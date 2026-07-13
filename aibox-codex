@@ -1,0 +1,615 @@
+#!/usr/bin/env bash
+#
+# aibox-codex — run OpenAI Codex CLI inside the aibox-codex container.
+#
+# Each "profile" is an isolated config sandbox on the host:
+#
+#   $AIBOX_CONFIG_ROOT/
+#     └── <profile>/
+#           ├── base        # endpoint config inherited by every relay
+#           ├── envs/       # relay endpoints; pick one every run with -e <name>
+#           │     ├── openrouter
+#           │     └── <relay>…
+#           └── home/       # mounted as /home/codex (CODEX_HOME, sessions, auth…)
+#
+# Everything is per-profile. `base` holds shared endpoint settings; each relay
+# under envs/ inherits base and overrides only what it sets (set a key to an
+# empty value to blank out a base default). There is no default endpoint —
+# every run picks a relay:
+#     aibox-codex -e openrouter        aibox-codex -e some-relay
+#
+# HOW THE ENDPOINT REACHES CODEX (differs from aibox-claude!)
+# ----------------------------------------------------------
+# Claude Code is configured entirely by env vars. Codex is not: a custom model
+# provider lives in config.toml under [model_providers.<id>], and only the API
+# *key* comes from an env var (the provider's `env_key`). We don't want to write
+# into the mounted config.toml (that file is yours — `codex login`, trust levels,
+# MCP servers all live there). So we inject the whole provider EPHEMERALLY at
+# launch via Codex's own `-c key=value` overrides, and pass the key as one env
+# var. Nothing endpoint-related is ever persisted or mounted.
+#
+# Relay keys we understand (KEY=VALUE, docker --env-file format), see the
+# scaffolded stubs for the full annotated set:
+#   CODEX_BASE_URL       -> model_providers.aibox.base_url  (REQUIRED)
+#   CODEX_API_KEY        -> the API key (REQUIRED). Delivered one of two ways
+#                          depending on CODEX_REQUIRES_OPENAI_AUTH (see below).
+#   CODEX_MODEL          -> model                           (REQUIRED)
+#   CODEX_REASONING      -> model_reasoning_effort               (optional)
+#   CODEX_PLAN_REASONING -> plan_mode_reasoning_effort           (optional)
+#   CODEX_REQUIRES_OPENAI_AUTH -> auth mode switch. Unset/0 (default): key goes
+#                          in via env_key (OPENAI_API_KEY env var, nothing on
+#                          disk). Set to 1: provider uses requires_openai_auth
+#                          and the key is delivered as a throwaway auth.json
+#                          ({"OPENAI_API_KEY": "..."}) mounted read-only over
+#                          CODEX_HOME. The two are mutually exclusive.  (opt)
+#   CODEX_QUERY_PARAMS   -> e.g. api-version=... for Azure       (optional)
+#   CODEX_INSTRUCTIONS_FILE -> a HOST path; bind-mounted read-only into the
+#                           container and wired to model_instructions_file (opt)
+#
+# Reasoning effort accepts: none|minimal|low|medium|high|xhigh|max|ultra
+# (same set for CODEX_REASONING and CODEX_PLAN_REASONING).
+#
+# IMPORTANT: modern Codex speaks the OpenAI *Responses* API, not chat
+# completions. Your relay/proxy MUST expose a Responses-compatible endpoint.
+# OpenRouter and vanilla OpenAI-chat backends need a translating proxy in front.
+#
+# The project you want to work on is mounted read-write at /work.
+#
+# The container IS the sandbox boundary, so codex runs with its own OS sandbox
+# AND approval prompts bypassed by default (--dangerously-bypass-approvals-and-
+# sandbox) — the agent can do whatever it likes inside. Pass --safe to put
+# Codex's normal approvals + workspace-write sandbox back.
+#
+# Usage:
+#   aibox-codex [options] [-- <args passed straight to codex>]
+#   aibox-codex sync [base|<relay>] [--dry-run]   # refresh template docs
+#
+# `sync` rewrites a file's doc/example comments to the current template while
+# keeping every real config line you added (re-placed under its example; any
+# whose example is gone is kept in a trailing block). No arg syncs base + all
+# relays; --dry-run prints the result instead of writing.
+#
+# Options:
+#   -c, --config <profile>   Config profile name         (default: "default")
+#   -e, --env    <name|path> Relay endpoint (REQUIRED): a name under
+#                            <profile>/envs/, or a path. Merged onto `base`.
+#   -w, --work   <dir>       Project dir mounted at /work (default: $PWD)
+#   -m, --mount  <spec>      Extra bind mount, docker syntax host:container[:ro]
+#                            (repeatable; e.g. shared read-only prompts)
+#   -s, --shell              Open a bash shell instead of launching codex
+#       --safe               Keep Codex's normal approvals + sandbox (default is
+#                            to bypass both — the container is the sandbox)
+#       --exec               Non-interactive: run `codex exec` (headless). Pass
+#                            the prompt after -- (e.g. --exec -- "fix the build")
+#       --build              Rebuild the image from scratch before running.
+#                            Forces --no-cache --pull: the base image is
+#                            re-pulled and the "latest" Node/Go/Codex versions
+#                            are re-resolved (a plain cached build would freeze
+#                            them at first-build values). This is the way to
+#                            upgrade. Slow — it rebuilds every layer.
+#       --no-net             Disable networking (only useful for offline tasks)
+#   -h, --help               Show this help
+#
+# Examples:
+#   aibox-codex --build                          # first-time build / upgrade
+#   aibox-codex -c risky -w ~/code/sketchy-repo  # run in the "risky" profile
+#   aibox-codex -e openrouter                    # default profile, openrouter relay
+#   aibox-codex --safe                           # keep the approval prompts
+#   aibox-codex --exec -- "run the tests and fix failures"   # headless
+#   aibox-codex sync --dry-run                   # preview a template refresh
+#   aibox-codex -c risky -s                      # poke around with a shell
+
+set -euo pipefail
+
+IMAGE="${AIBOX_IMAGE:-aibox-codex:latest}"
+CONFIG_ROOT="${AIBOX_CONFIG_ROOT:-$HOME/.aibox/codex}"
+# Bump when a template below changes. Existing env files carry the version they
+# were written with (first-line `# aibox-template: vN`); a run whose file lags
+# this prints a hint to `sync`, which refreshes the docs and keeps your config.
+TEMPLATE_VERSION=1
+# Resolve our own location, following symlinks, so the Dockerfile is found even
+# when invoked through a symlink on $PATH (e.g. ~/.local/bin/aibox-codex ->
+# this file). Portable: no `readlink -f`, which BSD/macOS readlink lacks.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="$dir/$src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$src")" && pwd)"
+DOCKERFILE="$SCRIPT_DIR/aibox-codex.Dockerfile"
+
+profile=default
+env_name=
+workdir="$PWD"
+open_shell=0
+do_build=0
+no_net=0
+safe=0
+exec_mode=0
+declare -a extra_mounts=()
+declare -a codex_args=()
+
+# Print the leading comment block (up to the first blank line) as help text,
+# so the usage output stays in sync with the header no matter how it grows.
+usage() { sed -n '3,/^$/p' "$src" | sed 's/^#\( \|$\)//'; }
+
+# --- env-file templates (single source, shared by scaffold and sync) --------
+# Both begin with a `# aibox-template: vN` stamp so `sync` can tell a file's
+# vintage. Everything is a comment: each key is documented, then shown as a
+# commented #EXAMPLE. You set one by adding a real line under its example.
+emit_base_template() {
+    printf '# aibox-template: v%s\n' "$TEMPLATE_VERSION"
+    cat <<'EOF'
+# base — shared config inherited by every relay under envs/.
+# A relay (-e <name>) is merged ON TOP of this file; a key set there wins.
+# docker --env-file format: KEY=VALUE, one per line.
+#
+# Each item is documented, then shown as a commented #EXAMPLE. To set one, add
+# a real line under its example — leave the example itself as living reference.
+#
+# The model this relay serves. Codex uses ONE model plus a reasoning knob
+# (no haiku/sonnet/opus tiers).
+#CODEX_MODEL=gpt-5.5
+#
+# Reasoning effort: none|minimal|low|medium|high|xhigh|max|ultra.
+# Omit to use the model default.
+#CODEX_REASONING=medium
+#
+# Reasoning effort while in plan mode. Omit to fall back to CODEX_REASONING.
+#CODEX_PLAN_REASONING=xhigh
+EOF
+}
+
+emit_relay_template() {
+    printf '# aibox-template: v%s\n' "$TEMPLATE_VERSION"
+    printf '# %s — relay endpoint, merged onto ../base (this file wins).\n' "$1"
+    cat <<'EOF'
+# docker --env-file format: KEY=VALUE. Each item is documented, then shown as a
+# commented #EXAMPLE — add a real line under the example to set it.
+#
+# REQUIRED. base_url of your provider. Codex appends the Responses path itself,
+# so give the API root (the model_providers.<id>.base_url value).
+#CODEX_BASE_URL=https://your-provider.example.com/v1
+#
+# REQUIRED. API key. Delivered ephemerally (see the auth mode below) and never
+# written to the mounted config.toml.
+#CODEX_API_KEY=sk-replace-me
+#
+# REQUIRED unless set in base. The model this relay serves.
+#CODEX_MODEL=gpt-5.5
+#
+# Override other base defaults here when this relay differs:
+#CODEX_REASONING=xhigh
+#CODEX_PLAN_REASONING=xhigh
+#
+# Auth mode. Default (unset): the key crosses in as an env var and codex reads
+# it via the provider's env_key — nothing touches disk. Set to 1 for auth.json
+# mode: codex reads the key from a {"OPENAI_API_KEY": "..."} file
+# (requires_openai_auth=true, no env_key), the same auth.json `codex login`
+# writes. The script generates it as a throwaway, mounts it read-only, and never
+# persists it. Use 1 only if your relay's account/refresh flow expects it;
+# env_key mode is otherwise simpler and identical on the wire.
+#CODEX_REQUIRES_OPENAI_AUTH=1
+#
+# A model-instructions file (config.toml's model_instructions_file). Give the
+# path ON YOUR HOST — the script bind-mounts it read-only and points codex at
+# it. Absolute, or relative to where you launch aibox-codex.
+#CODEX_INSTRUCTIONS_FILE=~/prompts/gpt-5.5-base-instructions.md
+#
+# Azure-style deployments need the api-version as a query param:
+#CODEX_QUERY_PARAMS=api-version=2025-04-01-preview
+#
+# NOTE: codex requires a Responses-API endpoint. OpenRouter and plain
+# OpenAI-chat backends do NOT speak it directly — put a translating proxy
+# (e.g. LiteLLM with the responses shim) in front and point CODEX_BASE_URL at
+# it, reachable from the container as http://host.docker.internal:PORT
+EOF
+}
+
+# --- sync: refresh a file's docs to the current template, keep your config ---
+# First-line `# aibox-template: vN` -> N (0 if unstamped/pre-versioning).
+file_template_version() {
+    local v
+    v="$(sed -n '1s/^# aibox-template: v\([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null)"
+    printf '%s' "${v:-0}"
+}
+
+# Emit the given file rewritten against a freshly generated template: doc and
+# example lines come from the template; every real (uncommented KEY=VALUE) line
+# from the old file is preserved and re-placed directly under its matching
+# #KEY= example. Real keys with no matching example are appended in a trailing
+# block so nothing is lost. Prints to stdout; the caller decides whether to
+# write. awk owns the merge (its associative arrays sidestep bash 3.2).
+sync_file() {
+    local old="$1"; shift
+    "$@" | awk '
+        # First arg: old file — collect real KEY=VALUE lines (last wins per key).
+        FNR==NR {
+            s=$0; sub(/^[ \t]+/,"",s)
+            if (s ~ /^#/ || s=="") next
+            eq=index(s,"="); if (eq==0) next
+            key=substr(s,1,eq-1)
+            if (!(key in have)) { order[++n]=key; have[key]=1 }
+            val[key]=s
+            next
+        }
+        # Second input (stdin): the fresh template. Echo it; after each #KEY=
+        # example, drop in the matching real line if we have one.
+        {
+            print
+            if ($0 ~ /^#[A-Za-z_][A-Za-z0-9_]*=/) {
+                k=substr($0,2); k=substr(k,1,index(k,"=")-1)
+                if (k in have && !(k in done)) { print val[k]; done[k]=1 }
+            }
+        }
+        END {
+            first=1
+            for (i=1;i<=n;i++) {
+                k=order[i]
+                if (k in done) continue
+                if (first) {
+                    print ""
+                    print "# --- settings kept from your old file (no matching example above) ---"
+                    first=0
+                }
+                print val[k]
+            }
+        }
+    ' "$old" -
+}
+
+# Sync one file in place (or to stdout under --dry-run). Trailing args are the
+# template-emitter command for that file.
+sync_one() {
+    local file="$1"; shift
+    if [[ ! -f "$file" ]]; then
+        echo "!! not found, skipping: $file" >&2
+        return
+    fi
+    local result
+    result="$(sync_file "$file" "$@")"
+    if (( dry_run )); then
+        printf '===== %s =====\n%s\n\n' "$file" "$result"
+    else
+        printf '%s\n' "$result" > "$file"
+        chmod 600 "$file"
+        echo ">> synced $file -> template v$TEMPLATE_VERSION" >&2
+    fi
+}
+
+subcmd=
+sync_target=
+dry_run=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        sync)         subcmd=sync; shift
+                      [[ $# -gt 0 && "$1" != -* ]] && { sync_target="$1"; shift; } ;;
+        --dry-run)    dry_run=1; shift ;;
+        -c|--config)  profile="$2"; shift 2 ;;
+        -e|--env)     env_name="$2"; shift 2 ;;
+        -w|--work)    workdir="$2";  shift 2 ;;
+        -m|--mount)   extra_mounts+=("$2"); shift 2 ;;
+        -s|--shell)   open_shell=1; shift ;;
+        --safe)       safe=1; shift ;;
+        --exec)       exec_mode=1; shift ;;
+        --build)      do_build=1; shift ;;
+        --no-net)     no_net=1; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; codex_args+=("$@"); break ;;
+        *)            codex_args+=("$1"); shift ;;
+    esac
+done
+
+# --- explicit build --------------------------------------------------------
+# --build always (re)builds; a missing image is also auto-built just before the
+# real run below, so the scaffold-and-stop path never builds for nothing.
+#
+# --no-cache --pull is deliberate: the Node/Go layers resolve "latest" at build
+# time via curl, but their RUN text never changes, so a cached build would skip
+# the resolution and freeze the versions at whatever the first build saw. Full
+# rebuild + fresh base image is the only way an explicit --build actually picks
+# up new upstream versions. Slower, but --build means "I want current".
+if (( do_build )); then
+    echo ">> building $IMAGE (no cache, pulling fresh base) ..."
+    docker build --no-cache --pull -f "$DOCKERFILE" -t "$IMAGE" "$SCRIPT_DIR"
+fi
+
+# --- resolve profile paths -------------------------------------------------
+# Everything is per-profile. `base` is the shared endpoint config; each relay
+# under envs/ is merged on top of it (relay wins). home/ is durable state.
+profile_dir="$CONFIG_ROOT/$profile"
+home_dir="$profile_dir/home"
+envs_dir="$profile_dir/envs"
+base_file="$profile_dir/base"
+
+# --- sync: refresh template docs in place, keeping your real config ----------
+# `sync base` -> just base; `sync <relay>` -> one relay; `sync` -> base + every
+# relay under envs/. --dry-run prints the result instead of writing.
+if [[ "$subcmd" == sync ]]; then
+    case "$sync_target" in
+        "")     sync_one "$base_file" emit_base_template
+                for f in "$envs_dir"/*; do
+                    [[ -f "$f" ]] && sync_one "$f" emit_relay_template "$(basename "$f")"
+                done ;;
+        base)   sync_one "$base_file" emit_base_template ;;
+        *)      sync_one "$envs_dir/$sync_target" emit_relay_template "$sync_target" ;;
+    esac
+    exit 0
+fi
+
+mkdir -p "$home_dir"
+
+# Codex refuses to start if CODEX_HOME doesn't exist as a directory. It lives
+# inside the mounted home (see Dockerfile: CODEX_HOME=/home/codex/.codex), so
+# create it host-side now; the mount would otherwise shadow the image's copy.
+mkdir -p "$home_dir/.codex"
+
+# --- a relay is required ----------------------------------------------------
+# There is no default endpoint: every run picks one with -e. A bare --build is
+# the one exception — it built above, so just report and stop.
+if [[ -z "$env_name" ]]; then
+    if (( do_build )); then
+        echo ">> image built. run it with a relay: aibox-codex -e <name>" >&2
+        exit 0
+    fi
+    echo "!! no relay selected — pick one with -e <name>:" >&2
+    if relays=$(ls -1 "$envs_dir" 2>/dev/null) && [[ -n "$relays" ]]; then
+        sed 's/^/     /' <<<"$relays" >&2
+    else
+        echo "     (none yet — run  aibox-codex -e <name>  to scaffold one)" >&2
+    fi
+    exit 1
+fi
+
+# A bare name lives under this profile's envs/; a value with a slash or a .env
+# suffix is taken as an explicit path (never scaffolded).
+if [[ "$env_name" == */* || "$env_name" == *.env ]]; then
+    env_file="$env_name"; named=0
+else
+    env_file="$envs_dir/$env_name"; named=1
+fi
+
+# First use of a named relay: scaffold `base` (once) plus a relay stub, then
+# stop so credentials can be filled in.
+if [[ ! -f "$env_file" ]]; then
+    if (( ! named )); then
+        echo "!! env file not found: $env_file" >&2
+        exit 1
+    fi
+    mkdir -p "$envs_dir"
+    [[ -f "$base_file" ]] || { emit_base_template > "$base_file"; chmod 600 "$base_file"; }
+    emit_relay_template "$env_name" > "$env_file"
+    chmod 600 "$env_file"
+    echo ">> scaffolded $base_file and $env_file"
+    echo ">> edit the credentials, then re-run: aibox-codex -e $env_name"
+    exit 0
+fi
+
+# Nudge (don't touch the file) when base or the relay predates the current
+# template, so stale docs can be refreshed with `sync` when convenient.
+for f in "$base_file" "$env_file"; do
+    [[ -f "$f" ]] || continue
+    fv="$(file_template_version "$f")"
+    if (( fv < TEMPLATE_VERSION )); then
+        echo ">> $f is template v$fv (current v$TEMPLATE_VERSION) — refresh docs with: aibox-codex sync ${f##*/}" >&2
+    fi
+done
+
+# --- build if the image is missing -----------------------------------------
+# Cached on purpose (no --no-cache/--pull): this only fires to get a runnable
+# image when there's none, so speed wins. It may reuse stale layers and produce
+# an older version than upstream — that's fine here. Upgrading is --build's job.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo ">> building $IMAGE ..."
+    docker build -f "$DOCKERFILE" -t "$IMAGE" "$SCRIPT_DIR"
+fi
+
+# --- merge base + relay, then read the values we care about ----------------
+# docker's precedence across multiple --env-file flags is unspecified, and here
+# we need to READ specific keys anyway (to translate them into codex -c
+# overrides). awk merges the files (later wins per key, KEY= blanks a base
+# default, comments/blank lines dropped) and emits KEY=VALUE lines; a case
+# reads them into scalars. No associative array — macOS ships bash 3.2, which
+# has none (that's also why the rest of this script guards arrays so carefully).
+base_url= api_key= model= reasoning= plan_reasoning=
+query_params= requires_openai_auth= instructions_file=
+declare -a env_srcs=()
+[[ -f "$base_file" ]] && env_srcs+=("$base_file")
+env_srcs+=("$env_file")
+while IFS= read -r line; do
+    key=${line%%=*}
+    val=${line#*=}
+    case "$key" in
+        CODEX_BASE_URL)             base_url=$val ;;
+        CODEX_API_KEY)              api_key=$val ;;
+        CODEX_MODEL)                model=$val ;;
+        CODEX_REASONING)            reasoning=$val ;;
+        CODEX_PLAN_REASONING)       plan_reasoning=$val ;;
+        CODEX_QUERY_PARAMS)         query_params=$val ;;
+        CODEX_REQUIRES_OPENAI_AUTH) requires_openai_auth=$val ;;
+        CODEX_INSTRUCTIONS_FILE)    instructions_file=$val ;;
+        # Unknown keys are ignored: this script only understands the set above.
+    esac
+done < <(awk '
+    /^[ \t]*#/ { next }
+    /^[ \t]*$/ { next }
+    {
+        s = $0; sub(/^[ \t]+/, "", s)
+        eq = index(s, "=")
+        key = (eq > 0) ? substr(s, 1, eq - 1) : s
+        if (!(key in seen)) { order[++n] = key; seen[key] = 1 }
+        val[key] = s
+    }
+    END { for (i = 1; i <= n; i++) print val[order[i]] }
+' "${env_srcs[@]}")
+
+missing=()
+[[ -z "$base_url" ]] && missing+=(CODEX_BASE_URL)
+[[ -z "$api_key"  ]] && missing+=(CODEX_API_KEY)
+[[ -z "$model"    ]] && missing+=(CODEX_MODEL)
+if (( ${#missing[@]} )); then
+    echo "!! relay is missing required keys: ${missing[*]}" >&2
+    echo "   edit $env_file (or $base_file) and try again" >&2
+    exit 1
+fi
+
+# --- how the key reaches codex: two mutually-exclusive modes ----------------
+# Codex has two separate ways to feed an API key to a custom provider, and they
+# are alternatives — you pick one:
+#
+#   env_key mode (DEFAULT):  provider.env_key = OPENAI_API_KEY; codex reads that
+#       env var and sends `Authorization: Bearer <key>`. Nothing touches disk.
+#
+#   auth.json mode (CODEX_REQUIRES_OPENAI_AUTH=1):  provider sets
+#       requires_openai_auth=true and NO env_key, so codex takes its "first-party
+#       auth" path and reads the key from $CODEX_HOME/auth.json — the
+#       {"OPENAI_API_KEY": "..."} file you may already use. On the wire it's the
+#       same Bearer token; the difference is purely codex-internal (it also
+#       enables the account/refresh bookkeeping some relays expect).
+#
+# We keep BOTH ephemeral. The key never lands in the mounted profile home: it's
+# either a 0600 --env-file (never mounted, not in argv) or a 0600 throwaway
+# auth.json bind-mounted read-only over CODEX_HOME. Both are removed on exit —
+# we can't `exec docker` later or the EXIT trap wouldn't fire.
+# tr for the lowercase fold — bash 3.2 (macOS) has no ${var,,}.
+use_auth_json=0
+case "$(printf '%s' "$requires_openai_auth" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) use_auth_json=1 ;;
+esac
+
+# Stage the key in a 0600 host-side temp and record the docker flag that
+# delivers it: a mounted auth.json for auth.json mode, an --env-file otherwise.
+declare -a auth_run_args=()
+if (( use_auth_json )); then
+    auth_json_tmp="$(mktemp "${TMPDIR:-/tmp}/aibox-codex-auth.XXXXXX")"
+    chmod 600 "$auth_json_tmp"
+    trap 'rm -f "$auth_json_tmp"' EXIT INT TERM
+    printf '{"OPENAI_API_KEY": "%s"}\n' "$api_key" > "$auth_json_tmp"
+    # Mounted over the home dir's auth.json; docker applies the file mount after
+    # the /home/codex mount regardless of the order we pass them.
+    auth_run_args=(-v "$auth_json_tmp:/home/codex/.codex/auth.json:ro")
+else
+    key_env="$(mktemp "${TMPDIR:-/tmp}/aibox-codex-key.XXXXXX")"
+    chmod 600 "$key_env"
+    trap 'rm -f "$key_env"' EXIT INT TERM
+    printf 'OPENAI_API_KEY=%s\n' "$api_key" > "$key_env"
+    auth_run_args=(--env-file "$key_env")
+fi
+
+# --- assemble docker run ---------------------------------------------------
+declare -a run_args=(--rm "${auth_run_args[@]}")
+
+# Interactive TTY only when we actually have one (so pipes still work).
+if [[ -t 0 && -t 1 ]]; then run_args+=(-it); else run_args+=(-i); fi
+
+# On Linux, run as the host uid/gid so files created in /work stay yours.
+# Docker Desktop (macOS) maps ownership automatically, so skip it there.
+if [[ "$(uname)" == "Linux" ]]; then
+    run_args+=(--user "$(id -u):$(id -g)")
+fi
+
+# Hardening: no privilege escalation, drop all Linux capabilities. Codex's own
+# Landlock/seccomp sandbox is off (we bypass it — the container is the
+# boundary), and a Node/native binary needs none of these caps.
+run_args+=(--security-opt no-new-privileges --cap-drop ALL)
+
+if (( no_net )); then
+    run_args+=(--network none)
+elif [[ "$(uname)" == "Linux" ]]; then
+    # Docker Desktop resolves host.docker.internal for free; native Linux does
+    # not. Map it so a relay/proxy on the host (LiteLLM, etc.) is reachable the
+    # same way from either OS.
+    run_args+=(--add-host host.docker.internal:host-gateway)
+fi
+
+# Mounts: isolated home + the project at /work + any extras.
+run_args+=(-v "$home_dir:/home/codex")
+run_args+=(-v "$workdir:/work" -w /work)
+# macOS bash 3.2 treats an empty array as "unbound" under `set -u`; the
+# ${arr[@]+…} guard expands to nothing when extra_mounts is empty.
+for m in ${extra_mounts[@]+"${extra_mounts[@]}"}; do run_args+=(-v "$m"); done
+
+# A model_instructions_file is a host path that won't exist inside the
+# container. Bind-mount it read-only at a fixed container path and point the
+# config there (below). Resolve to an absolute host path first so a relative
+# entry in the relay is taken against $PWD, not the container's /work. A leading
+# ~/ is expanded by hand: it's a literal char in a docker env-file, not a shell.
+instructions_ctr=/aibox-instructions.md
+if [[ -n "$instructions_file" ]]; then
+    case "$instructions_file" in
+        "~/"*) host_instr="$HOME/${instructions_file#\~/}" ;;
+        /*)    host_instr="$instructions_file" ;;
+        *)     host_instr="$PWD/$instructions_file" ;;
+    esac
+    if [[ ! -f "$host_instr" ]]; then
+        echo "!! CODEX_INSTRUCTIONS_FILE not found: $host_instr" >&2
+        exit 1
+    fi
+    run_args+=(-v "$host_instr:$instructions_ctr:ro")
+fi
+
+if (( open_shell )); then
+    docker run "${run_args[@]}" --entrypoint /bin/bash "$IMAGE"
+    exit
+fi
+
+# --- build the codex invocation --------------------------------------------
+# The endpoint is injected EPHEMERALLY via codex's own `-c key=value` global
+# overrides — nothing lands in the mounted config.toml. `aibox` is our provider
+# id; the auth wiring (env_key vs requires_openai_auth) is set per the mode above.
+declare -a codex_cmd=()
+
+# `codex exec` is the headless subcommand; the interactive TUI is the bare cmd.
+if (( exec_mode )); then
+    codex_cmd+=(exec)
+fi
+
+codex_cmd+=(
+    -c model_provider=aibox
+    -c "model_providers.aibox.name=aibox relay"
+    -c "model_providers.aibox.base_url=$base_url"
+    -c model_providers.aibox.wire_api=responses
+    -c "model=$model"
+)
+# Exactly one auth wiring — the two conflict in codex's own provider.validate(),
+# and its first-party (auth.json) path only engages when env_key is unset:
+#   auth.json mode -> requires_openai_auth=true, NO env_key (key came in via the
+#                     mounted auth.json above)
+#   env_key mode   -> env_key=OPENAI_API_KEY (key came in via the --env-file)
+if (( use_auth_json )); then
+    codex_cmd+=(-c model_providers.aibox.requires_openai_auth=true)
+else
+    codex_cmd+=(-c model_providers.aibox.env_key=OPENAI_API_KEY)
+fi
+[[ -n "$reasoning" ]]      && codex_cmd+=(-c "model_reasoning_effort=$reasoning")
+[[ -n "$plan_reasoning" ]] && codex_cmd+=(-c "plan_mode_reasoning_effort=$plan_reasoning")
+# Point at the read-only mount, not the host path (see the bind mount above).
+[[ -n "$instructions_file" ]] && codex_cmd+=(-c "model_instructions_file=$instructions_ctr")
+
+# query_params is a TOML inline table: split k=v[,k=v...] into per-key overrides.
+if [[ -n "$query_params" ]]; then
+    IFS=',' read -ra qp <<<"$query_params"
+    for pair in "${qp[@]}"; do
+        pk=${pair%%=*}; pv=${pair#*=}
+        codex_cmd+=(-c "model_providers.aibox.query_params.$pk=$pv")
+    done
+fi
+
+# Wide-open by default: the container is the boundary, so bypass BOTH codex's
+# approval prompts and its OS sandbox. --safe puts the normal approvals +
+# workspace-write sandbox back. These are prepended so an explicit flag in
+# codex_args (e.g. -a or -s) still wins — codex takes the last occurrence.
+if (( ! safe )); then
+    codex_cmd+=(--dangerously-bypass-approvals-and-sandbox)
+    echo ">> permissions: BYPASSED (agent runs unrestricted; use --safe to prompt)" >&2
+else
+    codex_cmd+=(-a on-request -s workspace-write)
+    echo ">> permissions: prompting + workspace-write sandbox (--safe)" >&2
+fi
+
+# Append passthrough args last. The ${arr[@]+…} guard keeps an empty array from
+# tripping `set -u` on macOS bash 3.2.
+codex_cmd+=(${codex_args[@]+"${codex_args[@]}"})
+
+docker run "${run_args[@]}" "$IMAGE" "${codex_cmd[@]}"
