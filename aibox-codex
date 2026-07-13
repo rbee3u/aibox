@@ -106,7 +106,7 @@ CONFIG_ROOT="${AIBOX_CONFIG_ROOT:-$HOME/.aibox/codex}"
 # Bump when a template below changes. Existing env files carry the version they
 # were written with (first-line `# aibox-template: vN`); a run whose file lags
 # this prints a hint to `sync`, which refreshes the docs and keeps your config.
-TEMPLATE_VERSION=1
+TEMPLATE_VERSION=3
 # Resolve our own location, following symlinks, so the Dockerfile is found even
 # when invoked through a symlink on $PATH (e.g. ~/.local/bin/aibox-codex ->
 # this file). Portable: no `readlink -f`, which BSD/macOS readlink lacks.
@@ -144,18 +144,18 @@ emit_base_template() {
 # base — shared config inherited by every relay under envs/.
 # A relay (-e <name>) is merged ON TOP of this file; a key set there wins.
 # docker --env-file format: KEY=VALUE, one per line.
-#
+
 # Each item is documented, then shown as a commented #EXAMPLE. To set one, add
 # a real line under its example — leave the example itself as living reference.
-#
+
 # The model this relay serves. Codex uses ONE model plus a reasoning knob
 # (no haiku/sonnet/opus tiers).
 #CODEX_MODEL=gpt-5.5
-#
+
 # Reasoning effort: none|minimal|low|medium|high|xhigh|max|ultra.
 # Omit to use the model default.
 #CODEX_REASONING=medium
-#
+
 # Reasoning effort while in plan mode. Omit to fall back to CODEX_REASONING.
 #CODEX_PLAN_REASONING=xhigh
 EOF
@@ -167,22 +167,22 @@ emit_relay_template() {
     cat <<'EOF'
 # docker --env-file format: KEY=VALUE. Each item is documented, then shown as a
 # commented #EXAMPLE — add a real line under the example to set it.
-#
+
 # REQUIRED. base_url of your provider. Codex appends the Responses path itself,
 # so give the API root (the model_providers.<id>.base_url value).
 #CODEX_BASE_URL=https://your-provider.example.com/v1
-#
+
 # REQUIRED. API key. Delivered ephemerally (see the auth mode below) and never
 # written to the mounted config.toml.
 #CODEX_API_KEY=sk-replace-me
-#
+
 # REQUIRED unless set in base. The model this relay serves.
 #CODEX_MODEL=gpt-5.5
-#
+
 # Override other base defaults here when this relay differs:
 #CODEX_REASONING=xhigh
 #CODEX_PLAN_REASONING=xhigh
-#
+
 # Auth mode. Default (unset): the key crosses in as an env var and codex reads
 # it via the provider's env_key — nothing touches disk. Set to 1 for auth.json
 # mode: codex reads the key from a {"OPENAI_API_KEY": "..."} file
@@ -191,19 +191,14 @@ emit_relay_template() {
 # persists it. Use 1 only if your relay's account/refresh flow expects it;
 # env_key mode is otherwise simpler and identical on the wire.
 #CODEX_REQUIRES_OPENAI_AUTH=1
-#
+
 # A model-instructions file (config.toml's model_instructions_file). Give the
 # path ON YOUR HOST — the script bind-mounts it read-only and points codex at
 # it. Absolute, or relative to where you launch aibox-codex.
 #CODEX_INSTRUCTIONS_FILE=~/prompts/gpt-5.5-base-instructions.md
-#
+
 # Azure-style deployments need the api-version as a query param:
 #CODEX_QUERY_PARAMS=api-version=2025-04-01-preview
-#
-# NOTE: codex requires a Responses-API endpoint. OpenRouter and plain
-# OpenAI-chat backends do NOT speak it directly — put a translating proxy
-# (e.g. LiteLLM with the responses shim) in front and point CODEX_BASE_URL at
-# it, reachable from the container as http://host.docker.internal:PORT
 EOF
 }
 
@@ -484,7 +479,17 @@ declare -a auth_run_args=()
 if (( use_auth_json )); then
     auth_json_tmp="$(mktemp "${TMPDIR:-/tmp}/aibox-codex-auth.XXXXXX")"
     chmod 600 "$auth_json_tmp"
-    trap 'rm -f "$auth_json_tmp"' EXIT INT TERM
+    # Docker Desktop's virtiofs can't CREATE a bind-mount target nested inside
+    # another bind mount (/home/codex): runc refuses with "mountpoint ... is
+    # outside of rootfs". Pre-create the auth.json so docker overmounts an
+    # existing file instead of creating one. Only remove it on exit if we made
+    # it — a real `codex login` auth.json in the home dir is left untouched.
+    auth_mount="$home_dir/.codex/auth.json"
+    created_auth_mount=
+    if [[ ! -e "$auth_mount" ]]; then
+        printf '{}\n' > "$auth_mount"; chmod 600 "$auth_mount"; created_auth_mount=1
+    fi
+    trap 'rm -f "$auth_json_tmp"; [ -n "$created_auth_mount" ] && rm -f "$auth_mount"' EXIT INT TERM
     printf '{"OPENAI_API_KEY": "%s"}\n' "$api_key" > "$auth_json_tmp"
     # Mounted over the home dir's auth.json; docker applies the file mount after
     # the /home/codex mount regardless of the order we pass them.

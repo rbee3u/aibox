@@ -69,7 +69,7 @@ CONFIG_ROOT="${AIBOX_CONFIG_ROOT:-$HOME/.aibox/claude}"
 # Bump when a template below changes. Existing env files carry the version they
 # were written with (first-line `# aibox-template: vN`); a run whose file lags
 # this prints a hint to `sync`, which refreshes the docs and keeps your config.
-TEMPLATE_VERSION=1
+TEMPLATE_VERSION=3
 # Resolve our own location, following symlinks, so the Dockerfile is found even
 # when invoked through a symlink on $PATH (e.g. ~/.local/bin/aibox-claude ->
 # this file). Portable: no `readlink -f`, which BSD/macOS readlink lacks.
@@ -106,17 +106,17 @@ emit_base_template() {
 # base — shared config inherited by every relay under envs/.
 # A relay (-e <name>) is merged ON TOP of this file; a key set there wins.
 # docker --env-file format: KEY=VALUE, one per line.
-#
+
 # Each item is documented, then shown as a commented #EXAMPLE. To set one, add
 # a real line under its example — leave the example itself as living reference.
-#
+
 # Model tiers: claude shells out to the haiku tier for background work and
 # resolves sonnet/opus via subagents or /model. Map every tier to a model your
 # relays serve; a relay that differs overrides just that line.
 #ANTHROPIC_DEFAULT_HAIKU_MODEL=replace-with-small-fast-model
 #ANTHROPIC_DEFAULT_SONNET_MODEL=replace-with-mid-model
 #ANTHROPIC_DEFAULT_OPUS_MODEL=replace-with-main-model
-#
+
 # Fable is a real fourth tier, only used if you /model to it; many relays don't
 # serve it — set it only if yours does.
 #ANTHROPIC_DEFAULT_FABLE_MODEL=replace-with-fable-model
@@ -129,19 +129,19 @@ emit_relay_template() {
     cat <<'EOF'
 # docker --env-file format: KEY=VALUE. Each item is documented, then shown as a
 # commented #EXAMPLE — add a real line under the example to set it.
-#
+
 # REQUIRED. base_url of your provider (claude's /v1/messages root).
 #ANTHROPIC_BASE_URL=https://your-provider.example.com/anthropic
-#
+
 # REQUIRED. API key / auth token.
 #ANTHROPIC_AUTH_TOKEN=sk-replace-me
-#
-# Override a base default here when this relay differs:
+
+# Override any base model tier here when this relay serves a different model.
+# Set only the tiers that differ; unset ones fall through to base.
+#ANTHROPIC_DEFAULT_HAIKU_MODEL=this-relays-small-model
+#ANTHROPIC_DEFAULT_SONNET_MODEL=this-relays-mid-model
 #ANTHROPIC_DEFAULT_OPUS_MODEL=this-relays-big-model
-#
-# OpenRouter speaks OpenAI format, not Anthropic /v1/messages — point BASE_URL
-# at a translating proxy (claude-code-router / LiteLLM) instead:
-#ANTHROPIC_BASE_URL=http://host.docker.internal:PORT
+#ANTHROPIC_DEFAULT_FABLE_MODEL=this-relays-fable-model
 EOF
 }
 
