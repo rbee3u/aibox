@@ -37,13 +37,12 @@
 # relays; --dry-run prints the result instead of writing.
 #
 # Options:
-#   -c, --config <profile>   Config profile name         (default: "default")
+#   -p, --profile <name>     Config profile name         (default: "default")
 #   -e, --env    <name|path> Relay endpoint (REQUIRED): a name under
 #                            <profile>/envs/, or a path. Merged onto `base`.
 #   -w, --work   <dir>       Project dir mounted at /work (default: $PWD)
 #   -m, --mount  <spec>      Extra bind mount, docker syntax host:container[:ro]
 #                            (repeatable; e.g. shared read-only skills)
-#   -s, --shell              Open a bash shell instead of launching claude
 #       --safe               Keep claude's normal permission prompts (default
 #                            is to skip them — the container is the sandbox)
 #       --build              Rebuild the image from scratch before running.
@@ -52,15 +51,13 @@
 #                            are re-resolved (a plain cached build would freeze
 #                            them at first-build values). This is the way to
 #                            upgrade. Slow — it rebuilds every layer.
-#       --no-net             Disable networking (only useful for offline tasks)
 #   -h, --help               Show this help
 #
 # Examples:
 #   aibox-claude --build                         # first-time build / upgrade
-#   aibox-claude -c risky -w ~/code/sketchy-repo # run in the "risky" profile
+#   aibox-claude -p risky -w ~/code/sketchy-repo # run in the "risky" profile
 #   aibox-claude -e openrouter                   # default profile, openrouter relay
 #   aibox-claude --safe                          # keep the permission prompts
-#   aibox-claude -c risky -s                     # poke around with a shell
 
 set -euo pipefail
 
@@ -84,10 +81,8 @@ DOCKERFILE="$SCRIPT_DIR/aibox-claude.Dockerfile"
 
 profile=default
 env_name=
-workdir="$PWD"
-open_shell=0
+work_dir="$PWD"
 do_build=0
-no_net=0
 safe=0
 declare -a extra_mounts=()
 declare -a claude_args=()
@@ -224,14 +219,12 @@ while [[ $# -gt 0 ]]; do
         sync)         subcmd=sync; shift
                       [[ $# -gt 0 && "$1" != -* ]] && { sync_target="$1"; shift; } ;;
         --dry-run)    dry_run=1; shift ;;
-        -c|--config)  profile="$2"; shift 2 ;;
+        -p|--profile) profile="$2"; shift 2 ;;
         -e|--env)     env_name="$2"; shift 2 ;;
-        -w|--work)    workdir="$2";  shift 2 ;;
+        -w|--work)    work_dir="$2"; shift 2 ;;
         -m|--mount)   extra_mounts+=("$2"); shift 2 ;;
-        -s|--shell)   open_shell=1; shift ;;
         --safe)       safe=1; shift ;;
         --build)      do_build=1; shift ;;
-        --no-net)     no_net=1; shift ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; claude_args+=("$@"); break ;;
         *)            claude_args+=("$1"); shift ;;
@@ -352,7 +345,7 @@ done
 # image when there's none, so speed wins. It may reuse stale layers and produce
 # an older version than upstream — that's fine here. Upgrading is --build's job.
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo ">> building $IMAGE ..."
+    echo ">> $IMAGE not present — building from cache (fast; --build to refresh) ..."
     docker build -f "$DOCKERFILE" -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
@@ -389,36 +382,25 @@ declare -a run_args=(--rm --env-file "$merged_env")
 # Interactive TTY only when we actually have one (so pipes still work).
 if [[ -t 0 && -t 1 ]]; then run_args+=(-it); else run_args+=(-i); fi
 
-# On Linux, run as the host uid/gid so files created in /work stay yours.
-# Docker Desktop (macOS) maps ownership automatically, so skip it there.
-if [[ "$(uname)" == "Linux" ]]; then
-    run_args+=(--user "$(id -u):$(id -g)")
-fi
-
 # Hardening: no privilege escalation, drop all Linux capabilities. A Node
 # process needs none of them, and the mounts stay writable regardless.
 run_args+=(--security-opt no-new-privileges --cap-drop ALL)
 
-if (( no_net )); then
-    run_args+=(--network none)
-elif [[ "$(uname)" == "Linux" ]]; then
-    # Docker Desktop resolves host.docker.internal for free; native Linux does
-    # not. Map it so a relay/proxy on the host (LiteLLM, claude-code-router…)
-    # is reachable the same way from either OS.
+# Linux only: run as the host uid/gid so files created in /work stay yours
+# (Docker Desktop maps ownership automatically), and map host.docker.internal
+# (which Docker Desktop resolves for free) so a relay/proxy on the host
+# (LiteLLM, claude-code-router…) is reachable the same way from either OS.
+if [[ "$(uname)" == "Linux" ]]; then
+    run_args+=(--user "$(id -u):$(id -g)")
     run_args+=(--add-host host.docker.internal:host-gateway)
 fi
 
 # Mounts: isolated home + the project at /work + any extras.
 run_args+=(-v "$home_dir:/home/claude")
-run_args+=(-v "$workdir:/work" -w /work)
+run_args+=(-v "$work_dir:/work" -w /work)
 # macOS bash 3.2 treats an empty array as "unbound" under `set -u`; the
 # ${arr[@]+…} guard expands to nothing when extra_mounts is empty.
 for m in ${extra_mounts[@]+"${extra_mounts[@]}"}; do run_args+=(-v "$m"); done
-
-if (( open_shell )); then
-    docker run "${run_args[@]}" --entrypoint /bin/bash "$IMAGE"
-    exit
-fi
 
 # Wide-open by default: the container is the boundary, so let the agent skip
 # every permission prompt. --safe puts the normal prompts back. Prepended so

@@ -1,4 +1,4 @@
-# aibox
+# Put the AI in a box
 
 Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that
 **is** the sandbox boundary — so the agent can skip every permission prompt and
@@ -63,7 +63,7 @@ Everything is per-profile on the host, under `~/.aibox/<tool>/`:
 
 ```
 ~/.aibox/codex/
-└── default/                 # profile (-c <name> to switch; default is "default")
+└── default/                 # profile (-p <name> to switch; default is "default")
       ├── base               # shared config inherited by every relay
       ├── envs/               # relay endpoints — pick one per run with -e <name>
       │     └── myrelay
@@ -129,13 +129,11 @@ Both tools share these (see `-h` for the full list):
 | Flag | |
 | --- | --- |
 | `-e, --env <name\|path>` | relay endpoint (required) |
-| `-c, --config <profile>` | config profile (default `default`) |
+| `-p, --profile <name>` | config profile (default `default`) |
 | `-w, --work <dir>` | project dir mounted at `/work` (default `$PWD`) |
 | `-m, --mount <spec>` | extra bind mount (`host:container[:ro]`, repeatable) |
-| `-s, --shell` | open a bash shell instead of the agent |
 | `--safe` | keep the agent's normal prompts/sandbox instead of bypassing |
 | `--build` | rebuild the image from scratch (this is how you upgrade) |
-| `--no-net` | disable networking |
 
 `aibox-codex` also has `--exec` for headless runs: `aibox-codex -e r --exec -- "fix the build"`.
 
