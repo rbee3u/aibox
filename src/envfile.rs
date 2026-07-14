@@ -46,7 +46,7 @@ impl MergedEnv {
     }
 
     /// The merged lines in order, each a full `KEY=VALUE` string.
-    pub fn lines(&self) -> impl Iterator<Item = &str> {
+    fn lines(&self) -> impl Iterator<Item = &str> {
         self.entries.values().map(|s| s.as_str())
     }
 
@@ -69,11 +69,6 @@ impl MergedEnv {
             Some(eq) => Some(&line[eq + 1..]),
             None => Some(""),
         }
-    }
-
-    /// True if no entries survived the merge.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 }
 

@@ -107,7 +107,7 @@ pub enum Action {
 /// Flags shared by a normal run. `--exec` is Codex-only and rejected for Claude
 /// in [`crate::run`] rather than in the type, so the two subcommands can share
 /// one struct (matching the Bash scripts' shared arg loop).
-#[derive(Debug, Args, Default)]
+#[derive(Debug, Args)]
 pub struct RunArgs {
     /// Config profile name.
     #[arg(short, long, default_value = "default")]

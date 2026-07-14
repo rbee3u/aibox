@@ -73,7 +73,7 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
 pub fn dispatch(agent: AgentKind, home: &Path, action: &str, id: Option<&str>) -> Result<i32> {
     let backend = backend_for(agent);
     match action {
-        "list" => list(backend.as_ref(), home, agent),
+        "list" => list(backend.as_ref(), home),
         "get" => get(backend.as_ref(), home, id),
         "delete" | "rm" => delete(backend.as_ref(), home, id),
         other => bail!("unknown session action: {other} (use list|get|delete)"),
@@ -109,7 +109,7 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 /// List this profile's sessions, newest first: `shortid  date  title`. Sessions
 /// with no typed prompts are skipped. Ports the Bash `session_list` (including the
 /// `%-8s  %-16s  %s` columns and the newest-first sort).
-fn list(backend: &dyn SessionBackend, home: &Path, agent: AgentKind) -> Result<i32> {
+fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     // Collect (start_ts, id, title) for every session with ≥1 typed prompt.
     let mut rows: Vec<(String, String, String)> = Vec::new();
     for f in backend.files(home) {
@@ -134,7 +134,6 @@ fn list(backend: &dyn SessionBackend, home: &Path, agent: AgentKind) -> Result<i
         // %-8s  %-16s  %s
         println!("{short:<8}  {disp:<16}  {title}");
     }
-    let _ = agent;
     Ok(0)
 }
 

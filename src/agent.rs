@@ -72,8 +72,8 @@ impl AgentKind {
     /// is gone.
     pub fn dockerfile(self) -> &'static str {
         match self {
-            AgentKind::Claude => include_str!("../assets/aibox-claude.Dockerfile"),
-            AgentKind::Codex => include_str!("../assets/aibox-codex.Dockerfile"),
+            AgentKind::Claude => include_str!("../assets/claude.Dockerfile"),
+            AgentKind::Codex => include_str!("../assets/codex.Dockerfile"),
         }
     }
 
@@ -219,45 +219,47 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         cmd.push("exec".to_string());
     }
 
-    cmd.push("-c".into());
-    cmd.push("model_provider=aibox".into());
-    cmd.push("-c".into());
-    cmd.push("model_providers.aibox.name=aibox relay".into());
-    cmd.push("-c".into());
-    cmd.push(format!("model_providers.aibox.base_url={base_url}"));
-    cmd.push("-c".into());
-    cmd.push("model_providers.aibox.wire_api=responses".into());
-    cmd.push("-c".into());
-    cmd.push(format!("model={model}"));
+    push_c(&mut cmd, "model_provider=aibox");
+    push_c(&mut cmd, "model_providers.aibox.name=aibox relay");
+    push_c(
+        &mut cmd,
+        format!("model_providers.aibox.base_url={base_url}"),
+    );
+    push_c(&mut cmd, "model_providers.aibox.wire_api=responses");
+    push_c(&mut cmd, format!("model={model}"));
 
     // Exactly one auth wiring — the two conflict in codex's provider.validate(),
     // and its first-party (auth.json) path only engages when env_key is unset.
-    cmd.push("-c".into());
     if use_auth_json {
-        cmd.push("model_providers.aibox.requires_openai_auth=true".into());
+        push_c(&mut cmd, "model_providers.aibox.requires_openai_auth=true");
     } else {
-        cmd.push("model_providers.aibox.env_key=OPENAI_API_KEY".into());
+        push_c(&mut cmd, "model_providers.aibox.env_key=OPENAI_API_KEY");
     }
 
     if !reasoning.is_empty() {
-        cmd.push("-c".into());
-        cmd.push(format!("model_reasoning_effort={reasoning}"));
+        push_c(&mut cmd, format!("model_reasoning_effort={reasoning}"));
     }
     if !plan_reasoning.is_empty() {
-        cmd.push("-c".into());
-        cmd.push(format!("plan_mode_reasoning_effort={plan_reasoning}"));
+        push_c(
+            &mut cmd,
+            format!("plan_mode_reasoning_effort={plan_reasoning}"),
+        );
     }
     if !instructions_file.is_empty() {
-        cmd.push("-c".into());
-        cmd.push(format!("model_instructions_file={CODEX_INSTRUCTIONS_CTR}"));
+        push_c(
+            &mut cmd,
+            format!("model_instructions_file={CODEX_INSTRUCTIONS_CTR}"),
+        );
     }
 
     // query_params is a TOML inline table: split k=v[,k=v…] into per-key overrides.
     if !query_params.is_empty() {
         for pair in query_params.split(',') {
             let (pk, pv) = pair.split_once('=').unwrap_or((pair, ""));
-            cmd.push("-c".into());
-            cmd.push(format!("model_providers.aibox.query_params.{pk}={pv}"));
+            push_c(
+                &mut cmd,
+                format!("model_providers.aibox.query_params.{pk}={pv}"),
+            );
         }
     }
 
@@ -283,6 +285,14 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         staged,
         guarded,
     })
+}
+
+/// Push a codex `-c key=value` override as the two argv tokens it takes. Folds
+/// the repeated `cmd.push("-c"); cmd.push(kv)` pair that wiring the ephemeral
+/// provider needs into one call.
+fn push_c(cmd: &mut Vec<String>, kv: impl Into<String>) {
+    cmd.push("-c".to_string());
+    cmd.push(kv.into());
 }
 
 /// Resolve a `CODEX_INSTRUCTIONS_FILE` value (a host path) to an absolute path.

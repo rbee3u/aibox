@@ -17,11 +17,6 @@ Both subcommands also carry `sync` (refresh config-file template docs) and
 `session` (browse saved transcripts host-side). See `README.md` for user docs
 and `REWRITE.md` for the design history (this was ported from two Bash scripts).
 
-The original Bash scripts (`aibox-claude`, `aibox-codex`, `aibox-claude-status.sh`)
-are **still in the tree** as a reference/fallback during the transition. They are
-frozen — don't add features there. New work goes in Rust. They'll be removed once
-the Rust version has been exercised enough.
-
 ## Layout
 
 ```

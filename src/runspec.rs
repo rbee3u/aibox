@@ -17,13 +17,13 @@ use std::path::Path;
 /// The Claude status-line script, embedded so a fresh profile home gets it
 /// seeded on first run (the home mount shadows the image, so it must land on the
 /// host). Runs inside the container against its `jq`; stays Bash on purpose.
-const CLAUDE_STATUS_SH: &str = include_str!("../assets/aibox-claude-status.sh");
+const CLAUDE_STATUS_SH: &str = include_str!("../assets/claude-status.sh");
 
 /// Default Claude settings.json wiring the status line, written only if absent.
 const CLAUDE_SETTINGS: &str = r#"{
   "statusLine": {
     "type": "command",
-    "command": "bash /home/claude/.claude/aibox-claude-status.sh"
+    "command": "bash /home/claude/.claude/statusline.sh"
   }
 }
 "#;
@@ -40,7 +40,7 @@ pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
             let claude_dir = home_dir.join(".claude");
             fs::create_dir_all(&claude_dir)
                 .with_context(|| format!("create {}", claude_dir.display()))?;
-            let status_dst = claude_dir.join("aibox-claude-status.sh");
+            let status_dst = claude_dir.join("statusline.sh");
             if !status_dst.exists() {
                 fs::write(&status_dst, CLAUDE_STATUS_SH)
                     .with_context(|| format!("seed {}", status_dst.display()))?;
@@ -79,7 +79,6 @@ pub struct RunOpts<'a> {
 
 /// What an agent wants from a run, after translating its relay config. Combines
 /// with the shared docker flags in [`assemble_run_args`].
-#[derive(Default)]
 pub struct Invocation {
     /// Extra `docker run` args the agent needs (e.g. Codex's `--env-file` for the
     /// key, or a read-only `auth.json` / instructions mount).
