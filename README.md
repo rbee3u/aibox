@@ -4,12 +4,18 @@ Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that
 **is** the sandbox boundary — so the agent can skip every permission prompt and
 work unrestricted, while the blast radius stays inside the container.
 
-Two sibling tools, same design:
+One binary, `aibox`, with a subcommand per agent — same design for both:
 
-| Tool          | Agent        | Wraps            |
-| ------------- | ------------ | ---------------- |
-| `aibox-claude` | Claude Code  | `@anthropic-ai/claude-code` |
-| `aibox-codex`  | OpenAI Codex | `@openai/codex`  |
+| Subcommand     | Agent        | Wraps            |
+| -------------- | ------------ | ---------------- |
+| `aibox claude` | Claude Code  | `@anthropic-ai/claude-code` |
+| `aibox codex`  | OpenAI Codex | `@openai/codex`  |
+
+> **Rust rewrite.** `aibox` is a single Rust binary; it replaces the two Bash
+> scripts (`aibox-claude` / `aibox-codex`) that this repo shipped earlier. The
+> on-disk layout (`~/.aibox/<agent>/…`) and image names (`aibox-claude:latest`,
+> `aibox-codex:latest`) are unchanged, so existing profiles keep working — only
+> the invocation changed (`aibox-claude …` → `aibox claude …`). See `REWRITE.md`.
 
 ## Why
 
@@ -32,30 +38,42 @@ written into the mounted home).
 
 ## Install
 
-Symlink the scripts onto your `$PATH` (they resolve their own location, so the
-Dockerfile is found through the symlink):
+`aibox` is a single Rust binary. Build and install it with Cargo (needs a Rust
+toolchain; [rustup.rs](https://rustup.rs) if you don't have one):
 
 ```sh
-ln -s "$PWD/aibox-claude" ~/.local/bin/aibox-claude
-ln -s "$PWD/aibox-codex"  ~/.local/bin/aibox-codex
+cargo install --path .
 ```
+
+That drops `aibox` into `~/.cargo/bin` (make sure it's on your `$PATH`). To build
+without installing, `cargo build --release` and use `target/release/aibox`.
+
+The Dockerfiles are embedded in the binary at compile time, so there's nothing
+else to place on disk — `aibox` builds its images from what it carries.
 
 ## Quick start
 
 ```sh
 # 1. Build the image (also re-run any time to upgrade to latest upstream)
-aibox-codex --build
+aibox codex --build
 
 # 2. First use of a relay name scaffolds a config stub, then stops
-aibox-codex -e myrelay
+aibox codex -e myrelay
 #    -> edit ~/.aibox/codex/default/envs/myrelay with your endpoint + key
 
 # 3. Run it against the current directory
 cd ~/code/some-project
-aibox-codex -e myrelay
+aibox codex -e myrelay
 ```
 
-`aibox-claude` works the same way (`aibox-claude --build`, `-e <relay>`, …).
+`aibox claude` works the same way (`aibox claude --build`, `-e <relay>`, …).
+
+Pass arguments straight through to the underlying agent after `--`:
+
+```sh
+aibox claude -e myrelay -- --model opus
+aibox codex -e myrelay --exec -- "run the tests and fix failures"
+```
 
 ## Config layout
 
@@ -111,10 +129,10 @@ scripts' templates evolve, a normal run nudges you if a file is stale. Refresh
 the docs without losing your config:
 
 ```sh
-aibox-codex sync            # base + every relay in the profile
-aibox-codex sync base       # just base
-aibox-codex sync myrelay    # one relay
-aibox-codex sync --dry-run  # print the result instead of writing
+aibox codex sync            # base + every relay in the profile
+aibox codex sync base       # just base
+aibox codex sync myrelay    # one relay
+aibox codex sync --dry-run  # print the result instead of writing
 ```
 
 `sync` rewrites the doc/example comments to the current template while keeping
@@ -128,11 +146,11 @@ The agent's chat transcripts live in the profile home on the host, so both
 tools can browse them straight from disk — no container, no relay:
 
 ```sh
-aibox-claude session                  # list this profile's sessions, newest first
-aibox-claude session list             # same thing
-aibox-claude session get 3f2a         # print your prompts from that session
-aibox-claude session delete 3f2a      # remove it (asks first)
-aibox-claude session get 3f2a -p risky  # a different profile
+aibox claude session                  # list this profile's sessions, newest first
+aibox claude session list             # same thing
+aibox claude session get 3f2a         # print your prompts from that session
+aibox claude session delete 3f2a      # remove it (asks first)
+aibox claude session get 3f2a -p risky  # a different profile
 ```
 
 `list` shows one row per session — short id, date, and a title (Claude's
@@ -154,7 +172,7 @@ per-profile: pass `-p <name>` to browse a profile other than `default`.
 
 ## Common flags
 
-Both tools share these (see `-h` for the full list):
+Both agents share these (see `aibox claude -h` / `aibox codex -h` for the full list):
 
 | Flag | |
 | --- | --- |
@@ -165,10 +183,13 @@ Both tools share these (see `-h` for the full list):
 | `--safe` | keep the agent's normal prompts/sandbox instead of bypassing |
 | `--build` | rebuild the image from scratch (this is how you upgrade) |
 
-`aibox-codex` also has `--exec` for headless runs: `aibox-codex -e r --exec -- "fix the build"`.
+`aibox codex` also has `--exec` for headless runs: `aibox codex -e r --exec -- "fix the build"`.
 
 ## Upgrading
 
 `--build` forces `--no-cache --pull`, which re-pulls the base image and
 re-resolves the "latest" Node / Go / Rust / agent versions. A plain cached build would
 freeze them, so `--build` is the way to pick up new upstream releases.
+
+That upgrades the *images*. To upgrade `aibox` itself, pull the repo and
+`cargo install --path .` again.

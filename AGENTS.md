@@ -1,74 +1,105 @@
 # AGENTS.md
 
-Guidance for AI agents working on this repo. Read this before editing the
-scripts.
+Guidance for AI agents working on this repo. Read this before editing.
 
 ## What this is
 
-Two Bash wrapper scripts (`aibox-claude`, `aibox-codex`) plus their Dockerfiles.
-Each runs a coding agent inside a container that is the sandbox boundary. The
-scripts are the whole product — there's no build system, no tests beyond running
-them. See `README.md` for user-facing docs.
+`aibox` is a single Rust CLI that runs a coding agent (Claude Code or OpenAI
+Codex) inside a Docker container that **is** the sandbox boundary. One binary,
+two agent subcommands:
+
+```
+aibox claude [options] [-- <args passed straight to claude>]
+aibox codex  [options] [-- <args passed straight to codex>]
+```
+
+Both subcommands also carry `sync` (refresh config-file template docs) and
+`session` (browse saved transcripts host-side). See `README.md` for user docs
+and `REWRITE.md` for the design history (this was ported from two Bash scripts).
+
+The original Bash scripts (`aibox-claude`, `aibox-codex`, `aibox-claude-status.sh`)
+are **still in the tree** as a reference/fallback during the transition. They are
+frozen — don't add features there. New work goes in Rust. They'll be removed once
+the Rust version has been exercised enough.
+
+## Layout
+
+```
+src/
+  main.rs        # thin bin: split argv at `--`, clap parse, call lib::run
+  lib.rs         # orchestration (run / run_agent) + module wiring
+  cli.rs         # clap types + split_passthrough
+  agent.rs       # AgentKind enum + trait-like methods — THE divergence point
+  profile.rs     # profile paths, home seeding, relay resolve/scaffold
+  envfile.rs     # base+relay merge (IndexMap: order + last-wins)
+  template.rs    # env-file templates + TEMPLATE_VERSION + stamp reader
+  sync.rs        # sync merge engine + file dispatch
+  session/       # transcript browsing: mod.rs (shared) + claude.rs + codex.rs
+  docker.rs      # docker build/run child processes
+  creds.rs       # 0600 temp creds + Drop + signal cleanup
+  runspec.rs     # docker-run arg assembly + Invocation + home seeding
+  platform.rs    # uid/gid, TTY, OS gate
+assets/          # Dockerfiles + status.sh, embedded via include_str!
+```
 
 ## Hard constraints
 
-**bash 3.2 compatibility.** macOS ships bash 3.2 and users run these there. Do
-NOT use bash 4+ features:
-- no associative arrays (`declare -A`)
-- no `${var,,}` / `${var^^}` case expansion — pipe through `tr` instead
-- guard empty-array expansion for `set -u`: `${arr[@]+"${arr[@]}"}`, not `"${arr[@]}"`
-
-When you need an associative array, push the logic into `awk` (its arrays are
-associative and always available). The `sync` merge and the env-file read both
-do this deliberately.
-
-**Quoting style.** Strings that don't need quotes don't get them
-(`profile=default`, `-c model_provider=aibox`). When quotes ARE needed, prefer
-double `"`; single `'` only as a last resort (e.g. heredoc delimiters that must
-not expand). Expansions and values with spaces are quoted (`"$model"`,
-`"model_providers.aibox.name=aibox relay"`). Keep this consistent — it was a
-deliberate cleanup pass.
+**The two agents diverge in exactly one place: `AgentKind` (`agent.rs`).**
+Image name, config root, container home, Dockerfile, templates, the docker
+invocation (endpoint wiring + agent command line), and the session backend all
+hang off it. Shared logic (profile, envfile, sync, session surface, docker
+hardening) is written once and takes an `AgentKind`. This is the type-enforced
+replacement for the old "keep the two Bash scripts in parallel" rule: a
+divergence that isn't expressed through `AgentKind` is a compile error, not a
+copy-paste someone forgot. If you're about to special-case Claude vs Codex
+outside `agent.rs` / `session/`, reconsider.
 
 **Credentials never persist.** The API key is staged in a `0600` temp file
-(env-file, or a throwaway `auth.json` bind-mounted read-only for codex's
-`requires_openai_auth` mode) and removed via an EXIT/INT/TERM trap. Because of
-that trap we canNOT `exec docker` — docker must run as a child so cleanup fires.
-Don't "optimize" that into an exec.
+(the merged env-file for Claude, a key-only env-file or a throwaway `auth.json`
+for Codex) and unlinked on every exit path. `creds.rs` covers both:
+- normal / error path — `StagedFile`'s `Drop` unlinks;
+- interrupt path — a SIGINT/SIGTERM handler unlinks every registered path and
+  re-raises, because `Drop` does **not** run on a signal.
 
-**config.toml stays the user's.** For codex, the endpoint is injected only via
-runtime `-c key=value` overrides, never written to the mounted `config.toml`.
-That file holds the user's `codex login`, trust levels, MCP servers. The env
-file (SessionFlags, precedence 30) intentionally outranks config.toml (User,
-precedence 20), which is what lets the relay's model/reasoning win on each run.
+Docker runs as a **child** (`Command::status()`, never an exec-replace) so the
+guards drop after it returns. Don't turn that into `exec`. If you add a new kind
+of staged credential, register it through `creds.rs` so both paths cover it, and
+manually test Ctrl-C mid-run.
 
-## Keep the two scripts in parallel
-
-`aibox-claude` and `aibox-codex` share structure intentionally: same arg-parse
-loop, same profile/`base`/`envs/` layout, same `# --- section ---` headers, same
-`sync` implementation, same hardening flags. When you change shared behavior,
-change BOTH unless there's a Codex/Claude-specific reason not to (and note it).
+**config.toml stays the user's (Codex).** The endpoint is injected only via
+runtime `-c key=value` overrides (`agent.rs::build_codex`), never written to the
+mounted `config.toml` — that file holds the user's `codex login`, trust levels,
+MCP servers. The two auth modes are mutually exclusive: `env_key` (key via
+`--env-file`) vs `requires_openai_auth` (key via a read-only `auth.json` mount);
+setting both breaks Codex's own provider validation.
 
 ## Templates and `sync`
 
-Env-file templates live in `emit_base_template` / `emit_relay_template` —
-single source, shared by first-run scaffolding and `sync`. Rules:
-- Every item is a `#` comment describing it, followed by a commented
-  `#KEY=example`. Nothing active — users append real lines under the examples.
+Env-file templates live in `template.rs` (`base_template` / `relay_template`) —
+single source, shared by first-run scaffolding (`profile.rs`) and `sync`
+(`sync.rs`). Rules:
+- Every item is a `#` doc comment, then a commented `#KEY=example`. Nothing
+  active — users append real lines under the examples.
 - The first line is a `# aibox-template: vN` stamp. **Bump `TEMPLATE_VERSION`
-  whenever you change a template**, so stale files get flagged and `sync` can
-  refresh them.
-- The `sync` awk matches example lines by `^#[A-Za-z_][A-Za-z0-9_]*=` and
-  re-places the user's real lines under them. If you change example formatting,
-  keep it matching that pattern.
+  (in `agent.rs`) whenever you change a template**, so stale files get flagged
+  and `sync` can refresh them.
+- `sync` matches example lines by `^#[A-Za-z_][A-Za-z0-9_]*=` (see
+  `sync::example_key`) and re-places the user's real lines under them. If you
+  change example formatting, keep it matching that pattern, and update the
+  `sync` tests.
 
-## Help text is generated
+## Dockerfiles
 
-`usage()` prints the leading comment block (lines 3 to the first blank line) with
-the `# ` stripped. So the header comment IS the `--help` output — edit the
-header to change help, and keep it formatted as help.
+Neither Dockerfile has a `COPY` — they fetch everything via apt/curl/npm. That's
+load-bearing: the build context is unused, so `docker.rs` feeds the embedded
+Dockerfile to `docker build -f -` on stdin with an empty context. Keep them
+`COPY`-free, or the stdin-build has to change.
 
 ## After editing
 
-Run `bash -n <script>` and `bash <script> --help`. For `sync` changes, test the
-merge against a mock old file (stub `docker` on `$PATH` if you need to reach a
-run path). Confirm both scripts still parse.
+- `cargo build` and `cargo test` (unit tests live beside each module).
+- `cargo clippy --all-targets` and `cargo fmt` — keep both clean.
+- For run-path changes you can't unit-test, stub `docker` on `$PATH` with a
+  script that echoes its args, and check the assembled `docker run` line.
+- For `creds.rs` changes, manually verify a staged file is gone after both a
+  normal exit and a Ctrl-C mid-run.
