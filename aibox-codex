@@ -63,11 +63,17 @@
 # Usage:
 #   aibox-codex [options] [-- <args passed straight to codex>]
 #   aibox-codex sync [base|<relay>] [--dry-run]   # refresh template docs
+#   aibox-codex session [list|get <id>|delete <id>] [-p <profile>]
 #
 # `sync` rewrites a file's doc/example comments to the current template while
 # keeping every real config line you added (re-placed under its example; any
 # whose example is gone is kept in a trailing block). No arg syncs base + all
 # relays; --dry-run prints the result instead of writing.
+#
+# `session` browses this profile's saved chats straight from disk (no container):
+# `list` shows them newest-first (shortid, date, first-prompt preview); `get <id>`
+# prints your prompts from one, numbered, for copy-paste; `delete <id>` removes
+# one (asks first). <id> is a session's short id or any unique prefix.
 #
 # Options:
 #   -p, --profile <name>     Config profile name         (default: "default")
@@ -82,7 +88,7 @@
 #                            the prompt after -- (e.g. --exec -- "fix the build")
 #       --build              Rebuild the image from scratch before running.
 #                            Forces --no-cache --pull: the base image is
-#                            re-pulled and the "latest" Node/Go/Codex versions
+#                            re-pulled and the "latest" Node/Go/Rust/Codex versions
 #                            are re-resolved (a plain cached build would freeze
 #                            them at first-build values). This is the way to
 #                            upgrade. Slow — it rebuilds every layer.
@@ -268,13 +274,229 @@ sync_one() {
     fi
 }
 
+# --- session browsing (host-side; no container spin-up) ---------------------
+# `list`/`get`/`delete` operate directly on the transcripts the agent wrote into
+# the mounted profile home — reading and (for delete) rm-ing plain files. This
+# whole block is deliberately kept in parallel with aibox-claude; only the on-disk
+# format differs (Codex: <home>/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl,
+# line 1 a session_meta, user turns as response_item messages — no ai-title), so
+# only the awk extractors below and session_files/session_id_of diverge — surface,
+# resolve, delete are identical.
+#
+# NOTE: the Codex on-disk format here was mapped from the codex-rs `rollout` crate
+# (RolloutLine flattens a top-level `timestamp`+`type`+`payload`; a session_meta
+# line, then response_item messages with content [{type:input_text,text:…}]). It
+# was validated against a synthetic fixture built to that spec, NOT a real
+# codex-generated file — worth a sanity check on first real use.
+
+# Reusable awk helpers, IDENTICAL in both scripts: decode a JSON string body
+# (raw UTF-8 passes through; standard escapes and \uXXXX incl. surrogate pairs
+# are decoded) and pull a string field's value out of one JSONL line. macOS
+# ships BSD awk (no gawk strtonum/bitops), so \u is done with plain arithmetic.
+# alltext() (join every "text":"…" on a line) pulls a codex message's content.
+SESSION_AWK='
+function hexval(ch,   p){ p=index("0123456789abcdef",tolower(ch)); return (p>0)?p-1:0 }
+function hex4(s,   v,i){ v=0; for(i=1;i<=4;i++) v=v*16+hexval(substr(s,i,1)); return v }
+function utf8(code){
+  if(code<128) return sprintf("%c",code)
+  if(code<2048) return sprintf("%c%c",192+int(code/64),128+(code%64))
+  if(code<65536) return sprintf("%c%c%c",224+int(code/4096),128+(int(code/64)%64),128+(code%64))
+  return sprintf("%c%c%c%c",240+int(code/262144),128+(int(code/4096)%64),128+(int(code/64)%64),128+(code%64))
+}
+function jdec(s,   out,i,c,n,code,lo){
+  out=""; n=length(s); i=1
+  while(i<=n){
+    c=substr(s,i,1)
+    if(c=="\\"){
+      i++; c=substr(s,i,1)
+      if(c=="n") out=out "\n"
+      else if(c=="t") out=out "\t"
+      else if(c=="r") out=out "\r"
+      else if(c=="b") out=out sprintf("%c",8)
+      else if(c=="f") out=out sprintf("%c",12)
+      else if(c=="/") out=out "/"
+      else if(c=="\\") out=out "\\"
+      else if(c=="\"") out=out "\""
+      else if(c=="u"){
+        code=hex4(substr(s,i+1,4)); i+=4
+        if(code>=55296 && code<=56319 && substr(s,i+1,2)=="\\u"){
+          lo=hex4(substr(s,i+3,4)); i+=6
+          code=65536+(code-55296)*1024+(lo-56320)
+        }
+        out=out utf8(code)
+      }
+      else out=out c
+    } else { out=out c }
+    i++
+  }
+  return out
+}
+function keypos(line,key,   pat,p){ pat="\"" key "\":"; p=index(line,pat); return (p==0)?0:p+length(pat) }
+function scanstr(line,q,   i,c,body,n){
+  n=length(line); i=q+1; body=""
+  while(i<=n){
+    c=substr(line,i,1)
+    if(c=="\\"){ body=body substr(line,i,2); i+=2; continue }
+    if(c=="\"") break
+    body=body c; i++
+  }
+  return body
+}
+function getstr(line,key,   q){
+  q=keypos(line,key); if(q==0) return ""
+  while(substr(line,q,1)==" ") q++
+  if(substr(line,q,1)!="\"") return ""
+  return jdec(scanstr(line,q))
+}
+function alltext(line,skip,   out,p,q,body,dec,rest){
+  out=""; rest=line
+  while((p=index(rest,"\"text\":"))>0){
+    q=p+7
+    while(substr(rest,q,1)==" ") q++
+    if(substr(rest,q,1)=="\""){
+      body=scanstr(rest,q); dec=jdec(body)
+      if(skip=="" || dec !~ skip)
+        out=(out=="")?dec:out "\n" dec
+      rest=substr(rest,q+length(body)+2)
+    } else rest=substr(rest,q)
+  }
+  return out
+}
+'
+
+# All Codex rollout transcripts under this profile home (empty if none yet).
+session_files() {
+    local base="$home_dir/.codex/sessions"
+    [[ -d "$base" ]] || return 0
+    find "$base" -type f -name 'rollout-*.jsonl' 2>/dev/null
+}
+
+# A Codex session id is the trailing uuid of the rollout filename
+# (rollout-<date>-<uuid>.jsonl -> <uuid>); the uuid is the last 36 chars of the
+# stem. The leading space in ${stem: -36} is required (bash 3.2 negative offset).
+session_id_of() { local b stem; b="$(basename "$1")"; stem="${b%.jsonl}"; printf '%s' "${stem: -36}"; }
+
+# Resolve a full id or unique prefix to exactly one transcript path (printed on
+# stdout). 0 matches or an ambiguous prefix fail with a message on stderr.
+session_resolve() {
+    local query="$1" f id
+    declare -a matches=()
+    [[ -n "$query" ]] || { echo "!! need a session id (or unique prefix)" >&2; return 1; }
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        id="$(session_id_of "$f")"
+        case "$id" in "$query"*) matches+=("$f") ;; esac
+    done < <(session_files)
+    case ${#matches[@]} in
+        0) echo "!! no session matches: $query" >&2; return 1 ;;
+        1) printf '%s' "${matches[0]}" ;;
+        *) echo "!! ambiguous id '$query' matches ${#matches[@]} sessions:" >&2
+           local m; for m in "${matches[@]}"; do echo "     $(session_id_of "$m")" >&2; done
+           return 1 ;;
+    esac
+}
+
+# Matches an injected wrapper Codex records as a user turn but that you never
+# typed: the environment/instructions context blocks, `!`-shell commands, and
+# the per-project AGENTS.md preamble (`# <file> instructions for <path>` +
+# <INSTRUCTIONS>…). Passed into alltext(), which tests it against EACH content
+# item and drops the matches — a turn can bundle several items (e.g. AGENTS.md
+# + environment_context) and the real text isn't always first. A turn left with
+# nothing after filtering is skipped, so `list`/`get` stay your actual chats.
+CODEX_SKIP_RE='^(<environment_context>|<user_instructions>|<user_shell|<INSTRUCTIONS>|#[^\n]* instructions for |## My env)'
+
+# List this profile's sessions, newest first: shortid, date, first prompt. Codex
+# has no ai-title, so the preview is your first real prompt. Sessions with no
+# such prompt (nothing you asked) are skipped so the list stays your chats.
+session_list() {
+    local f id summary typed rest ts title listing=""
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        id="$(session_id_of "$f")"
+        summary="$(awk -v skip="$CODEX_SKIP_RE" "$SESSION_AWK"'
+            NR==1 { startts=getstr($0,"timestamp") }
+            index($0,"\"type\":\"response_item\"")>0 && index($0,"\"role\":\"user\"")>0 {
+                t=alltext($0,skip)
+                if(t!=""){
+                    typed++
+                    if(firsttyped=="") firsttyped=t
+                }
+            }
+            END{ gsub(/[\n\t]+/," ",firsttyped); print typed+0 "\t" startts "\t" firsttyped }
+        ' "$f")"
+        typed="${summary%%$'\t'*}"
+        [[ "${typed:-0}" -gt 0 ]] || continue
+        rest="${summary#*$'\t'}"
+        ts="${rest%%$'\t'*}"
+        title="${rest#*$'\t'}"
+        listing+="$ts"$'\t'"$id"$'\t'"$title"$'\n'
+    done < <(session_files)
+    if [[ -z "$listing" ]]; then
+        echo ">> no sessions in profile '$profile'" >&2
+        return 0
+    fi
+    printf '%s' "$listing" | sort -r | awk -F'\t' '{
+        id=substr($2,1,8)
+        disp=($1!="")? substr($1,1,10) " " substr($1,12,5) : ""
+        printf "%-8s  %-16s  %s\n", id, disp, $3
+    }'
+}
+
+# Print your prompts from one session, numbered + timestamped, full text (for
+# copy-paste). Codex records user turns as response_item messages; the injected
+# context wrappers (see CODEX_SKIP_RE) are excluded.
+session_get() {
+    local path id
+    path="$(session_resolve "$1")" || return 1
+    id="$(session_id_of "$path")"
+    echo ">> session $id" >&2
+    awk -v skip="$CODEX_SKIP_RE" "$SESSION_AWK"'
+        index($0,"\"type\":\"response_item\"")>0 && index($0,"\"role\":\"user\"")>0 {
+            t=alltext($0,skip)
+            if(t!=""){
+                n++; ts=getstr($0,"timestamp")
+                d=(ts!="")? substr(ts,1,10) " " substr(ts,12,5) : ""
+                printf "\n[%d] %s\n%s\n", n, d, t
+            }
+        }
+        END{ if(n==0) print "(no prompts in this session)" }
+    ' "$path"
+}
+
+# Delete one session transcript, asking first (this is not reversible).
+session_delete() {
+    local path id ans
+    path="$(session_resolve "$1")" || return 1
+    id="$(session_id_of "$path")"
+    printf 'delete session %s? [y/N] ' "$id" >&2
+    read -r ans || ans=
+    case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+        y|yes) rm -f "$path"; echo ">> deleted $id" >&2 ;;
+        *)     echo ">> kept $id" >&2 ;;
+    esac
+}
+
+session_dispatch() {
+    case "$1" in
+        list)      session_list ;;
+        get)       session_get "$2" ;;
+        delete|rm) session_delete "$2" ;;
+        *) echo "!! unknown session action: $1 (use list|get|delete)" >&2; return 1 ;;
+    esac
+}
+
 subcmd=
 sync_target=
 dry_run=0
+sess_action=
+sess_id=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         sync)         subcmd=sync; shift
                       [[ $# -gt 0 && "$1" != -* ]] && { sync_target="$1"; shift; } ;;
+        session)      subcmd=session; shift
+                      [[ $# -gt 0 && "$1" != -* ]] && { sess_action="$1"; shift; }
+                      [[ $# -gt 0 && "$1" != -* ]] && { sess_id="$1"; shift; } ;;
         --dry-run)    dry_run=1; shift ;;
         -p|--profile) profile="$2"; shift 2 ;;
         -e|--env)     env_name="$2"; shift 2 ;;
@@ -293,7 +515,7 @@ done
 # --build always (re)builds; a missing image is also auto-built just before the
 # real run below, so the scaffold-and-stop path never builds for nothing.
 #
-# --no-cache --pull is deliberate: the Node/Go layers resolve "latest" at build
+# --no-cache --pull is deliberate: the Node/Go/Rust layers resolve "latest" at build
 # time via curl, but their RUN text never changes, so a cached build would skip
 # the resolution and freeze the versions at whatever the first build saw. Full
 # rebuild + fresh base image is the only way an explicit --build actually picks
@@ -324,6 +546,14 @@ if [[ "$subcmd" == sync ]]; then
         *)      sync_one "$envs_dir/$sync_target" emit_relay_template "$sync_target" ;;
     esac
     exit 0
+fi
+
+# --- session: browse/delete this profile's transcripts (host-side) -----------
+# No relay, no docker — just reads (and rm's) the files under the profile home.
+# `session` with no action defaults to `list`.
+if [[ "$subcmd" == session ]]; then
+    session_dispatch "${sess_action:-list}" "$sess_id"
+    exit $?
 fi
 
 mkdir -p "$home_dir"
@@ -388,7 +618,7 @@ done
 # Cached on purpose (no --no-cache/--pull): this only fires to get a runnable
 # image when there's none, so speed wins. It may reuse stale layers and produce
 # an older version than upstream — that's fine here. Upgrading is --build's job.
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+if [ -z "$(docker image ls -q "$IMAGE" 2>/dev/null)" ]; then
     echo ">> $IMAGE not present — building from cache (fast; --build to refresh) ..."
     docker build -f "$DOCKERFILE" -t "$IMAGE" "$SCRIPT_DIR"
 fi

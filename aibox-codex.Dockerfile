@@ -6,7 +6,7 @@
 # We don't rely on it: aibox-codex launches with the sandbox bypassed, because
 # the container is the boundary. See the aibox-codex script for the flags.
 #
-# Build (latest stable Node + Go, resolved at build time):
+# Build (latest stable Node + Go + Rust, resolved at build time):
 #   docker build -f aibox-codex.Dockerfile -t aibox-codex:latest .
 #   (or just run  aibox-codex --build)
 #
@@ -14,6 +14,7 @@
 #   docker build -f aibox-codex.Dockerfile \
 #       --build-arg GO_VERSION=go1.26.0 \
 #       --build-arg NODE_VERSION=v24.4.0 \
+#       --build-arg RUST_VERSION=1.88.0 \
 #       -t aibox-codex:latest .
 
 FROM debian:bookworm-slim
@@ -26,9 +27,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # empty. Used by the Node and Go layers below to pick the right arch tarball.
 ARG TARGETARCH
 
-# Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo
-# and node native modules), jq (to resolve "latest" versions), and the handful
-# of CLIs a coding agent shells out to.
+# Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo,
+# Rust crates, and node native modules), jq (to resolve "latest" versions), and
+# the handful of CLIs a coding agent shells out to.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -82,6 +83,23 @@ RUN set -eux; \
     rm /tmp/go.tgz; \
     /usr/local/go/bin/go version
 
+# --- Rust -------------------------------------------------------------------
+# Empty/default RUST_VERSION => latest stable resolved by rustup at build time.
+# Accepts rustup toolchain names like stable, nightly, or 1.88.0 when pinning.
+ARG RUST_VERSION=stable
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+RUN set -eux; \
+    v="${RUST_VERSION:-stable}"; \
+    curl -fsSL https://sh.rustup.rs | sh -s -- \
+        -y \
+        --no-modify-path \
+        --profile default \
+        --default-toolchain "$v"; \
+    chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"; \
+    "$CARGO_HOME/bin/rustc" --version; \
+    "$CARGO_HOME/bin/cargo" --version; \
+    "$CARGO_HOME/bin/rustup" --version
+
 # --- Extra toolchains (add per project, then `aibox-codex --build`) ----------
 # This is the slot to grow the image. Uncomment / add what a project needs;
 # each is its own layer, so adding one only rebuilds from here down. Keep
@@ -96,12 +114,6 @@ RUN set -eux; \
 #   RUN apt-get update && apt-get install -y --no-install-recommends \
 #         python3 python3-pip python3-venv \
 #     && rm -rf /var/lib/apt/lists/*
-#
-# Rust (rustup into /usr/local, available to all users):
-#   ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
-#   ENV PATH=/usr/local/cargo/bin:$PATH
-#   RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path \
-#     && chmod -R a+rwX /usr/local/cargo
 
 # --- Codex CLI ---------------------------------------------------------------
 # The npm package delivers a per-platform native binary via optionalDependencies;
@@ -120,7 +132,7 @@ ENV HOME=/home/codex
 ENV CODEX_HOME=/home/codex/.codex
 # GOPATH lives in the mounted home => module cache persists per profile.
 ENV GOPATH=/home/codex/go
-ENV PATH=/usr/local/go/bin:/home/codex/go/bin:$PATH
+ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/home/codex/go/bin:$PATH
 
 WORKDIR /work
 USER codex

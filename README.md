@@ -63,11 +63,11 @@ Everything is per-profile on the host, under `~/.aibox/<tool>/`:
 
 ```
 ~/.aibox/codex/
-└── default/                 # profile (-p <name> to switch; default is "default")
-      ├── base               # shared config inherited by every relay
-      ├── envs/               # relay endpoints — pick one per run with -e <name>
+└── default/                # profile (-p <name> to switch; default is "default")
+      ├── base              # shared config inherited by every relay
+      ├── envs/             # relay endpoints — pick one per run with -e <name>
       │     └── myrelay
-      └── home/               # mounted as the agent's home (sessions, auth, config)
+      └── home/             # mounted as the agent's home (sessions, auth, config)
 ```
 
 `base` holds shared settings; each relay under `envs/` is merged on top of it
@@ -122,6 +122,36 @@ every real config line you added — each re-placed under its matching example.
 A real key whose example no longer exists is kept in a trailing block, so
 nothing is lost.
 
+## Browsing past sessions: `session`
+
+The agent's chat transcripts live in the profile home on the host, so both
+tools can browse them straight from disk — no container, no relay:
+
+```sh
+aibox-claude session                  # list this profile's sessions, newest first
+aibox-claude session list             # same thing
+aibox-claude session get 3f2a         # print your prompts from that session
+aibox-claude session delete 3f2a      # remove it (asks first)
+aibox-claude session get 3f2a -p risky  # a different profile
+```
+
+`list` shows one row per session — short id, date, and a title (Claude's
+generated title, or the first prompt for Codex):
+
+```
+3f2a1b6c  2026-07-14 02:16  Debug the repeated image rebuild
+9d0e4a2f  2026-07-13 08:02  隔离环境下查找和切换会话
+```
+
+`get <id>` prints your own prompts from a session, numbered and timestamped,
+in full — handy for finding a prompt you liked and copy-pasting it into a new
+run. Tool results and the agent's replies are left out. `delete <id>` removes
+one transcript after a `y/N` confirm.
+
+`<id>` is the short id from `list` (or any unique prefix of the full id) — an
+ambiguous prefix lists the matches instead of guessing. Everything is
+per-profile: pass `-p <name>` to browse a profile other than `default`.
+
 ## Common flags
 
 Both tools share these (see `-h` for the full list):
@@ -140,5 +170,5 @@ Both tools share these (see `-h` for the full list):
 ## Upgrading
 
 `--build` forces `--no-cache --pull`, which re-pulls the base image and
-re-resolves the "latest" Node / Go / agent versions. A plain cached build would
+re-resolves the "latest" Node / Go / Rust / agent versions. A plain cached build would
 freeze them, so `--build` is the way to pick up new upstream releases.

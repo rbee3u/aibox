@@ -2,7 +2,7 @@
 # Packages Claude Code plus a general dev toolchain into a Debian image, so
 # high-risk projects can be run inside a container that IS the sandbox boundary.
 #
-# Build (latest stable Node + Go, resolved at build time):
+# Build (latest stable Node + Go + Rust, resolved at build time):
 #   docker build -f aibox-claude.Dockerfile -t aibox-claude:latest .
 #   (or just run  aibox-claude --build)
 #
@@ -10,6 +10,7 @@
 #   docker build -f aibox-claude.Dockerfile \
 #       --build-arg GO_VERSION=go1.26.0 \
 #       --build-arg NODE_VERSION=v24.4.0 \
+#       --build-arg RUST_VERSION=1.88.0 \
 #       -t aibox-claude:latest .
 
 FROM debian:bookworm-slim
@@ -22,9 +23,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # empty. Used by the Node and Go layers below to pick the right arch tarball.
 ARG TARGETARCH
 
-# Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo
-# and node native modules), jq (to resolve "latest" versions), and the handful
-# of CLIs Claude Code shells out to.
+# Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo,
+# Rust crates, and node native modules), jq (to resolve "latest" versions), and
+# the handful of CLIs Claude Code shells out to.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -78,6 +79,23 @@ RUN set -eux; \
     rm /tmp/go.tgz; \
     /usr/local/go/bin/go version
 
+# --- Rust -------------------------------------------------------------------
+# Empty/default RUST_VERSION => latest stable resolved by rustup at build time.
+# Accepts rustup toolchain names like stable, nightly, or 1.88.0 when pinning.
+ARG RUST_VERSION=stable
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+RUN set -eux; \
+    v="${RUST_VERSION:-stable}"; \
+    curl -fsSL https://sh.rustup.rs | sh -s -- \
+        -y \
+        --no-modify-path \
+        --profile default \
+        --default-toolchain "$v"; \
+    chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"; \
+    "$CARGO_HOME/bin/rustc" --version; \
+    "$CARGO_HOME/bin/cargo" --version; \
+    "$CARGO_HOME/bin/rustup" --version
+
 # --- Extra toolchains (add per project, then `aibox-claude --build`) ---------
 # This is the slot to grow the image. Uncomment / add what a project needs;
 # each is its own layer, so adding one only rebuilds from here down. Keep
@@ -92,12 +110,6 @@ RUN set -eux; \
 #   RUN apt-get update && apt-get install -y --no-install-recommends \
 #         python3 python3-pip python3-venv \
 #     && rm -rf /var/lib/apt/lists/*
-#
-# Rust (rustup into /usr/local, available to all users):
-#   ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
-#   ENV PATH=/usr/local/cargo/bin:$PATH
-#   RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path \
-#     && chmod -R a+rwX /usr/local/cargo
 
 # --- Claude Code -------------------------------------------------------------
 RUN npm install -g @anthropic-ai/claude-code \
@@ -111,7 +123,7 @@ RUN groupadd --gid 1000 claude \
 ENV HOME=/home/claude
 # GOPATH lives in the mounted home => module cache persists per profile.
 ENV GOPATH=/home/claude/go
-ENV PATH=/usr/local/go/bin:/home/claude/go/bin:$PATH
+ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/home/claude/go/bin:$PATH
 # Image is immutable; update by rebuilding, not self-updating.
 ENV DISABLE_AUTOUPDATER=1
 
