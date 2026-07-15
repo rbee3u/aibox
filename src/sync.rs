@@ -1,8 +1,8 @@
 //! `sync`: refresh a config file's doc/example comments to the current template
 //! while keeping every real config line the user added.
 //!
-//! Ports the Bash `sync_file` awk merge. The algorithm, given the old file's
-//! contents and a freshly generated template:
+//! The algorithm, given the old file's contents and a freshly generated
+//! template:
 //!
 //! 1. Collect the old file's real (uncommented `KEY=VALUE`) lines, last value
 //!    winning per key, in first-seen order.
@@ -23,15 +23,14 @@ use indexmap::IndexMap;
 use std::fs;
 use std::path::Path;
 
-/// The trailing-block header, emitted once before any orphaned keys. Byte-for-byte
-/// the Bash string so synced files are identical across the two implementations.
+/// The trailing-block header, emitted once before any orphaned keys.
 const ORPHAN_HEADER: &str =
     "# --- settings kept from your old file (no matching example above) ---";
 
 /// Rewrite `old` against `template`: template docs/examples, with the user's real
 /// values re-placed under their matching examples and orphans appended. Returns
 /// the new file contents (no trailing newline is added beyond what the template
-/// and values carry — the caller adds one when writing, matching Bash `printf`).
+/// and values carry — the caller adds one when writing).
 pub fn merge(old: &str, template: &str) -> String {
     // 1. Collect real KEY=VALUE lines from the old file (last wins, keep order).
     let mut vals: IndexMap<String, String> = IndexMap::new();
@@ -80,7 +79,7 @@ pub fn merge(old: &str, template: &str) -> String {
 
 /// If `line` is an example line of the form `#KEY=…` (a `#` immediately followed
 /// by a key that starts with a letter/underscore, then `=`), return the key.
-/// Matches the Bash awk pattern `^#[A-Za-z_][A-Za-z0-9_]*=`.
+/// The key must match `#[A-Za-z_][A-Za-z0-9_]*=`.
 fn example_key(line: &str) -> Option<String> {
     let rest = line.strip_prefix('#')?;
     let mut chars = rest.char_indices();
@@ -106,8 +105,7 @@ fn example_key(line: &str) -> Option<String> {
 /// - `Some("base")` — just `base`;
 /// - `Some(relay)` — one relay under `envs/`.
 ///
-/// `dry_run` prints the result instead of writing. Ports the Bash `sync`
-/// subcommand block (shared by both scripts).
+/// `dry_run` prints the result instead of writing.
 pub fn run_sync(prof: &Profile, target: Option<&str>, dry_run: bool) -> Result<i32> {
     match target {
         None => {
@@ -138,7 +136,7 @@ pub fn run_sync(prof: &Profile, target: Option<&str>, dry_run: bool) -> Result<i
 
 /// Sync one file in place (or to stdout under `dry_run`). `relay_name` is `None`
 /// for `base` (uses the base template) or `Some(name)` for a relay. A missing
-/// file is skipped with a notice, matching the Bash `sync_one`.
+/// file is skipped with a notice.
 fn sync_one(prof: &Profile, file: &Path, relay_name: Option<&str>, dry_run: bool) -> Result<()> {
     if !file.is_file() {
         eprintln!("!! not found, skipping: {}", file.display());
@@ -153,7 +151,7 @@ fn sync_one(prof: &Profile, file: &Path, relay_name: Option<&str>, dry_run: bool
     if dry_run {
         println!("===== {} =====\n{result}\n", file.display());
     } else {
-        // Match the Bash `printf '%s\n'`: exactly one trailing newline.
+        // Exactly one trailing newline.
         profile::write_600(file, &format!("{result}\n"))?;
         eprintln!(
             ">> synced {} -> template v{TEMPLATE_VERSION}",
@@ -168,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn example_key_matches_bash_pattern() {
+    fn example_key_matches_pattern() {
         assert_eq!(example_key("#FOO=bar").as_deref(), Some("FOO"));
         assert_eq!(example_key("#FOO_BAR2=x").as_deref(), Some("FOO_BAR2"));
         assert_eq!(example_key("#_X=1").as_deref(), Some("_X"));
@@ -219,7 +217,7 @@ mod tests {
     #[test]
     fn value_placed_once_even_with_repeated_example() {
         // If the template somehow lists the same example twice, the value lands
-        // under the first only (matches Bash `!(k in done)`).
+        // under the first only.
         let template = "#FOO=example\n#FOO=example\n";
         let old = "FOO=v\n";
         let got = merge(old, template);

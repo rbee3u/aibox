@@ -1,8 +1,7 @@
 //! Command-line surface (clap derive) plus the argv pre-split that keeps
 //! pass-through agent args away from the parser.
 //!
-//! Invocation shape, unchanged in spirit from the two Bash scripts but now under
-//! one binary with agent subcommands:
+//! Invocation shape — one binary with agent subcommands:
 //!
 //! ```text
 //!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
@@ -12,18 +11,16 @@
 //!
 //! ## Why we split argv ourselves
 //!
-//! The Bash loop treats the first `--` as "everything after this goes to the
-//! agent verbatim" (`claude_args+=("$@"); break`). clap's trailing-var-arg has
-//! sharp edges when it has to coexist with subcommands (`sync`/`session`), so we
-//! sidestep the whole problem: [`split_passthrough`] cuts argv at the first `--`
-//! before clap ever sees it. clap parses only the left side; the right side is
-//! handed to the agent as-is.
+//! The first `--` means "everything after this goes to the agent verbatim".
+//! clap's trailing-var-arg has sharp edges when it has to coexist with
+//! subcommands (`sync`/`session`), so we sidestep the whole problem:
+//! [`split_passthrough`] cuts argv at the first `--` before clap ever sees it.
+//! clap parses only the left side; the right side is handed to the agent as-is.
 //!
-//! One deliberate deviation from Bash: the old scripts also collected *bare*
-//! positional args (no `--`) into the pass-through array (`*) claude_args+=…`).
-//! We don't — real usage always separates agent args with `--`
-//! (`aibox claude -e r -- --model opus`), and requiring it lets clap reject
-//! genuine typos instead of forwarding them silently.
+//! Bare positional args (no `--`) are not collected as pass-through: real usage
+//! always separates agent args with `--` (`aibox claude -e r -- --model opus`),
+//! and requiring it lets clap reject genuine typos instead of forwarding them
+//! silently.
 
 use crate::agent::AgentKind;
 use clap::{Args, Parser, Subcommand};
@@ -106,7 +103,7 @@ pub enum Action {
 
 /// Flags shared by a normal run. `--exec` is Codex-only and rejected for Claude
 /// in [`crate::run`] rather than in the type, so the two subcommands can share
-/// one struct (matching the Bash scripts' shared arg loop).
+/// one struct.
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Config profile name.

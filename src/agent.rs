@@ -3,18 +3,15 @@
 //! Everything the wrapper does that differs between Claude Code and Codex is
 //! funnelled through [`AgentKind`] and its methods. Shared logic (profile
 //! resolution, env merge, sync, session resolve/delete, docker hardening) lives
-//! elsewhere and takes an `AgentKind` only to ask these questions. This is the
-//! Rust replacement for the Bash "keep the two scripts in parallel" rule from
-//! AGENTS.md: a divergence that isn't expressed here is a compile error, not a
-//! copy-paste someone forgot.
+//! elsewhere and takes an `AgentKind` only to ask these questions. A divergence
+//! that isn't expressed here is a compile error, not a copy-paste someone forgot.
 
 use crate::creds::{GuardedPath, StagedFile};
 use crate::runspec::{Invocation, RunOpts};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Container path the Codex model-instructions file is mounted at (read-only),
-/// matching the Bash `instructions_ctr=/aibox-instructions.md`.
+/// Container path the Codex model-instructions file is mounted at (read-only).
 const CODEX_INSTRUCTIONS_CTR: &str = "/aibox-instructions.md";
 
 /// Which agent a run targets. Selected by the `aibox claude` / `aibox codex`
@@ -27,8 +24,7 @@ pub enum AgentKind {
 
 /// Bump when a template in [`crate::template`] changes. Existing env files carry
 /// the version they were written with (first line `# aibox-template: vN`); a run
-/// whose file lags this prints a hint to `sync`. Shared by both agents, matching
-/// the Bash `TEMPLATE_VERSION=3` in each script.
+/// whose file lags this prints a hint to `sync`. Shared by both agents.
 pub const TEMPLATE_VERSION: u32 = 3;
 
 impl AgentKind {
@@ -40,8 +36,7 @@ impl AgentKind {
         }
     }
 
-    /// Default image tag, overridable by `$AIBOX_IMAGE`. Unchanged from the Bash
-    /// `IMAGE="${AIBOX_IMAGE:-aibox-claude:latest}"`.
+    /// Default image tag, overridable by `$AIBOX_IMAGE`.
     pub fn image_default(self) -> &'static str {
         match self {
             AgentKind::Claude => "aibox-claude:latest",
@@ -49,11 +44,21 @@ impl AgentKind {
         }
     }
 
-    /// Default config root, overridable by `$AIBOX_CONFIG_ROOT`. Mirrors the Bash
-    /// `CONFIG_ROOT="${AIBOX_CONFIG_ROOT:-$HOME/.aibox/claude}"`. Returns the
+    /// Default config root, overridable by `$AIBOX_CONFIG_ROOT`. Returns the
     /// `$HOME/.aibox/<tag>` path; caller resolves `$HOME`.
     pub fn config_root_default(self, home: &str) -> PathBuf {
         PathBuf::from(home).join(".aibox").join(self.tag())
+    }
+
+    /// Whether the agent has a headless `exec` subcommand (the `--exec` flag).
+    /// Codex does (`codex exec`); Claude doesn't. The flag is shared in the CLI
+    /// struct so the subcommands can share one arg type, so the rejection lives
+    /// here rather than as an inline Claude/Codex branch in [`crate::run`].
+    pub fn supports_exec(self) -> bool {
+        match self {
+            AgentKind::Claude => false,
+            AgentKind::Codex => true,
+        }
     }
 
     /// The agent's home *inside the container* — the mount target and, for Codex,
@@ -68,8 +73,7 @@ impl AgentKind {
     /// The Dockerfile for this agent, embedded at compile time. Because neither
     /// Dockerfile has a `COPY` (they fetch everything via apt/curl/npm), the
     /// build context is irrelevant and we can feed this straight to
-    /// `docker build -f -`, which is why the Bash `readlink` self-location dance
-    /// is gone.
+    /// `docker build -f -` on stdin with an empty context.
     pub fn dockerfile(self) -> &'static str {
         match self {
             AgentKind::Claude => include_str!("../assets/claude.Dockerfile"),
@@ -85,7 +89,7 @@ impl AgentKind {
     ///   extra run args; the command line is just the permission toggle plus
     ///   pass-through.
     /// - **Codex** needs `-c key=value` overrides, a chosen auth mode, and
-    ///   possibly extra mounts — built in Phase 2.
+    ///   possibly extra mounts.
     pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
         match self {
             AgentKind::Claude => build_claude(opts),
@@ -96,11 +100,10 @@ impl AgentKind {
 
 /// Claude is configured entirely by env vars. The merged `base` + relay config
 /// is staged in a 0600 temp file (host-side only, never mounted) and delivered
-/// via `docker run --env-file`, matching the Bash `merged_env` handling. The
-/// command line bypasses permissions by default (the container is the boundary),
-/// or keeps prompts under `--safe`, then appends pass-through. Prepending the
-/// default flag means an explicit `--permission-mode` in the pass-through still
-/// wins — matching the Bash ordering.
+/// via `docker run --env-file`. The command line bypasses permissions by default
+/// (the container is the boundary), or keeps prompts under `--safe`, then appends
+/// pass-through. Prepending the default flag means an explicit `--permission-mode`
+/// in the pass-through still wins.
 fn build_claude(opts: &RunOpts) -> Result<Invocation> {
     // Stage the merged env as a 0600 file docker reads with --env-file. Held in
     // `staged` so it's unlinked once the run returns (or on signal; see creds).
@@ -132,10 +135,10 @@ fn build_claude(opts: &RunOpts) -> Result<Invocation> {
 /// the mounted `config.toml` (it holds the user's `codex login`, trust levels,
 /// MCP servers); instead the whole provider is injected ephemerally via Codex's
 /// own `-c key=value` overrides, and the key is delivered one of two mutually
-/// exclusive ways (see below). Ports the Bash `aibox-codex` run tail.
+/// exclusive ways (see below).
 fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // Read the keys we translate out of the merge. Unknown keys are ignored —
-    // this understands exactly the set below (matching the Bash `case`).
+    // this understands exactly the set below.
     let env = opts.env;
     let base_url = env.get("CODEX_BASE_URL").unwrap_or("");
     let api_key = env.get("CODEX_API_KEY").unwrap_or("");
@@ -146,7 +149,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     let requires_openai_auth = env.get("CODEX_REQUIRES_OPENAI_AUTH").unwrap_or("");
     let instructions_file = env.get("CODEX_INSTRUCTIONS_FILE").unwrap_or("");
 
-    // Required keys, matching the Bash `missing` check.
+    // Required keys.
     let mut missing = Vec::new();
     if base_url.is_empty() {
         missing.push("CODEX_BASE_URL");
@@ -297,8 +300,7 @@ fn push_c(cmd: &mut Vec<String>, kv: impl Into<String>) {
 
 /// Resolve a `CODEX_INSTRUCTIONS_FILE` value (a host path) to an absolute path.
 /// A leading `~/` expands against `$HOME`; an absolute path is taken as-is; a
-/// relative path is taken against the launch dir (`$PWD`), matching the Bash
-/// hand-expansion (`*) host_instr="$PWD/$instructions_file"`). Note this is the
+/// relative path is taken against the launch dir (`$PWD`). Note this is the
 /// launch cwd, *not* the `-w` work dir — the two differ when `-w` is passed.
 fn resolve_instructions_path(value: &str) -> Result<PathBuf> {
     if let Some(rest) = value.strip_prefix("~/") {
@@ -309,5 +311,16 @@ fn resolve_instructions_path(value: &str) -> Result<PathBuf> {
     } else {
         let cwd = std::env::current_dir().context("get $PWD for relative instructions path")?;
         Ok(cwd.join(value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_codex_supports_exec() {
+        assert!(!AgentKind::Claude.supports_exec());
+        assert!(AgentKind::Codex.supports_exec());
     }
 }

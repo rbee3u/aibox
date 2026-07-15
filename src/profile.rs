@@ -10,10 +10,6 @@
 //!     ├── envs/       # relay endpoints, pick one per run with -e <name>
 //!     └── home/       # mounted as the agent's home
 //! ```
-//!
-//! Ports the Bash "resolve profile paths", "a relay is required", first-run
-//! scaffolding, and template-staleness nudge blocks (shared between the two
-//! scripts).
 
 use crate::agent::{AgentKind, TEMPLATE_VERSION};
 use crate::template;
@@ -23,7 +19,6 @@ use std::path::{Path, PathBuf};
 
 /// Resolved per-profile paths. Built from the agent, the config root, and the
 /// profile name.
-#[derive(Debug, Clone)]
 pub struct Profile {
     pub agent: AgentKind,
     pub dir: PathBuf,
@@ -34,9 +29,8 @@ pub struct Profile {
 
 /// How a relay endpoint was resolved. A bare name lives under `envs/` and may be
 /// scaffolded on first use; a path (contains `/` or ends `.env`) is taken as-is
-/// and never scaffolded — matching the Bash
-/// `if [[ "$env_name" == */* || "$env_name" == *.env ]]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// and never scaffolded.
+#[derive(Debug, PartialEq, Eq)]
 pub enum RelayRef {
     /// A name under `<profile>/envs/`; may be scaffolded.
     Named { name: String, path: PathBuf },
@@ -101,7 +95,7 @@ impl Profile {
     /// first use. Returns:
     /// - `Ok(Some(relay))` — the relay file exists and is ready to use;
     /// - `Ok(None)` — we just scaffolded a stub and the caller should stop so the
-    ///   user can fill in credentials (matches the Bash scaffold-and-exit);
+    ///   user can fill in credentials;
     /// - `Err` — an explicit path that doesn't exist.
     pub fn resolve_relay_for_run(&self, env: &str) -> Result<Option<RelayRef>> {
         let relay = self.relay_ref(env);
@@ -120,7 +114,7 @@ impl Profile {
     }
 
     /// Write a `base` (once) plus a relay stub, then leave it to the caller to
-    /// stop. Files are 0600. Ports the Bash first-run scaffolding.
+    /// stop. Files are 0600.
     fn scaffold(&self, name: &str, relay_path: &Path) -> Result<()> {
         fs::create_dir_all(&self.envs_dir)
             .with_context(|| format!("create {}", self.envs_dir.display()))?;
@@ -165,8 +159,7 @@ impl Profile {
     }
 
     /// Nudge (without touching the file) when `base` or the relay predates the
-    /// current template, so stale docs can be refreshed with `sync`. Mirrors the
-    /// Bash staleness loop.
+    /// current template, so stale docs can be refreshed with `sync`.
     pub fn nudge_if_stale(&self, relay_path: &Path) {
         for f in [self.base_file.as_path(), relay_path] {
             let Ok(contents) = fs::read_to_string(f) else {
@@ -203,7 +196,7 @@ impl Profile {
 }
 
 /// Write `contents` to `path` with 0600 permissions (create or truncate). Used
-/// for every scaffolded config file, matching the Bash `chmod 600`.
+/// for every scaffolded config file.
 pub fn write_600(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
     set_600(path)

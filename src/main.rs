@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     match aibox::run(cli, passthrough) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(e) => {
-            // anyhow's Display chain, prefixed to match the scripts' `!!` errors.
+            // anyhow's Display chain, prefixed with `!!` to mark an error.
             eprintln!("!! {e:#}");
             ExitCode::from(1)
         }

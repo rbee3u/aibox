@@ -14,8 +14,7 @@ aibox codex  [options] [-- <args passed straight to codex>]
 ```
 
 Both subcommands also carry `sync` (refresh config-file template docs) and
-`session` (browse saved transcripts host-side). See `README.md` for user docs
-and `REWRITE.md` for the design history (this was ported from two Bash scripts).
+`session` (browse saved transcripts host-side). See `README.md` for user docs.
 
 ## Layout
 

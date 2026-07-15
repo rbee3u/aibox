@@ -9,16 +9,15 @@
 //! Neither Dockerfile has a `COPY`; they fetch everything with apt/curl/npm. So
 //! the build context is unused, and we feed the embedded Dockerfile
 //! (`AgentKind::dockerfile`) to `docker build -f - <ctx>` on stdin with an empty
-//! context directory. This is what lets the Bash `readlink` self-location dance
-//! (needed only to find the Dockerfile beside the script) disappear entirely.
+//! context directory, so there's no need to locate a Dockerfile on disk.
 
 use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// Build the image for `agent` into `image`. `fresh` maps to the Bash `--build`
-/// path: `--no-cache --pull` so the Node/Go/Rust/agent "latest" layers actually
+/// Build the image for `agent` into `image`. `fresh` is the `--build` path:
+/// `--no-cache --pull` so the Node/Go/Rust/agent "latest" layers actually
 /// re-resolve instead of reusing frozen cached versions. `fresh = false` is the
 /// auto-build-when-missing path (cached, fast).
 ///
@@ -53,8 +52,8 @@ pub fn build_image(agent: AgentKind, image: &str, fresh: bool) -> Result<()> {
     Ok(())
 }
 
-/// True if an image with this tag exists locally. Mirrors the Bash
-/// `docker image ls -q "$IMAGE"` emptiness check.
+/// True if an image with this tag exists locally (`docker image ls -q` prints
+/// nothing for a missing tag).
 pub fn image_exists(image: &str) -> bool {
     Command::new("docker")
         .args(["image", "ls", "-q", image])
@@ -65,8 +64,7 @@ pub fn image_exists(image: &str) -> bool {
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
 /// exit code. A child (not `exec`) so the caller's credential cleanup still runs
-/// after it returns — the Rust equivalent of the Bash "can't `exec docker`" rule,
-/// except here it falls out naturally from the process model.
+/// after it returns.
 pub fn run(run_args: &[String], image: &str, cmd: &[String]) -> Result<i32> {
     let status = Command::new("docker")
         .arg("run")

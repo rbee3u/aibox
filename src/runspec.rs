@@ -1,8 +1,8 @@
 //! Assembling the `docker run` invocation shared by both agents.
 //!
-//! This is the Rust home of the two scripts' "assemble docker run" tail: the
-//! hardening flags, TTY probe, Linux uid/gid + host-gateway, the home/`/work`/
-//! extra mounts, and the permission-bypass toggle. What *differs* between the
+//! The shared `docker run` tail: the hardening flags, TTY probe, Linux uid/gid +
+//! host-gateway, the home/`/work`/ extra mounts, and the permission-bypass
+//! toggle. What *differs* between the
 //! agents — how the endpoint is wired and what the agent command line looks like
 //! — is produced by [`crate::agent::AgentKind::build_invocation`] and folded in
 //! here.
@@ -95,9 +95,9 @@ pub struct Invocation {
 }
 
 /// Build the full `docker run` argument list (everything between `docker run` and
-/// the image), folding in the agent's `extra_run_args`. Ports the shared Bash
-/// tail: `--rm`, the credential/auth args, `-it`/`-i`, hardening, Linux
-/// uid/gid + host-gateway, and the home / `/work` / extra mounts.
+/// the image), folding in the agent's `extra_run_args`: `--rm`, the
+/// credential/auth args, `-it`/`-i`, hardening, Linux uid/gid + host-gateway, and
+/// the home / `/work` / extra mounts.
 pub fn assemble_run_args(
     agent: AgentKind,
     work_dir: &str,

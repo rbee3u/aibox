@@ -1,20 +1,17 @@
 //! Ephemeral credential staging with cleanup on *every* exit path.
 //!
 //! Credentials (the merged env file, or Codex's throwaway `auth.json`) are
-//! staged in 0600 temp files that must never outlive the process. The Bash
-//! version used `trap 'rm -f …' EXIT INT TERM` and deliberately did *not*
-//! `exec docker`, so the trap would fire after docker returned.
+//! staged in 0600 temp files that must never outlive the process.
 //!
-//! ## The signal gap (REWRITE.md §5)
+//! ## The signal gap
 //!
 //! Rust's `Drop` covers the normal path (the guard drops after `docker run`
-//! returns), and — unlike Bash — running docker as a child rather than `exec`
-//! falls out of the process model for free. But `Drop` does **not** run when the
-//! process is killed by SIGINT (Ctrl-C) or SIGTERM: the default disposition
-//! terminates without unwinding. So we also register every staged path in a
-//! process-global set and install a signal handler that unlinks them and
-//! re-raises the signal. Between the two, a staged credential is removed whether
-//! the run finishes, errors, or is interrupted.
+//! returns), because docker runs as a child rather than an `exec`-replace. But
+//! `Drop` does **not** run when the process is killed by SIGINT (Ctrl-C) or
+//! SIGTERM: the default disposition terminates without unwinding. So we also
+//! register every staged path in a process-global set and install a signal
+//! handler that unlinks them and re-raises the signal. Between the two, a staged
+//! credential is removed whether the run finishes, errors, or is interrupted.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -37,29 +34,22 @@ fn install_signal_handler() {
     if HANDLER_INSTALLED.set(()).is_err() {
         return; // already installed
     }
-    // SAFETY: the handler only calls async-signal-safe operations (unlink via
-    // rustix, and re-raise). See `cleanup_from_signal`.
-    unsafe {
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, on_signal_sigint);
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, on_signal_sigterm);
+    for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        // SAFETY: the handler only calls async-signal-safe operations (unlink via
+        // rustix, and re-raise). See `cleanup_from_signal`.
+        unsafe {
+            let _ = signal_hook::low_level::register(sig, move || {
+                cleanup_from_signal();
+                // Re-raise with default handler so the process dies as if unhandled.
+                let _ = signal_hook::low_level::emulate_default_handler(sig);
+            });
+        }
     }
-}
-
-fn on_signal_sigint() {
-    cleanup_from_signal();
-    // Re-raise with default handler so the process dies as if unhandled.
-    let _ = signal_hook::low_level::emulate_default_handler(signal_hook::consts::SIGINT);
-}
-
-fn on_signal_sigterm() {
-    cleanup_from_signal();
-    let _ = signal_hook::low_level::emulate_default_handler(signal_hook::consts::SIGTERM);
 }
 
 /// Unlink every pending path. Called from a signal handler, so it avoids
 /// allocation and uses only `unlink`. `try_lock` avoids deadlock if we were
-/// interrupted mid-`register`; in the worst case a file is missed, which is no
-/// worse than the Bash trap racing.
+/// interrupted mid-`register`; in the worst case a file is missed.
 fn cleanup_from_signal() {
     if let Some(lock) = PENDING.get() {
         if let Ok(paths) = lock.try_lock() {
@@ -67,6 +57,15 @@ fn cleanup_from_signal() {
                 let _ = rustix::fs::unlink(p);
             }
         }
+    }
+}
+
+/// Remove `path` and drop it from the pending-cleanup set. Shared by both
+/// guards' `Drop`, so the normal-exit cleanup can't diverge between them.
+fn remove_and_unregister(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    if let Ok(mut v) = pending().lock() {
+        v.retain(|p| p != path);
     }
 }
 
@@ -93,7 +92,7 @@ impl StagedFile {
             .rand_bytes(6)
             .tempfile_in(&dir)
             .with_context(|| format!("create temp file in {dir}"))?;
-        // Ensure 0600 explicitly (defensive; matches Bash `chmod 600`).
+        // Ensure 0600 explicitly (defensive).
         crate::profile::set_600(named.path())?;
         std::fs::write(named.path(), contents)
             .with_context(|| format!("write staged file {}", named.path().display()))?;
@@ -112,10 +111,7 @@ impl StagedFile {
 
 impl Drop for StagedFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-        if let Ok(mut v) = pending().lock() {
-            v.retain(|p| p != &self.path);
-        }
+        remove_and_unregister(&self.path);
     }
 }
 
@@ -153,10 +149,7 @@ impl GuardedPath {
 impl Drop for GuardedPath {
     fn drop(&mut self) {
         if self.created {
-            let _ = std::fs::remove_file(&self.path);
-            if let Ok(mut v) = pending().lock() {
-                v.retain(|p| p != &self.path);
-            }
+            remove_and_unregister(&self.path);
         }
     }
 }

@@ -1,15 +1,13 @@
 //! Host-platform probes: uid/gid, TTY detection, OS gate.
 //!
-//! Replaces the Bash `uname`, `id -u`/`id -g`, and `-t 0 && -t 1` checks. These
-//! decide the Linux-only `--user`/`--add-host` flags and the `-it` vs `-i`
+//! These decide the Linux-only `--user`/`--add-host` flags and the `-it` vs `-i`
 //! docker flag, so they must reflect the *host* the wrapper runs on — not the
 //! container.
 
 use std::io::IsTerminal;
 
 /// True when the host is Linux. Gates the `--user host-uid:gid` and
-/// `--add-host host.docker.internal:host-gateway` docker flags, which the Bash
-/// version only adds under `[[ "$(uname)" == "Linux" ]]` (Docker Desktop on
+/// `--add-host host.docker.internal:host-gateway` docker flags (Docker Desktop on
 /// macOS/Windows handles ownership and that hostname on its own).
 pub fn is_linux() -> bool {
     cfg!(target_os = "linux")
@@ -29,9 +27,8 @@ pub fn uid_gid() -> (u32, u32) {
     (0, 0)
 }
 
-/// True only when both stdin and stdout are TTYs, matching the Bash
-/// `[[ -t 0 && -t 1 ]]` guard. Decides `-it` (interactive) vs `-i` (piped) so
-/// that piping into the agent still works.
+/// True only when both stdin and stdout are TTYs. Decides `-it` (interactive)
+/// vs `-i` (piped) so that piping into the agent still works.
 pub fn has_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

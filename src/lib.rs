@@ -2,12 +2,12 @@
 //! container that IS the sandbox boundary.
 //!
 //! This library holds all the logic; the `aibox` binary (`main.rs`) is a thin
-//! shell that parses argv and calls [`run`]. Splitting it this way is the whole
-//! point of the Rust rewrite: the merge, `sync`, session parsing, and arg
-//! handling become plain functions with `#[test]`s instead of untested awk.
+//! shell that parses argv and calls [`run`]. Splitting it this way keeps the
+//! merge, `sync`, session parsing, and arg handling as plain functions with
+//! `#[test]`s.
 //!
 //! The two agents diverge only through [`agent::AgentKind`]; everything else is
-//! shared. See `REWRITE.md` for the design and the phase plan.
+//! shared.
 
 pub mod agent;
 pub mod cli;
@@ -35,22 +35,18 @@ fn image_for(agent: AgentKind) -> String {
 
 /// Top-level dispatch. `passthrough` is the argv tail after `--` (agent args).
 ///
-/// `sync` / `session` short-circuit a run and never touch docker; they arrive in
-/// Phases 3 and 4. A plain run flows through [`run_agent`].
+/// `sync` / `session` short-circuit a run and never touch docker. A plain run
+/// flows through [`run_agent`].
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
     let agent = cli.agent.kind();
     let args = cli.agent.args();
 
     if let Some(action) = &args.action {
+        let root = profile::config_root(agent)?;
+        let prof = Profile::resolve(agent, &root, &args.run.profile);
         return match action {
-            Action::Sync { target, dry_run } => {
-                let root = profile::config_root(agent)?;
-                let prof = Profile::resolve(agent, &root, &args.run.profile);
-                sync::run_sync(&prof, target.as_deref(), *dry_run)
-            }
+            Action::Sync { target, dry_run } => sync::run_sync(&prof, target.as_deref(), *dry_run),
             Action::Session { action, id } => {
-                let root = profile::config_root(agent)?;
-                let prof = Profile::resolve(agent, &root, &args.run.profile);
                 let act = action.as_deref().unwrap_or("list");
                 session::dispatch(agent, &prof.home_dir, act, id.as_deref())
             }
@@ -66,18 +62,20 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
     let image = image_for(agent);
 
+    // Reject --exec for agents without a headless subcommand (Claude) before any
+    // work — notably before --build, so `aibox claude --build --exec` fails fast
+    // instead of building an image first. The flag is shared in the CLI struct;
+    // whether it's supported is an AgentKind question (see `supports_exec`).
+    if run.exec && !agent.supports_exec() {
+        anyhow::bail!("--exec is codex-only");
+    }
+
     // --- explicit build --------------------------------------------------
     // `--build` always rebuilds fresh (--no-cache --pull); a missing image is
     // auto-built (cached, fast) just before the run below.
     if run.build {
         eprintln!(">> building {image} (no cache, pulling fresh base) ...");
         docker::build_image(agent, &image, true).context("--build")?;
-    }
-
-    // --exec is Codex-only; reject it early for Claude (the flag is shared in the
-    // CLI struct so the subcommands can share one arg type).
-    if run.exec && agent == AgentKind::Claude {
-        anyhow::bail!("--exec is codex-only");
     }
 
     // --- resolve profile paths ------------------------------------------
@@ -152,8 +150,8 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
         home_dir: &prof.home_dir,
     };
     // `build_invocation` owns all credential staging and endpoint wiring: Claude
-    // stages the merged env as `--env-file`, Codex (Phase 2) stages its key and
-    // `-c` overrides. Everything ephemeral lands in `invocation.staged`.
+    // stages the merged env as `--env-file`, Codex stages its key and `-c`
+    // overrides. Everything ephemeral lands in `invocation.staged`.
     let invocation = agent.build_invocation(&opts)?;
 
     let run_args = runspec::assemble_run_args(
@@ -166,7 +164,10 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 
     let code = docker::run(&run_args, &image, &invocation.agent_cmd)?;
 
-    // Keep staged credential files alive until docker returns, then drop (unlink).
-    drop(invocation.staged);
+    // docker has returned; drop the whole invocation so its staged files and
+    // guarded mount targets are unlinked together (their `Drop` impls do the
+    // cleanup). Explicit rather than end-of-scope only to mark the ordering:
+    // nothing ephemeral outlives the run.
+    drop(invocation);
     Ok(code)
 }

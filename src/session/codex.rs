@@ -10,49 +10,43 @@
 //! Codex has no ai-title, so a session's preview is its first *real* prompt. It
 //! also records injected wrapper turns (environment/instructions context blocks,
 //! `!`-shell commands, the per-project AGENTS.md preamble) as user turns; those
-//! are filtered by [`SKIP_RE`] applied to each content item. A turn left with no
+//! are filtered by [`is_wrapper`] applied to each content item. A turn left with no
 //! text after filtering is skipped, so `list`/`get` stay the user's actual chats.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
 
-use super::{Prompt, SessionBackend, SessionSummary};
-use regex::Regex;
+use super::SessionBackend;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-/// Injected wrapper turns Codex records as user turns but that the user never
-/// typed. Applied to each content item; matching items are dropped. Ported
-/// verbatim from the Bash `CODEX_SKIP_RE`.
-static SKIP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^(<environment_context>|<user_instructions>|<user_shell|<INSTRUCTIONS>|#[^\n]* instructions for |## My env)",
-    )
-    .expect("valid skip regex")
-});
+/// True if `t` is an injected wrapper turn Codex records as a user turn but that
+/// the user never typed. Matches a set of literal prefixes at string start, plus
+/// one `#… instructions for ` case that must stay on the first line.
+fn is_wrapper(t: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "<environment_context>",
+        "<user_instructions>",
+        "<user_shell",
+        "<INSTRUCTIONS>",
+        "## My env",
+    ];
+    if PREFIXES.iter().any(|p| t.starts_with(p)) {
+        return true;
+    }
+    // `^#[^\n]* instructions for `: a `#` at string start, then " instructions
+    // for " somewhere on that same first line.
+    t.lines()
+        .next()
+        .is_some_and(|first| first.starts_with('#') && first.contains(" instructions for "))
+}
 
 pub struct Codex;
 
 impl SessionBackend for Codex {
     fn files(&self, home: &Path) -> Vec<PathBuf> {
         let base = home.join(".codex").join("sessions");
-        if !base.is_dir() {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for entry in walkdir::WalkDir::new(&base).into_iter().flatten() {
-            let p = entry.path();
-            if p.is_file()
-                && p.extension().is_some_and(|e| e == "jsonl")
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("rollout-"))
-            {
-                out.push(p.to_path_buf());
-            }
-        }
-        out
+        super::walk_jsonl(&base, |name| name.starts_with("rollout-"))
     }
 
     fn id_of(&self, path: &Path) -> String {
@@ -66,65 +60,20 @@ impl SessionBackend for Codex {
         }
     }
 
-    fn summarize(&self, path: &Path) -> Option<SessionSummary> {
-        let text = std::fs::read_to_string(path).ok()?;
-        let mut start_ts = String::new();
-        let mut first_typed = String::new();
-        let mut typed = 0u32;
-
-        for (i, line) in text.lines().enumerate() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if i == 0 {
-                start_ts = v
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-            }
-            if let Some(t) = user_turn_text(&v) {
-                typed += 1;
-                if first_typed.is_empty() {
-                    first_typed = t;
-                }
-            }
-        }
-
-        if typed == 0 {
-            return None;
-        }
-        Some(SessionSummary {
-            id: self.id_of(path),
-            start_ts,
-            title: first_typed,
-        })
+    /// A real prompt is a wrapper-filtered `response_item` user message; see
+    /// [`user_turn_text`]. Feeds both shared loops in [`SessionBackend`].
+    fn typed_text(&self, v: &Value) -> Option<String> {
+        user_turn_text(v)
     }
 
-    fn prompts(&self, path: &Path) -> Vec<Prompt> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for line in text.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if let Some(t) = user_turn_text(&v) {
-                let timestamp = v
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                out.push(Prompt { timestamp, text: t });
-            }
-        }
-        out
+    /// Line 0 (the `session_meta`) carries the session start timestamp.
+    fn start_ts(&self, lines: &[Value]) -> String {
+        lines.first().map(super::ts_of).unwrap_or_default()
     }
 }
 
 /// If `v` is a `response_item` user message, join its content items' text with
-/// newlines, dropping any item that matches [`SKIP_RE`] (an injected wrapper).
+/// newlines, dropping any item for which [`is_wrapper`] holds (an injected wrapper).
 /// Returns `None` when `v` isn't a user turn or nothing real survives filtering.
 fn user_turn_text(v: &Value) -> Option<String> {
     if v.get("type").and_then(Value::as_str) != Some("response_item") {
@@ -138,7 +87,7 @@ fn user_turn_text(v: &Value) -> Option<String> {
     let mut parts = Vec::new();
     for it in items {
         if let Some(t) = it.get("text").and_then(Value::as_str) {
-            if !t.is_empty() && !SKIP_RE.is_match(t) {
+            if !t.is_empty() && !is_wrapper(t) {
                 parts.push(t.to_string());
             }
         }
@@ -187,6 +136,25 @@ mod tests {
         let s = Codex.summarize(&path).unwrap();
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert_eq!(s.title, "real question");
+    }
+
+    #[test]
+    fn is_wrapper_matches_all_branches() {
+        // Literal prefixes.
+        assert!(is_wrapper(
+            "<environment_context>cwd=/work</environment_context>"
+        ));
+        assert!(is_wrapper("<user_instructions>be nice</user_instructions>"));
+        assert!(is_wrapper("<user_shell foo"));
+        assert!(is_wrapper("<INSTRUCTIONS>x"));
+        assert!(is_wrapper("## My env is linux"));
+        // The `#… instructions for ` branch (stays on the first line).
+        assert!(is_wrapper("# Base instructions for gpt-5.5\nmore"));
+        // A `#` line without the phrase, and the phrase not at string start.
+        assert!(!is_wrapper("# just a heading"));
+        assert!(!is_wrapper("preamble\n# instructions for x"));
+        // A real prompt.
+        assert!(!is_wrapper("the real ask"));
     }
 
     #[test]

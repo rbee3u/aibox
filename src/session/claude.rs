@@ -1,7 +1,6 @@
 //! Claude transcript format: `<home>/.claude/projects/*/<uuid>.jsonl`.
 //!
-//! Each line is a JSON object. The fields we read (matching the Bash awk
-//! extractors, now via serde_json):
+//! Each line is a JSON object. The fields we read:
 //! - a top-level `timestamp` (first one seen = session start);
 //! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
 //! - `{"type":"user","promptSource":"typed", …, "content":"…"}` — a prompt the
@@ -10,7 +9,7 @@
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
-use super::{Prompt, SessionBackend, SessionSummary};
+use super::SessionBackend;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -19,17 +18,7 @@ pub struct Claude;
 impl SessionBackend for Claude {
     fn files(&self, home: &Path) -> Vec<PathBuf> {
         let base = home.join(".claude").join("projects");
-        if !base.is_dir() {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for entry in walkdir::WalkDir::new(&base).into_iter().flatten() {
-            let p = entry.path();
-            if p.is_file() && p.extension().is_some_and(|e| e == "jsonl") {
-                out.push(p.to_path_buf());
-            }
-        }
-        out
+        super::walk_jsonl(&base, |_| true)
     }
 
     fn id_of(&self, path: &Path) -> String {
@@ -39,78 +28,40 @@ impl SessionBackend for Claude {
             .to_string()
     }
 
-    fn summarize(&self, path: &Path) -> Option<SessionSummary> {
-        let text = std::fs::read_to_string(path).ok()?;
-        let mut start_ts = String::new();
-        let mut ai_title = String::new();
-        let mut first_typed = String::new();
-        let mut typed = 0u32;
-
-        for line in text.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if start_ts.is_empty() {
-                if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
-                    start_ts = ts.to_string();
-                }
-            }
-            match v.get("type").and_then(Value::as_str) {
-                Some("ai-title") => {
-                    if let Some(t) = v.get("aiTitle").and_then(Value::as_str) {
-                        if !t.is_empty() {
-                            ai_title = t.to_string();
-                        }
-                    }
-                }
-                Some("user") if is_typed(&v) => {
-                    typed += 1;
-                    if first_typed.is_empty() {
-                        if let Some(c) = content_text(&v) {
-                            first_typed = c;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if typed == 0 {
+    /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
+    /// with a non-empty `content`. The shared loops in [`SessionBackend`] use this
+    /// for both `list` counting and `get`.
+    fn typed_text(&self, v: &Value) -> Option<String> {
+        if v.get("type").and_then(Value::as_str) != Some("user") || !is_typed(v) {
             return None;
         }
-        let title = if !ai_title.is_empty() {
-            ai_title
-        } else {
-            first_typed
-        };
-        Some(SessionSummary {
-            id: self.id_of(path),
-            start_ts,
-            title,
-        })
+        content_text(v)
     }
 
-    fn prompts(&self, path: &Path) -> Vec<Prompt> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for line in text.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if v.get("type").and_then(Value::as_str) == Some("user") && is_typed(&v) {
-                if let Some(c) = content_text(&v) {
-                    let timestamp = v
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    out.push(Prompt { timestamp, text: c });
-                }
-            }
-        }
-        out
+    /// The first line bearing a top-level `timestamp` is the session start.
+    fn start_ts(&self, lines: &[Value]) -> String {
+        lines
+            .iter()
+            .find_map(|v| v.get("timestamp").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Prefer the agent-generated `ai-title`; fall back to the first typed prompt.
+    /// A session can carry several `ai-title` lines (re-titled mid-run); the last
+    /// non-empty one wins.
+    fn title(&self, lines: &[Value], first_prompt: &str) -> String {
+        lines
+            .iter()
+            .rev()
+            .filter_map(|v| {
+                (v.get("type").and_then(Value::as_str) == Some("ai-title"))
+                    .then(|| v.get("aiTitle").and_then(Value::as_str))
+                    .flatten()
+            })
+            .find(|t| !t.is_empty())
+            .unwrap_or(first_prompt)
+            .to_string()
     }
 }
 

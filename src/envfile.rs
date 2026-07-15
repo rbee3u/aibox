@@ -1,20 +1,15 @@
 //! Env-file parsing and the `base` + relay merge.
 //!
-//! Ports the Bash awk merge used by both scripts: read one or more
-//! `docker --env-file`-format files in order, drop comments and blank lines, and
-//! keep `KEY=VALUE` lines with **last value winning** per key while **preserving
-//! first-seen order**. A later file (the relay) thus overrides an earlier one
-//! (`base`), and a `KEY=` line with an empty value overrides a base default with
-//! emptiness — both behaviours the Bash relied on.
-//!
-//! The Bash needed awk here purely because macOS ships bash 3.2 with no
-//! associative arrays. In Rust an [`IndexMap`] gives order-plus-override directly.
+//! Read one or more `docker --env-file`-format files in order, drop comments and
+//! blank lines, and keep `KEY=VALUE` lines with **last value winning** per key
+//! while **preserving first-seen order**. A later file (the relay) thus overrides
+//! an earlier one (`base`), and a `KEY=` line with an empty value blanks a base
+//! default. An [`IndexMap`] gives order-plus-override directly.
 
 use indexmap::IndexMap;
 
 /// A merged set of `KEY=VALUE` env lines, order-preserving. Values include the
 /// full original line text after the key (so `KEY=` stays `KEY=`).
-#[derive(Debug, Default, Clone)]
 pub struct MergedEnv {
     /// key -> full `KEY=VALUE` line, in first-seen order.
     entries: IndexMap<String, String>,
@@ -23,8 +18,7 @@ pub struct MergedEnv {
 impl MergedEnv {
     /// Merge the given file contents in order. Later contents override earlier
     /// per key; first-seen order is preserved. Comments (`#…`) and blank lines
-    /// are dropped. Leading whitespace on a line is trimmed before parsing,
-    /// matching the Bash `sub(/^[ \t]+/, "", s)`.
+    /// are dropped. Leading whitespace on a line is trimmed before parsing.
     pub fn merge(sources: &[String]) -> Self {
         let mut entries: IndexMap<String, String> = IndexMap::new();
         for src in sources {
@@ -33,8 +27,7 @@ impl MergedEnv {
                 if s.is_empty() || s.starts_with('#') {
                     continue;
                 }
-                // A line with no '=' is treated as a bare key (matches awk's
-                // key=s when index==0), stored as-is.
+                // A line with no '=' is treated as a bare key, stored as-is.
                 let key = match s.find('=') {
                     Some(eq) => &s[..eq],
                     None => s,

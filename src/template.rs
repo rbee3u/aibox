@@ -1,17 +1,15 @@
 //! Env-file templates (single source, shared by first-run scaffolding and
 //! `sync`) plus the version-stamp reader.
 //!
-//! Ported verbatim from the Bash `emit_base_template` / `emit_relay_template`
-//! functions. Every line is a comment: each key is documented, then shown as a
-//! commented `#KEY=example`. The user sets one by adding a real line under its
-//! example. The first line is a `# aibox-template: vN` stamp so `sync` can tell a
-//! file's vintage — bump [`crate::agent::TEMPLATE_VERSION`] whenever a template
-//! here changes.
+//! Every line is a comment: each key is documented, then shown as a commented
+//! `#KEY=example`. The user sets one by adding a real line under its example. The
+//! first line is a `# aibox-template: vN` stamp so `sync` can tell a file's
+//! vintage — bump [`crate::agent::TEMPLATE_VERSION`] whenever a template here
+//! changes.
 
 use crate::agent::AgentKind;
 
-/// Base template — shared config inherited by every relay. Matches the Bash
-/// `emit_base_template` for each agent.
+/// Base template — shared config inherited by every relay.
 pub fn base_template(agent: AgentKind, ver: u32) -> String {
     let stamp = format!("# aibox-template: v{ver}\n");
     let body = match agent {
@@ -21,8 +19,8 @@ pub fn base_template(agent: AgentKind, ver: u32) -> String {
     format!("{stamp}{body}")
 }
 
-/// Relay template — one endpoint, merged onto `base`. Matches the Bash
-/// `emit_relay_template "$name"`; `name` fills the header line.
+/// Relay template — one endpoint, merged onto `base`. `name` fills the header
+/// line.
 pub fn relay_template(agent: AgentKind, name: &str, ver: u32) -> String {
     let stamp = format!("# aibox-template: v{ver}\n");
     let header = format!("# {name} — relay endpoint, merged onto ../base (this file wins).\n");
@@ -34,8 +32,7 @@ pub fn relay_template(agent: AgentKind, name: &str, ver: u32) -> String {
 }
 
 /// Read a file's first-line `# aibox-template: vN` stamp, returning N (0 if the
-/// file is unstamped / pre-versioning). Mirrors the Bash `file_template_version`
-/// (a `sed` one-liner).
+/// file is unstamped / pre-versioning).
 pub fn file_template_version(contents: &str) -> u32 {
     let first = contents.lines().next().unwrap_or("");
     let prefix = "# aibox-template: v";
@@ -47,7 +44,7 @@ pub fn file_template_version(contents: &str) -> u32 {
     digits.parse().unwrap_or(0)
 }
 
-// --- Claude templates (from aibox-claude emit_*_template) --------------------
+// --- Claude templates --------------------------------------------------------
 
 const CLAUDE_BASE: &str = "\
 # base — shared config inherited by every relay under envs/.
@@ -87,7 +84,7 @@ const CLAUDE_RELAY: &str = "\
 #ANTHROPIC_DEFAULT_FABLE_MODEL=this-relays-fable-model
 ";
 
-// --- Codex templates (from aibox-codex emit_*_template) ----------------------
+// --- Codex templates ---------------------------------------------------------
 
 const CODEX_BASE: &str = "\
 # base — shared config inherited by every relay under envs/.

@@ -1,29 +1,68 @@
 //! Browsing saved chat transcripts straight from the profile home — no container,
-//! no relay. Ports the two scripts' shared `session` block (`list` / `get` /
-//! `delete`), with the per-agent on-disk format behind [`SessionBackend`].
+//! no relay. The `session` surface (`list` / `get` / `delete`) is shared, with the
+//! per-agent on-disk format behind [`SessionBackend`].
 //!
-//! ## The big win of the rewrite
-//!
-//! The Bash carried ~130 lines of hand-written awk to decode JSON strings —
-//! UTF-8, `\uXXXX`, and surrogate pairs — purely because macOS ships BSD awk with
-//! no `strtonum`/bit-ops. Here [`serde_json`] parses each JSONL line and every
-//! escape falls out for free. The two agents differ only in *where* the fields
-//! live; that difference is the two [`SessionBackend`] impls ([`claude`],
+//! [`serde_json`] parses each JSONL line, so string decoding (UTF-8, `\uXXXX`,
+//! surrogate pairs) falls out for free. The two agents differ only in *where* the
+//! fields live; that difference is the two [`SessionBackend`] impls ([`claude`],
 //! [`codex`]). Everything below — file discovery glue, id-prefix resolution,
-//! newest-first listing, and delete-with-confirm — is shared, exactly as the Bash
-//! kept the block byte-for-byte parallel between the two scripts.
+//! newest-first listing, and delete-with-confirm — is shared.
 
 pub mod claude;
 pub mod codex;
 
 use crate::agent::AgentKind;
 use anyhow::{bail, Result};
+use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// Collect every `.jsonl` transcript under `base` (recursively), keeping only
+/// those whose file name passes `keep`. Empty if `base` isn't a directory. Shared
+/// by both backends' `files()`; they differ only in the base dir and the filter
+/// (Claude keeps all, Codex keeps `rollout-` names).
+pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(base).into_iter().flatten() {
+        let p = entry.path();
+        if p.is_file()
+            && p.extension().is_some_and(|e| e == "jsonl")
+            && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
+        {
+            out.push(p.to_path_buf());
+        }
+    }
+    out
+}
+
+/// Read a transcript and parse each line as JSON, skipping unparseable lines.
+/// Empty if the file can't be read. Shared by both backends' `summarize`/`prompts`,
+/// which then extract their agent-specific fields from the parsed values.
+pub(crate) fn json_lines(path: &Path) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
+}
+
+/// A line's top-level `timestamp` as a string (empty if absent). The one field
+/// both formats surface identically; folded here so neither backend repeats the
+/// `get("timestamp").and_then(as_str).unwrap_or("")` dance.
+pub(crate) fn ts_of(v: &Value) -> String {
+    v.get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// One session's list-row data. A session with no typed prompts (the user never
 /// asked anything) yields `None` from [`SessionBackend::summarize`] and is
-/// dropped from the listing, matching the Bash `typed > 0` guard.
+/// dropped from the listing (the "at least one typed prompt" guard).
 pub struct SessionSummary {
     /// Full session id (the row shows the first 8 chars).
     pub id: String,
@@ -43,7 +82,11 @@ pub struct Prompt {
 }
 
 /// The per-agent on-disk transcript format. The two impls ([`claude::Claude`],
-/// [`codex::Codex`]) are the only place session handling diverges.
+/// [`codex::Codex`]) diverge only in the four required methods below — *where*
+/// each field lives on a line and which lines count as a real prompt. The two
+/// list/get loops that consume those answers ([`summarize`](Self::summarize) /
+/// [`prompts`](Self::prompts)) are written once here as provided methods, so the
+/// two backends can't drift out of sync.
 pub trait SessionBackend {
     /// All transcript files under this profile home (empty if none yet).
     fn files(&self, home: &Path) -> Vec<PathBuf>;
@@ -51,12 +94,60 @@ pub trait SessionBackend {
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
 
-    /// Summarize one transcript for `list`. `None` = no typed prompts, so the
-    /// session is skipped.
-    fn summarize(&self, path: &Path) -> Option<SessionSummary>;
+    /// `Some(text)` iff `v` is a prompt the user actually typed — with any
+    /// injected/wrapper turns already filtered out. `None` for every other line.
+    /// This is the heart of the divergence: Claude keys off `promptSource:typed`,
+    /// Codex off a wrapper-filtered `response_item` user message.
+    fn typed_text(&self, v: &Value) -> Option<String>;
 
-    /// Every typed prompt in one transcript, in order, for `get`.
-    fn prompts(&self, path: &Path) -> Vec<Prompt>;
+    /// The session start timestamp, given every parsed line. Claude takes the
+    /// first line bearing one; Codex takes line 0's (the `session_meta`).
+    fn start_ts(&self, lines: &[Value]) -> String;
+
+    /// The `list` row title, given every parsed line and the first typed prompt.
+    /// Default is just the first prompt; Claude overrides to prefer an `ai-title`.
+    fn title(&self, _lines: &[Value], first_prompt: &str) -> String {
+        first_prompt.to_string()
+    }
+
+    /// Summarize one transcript for `list`. `None` = no typed prompts, so the
+    /// session is skipped (needs at least one typed prompt). Shared loop over both
+    /// formats; the per-agent answers come from the required methods above.
+    fn summarize(&self, path: &Path) -> Option<SessionSummary> {
+        let lines = json_lines(path);
+        let mut first_typed = String::new();
+        let mut typed = 0u32;
+        for v in &lines {
+            if let Some(t) = self.typed_text(v) {
+                typed += 1;
+                if first_typed.is_empty() {
+                    first_typed = t;
+                }
+            }
+        }
+        if typed == 0 {
+            return None;
+        }
+        Some(SessionSummary {
+            id: self.id_of(path),
+            start_ts: self.start_ts(&lines),
+            title: self.title(&lines, &first_typed),
+        })
+    }
+
+    /// Every typed prompt in one transcript, in order, for `get`. Shared loop; the
+    /// per-line text (and wrapper filtering) is [`typed_text`](Self::typed_text).
+    fn prompts(&self, path: &Path) -> Vec<Prompt> {
+        json_lines(path)
+            .into_iter()
+            .filter_map(|v| {
+                self.typed_text(&v).map(|text| Prompt {
+                    timestamp: ts_of(&v),
+                    text,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Resolve `AgentKind` to its backend. The one bridge between the enum and the
@@ -68,8 +159,7 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     }
 }
 
-/// `session` dispatch: `list` (default), `get <id>`, `delete <id>`. Mirrors the
-/// Bash `session_dispatch`.
+/// `session` dispatch: `list` (default), `get <id>`, `delete <id>`.
 pub fn dispatch(agent: AgentKind, home: &Path, action: &str, id: Option<&str>) -> Result<i32> {
     let backend = backend_for(agent);
     match action {
@@ -82,7 +172,7 @@ pub fn dispatch(agent: AgentKind, home: &Path, action: &str, id: Option<&str>) -
 
 /// Resolve a full id or unique prefix to exactly one transcript path. Zero
 /// matches or an ambiguous prefix fail with a message (the ambiguous case lists
-/// the candidates), matching the Bash `session_resolve`.
+/// the candidates).
 fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
     if query.is_empty() {
         bail!("need a session id (or unique prefix)");
@@ -107,15 +197,13 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 }
 
 /// List this profile's sessions, newest first: `shortid  date  title`. Sessions
-/// with no typed prompts are skipped. Ports the Bash `session_list` (including the
-/// `%-8s  %-16s  %s` columns and the newest-first sort).
+/// with no typed prompts are skipped. Columns are `%-8s  %-16s  %s`.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     // Collect (start_ts, id, title) for every session with ≥1 typed prompt.
     let mut rows: Vec<(String, String, String)> = Vec::new();
     for f in backend.files(home) {
         if let Some(s) = backend.summarize(&f) {
-            // Titles can contain newlines/tabs; collapse to spaces like the Bash
-            // `gsub(/[\n\t]+/," ",ttl)`.
+            // Titles can contain newlines/tabs; collapse them to single spaces.
             let title = collapse_ws(&s.title);
             rows.push((s.start_ts, s.id, title));
         }
@@ -138,7 +226,7 @@ fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
 }
 
 /// Print your typed prompts from one session, numbered + timestamped, full text
-/// (for copy-paste). Ports the Bash `session_get`.
+/// (for copy-paste).
 fn get(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i32> {
     let path = resolve(backend, home, id.unwrap_or(""))?;
     let sid = backend.id_of(&path);
@@ -150,13 +238,12 @@ fn get(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i3
     }
     for (i, p) in prompts.iter().enumerate() {
         let d = fmt_ts(&p.timestamp);
-        // Matches the Bash `printf "\n[%d] %s\n%s\n"`.
         println!("\n[{}] {d}\n{}", i + 1, p.text);
     }
     Ok(0)
 }
 
-/// Delete one transcript, asking first (not reversible). Ports `session_delete`.
+/// Delete one transcript, asking first (not reversible).
 fn delete(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i32> {
     let path = resolve(backend, home, id.unwrap_or(""))?;
     let sid = backend.id_of(&path);
@@ -176,8 +263,8 @@ fn delete(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result
 }
 
 /// Format an ISO-8601 timestamp as `YYYY-MM-DD HH:MM` for display, or empty if
-/// the timestamp is empty. Mirrors the Bash `substr(ts,1,10) " " substr(ts,12,5)`
-/// (positions, not real date parsing — the stored value is already ISO-8601).
+/// the timestamp is empty. Positional slicing, not real date parsing — the stored
+/// value is already ISO-8601.
 fn fmt_ts(ts: &str) -> String {
     if ts.is_empty() {
         return String::new();
@@ -188,7 +275,7 @@ fn fmt_ts(ts: &str) -> String {
 }
 
 /// Collapse runs of newlines/tabs to a single space (titles are one-liners in the
-/// listing). Matches the Bash `gsub(/[\n\t]+/," ",…)`.
+/// listing).
 fn collapse_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_run = false;
