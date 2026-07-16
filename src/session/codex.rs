@@ -2,7 +2,7 @@
 //! `<home>/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`.
 //!
 //! Mapped from the codex-rs `rollout` crate: each line is a `RolloutLine` that
-//! flattens a top-level `timestamp` + `type` + `payload`. Line 1 is a
+//! flattens a top-level `timestamp` + `type` + `payload`. The first line is a
 //! `session_meta` (its `timestamp` is the session start). User turns are
 //! `response_item` messages with `role:"user"` whose `payload.content` is an
 //! array of `{type:"input_text"|"text", text:"…"}` items.
@@ -11,7 +11,7 @@
 //! also records injected wrapper turns (environment/instructions context blocks,
 //! `!`-shell commands, the per-project AGENTS.md preamble) as user turns; those
 //! are filtered by [`is_wrapper`] applied to each content item. A turn left with no
-//! text after filtering is skipped, so `list`/`get` stay the user's actual chats.
+//! text after filtering is skipped for previews and `get`.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
@@ -61,7 +61,7 @@ impl SessionBackend for Codex {
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
-    /// [`user_turn_text`]. Feeds both shared loops in [`SessionBackend`].
+    /// [`user_turn_text`]. Feeds shared summary and `get` paths.
     fn typed_text(&self, v: &Value) -> Option<String> {
         user_turn_text(v)
     }

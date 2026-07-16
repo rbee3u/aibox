@@ -96,7 +96,7 @@ const CODEX_BASE: &str = "\
 
 # The model this relay serves. Codex uses ONE model plus a reasoning knob
 # (no haiku/sonnet/opus tiers).
-#CODEX_MODEL=gpt-5.5
+#CODEX_MODEL=replace-with-model
 
 # Reasoning effort: none|minimal|low|medium|high|xhigh|max|ultra.
 # Omit to use the model default.
@@ -119,7 +119,7 @@ const CODEX_RELAY: &str = "\
 #CODEX_API_KEY=sk-replace-me
 
 # REQUIRED unless set in base. The model this relay serves.
-#CODEX_MODEL=gpt-5.5
+#CODEX_MODEL=replace-with-model
 
 # Override other base defaults here when this relay differs:
 #CODEX_REASONING=xhigh
@@ -129,15 +129,15 @@ const CODEX_RELAY: &str = "\
 # it via the provider's env_key — nothing touches disk. Set to 1 for auth.json
 # mode: codex reads the key from a {\"OPENAI_API_KEY\": \"...\"} file
 # (requires_openai_auth=true, no env_key), the same auth.json `codex login`
-# writes. The script generates it as a throwaway, mounts it read-only, and never
+# writes. aibox generates it as a throwaway, mounts it read-only, and never
 # persists it. Use 1 only if your relay's account/refresh flow expects it;
 # env_key mode is otherwise simpler and identical on the wire.
 #CODEX_REQUIRES_OPENAI_AUTH=1
 
 # A model-instructions file (config.toml's model_instructions_file). Give the
-# path ON YOUR HOST — the script bind-mounts it read-only and points codex at
-# it. Absolute, or relative to where you launch aibox-codex.
-#CODEX_INSTRUCTIONS_FILE=~/prompts/gpt-5.5-base-instructions.md
+# path ON YOUR HOST — aibox bind-mounts it read-only and points codex at it.
+# Absolute, or relative to where you launch `aibox codex`.
+#CODEX_INSTRUCTIONS_FILE=~/prompts/codex-instructions.md
 
 # Azure-style deployments need the api-version as a query param:
 #CODEX_QUERY_PARAMS=api-version=2025-04-01-preview

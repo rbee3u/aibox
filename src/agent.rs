@@ -1,7 +1,7 @@
 //! The one place the two agents diverge.
 //!
 //! Everything the wrapper does that differs between Claude Code and Codex is
-//! funnelled through [`AgentKind`] and its methods. Shared logic (profile
+//! funneled through [`AgentKind`] and its methods. Shared logic (profile
 //! resolution, env merge, sync, session resolve/delete, docker hardening) lives
 //! elsewhere and takes an `AgentKind` only to ask these questions. A divergence
 //! that isn't expressed here is a compile error, not a copy-paste someone forgot.
@@ -25,7 +25,7 @@ pub enum AgentKind {
 /// Bump when a template in [`crate::template`] changes. Existing env files carry
 /// the version they were written with (first line `# aibox-template: vN`); a run
 /// whose file lags this prints a hint to `sync`. Shared by both agents.
-pub const TEMPLATE_VERSION: u32 = 3;
+pub const TEMPLATE_VERSION: u32 = 4;
 
 impl AgentKind {
     /// Short lowercase tag used in paths and messages: `claude` / `codex`.
@@ -232,7 +232,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     push_c(&mut cmd, format!("model={model}"));
 
     // Exactly one auth wiring — the two conflict in codex's provider.validate(),
-    // and its first-party (auth.json) path only engages when env_key is unset.
+    // and Codex's built-in auth.json path only engages when env_key is unset.
     if use_auth_json {
         push_c(&mut cmd, "model_providers.aibox.requires_openai_auth=true");
     } else {

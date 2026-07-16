@@ -16,7 +16,7 @@ One binary, `aibox`, with explicit image builds and a subcommand per agent:
 > scripts (`aibox-claude` / `aibox-codex`) that this repo shipped earlier. The
 > on-disk layout (`~/.aibox/<agent>/…`) and image names (`aibox-claude:latest`,
 > `aibox-codex:latest`) are unchanged, so existing profiles keep working — only
-> the invocation changed (`aibox-claude …` → `aibox claude …`). See `REWRITE.md`.
+> the invocation changed (`aibox-claude …` → `aibox claude …`).
 
 ## Why
 
@@ -128,7 +128,7 @@ API key is staged in a `0600` temp file and removed on exit.
 ## Keeping templates fresh: `sync`
 
 Config files carry a template version stamp (`# aibox-template: vN`). When the
-scripts' templates evolve, a normal run nudges you if a file is stale. Refresh
+embedded templates evolve, a normal run nudges you if a file is stale. Refresh
 the docs without losing your config:
 
 ```sh
@@ -139,7 +139,7 @@ aibox codex sync --dry-run  # print the result instead of writing
 ```
 
 `sync` rewrites the doc/example comments to the current template while keeping
-every real config line you added — each re-placed under its matching example.
+every real config line you added — each re-inserted under its matching example.
 A real key whose example no longer exists is kept in a trailing block, so
 nothing is lost.
 
@@ -158,7 +158,8 @@ aibox claude -p risky session get 3f2a  # a different profile
 ```
 
 `list` shows one row per session — short id, date, and a title (Claude's
-generated title, or the first prompt for Codex):
+generated title, Codex's first prompt, or blank if the transcript has no typed
+prompt/title):
 
 ```
 3f2a1b6c  2026-07-14 02:16  Debug the repeated image rebuild
@@ -177,7 +178,8 @@ per-profile: pass `-p <name>` to browse a profile other than `default`.
 
 ## Common flags
 
-Both agents share these (see `aibox claude -h` / `aibox codex -h` for the full list):
+Normal runs for both agents share these (see `aibox claude -h` / `aibox codex -h`
+for the full list):
 
 | Flag | |
 | --- | --- |
@@ -188,6 +190,14 @@ Both agents share these (see `aibox claude -h` / `aibox codex -h` for the full l
 | `--safe` | keep the agent's normal prompts/sandbox instead of bypassing |
 
 `aibox codex` also has `--exec` for headless runs: `aibox codex -e r --exec -- "fix the build"`.
+
+## Environment overrides
+
+`AIBOX_CONFIG_ROOT` overrides the host config root as-is (instead of
+`~/.aibox/<agent>`; set separate values if you want separate custom roots for
+Claude and Codex). `AIBOX_IMAGE` overrides the image tag used by a normal run,
+and by `aibox build claude` / `aibox build codex`; `aibox build` without a target
+rejects it because one tag cannot name both agent images.
 
 ## Building images
 

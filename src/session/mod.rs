@@ -6,7 +6,7 @@
 //! surrogate pairs) falls out for free. The two agents differ only in *where* the
 //! fields live; that difference is the two [`SessionBackend`] impls ([`claude`],
 //! [`codex`]). Everything below — file discovery glue, id-prefix resolution,
-//! newest-first listing, and delete-with-confirm — is shared.
+//! newest-first listing, and delete confirmation — is shared.
 
 pub mod claude;
 pub mod codex;
@@ -85,7 +85,7 @@ pub struct Prompt {
 /// The per-agent on-disk transcript format. The two impls ([`claude::Claude`],
 /// [`codex::Codex`]) diverge only in the four required methods below — *where*
 /// each field lives on a line and which lines count as a real prompt. The two
-/// list/get loops that consume those answers ([`summarize`](Self::summarize) /
+/// summary/get loops that consume those answers ([`summarize`](Self::summarize) /
 /// [`prompts`](Self::prompts)) are written once here as provided methods, so the
 /// two backends can't drift out of sync.
 pub trait SessionBackend {
@@ -423,7 +423,7 @@ mod tests {
     fn delete_no_ids_includes_sessions_without_typed_prompts() {
         // No-id delete clears the whole profile — including tool/injected-only
         // shells that carry no typed prompt. `list` shows those same shells
-        // (empty title), so the two stay consistent and nothing is unclearable.
+        // (empty title), so the two stay consistent and all rows are removable.
         let dir = tempfile::tempdir().unwrap();
         let a = write_session(dir.path(), "11111111");
         let shell = dir.path().join("sessions").join("22222222.jsonl");
@@ -436,8 +436,8 @@ mod tests {
 
     #[test]
     fn summarize_empty_shell_has_empty_title() {
-        // A transcript with no typed prompt still summarizes (so `list` shows it);
-        // the title just comes out empty.
+        // A transcript with no typed prompt still summarizes for `list`; its
+        // title is empty.
         let dir = tempfile::tempdir().unwrap();
         let shell = dir.path().join("sessions").join("33333333.jsonl");
         std::fs::create_dir_all(shell.parent().unwrap()).unwrap();

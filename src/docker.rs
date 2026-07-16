@@ -1,7 +1,7 @@
 //! Building and running the container.
 //!
 //! Two entry points: [`build_image`] (invoked by `aibox build`) and [`run`]
-//! (assemble `docker run` and exec the agent). Both shell out to the `docker`
+//! (spawn `docker run` for the agent). Both shell out to the `docker`
 //! CLI via [`std::process::Command`].
 //!
 //! ## Why the Dockerfile comes from stdin

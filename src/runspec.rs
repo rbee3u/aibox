@@ -1,11 +1,9 @@
 //! Assembling the `docker run` invocation shared by both agents.
 //!
 //! The shared `docker run` tail: the hardening flags, TTY probe, Linux uid/gid +
-//! host-gateway, the home/`/work`/ extra mounts, and the permission-bypass
-//! toggle. What *differs* between the
-//! agents — how the endpoint is wired and what the agent command line looks like
-//! — is produced by [`crate::agent::AgentKind::build_invocation`] and folded in
-//! here.
+//! host-gateway, and the home/`/work`/extra mounts. What *differs* between the
+//! agents — credentials, endpoint wiring, and the agent command line — is
+//! produced by [`crate::agent::AgentKind::build_invocation`] and folded in here.
 
 use crate::agent::AgentKind;
 use crate::creds::StagedFile;
@@ -69,7 +67,7 @@ pub struct RunOpts<'a> {
     pub env: &'a crate::envfile::MergedEnv,
     /// `--safe`: keep the agent's own prompts/sandbox instead of bypassing.
     pub safe: bool,
-    /// Codex `--exec` headless mode (ignored by Claude).
+    /// Codex `--exec` headless mode (Claude is rejected before invocation build).
     pub exec: bool,
     /// Pass-through args after `--`, handed to the agent verbatim.
     pub passthrough: &'a [String],

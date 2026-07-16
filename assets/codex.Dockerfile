@@ -3,8 +3,8 @@
 # run inside a container that IS the sandbox boundary.
 #
 # Codex ships its own OS sandbox (Seatbelt on macOS, Landlock+seccomp on Linux).
-# We don't rely on it: aibox-codex launches with the sandbox bypassed, because
-# the container is the boundary. See `agent.rs::build_codex` for the flags.
+# We don't rely on it: the wrapper launches Codex with that sandbox bypassed,
+# because the container is the boundary. See `agent.rs::build_codex` for flags.
 #
 # Build:
 #   aibox build codex

@@ -89,7 +89,7 @@ mod tests {
         let relay = s("B=3\nC=4\n");
         let m = MergedEnv::merge(&[base, relay]);
         let lines: Vec<&str> = m.lines().collect();
-        // A, B, C — B keeps its original position even though relay re-set it.
+        // A, B, C — B keeps its original position even though relay sets it again.
         assert_eq!(lines, vec!["A=1", "B=3", "C=4"]);
     }
 

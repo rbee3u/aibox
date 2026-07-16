@@ -118,7 +118,7 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
 
 /// A normal (non-sync, non-session) run: resolve the profile and relay, require
 /// a pre-built image, merge config, stage credentials, assemble `docker run`,
-/// and exec the agent as a child (so credential cleanup fires afterwards).
+/// and run the agent as a child (so credential cleanup fires afterwards).
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
     let image = image_for(agent);
 

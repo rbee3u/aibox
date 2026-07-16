@@ -7,7 +7,7 @@
 //!   aibox build [claude|codex] [--force]
 //!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
 //!   aibox <claude|codex> sync [base|<relay>] [--dry-run]
-//!   aibox <claude|codex> [-p <profile>] session [list|get <id>|delete [id...]] [-y]
+//!   aibox <claude|codex> [-p <profile>] session [list|get <id>|delete [-y] [id...]]
 //! ```
 //!
 //! ## Why we split argv ourselves

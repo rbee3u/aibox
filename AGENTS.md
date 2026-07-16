@@ -23,7 +23,7 @@ src/
   main.rs        # thin bin: split argv at `--`, clap parse, call lib::run
   lib.rs         # orchestration (run / run_agent) + module wiring
   cli.rs         # clap types + split_passthrough
-  agent.rs       # AgentKind enum + trait-like methods — THE divergence point
+  agent.rs       # AgentKind enum + trait-like methods — divergence point
   profile.rs     # profile paths, home seeding, relay resolve/scaffold
   envfile.rs     # base+relay merge (IndexMap: order + last-wins)
   template.rs    # env-file templates + TEMPLATE_VERSION + stamp reader
@@ -78,7 +78,7 @@ single source, shared by first-run scaffolding (`profile.rs`) and `sync`
   (in `agent.rs`) whenever you change a template**, so stale files get flagged
   and `sync` can refresh them.
 - `sync` matches example lines by `^#[A-Za-z_][A-Za-z0-9_]*=` (see
-  `sync::example_key`) and re-places the user's real lines under them. If you
+  `sync::example_key`) and re-inserts the user's real lines under them. If you
   change example formatting, keep it matching that pattern, and update the
   `sync` tests.
 

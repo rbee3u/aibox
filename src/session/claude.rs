@@ -6,8 +6,8 @@
 //! - `{"type":"user","promptSource":"typed", …, "message":{"content":"…"}}` — a
 //!   prompt the user actually typed (as opposed to injected/tool turns). The text
 //!   lives in the nested `message.content` (a plain string, or a block array),
-//!   *not* a top-level `content`. `promptSource` is what lets us list only real
-//!   chats.
+//!   *not* a top-level `content`. `promptSource` marks turns that count as typed
+//!   prompts.
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
@@ -31,8 +31,8 @@ impl SessionBackend for Claude {
     }
 
     /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
-    /// with a non-empty `message.content`. The shared loops in [`SessionBackend`]
-    /// use this for both `list` counting and `get`.
+    /// with a non-empty `message.content`. Feeds shared title selection and
+    /// `get` paths.
     fn typed_text(&self, v: &Value) -> Option<String> {
         if v.get("type").and_then(Value::as_str) != Some("user") || !is_typed(v) {
             return None;

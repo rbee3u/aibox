@@ -12,8 +12,8 @@
 //! 3. Any real key with no matching example in the template is appended in a
 //!    trailing "settings kept from your old file" block, so nothing is lost.
 //!
-//! This is a pure string transform — the caller ([`crate::run`]) decides whether
-//! to write the result or print it (`--dry-run`).
+//! The merge itself is a pure string transform; `run_sync` decides whether to
+//! write the result or print it (`--dry-run`).
 
 use crate::agent::TEMPLATE_VERSION;
 use crate::profile::{self, Profile};
@@ -28,9 +28,9 @@ const ORPHAN_HEADER: &str =
     "# --- settings kept from your old file (no matching example above) ---";
 
 /// Rewrite `old` against `template`: template docs/examples, with the user's real
-/// values re-placed under their matching examples and orphans appended. Returns
-/// the new file contents (no trailing newline is added beyond what the template
-/// and values carry — the caller adds one when writing).
+/// values re-inserted under their matching examples and orphans appended.
+/// Returns the new file contents without a trailing newline; `sync_one` adds one
+/// when writing.
 pub fn merge(old: &str, template: &str) -> String {
     // 1. Collect real KEY=VALUE lines from the old file (last wins, keep order).
     let mut vals: IndexMap<String, String> = IndexMap::new();
