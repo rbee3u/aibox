@@ -1,5 +1,5 @@
 //! aibox — run coding agents (Claude Code, OpenAI Codex) inside a Docker
-//! container that IS the sandbox boundary.
+//! container that **is** the sandbox boundary.
 //!
 //! This library holds all the logic; the `aibox` binary (`main.rs`) is a thin
 //! shell that parses argv and calls [`run`]. Splitting it this way keeps the
@@ -37,7 +37,7 @@ fn image_for(agent: AgentKind) -> String {
 /// Top-level dispatch. `passthrough` is the argv tail after `--` (agent args).
 ///
 /// `build` owns image construction. `sync` / `session` short-circuit a run and
-/// never touch docker. A plain run flows through [`run_agent`].
+/// never touch Docker. A plain run flows through `run_agent`.
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
     match cli.command {
         Command::Build(args) => run_build(&args),
@@ -193,9 +193,9 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
         passthrough,
         home_dir: &prof.home_dir,
     };
-    // `build_invocation` owns all credential staging and endpoint wiring: Claude
-    // stages the merged env as `--env-file`, Codex stages its key and `-c`
-    // overrides. Everything ephemeral lands in `invocation.staged`.
+    // `build_invocation` owns credential staging and endpoint wiring: Claude
+    // stages the merged env as `--env-file`; Codex stages its key, guarded mount
+    // targets, and `-c` overrides.
     let invocation = agent.build_invocation(&opts)?;
 
     let run_args = runspec::assemble_run_args(
@@ -208,7 +208,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 
     let code = docker::run(&run_args, &image, &invocation.agent_cmd)?;
 
-    // docker has returned; drop the whole invocation so its staged files and
+    // Docker has returned; drop the whole invocation so its staged files and
     // guarded mount targets are unlinked together (their `Drop` impls do the
     // cleanup). Explicit rather than end-of-scope only to mark the ordering:
     // nothing ephemeral outlives the run.

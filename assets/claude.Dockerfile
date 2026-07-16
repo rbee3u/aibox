@@ -1,6 +1,6 @@
 # aibox-claude.Dockerfile
 # Packages Claude Code on top of aibox-base, so high-risk projects can be run
-# inside a container that IS the sandbox boundary.
+# inside a container that is the sandbox boundary.
 #
 # Build:
 #   aibox build claude

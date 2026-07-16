@@ -1,5 +1,5 @@
-//! Per-profile path layout, directory creation, home seeding, and relay
-//! resolution / scaffolding.
+//! Per-profile path layout, directory creation, config root resolution, and
+//! relay resolution / scaffolding.
 //!
 //! Everything is per-profile on the host, under `$AIBOX_CONFIG_ROOT` (default
 //! `$HOME/.aibox/<agent>`):
@@ -84,7 +84,7 @@ impl Profile {
         }
     }
 
-    /// Ensure the profile home exists (created before the docker run so the mount
+    /// Ensure the profile home exists (created before `docker run` so the mount
     /// doesn't shadow an image path with a root-owned empty dir).
     pub fn ensure_home(&self) -> Result<()> {
         fs::create_dir_all(&self.home_dir)

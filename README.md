@@ -6,11 +6,11 @@ work unrestricted, while the blast radius stays inside the container.
 
 One binary, `aibox`, with explicit image builds and a subcommand per agent:
 
-| Subcommand     | Agent        | Wraps            |
-| -------------- | ------------ | ---------------- |
-| `aibox build`  | image build  | embedded Dockerfiles |
-| `aibox claude` | Claude Code  | `@anthropic-ai/claude-code` |
-| `aibox codex`  | OpenAI Codex | `@openai/codex`  |
+| Command        | Purpose              | Uses |
+| -------------- | -------------------- | ---- |
+| `aibox build`  | build container images | embedded Dockerfiles |
+| `aibox claude` | run Claude Code      | `@anthropic-ai/claude-code` |
+| `aibox codex`  | run OpenAI Codex     | `@openai/codex` |
 
 > **Rust rewrite.** `aibox` is a single Rust binary; it replaces the two Bash
 > scripts (`aibox-claude` / `aibox-codex`) that this repo shipped earlier. The
@@ -27,15 +27,16 @@ untouched *outside*. Only the project you point it at (mounted at `/work`) and a
 isolated per-profile home are reachable.
 
 Hardening on every run: `--security-opt no-new-privileges`, `--cap-drop ALL`,
-runs as your host uid/gid on Linux, credentials delivered ephemerally (never
-written into the mounted home).
+runs as your host uid/gid on Linux, and API credentials are delivered through
+temp files removed after the run or on SIGINT/SIGTERM.
 
 ## Requirements
 
 - Docker (Desktop on macOS, Engine on Linux)
-- A relay/endpoint that serves the agent's API. Codex specifically needs a
-  **Responses-API** endpoint; put a translating proxy (LiteLLM, etc.) in front
-  of anything that speaks only OpenAI-chat or OpenRouter.
+- A relay/endpoint that serves the agent's API. Codex uses the **Responses
+  API**; chat-completions-only relays need a translating proxy such as LiteLLM.
+  When a provider supports multiple OpenAI-compatible APIs, configure its
+  Responses-compatible API root.
 
 ## Install
 
@@ -58,7 +59,7 @@ else to place on disk — `aibox` builds its images from what it carries.
 # 1. Build the image
 aibox build codex
 
-# 2. First use of a relay name scaffolds a config stub, then stops
+# 2. First use of a relay name scaffolds base + relay stubs, then stops
 aibox codex -e myrelay
 #    -> edit ~/.aibox/codex/default/envs/myrelay with your endpoint + key
 
@@ -101,7 +102,7 @@ real line under its example — leave the example itself as living reference.
 
 ### codex relay keys
 
-| Key | Maps to | |
+| Key | Maps to | Required |
 | --- | --- | --- |
 | `CODEX_BASE_URL` | `model_providers.<id>.base_url` | required |
 | `CODEX_API_KEY` | the API key | required |
@@ -109,17 +110,18 @@ real line under its example — leave the example itself as living reference.
 | `CODEX_REASONING` | `model_reasoning_effort` | optional |
 | `CODEX_PLAN_REASONING` | `plan_mode_reasoning_effort` | optional |
 | `CODEX_REQUIRES_OPENAI_AUTH` | auth mode: env var (default) vs `auth.json` | optional |
-| `CODEX_QUERY_PARAMS` | provider `query_params` (e.g. Azure `api-version`) | optional |
+| `CODEX_QUERY_PARAMS` | provider `query_params` (`k=v,k=v`, e.g. Azure `api-version`) | optional |
 | `CODEX_INSTRUCTIONS_FILE` | `model_instructions_file` (a **host** path) | optional |
 
 The endpoint is injected into Codex ephemerally via its own `-c key=value`
 overrides, so nothing endpoint-related ever lands in the mounted `config.toml`
 (which stays yours — `codex login`, trust levels, MCP servers live there). The
-API key is staged in a `0600` temp file and removed on exit.
+API key is staged in a `0600` temp file and removed after the run or on
+SIGINT/SIGTERM.
 
 ### claude relay keys
 
-| Key | |
+| Key | Required |
 | --- | --- |
 | `ANTHROPIC_BASE_URL` | required |
 | `ANTHROPIC_AUTH_TOKEN` | required |
@@ -181,7 +183,7 @@ per-profile: pass `-p <name>` to browse a profile other than `default`.
 Normal runs for both agents share these (see `aibox claude -h` / `aibox codex -h`
 for the full list):
 
-| Flag | |
+| Flag | Meaning |
 | --- | --- |
 | `-e, --env <name\|path>` | relay endpoint (required) |
 | `-p, --profile <name>` | config profile (default `default`) |
@@ -193,11 +195,12 @@ for the full list):
 
 ## Environment overrides
 
-`AIBOX_CONFIG_ROOT` overrides the host config root as-is (instead of
-`~/.aibox/<agent>`; set separate values if you want separate custom roots for
-Claude and Codex). `AIBOX_IMAGE` overrides the image tag used by a normal run,
-and by `aibox build claude` / `aibox build codex`; `aibox build` without a target
-rejects it because one tag cannot name both agent images.
+`AIBOX_CONFIG_ROOT` overrides the host config root as-is instead of
+`~/.aibox/<agent>`. Because the override is literal and not agent-suffixed, set
+it per command if you want separate custom roots for Claude and Codex.
+`AIBOX_IMAGE` overrides the image tag used by a normal run, and by
+`aibox build claude` / `aibox build codex`; `aibox build` without a target rejects
+it because one tag cannot name both agent images.
 
 ## Building images
 

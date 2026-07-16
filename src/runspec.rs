@@ -30,7 +30,7 @@ const CLAUDE_SETTINGS: &str = r#"{
 /// existing files are left untouched so customizations survive.
 ///
 /// - Claude: the status-line script + a `settings.json` wiring it.
-/// - Codex: `.codex/` (CODEX_HOME), which codex refuses to start without and
+/// - Codex: `.codex/` (CODEX_HOME), which Codex refuses to start without and
 ///   which the mount would otherwise shadow.
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
     match agent {
@@ -76,7 +76,7 @@ pub struct RunOpts<'a> {
 }
 
 /// What an agent wants from a run, after translating its relay config. Combines
-/// with the shared docker flags in [`assemble_run_args`].
+/// with the shared Docker flags in [`assemble_run_args`].
 pub struct Invocation {
     /// Extra `docker run` args the agent needs (e.g. Codex's `--env-file` for the
     /// key, or a read-only `auth.json` / instructions mount).

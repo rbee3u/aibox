@@ -1,17 +1,20 @@
-//! Ephemeral credential staging with cleanup on *every* exit path.
+//! Ephemeral credential staging with cleanup on normal exits and handled signals.
 //!
-//! Credentials (the merged env file, or Codex's throwaway `auth.json`) are
-//! staged in 0600 temp files that must never outlive the process.
+//! Secrets are staged in 0600 temp files: Claude's merged env file, Codex's
+//! key-only env file, or Codex's throwaway `auth.json`. They must never outlive
+//! the agent run.
 //!
 //! ## The signal gap
 //!
 //! Rust's `Drop` covers the normal path (the guard drops after `docker run`
-//! returns), because docker runs as a child rather than an `exec`-replace. But
+//! returns), because Docker runs as a child rather than an `exec`-replace. But
 //! `Drop` does **not** run when the process is killed by SIGINT (Ctrl-C) or
 //! SIGTERM: the default disposition terminates without unwinding. So we also
 //! register every staged path in a process-global set and install a signal
 //! handler that unlinks them and re-raises the signal. Between the two, a staged
-//! credential is removed whether the run finishes, errors, or is interrupted.
+//! credential is removed when the run finishes, errors, or receives SIGINT /
+//! SIGTERM. Uncatchable termination (for example SIGKILL) cannot run process
+//! cleanup, so secrets must never be written into profile homes.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -85,7 +88,7 @@ impl StagedFile {
 
         let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         // NamedTempFile is created 0600 on Unix. We persist it to a stable path
-        // we control so we can hand the path to docker, then manage deletion
+        // we control so we can hand the path to Docker, then manage deletion
         // ourselves (persist disarms tempfile's own drop-time unlink).
         let named = tempfile::Builder::new()
             .prefix(prefix)
@@ -120,7 +123,7 @@ impl Drop for StagedFile {
 ///
 /// This is Codex's `auth.json` case: Docker Desktop's virtiofs can't create a
 /// bind-mount target nested inside another bind mount (`/home/codex`), so we
-/// pre-create the file at `<home>/.codex/auth.json` for docker to over-mount.
+/// pre-create the file at `<home>/.codex/auth.json` for Docker to over-mount.
 /// If a real `codex login` auth.json already exists there, we leave it alone —
 /// only a placeholder we created is removed. Registered for signal cleanup like
 /// [`StagedFile`], so an interrupt doesn't leave our placeholder behind.

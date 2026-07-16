@@ -24,7 +24,7 @@ src/
   lib.rs         # orchestration (run / run_agent) + module wiring
   cli.rs         # clap types + split_passthrough
   agent.rs       # AgentKind enum + trait-like methods — divergence point
-  profile.rs     # profile paths, home seeding, relay resolve/scaffold
+  profile.rs     # profile paths, config root, relay resolve/scaffold
   envfile.rs     # base+relay merge (IndexMap: order + last-wins)
   template.rs    # env-file templates + TEMPLATE_VERSION + stamp reader
   sync.rs        # sync merge engine + file dispatch
@@ -38,19 +38,18 @@ assets/          # Dockerfiles + status.sh, embedded via include_str!
 
 ## Hard constraints
 
-**The two agents diverge in exactly one place: `AgentKind` (`agent.rs`).**
-Image name, config root, container home, Dockerfile, templates, the docker
-invocation (endpoint wiring + agent command line), and the session backend all
-hang off it. Shared logic (profile, envfile, sync, session surface, docker
-hardening) is written once and takes an `AgentKind`. This is the type-enforced
-replacement for the old "keep the two Bash scripts in parallel" rule: a
-divergence that isn't expressed through `AgentKind` is a compile error, not a
-copy-paste someone forgot. If you're about to special-case Claude vs Codex
-outside `agent.rs` / `session/`, reconsider.
+**Agent divergence is centralized.** Image name, config root, container home,
+Dockerfile, templates, Docker invocation (endpoint wiring + agent command line),
+and the session backend all hang off `AgentKind` (`agent.rs`). Shared logic
+(profile, envfile, sync, session surface, Docker hardening) is written once and
+takes an `AgentKind`. Transcript parsing is the only per-agent implementation
+outside `AgentKind`, and it stays behind `session/` backends. If you're about to
+special-case Claude vs Codex anywhere else, reconsider.
 
-**Credentials never persist.** The API key is staged in a `0600` temp file
-(the merged env-file for Claude, a key-only env-file or a throwaway `auth.json`
-for Codex) and unlinked on every exit path. `creds.rs` covers both:
+**Credentials never persist across handled exits.** The API key is staged in a
+`0600` temp file (the merged env-file for Claude, a key-only env-file or a
+throwaway `auth.json` for Codex) and unlinked after the run. `creds.rs` covers
+both:
 - normal / error path — `StagedFile`'s `Drop` unlinks;
 - interrupt path — a SIGINT/SIGTERM handler unlinks every registered path and
   re-raises, because `Drop` does **not** run on a signal.
@@ -58,7 +57,9 @@ for Codex) and unlinked on every exit path. `creds.rs` covers both:
 Docker runs as a **child** (`Command::status()`, never an exec-replace) so the
 guards drop after it returns. Don't turn that into `exec`. If you add a new kind
 of staged credential, register it through `creds.rs` so both paths cover it, and
-manually test Ctrl-C mid-run.
+manually test Ctrl-C mid-run. Uncatchable exits such as SIGKILL are outside
+process cleanup, so keep staged files in temp locations and never write secrets
+into profile homes.
 
 **config.toml stays the user's (Codex).** The endpoint is injected only via
 runtime `-c key=value` overrides (`agent.rs::build_codex`), never written to the

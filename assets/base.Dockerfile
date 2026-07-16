@@ -110,7 +110,7 @@ ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:$PATH
 # each is its own layer, so adding one only rebuilds from here down. Keep
 # language runtimes root-owned under /usr/local so mounted homes stay clean.
 #
-# Java (Temurin JDK from Debian's adoptium-free packaging):
+# Java (Debian OpenJDK):
 #   RUN apt-get update && apt-get install -y --no-install-recommends \
 #         default-jdk maven \
 #     && rm -rf /var/lib/apt/lists/*

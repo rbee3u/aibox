@@ -31,7 +31,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
-    about = "Run coding agents inside a Docker container that IS the sandbox boundary",
+    about = "Run coding agents inside a Docker container that is the sandbox boundary",
     long_about = "Run coding agents (Claude Code, OpenAI Codex) inside a Docker container \
                   that is the sandbox boundary — so the agent can skip every permission \
                   prompt and work unrestricted, while the blast radius stays inside the \
@@ -143,7 +143,7 @@ pub struct RunArgs {
     #[arg(short, long, default_value = "default")]
     pub profile: String,
 
-    /// Relay endpoint (required for a run): a name under <profile>/envs/, or a
+    /// Relay endpoint (required for a run): a name under `<profile>/envs/`, or a
     /// path. Merged onto `base`.
     #[arg(short, long)]
     pub env: Option<String>,
@@ -152,7 +152,7 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub work: Option<String>,
 
-    /// Extra bind mount, docker syntax host:container[:ro] (repeatable).
+    /// Extra bind mount, Docker syntax `host:container[:ro]` (repeatable).
     #[arg(short, long)]
     pub mount: Vec<String>,
 
@@ -169,7 +169,7 @@ pub struct RunArgs {
 /// after is pass-through for the agent. The `--` itself is dropped. Returns
 /// `(left, passthrough)`.
 ///
-/// `argv` should include argv[0] (the program name) as clap expects.
+/// `argv` should include `argv[0]` (the program name) as clap expects.
 pub fn split_passthrough(argv: Vec<String>) -> (Vec<String>, Vec<String>) {
     match argv.iter().position(|a| a == "--") {
         Some(i) => {

@@ -1,6 +1,6 @@
 # aibox-codex.Dockerfile
 # Packages OpenAI Codex CLI on top of aibox-base, so high-risk projects can be
-# run inside a container that IS the sandbox boundary.
+# run inside a container that is the sandbox boundary.
 #
 # Codex ships its own OS sandbox (Seatbelt on macOS, Landlock+seccomp on Linux).
 # We don't rely on it: the wrapper launches Codex with that sandbox bypassed,

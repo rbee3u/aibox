@@ -2,9 +2,10 @@
 //!
 //! Everything the wrapper does that differs between Claude Code and Codex is
 //! funneled through [`AgentKind`] and its methods. Shared logic (profile
-//! resolution, env merge, sync, session resolve/delete, docker hardening) lives
+//! resolution, env merge, sync, session resolve/delete, Docker hardening) lives
 //! elsewhere and takes an `AgentKind` only to ask these questions. A divergence
-//! that isn't expressed here is a compile error, not a copy-paste someone forgot.
+//! that isn't expressed here is visible at the type boundary instead of hidden
+//! in copy-pasted run paths.
 
 use crate::creds::{GuardedPath, StagedFile};
 use crate::runspec::{Invocation, RunOpts};
@@ -25,7 +26,7 @@ pub enum AgentKind {
 /// Bump when a template in [`crate::template`] changes. Existing env files carry
 /// the version they were written with (first line `# aibox-template: vN`); a run
 /// whose file lags this prints a hint to `sync`. Shared by both agents.
-pub const TEMPLATE_VERSION: u32 = 4;
+pub const TEMPLATE_VERSION: u32 = 5;
 
 impl AgentKind {
     /// Short lowercase tag used in paths and messages: `claude` / `codex`.
@@ -81,15 +82,13 @@ impl AgentKind {
         }
     }
 
-    /// Translate a run's merged relay config into the agent-specific docker
-    /// extras and command line. This is where the two agents genuinely diverge:
+    /// Translate a run's merged relay config into the agent-specific Docker
+    /// args and command line. This is where the two agents genuinely diverge:
     ///
-    /// - **Claude** is configured entirely by env vars, which already reached the
-    ///   container via the merged `--env-file` the caller staged. So there are no
-    ///   extra run args; the command line is just the permission toggle plus
-    ///   pass-through.
-    /// - **Codex** needs `-c key=value` overrides, a chosen auth mode, and
-    ///   possibly extra mounts.
+    /// - **Claude** gets the merged env through a staged `--env-file`; its command
+    ///   line is only the permission toggle plus pass-through args.
+    /// - **Codex** gets `-c key=value` overrides, a chosen auth mode, and optional
+    ///   read-only mounts.
     pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
         match self {
             AgentKind::Claude => build_claude(opts),
@@ -105,7 +104,7 @@ impl AgentKind {
 /// pass-through. Prepending the default flag means an explicit `--permission-mode`
 /// in the pass-through still wins.
 fn build_claude(opts: &RunOpts) -> Result<Invocation> {
-    // Stage the merged env as a 0600 file docker reads with --env-file. Held in
+    // Stage the merged env as a 0600 file Docker reads with --env-file. Held in
     // `staged` so it's unlinked once the run returns (or on signal; see creds).
     let env_file = crate::creds::StagedFile::create("aibox-env.", &opts.env.to_env_file())?;
     let extra_run_args = vec![
@@ -130,12 +129,11 @@ fn build_claude(opts: &RunOpts) -> Result<Invocation> {
     })
 }
 
-/// Codex is NOT configured by env vars: a custom model provider lives in
-/// `config.toml`, and only the API *key* comes from an env var. We never write
-/// the mounted `config.toml` (it holds the user's `codex login`, trust levels,
-/// MCP servers); instead the whole provider is injected ephemerally via Codex's
-/// own `-c key=value` overrides, and the key is delivered one of two mutually
-/// exclusive ways (see below).
+/// Codex provider settings are config values, not environment variables. We
+/// never write the mounted `config.toml` (it holds the user's `codex login`,
+/// trust levels, MCP servers); instead the provider is injected ephemerally via
+/// Codex's own `-c key=value` overrides. The API key is delivered by one of two
+/// mutually exclusive modes below.
 fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // Read the keys we translate out of the merge. Unknown keys are ignored —
     // this understands exactly the set below.
@@ -168,17 +166,18 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     let mut staged: Vec<StagedFile> = Vec::new();
     let mut guarded: Vec<GuardedPath> = Vec::new();
 
-    // --- how the key reaches codex: two mutually-exclusive modes ---------
+    // --- how the key reaches Codex: two mutually-exclusive modes ---------
     // env_key mode (default): key crosses as OPENAI_API_KEY via a 0600 --env-file.
     // auth.json mode (CODEX_REQUIRES_OPENAI_AUTH truthy): key delivered as a
-    // throwaway {"OPENAI_API_KEY":"…"} mounted read-only over CODEX_HOME.
+    // throwaway {"OPENAI_API_KEY":"..."} mounted read-only at
+    // CODEX_HOME/auth.json.
     let use_auth_json = matches!(
         requires_openai_auth.to_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     );
 
     if use_auth_json {
-        // Pre-create the mount target so docker over-mounts an existing file
+        // Pre-create the mount target so Docker over-mounts an existing file
         // (virtiofs can't create a target nested in the /home/codex mount). Only
         // a placeholder we create is removed later; a real login auth.json stays.
         let auth_mount = opts.home_dir.join(".codex").join("auth.json");
@@ -212,8 +211,8 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         extra_run_args.push(format!("{}:{CODEX_INSTRUCTIONS_CTR}:ro", host.display()));
     }
 
-    // --- build the codex invocation --------------------------------------
-    // The endpoint is injected ephemerally via codex's own `-c` overrides;
+    // --- build the Codex invocation --------------------------------------
+    // The endpoint is injected ephemerally via Codex's own `-c` overrides;
     // nothing lands in the mounted config.toml. `aibox` is our provider id.
     let mut cmd: Vec<String> = Vec::new();
 
@@ -231,7 +230,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     push_c(&mut cmd, "model_providers.aibox.wire_api=responses");
     push_c(&mut cmd, format!("model={model}"));
 
-    // Exactly one auth wiring — the two conflict in codex's provider.validate(),
+    // Exactly one auth wiring — the two conflict in Codex's provider.validate(),
     // and Codex's built-in auth.json path only engages when env_key is unset.
     if use_auth_json {
         push_c(&mut cmd, "model_providers.aibox.requires_openai_auth=true");
@@ -266,7 +265,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         }
     }
 
-    // Wide-open by default: bypass BOTH codex's approval prompts and its OS
+    // Wide-open by default: bypass BOTH Codex's approval prompts and its OS
     // sandbox. --safe puts the normal approvals + workspace-write sandbox back.
     // Prepended so an explicit flag in pass-through (e.g. -a/-s) still wins.
     if opts.safe {
@@ -290,7 +289,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     })
 }
 
-/// Push a codex `-c key=value` override as the two argv tokens it takes. Folds
+/// Push a Codex `-c key=value` override as the two argv tokens it takes. Folds
 /// the repeated `cmd.push("-c"); cmd.push(kv)` pair that wiring the ephemeral
 /// provider needs into one call.
 fn push_c(cmd: &mut Vec<String>, kv: impl Into<String>) {

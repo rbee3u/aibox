@@ -10,7 +10,7 @@
 //! Codex has no ai-title, so a session's preview is its first *real* prompt. It
 //! also records injected wrapper turns (environment/instructions context blocks,
 //! `!`-shell commands, the per-project AGENTS.md preamble) as user turns; those
-//! are filtered by [`is_wrapper`] applied to each content item. A turn left with no
+//! are filtered by `is_wrapper` applied to each content item. A turn left with no
 //! text after filtering is skipped for previews and `get`.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
@@ -61,7 +61,7 @@ impl SessionBackend for Codex {
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
-    /// [`user_turn_text`]. Feeds shared summary and `get` paths.
+    /// `user_turn_text`. Feeds shared summary and `get` paths.
     fn typed_text(&self, v: &Value) -> Option<String> {
         user_turn_text(v)
     }

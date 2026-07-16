@@ -1,13 +1,13 @@
 //! Host-platform probes: uid/gid, TTY detection, OS gate.
 //!
 //! These decide the Linux-only `--user`/`--add-host` flags and the `-it` vs `-i`
-//! docker flag, so they must reflect the *host* the wrapper runs on — not the
+//! Docker flag, so they must reflect the *host* the wrapper runs on — not the
 //! container.
 
 use std::io::IsTerminal;
 
 /// True when the host is Linux. Gates the `--user host-uid:gid` and
-/// `--add-host host.docker.internal:host-gateway` docker flags (Docker Desktop on
+/// `--add-host host.docker.internal:host-gateway` Docker flags (Docker Desktop on
 /// macOS/Windows handles ownership and that hostname on its own).
 pub fn is_linux() -> bool {
     cfg!(target_os = "linux")

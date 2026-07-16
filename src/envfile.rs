@@ -1,6 +1,6 @@
 //! Env-file parsing and the `base` + relay merge.
 //!
-//! Read one or more `docker --env-file`-format files in order, drop comments and
+//! Read one or more `docker --env-file` format files in order, drop comments and
 //! blank lines, and keep `KEY=VALUE` lines with **last value winning** per key
 //! while **preserving first-seen order**. A later file (the relay) thus overrides
 //! an earlier one (`base`), and a `KEY=` line with an empty value blanks a base
@@ -8,8 +8,8 @@
 
 use indexmap::IndexMap;
 
-/// A merged set of `KEY=VALUE` env lines, order-preserving. Values include the
-/// full original line text after the key (so `KEY=` stays `KEY=`).
+/// A merged set of `KEY=VALUE` env lines, order-preserving. Stored values are
+/// the full original lines (so `KEY=` stays `KEY=`).
 pub struct MergedEnv {
     /// key -> full `KEY=VALUE` line, in first-seen order.
     entries: IndexMap<String, String>,
@@ -44,7 +44,7 @@ impl MergedEnv {
     }
 
     /// Render as an env-file body (one `KEY=VALUE` per line, trailing newline if
-    /// non-empty). This is what gets written to the 0600 temp file docker reads.
+    /// non-empty). This is what gets written to the 0600 temp file Docker reads.
     pub fn to_env_file(&self) -> String {
         let mut out = String::new();
         for line in self.lines() {

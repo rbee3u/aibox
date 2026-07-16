@@ -54,15 +54,15 @@ const CLAUDE_BASE: &str = "\
 # Each item is documented, then shown as a commented #EXAMPLE. To set one, add
 # a real line under its example — leave the example itself as living reference.
 
-# Model tiers: claude shells out to the haiku tier for background work and
-# resolves sonnet/opus via subagents or /model. Map every tier to a model your
-# relays serve; a relay that differs overrides just that line.
+# Model tiers: Claude Code shells out to the haiku tier for background work and
+# resolves sonnet/opus through subagents or /model. Map every tier to a model
+# your relays serve; a relay that differs overrides just that line.
 #ANTHROPIC_DEFAULT_HAIKU_MODEL=replace-with-small-fast-model
 #ANTHROPIC_DEFAULT_SONNET_MODEL=replace-with-mid-model
 #ANTHROPIC_DEFAULT_OPUS_MODEL=replace-with-main-model
 
-# Fable is a real fourth tier, only used if you /model to it; many relays don't
-# serve it — set it only if yours does.
+# Claude Code also has a fable tier, used only if you /model to it; many relays
+# don't serve it, so set it only if yours does.
 #ANTHROPIC_DEFAULT_FABLE_MODEL=replace-with-fable-model
 ";
 
@@ -70,7 +70,7 @@ const CLAUDE_RELAY: &str = "\
 # docker --env-file format: KEY=VALUE. Each item is documented, then shown as a
 # commented #EXAMPLE — add a real line under the example to set it.
 
-# REQUIRED. base_url of your provider (claude's /v1/messages root).
+# REQUIRED. base_url of your provider (Claude's /v1/messages root).
 #ANTHROPIC_BASE_URL=https://your-provider.example.com/anthropic
 
 # REQUIRED. API key / auth token.
@@ -111,7 +111,8 @@ const CODEX_RELAY: &str = "\
 # commented #EXAMPLE — add a real line under the example to set it.
 
 # REQUIRED. base_url of your provider. Codex appends the Responses path itself,
-# so give the API root (the model_providers.<id>.base_url value).
+# so give the Responses-compatible API root
+# (the model_providers.<id>.base_url value).
 #CODEX_BASE_URL=https://your-provider.example.com/v1
 
 # REQUIRED. API key. Delivered ephemerally (see the auth mode below) and never
@@ -125,21 +126,23 @@ const CODEX_RELAY: &str = "\
 #CODEX_REASONING=xhigh
 #CODEX_PLAN_REASONING=xhigh
 
-# Auth mode. Default (unset): the key crosses in as an env var and codex reads
-# it via the provider's env_key — nothing touches disk. Set to 1 for auth.json
-# mode: codex reads the key from a {\"OPENAI_API_KEY\": \"...\"} file
-# (requires_openai_auth=true, no env_key), the same auth.json `codex login`
-# writes. aibox generates it as a throwaway, mounts it read-only, and never
-# persists it. Use 1 only if your relay's account/refresh flow expects it;
+# Auth mode. Default (unset): the key crosses in as an env var and Codex reads
+# it via the provider's env_key; nothing is written to config.toml or the
+# profile home. Set to 1 for auth.json mode: Codex reads the key from a
+# {\"OPENAI_API_KEY\": \"...\"} file at CODEX_HOME/auth.json
+# (requires_openai_auth=true, no env_key), the same path `codex login` uses.
+# aibox generates a throwaway file, mounts it read-only for the run, and removes
+# it on exit. Use 1 only if your relay's account/refresh flow expects it;
 # env_key mode is otherwise simpler and identical on the wire.
 #CODEX_REQUIRES_OPENAI_AUTH=1
 
 # A model-instructions file (config.toml's model_instructions_file). Give the
-# path ON YOUR HOST — aibox bind-mounts it read-only and points codex at it.
+# path ON YOUR HOST — aibox bind-mounts it read-only and points Codex at it.
 # Absolute, or relative to where you launch `aibox codex`.
 #CODEX_INSTRUCTIONS_FILE=~/prompts/codex-instructions.md
 
-# Azure-style deployments need the api-version as a query param:
+# Optional provider query params, as comma-separated k=v pairs. Azure-style
+# deployments commonly need api-version:
 #CODEX_QUERY_PARAMS=api-version=2025-04-01-preview
 ";
 
