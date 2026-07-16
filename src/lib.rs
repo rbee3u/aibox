@@ -56,9 +56,8 @@ fn run_agent_command(
         let prof = Profile::resolve(agent, &root, &args.run.profile);
         return match action {
             Action::Sync { target, dry_run } => sync::run_sync(&prof, target.as_deref(), *dry_run),
-            Action::Session { action, id } => {
-                let act = action.as_deref().unwrap_or("list");
-                session::dispatch(agent, &prof.home_dir, act, id.as_deref())
+            Action::Session { action, ids, yes } => {
+                session::dispatch(agent, &prof.home_dir, action, ids, *yes)
             }
         };
     }

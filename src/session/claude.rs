@@ -3,9 +3,11 @@
 //! Each line is a JSON object. The fields we read:
 //! - a top-level `timestamp` (first one seen = session start);
 //! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
-//! - `{"type":"user","promptSource":"typed", …, "content":"…"}` — a prompt the
-//!   user actually typed (as opposed to injected/tool turns). `promptSource` is
-//!   what lets us list only real chats.
+//! - `{"type":"user","promptSource":"typed", …, "message":{"content":"…"}}` — a
+//!   prompt the user actually typed (as opposed to injected/tool turns). The text
+//!   lives in the nested `message.content` (a plain string, or a block array),
+//!   *not* a top-level `content`. `promptSource` is what lets us list only real
+//!   chats.
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
@@ -29,8 +31,8 @@ impl SessionBackend for Claude {
     }
 
     /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
-    /// with a non-empty `content`. The shared loops in [`SessionBackend`] use this
-    /// for both `list` counting and `get`.
+    /// with a non-empty `message.content`. The shared loops in [`SessionBackend`]
+    /// use this for both `list` counting and `get`.
     fn typed_text(&self, v: &Value) -> Option<String> {
         if v.get("type").and_then(Value::as_str) != Some("user") || !is_typed(v) {
             return None;
@@ -70,11 +72,13 @@ fn is_typed(v: &Value) -> bool {
     v.get("promptSource").and_then(Value::as_str) == Some("typed")
 }
 
-/// Pull a user turn's text out of its `content`. Claude typically stores a plain
-/// string; some turns use the block array form `[{"type":"text","text":"…"}]`, so
-/// we handle both and join text blocks with newlines. Returns `None` if empty.
+/// Pull a user turn's text out of its `message.content` — Claude nests the turn
+/// under a `message` object (`{"role":"user","content":…}`), not at the top level.
+/// The content is typically a plain string; some turns use the block array form
+/// `[{"type":"text","text":"…"}]`, so we handle both and join text blocks with
+/// newlines. Returns `None` if the `message.content` is absent or empty.
 fn content_text(v: &Value) -> Option<String> {
-    match v.get("content") {
+    match v.get("message").and_then(|m| m.get("content")) {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
         Some(Value::Array(items)) => {
             let mut parts = Vec::new();
@@ -118,12 +122,12 @@ mod tests {
             home,
             ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
             &[
-                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","content":"first prompt"}"#,
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"first prompt"}}"#,
                 r#"{"type":"ai-title","aiTitle":"A Nice Title"}"#,
-                r#"{"type":"user","promptSource":"typed","content":"second"}"#,
+                r#"{"type":"user","promptSource":"typed","message":{"role":"user","content":"second"}}"#,
             ],
         );
-        let s = Claude.summarize(&path).unwrap();
+        let s = Claude.summarize(&path);
         assert_eq!(s.title, "A Nice Title");
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert!(s.id.starts_with("3f2a1b6c"));
@@ -136,25 +140,30 @@ mod tests {
             dir.path(),
             ".claude/projects/p/aaaa.jsonl",
             &[
-                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","promptSource":"typed","content":"only prompt"}"#,
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"only prompt"}}"#,
             ],
         );
-        let s = Claude.summarize(&path).unwrap();
+        let s = Claude.summarize(&path);
         assert_eq!(s.title, "only prompt");
     }
 
     #[test]
-    fn sessions_without_typed_prompts_are_skipped() {
+    fn sessions_without_typed_prompts_still_summarize_with_empty_title() {
+        // No `promptSource:typed` line, so no title — but the session still
+        // summarizes (empty title) so `list`/`delete` can see and clear it.
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             dir.path(),
             ".claude/projects/p/bbbb.jsonl",
             &[
-                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","content":"injected"}"#,
-                r#"{"type":"assistant","content":"hi"}"#,
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"injected"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":"hi"}}"#,
             ],
         );
-        assert!(Claude.summarize(&path).is_none());
+        let s = Claude.summarize(&path);
+        assert_eq!(s.title, "");
+        assert_eq!(s.start_ts, "2026-01-01T00:00:00Z");
+        assert!(Claude.prompts(&path).is_empty());
     }
 
     #[test]
@@ -165,7 +174,7 @@ mod tests {
             dir.path(),
             ".claude/projects/p/cccc.jsonl",
             &[
-                r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T09:00:00Z","content":"line1\nline2 测试"}"#,
+                r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T09:00:00Z","message":{"role":"user","content":"line1\nline2 测试"}}"#,
             ],
         );
         let ps = Claude.prompts(&path);
@@ -177,7 +186,7 @@ mod tests {
     #[test]
     fn content_block_array_form() {
         let v: Value = serde_json::from_str(
-            r#"{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}"#,
+            r#"{"message":{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}}"#,
         )
         .unwrap();
         assert_eq!(content_text(&v).as_deref(), Some("a\nb"));

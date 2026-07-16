@@ -152,8 +152,9 @@ tools can browse them straight from disk — no container, no relay:
 aibox claude session                  # list this profile's sessions, newest first
 aibox claude session list             # same thing
 aibox claude session get 3f2a         # print your prompts from that session
-aibox claude session delete 3f2a      # remove it (asks first)
-aibox claude session get 3f2a -p risky  # a different profile
+aibox claude session delete 3f2a 9d0e # remove sessions, asking for each one
+aibox claude session delete -y        # remove every session without asking
+aibox claude -p risky session get 3f2a  # a different profile
 ```
 
 `list` shows one row per session — short id, date, and a title (Claude's
@@ -166,8 +167,9 @@ generated title, or the first prompt for Codex):
 
 `get <id>` prints your own prompts from a session, numbered and timestamped,
 in full — handy for finding a prompt you liked and copy-pasting it into a new
-run. Tool results and the agent's replies are left out. `delete <id>` removes
-one transcript after a `y/N` confirm.
+run. Tool results and the agent's replies are left out. `delete [id...]` removes
+one or more transcripts, asking for each one; with no ids it selects every
+session in the profile. Pass `-y` / `--yes` to skip confirmations.
 
 `<id>` is the short id from `list` (or any unique prefix of the full id) — an
 ambiguous prefix lists the matches instead of guessing. Everything is

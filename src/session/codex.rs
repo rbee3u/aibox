@@ -133,7 +133,7 @@ mod tests {
                 r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"real question"}]}}"#,
             ],
         );
-        let s = Codex.summarize(&path).unwrap();
+        let s = Codex.summarize(&path);
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert_eq!(s.title, "real question");
     }
@@ -175,7 +175,10 @@ mod tests {
     }
 
     #[test]
-    fn turn_that_is_all_wrapper_is_skipped() {
+    fn turn_that_is_all_wrapper_yields_no_prompts_but_still_summarizes() {
+        // Every user turn is an injected wrapper, so no real prompt survives —
+        // but the session still summarizes (empty title, meta ts) so `list` and
+        // no-id `delete` can see and clear it.
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             dir.path(),
@@ -185,7 +188,9 @@ mod tests {
                 r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"text","text":"<user_instructions>be nice</user_instructions>"}]}}"#,
             ],
         );
-        assert!(Codex.summarize(&path).is_none());
+        let s = Codex.summarize(&path);
+        assert_eq!(s.title, "");
+        assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert!(Codex.prompts(&path).is_empty());
     }
 }

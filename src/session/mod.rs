@@ -14,7 +14,7 @@ pub mod codex;
 use crate::agent::AgentKind;
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::io::Write;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
@@ -60,15 +60,16 @@ pub(crate) fn ts_of(v: &Value) -> String {
         .to_string()
 }
 
-/// One session's list-row data. A session with no typed prompts (the user never
-/// asked anything) yields `None` from [`SessionBackend::summarize`] and is
-/// dropped from the listing (the "at least one typed prompt" guard).
+/// One session's list-row data. Every transcript yields a summary — sessions
+/// with no typed prompt (tool/injected-only shells) still list, just with an
+/// empty title — so `list` and no-id `delete` can see and clear them all.
 pub struct SessionSummary {
     /// Full session id (the row shows the first 8 chars).
     pub id: String,
     /// Session start timestamp (ISO-8601), or empty if none was found.
     pub start_ts: String,
-    /// The agent-generated title (Claude) or first typed prompt (both), or empty.
+    /// The agent-generated title (Claude) or first typed prompt (both), or empty
+    /// when the session has neither (a tool/injected-only shell).
     pub title: String,
 }
 
@@ -110,29 +111,22 @@ pub trait SessionBackend {
         first_prompt.to_string()
     }
 
-    /// Summarize one transcript for `list`. `None` = no typed prompts, so the
-    /// session is skipped (needs at least one typed prompt). Shared loop over both
-    /// formats; the per-agent answers come from the required methods above.
-    fn summarize(&self, path: &Path) -> Option<SessionSummary> {
+    /// Summarize one transcript for `list`. Every transcript summarizes — a
+    /// session with no typed prompt just gets an empty title (unless a backend's
+    /// `title` finds something else, like Claude's `ai-title`), so tool/injected-
+    /// only shells still list and can be cleared. Shared loop over both formats;
+    /// the per-agent answers come from the required methods above.
+    fn summarize(&self, path: &Path) -> SessionSummary {
         let lines = json_lines(path);
-        let mut first_typed = String::new();
-        let mut typed = 0u32;
-        for v in &lines {
-            if let Some(t) = self.typed_text(v) {
-                typed += 1;
-                if first_typed.is_empty() {
-                    first_typed = t;
-                }
-            }
-        }
-        if typed == 0 {
-            return None;
-        }
-        Some(SessionSummary {
+        let first_typed = lines
+            .iter()
+            .find_map(|v| self.typed_text(v))
+            .unwrap_or_default();
+        SessionSummary {
             id: self.id_of(path),
             start_ts: self.start_ts(&lines),
             title: self.title(&lines, &first_typed),
-        })
+        }
     }
 
     /// Every typed prompt in one transcript, in order, for `get`. Shared loop; the
@@ -159,15 +153,41 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     }
 }
 
-/// `session` dispatch: `list` (default), `get <id>`, `delete <id>`.
-pub fn dispatch(agent: AgentKind, home: &Path, action: &str, id: Option<&str>) -> Result<i32> {
+/// `session` dispatch: `list` (default), `get <id>`, `delete [id...]`.
+pub fn dispatch(
+    agent: AgentKind,
+    home: &Path,
+    action: &str,
+    ids: &[String],
+    yes: bool,
+) -> Result<i32> {
     let backend = backend_for(agent);
     match action {
-        "list" => list(backend.as_ref(), home),
-        "get" => get(backend.as_ref(), home, id),
-        "delete" | "rm" => delete(backend.as_ref(), home, id),
+        "list" => {
+            reject_yes("list", yes)?;
+            if !ids.is_empty() {
+                bail!("session list does not accept ids");
+            }
+            list(backend.as_ref(), home)
+        }
+        "get" => {
+            reject_yes("get", yes)?;
+            match ids {
+                [id] => get(backend.as_ref(), home, id),
+                [] => bail!("need a session id (or unique prefix)"),
+                _ => bail!("session get accepts exactly one id"),
+            }
+        }
+        "delete" | "rm" => delete(backend.as_ref(), home, ids, yes),
         other => bail!("unknown session action: {other} (use list|get|delete)"),
     }
+}
+
+fn reject_yes(action: &str, yes: bool) -> Result<()> {
+    if yes {
+        bail!("session {action} does not use -y/--yes");
+    }
+    Ok(())
 }
 
 /// Resolve a full id or unique prefix to exactly one transcript path. Zero
@@ -196,17 +216,17 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
     }
 }
 
-/// List this profile's sessions, newest first: `shortid  date  title`. Sessions
-/// with no typed prompts are skipped. Columns are `%-8s  %-16s  %s`.
+/// List this profile's sessions, newest first: `shortid  date  title`. Every
+/// transcript lists (tool/injected-only shells show an empty title) so nothing is
+/// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
-    // Collect (start_ts, id, title) for every session with ≥1 typed prompt.
+    // Collect (start_ts, id, title) for every transcript.
     let mut rows: Vec<(String, String, String)> = Vec::new();
     for f in backend.files(home) {
-        if let Some(s) = backend.summarize(&f) {
-            // Titles can contain newlines/tabs; collapse them to single spaces.
-            let title = collapse_ws(&s.title);
-            rows.push((s.start_ts, s.id, title));
-        }
+        let s = backend.summarize(&f);
+        // Titles can contain newlines/tabs; collapse them to single spaces.
+        let title = collapse_ws(&s.title);
+        rows.push((s.start_ts, s.id, title));
     }
     if rows.is_empty() {
         eprintln!(">> no sessions in this profile");
@@ -227,8 +247,8 @@ fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
 
 /// Print your typed prompts from one session, numbered + timestamped, full text
 /// (for copy-paste).
-fn get(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i32> {
-    let path = resolve(backend, home, id.unwrap_or(""))?;
+fn get(backend: &dyn SessionBackend, home: &Path, id: &str) -> Result<i32> {
+    let path = resolve(backend, home, id)?;
     let sid = backend.id_of(&path);
     eprintln!(">> session {sid}");
     let prompts = backend.prompts(&path);
@@ -243,23 +263,69 @@ fn get(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i3
     Ok(0)
 }
 
-/// Delete one transcript, asking first (not reversible).
-fn delete(backend: &dyn SessionBackend, home: &Path, id: Option<&str>) -> Result<i32> {
-    let path = resolve(backend, home, id.unwrap_or(""))?;
-    let sid = backend.id_of(&path);
-    eprint!("delete session {sid}? [y/N] ");
-    std::io::stderr().flush().ok();
-    let mut ans = String::new();
-    std::io::stdin().read_line(&mut ans).ok();
-    match ans.trim().to_lowercase().as_str() {
-        "y" | "yes" => {
+/// Delete transcripts, asking once per target unless `yes` is set. Passing no
+/// ids selects every transcript for this profile.
+fn delete(backend: &dyn SessionBackend, home: &Path, ids: &[String], yes: bool) -> Result<i32> {
+    let targets = delete_targets(backend, home, ids)?;
+    if targets.is_empty() {
+        eprintln!(">> no sessions in this profile");
+        return Ok(0);
+    }
+
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    delete_targets_with_input(backend, targets, yes, &mut input)
+}
+
+fn delete_targets(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    ids: &[String],
+) -> Result<Vec<PathBuf>> {
+    if ids.is_empty() {
+        // Every transcript, matching `list` (which now shows them all). No-id
+        // delete clears the whole profile, tool/injected-only shells included.
+        let mut targets = backend.files(home);
+        targets.sort_by_key(|p| backend.id_of(p));
+        return Ok(targets);
+    }
+
+    let mut targets = Vec::new();
+    for id in ids {
+        let path = resolve(backend, home, id)?;
+        if !targets.iter().any(|existing| existing == &path) {
+            targets.push(path);
+        }
+    }
+    Ok(targets)
+}
+
+fn delete_targets_with_input(
+    backend: &dyn SessionBackend,
+    targets: Vec<PathBuf>,
+    yes: bool,
+    input: &mut dyn BufRead,
+) -> Result<i32> {
+    for path in targets {
+        let sid = backend.id_of(&path);
+        let delete = yes || confirm_delete(&sid, input);
+        if delete {
             std::fs::remove_file(&path)
                 .map_err(|e| anyhow::anyhow!("delete {}: {e}", path.display()))?;
             eprintln!(">> deleted {sid}");
+        } else {
+            eprintln!(">> kept {sid}");
         }
-        _ => eprintln!(">> kept {sid}"),
     }
     Ok(0)
+}
+
+fn confirm_delete(sid: &str, input: &mut dyn BufRead) -> bool {
+    eprint!("delete session {sid}? [y/N] ");
+    io::stderr().flush().ok();
+    let mut ans = String::new();
+    input.read_line(&mut ans).ok();
+    matches!(ans.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// Format an ISO-8601 timestamp as `YYYY-MM-DD HH:MM` for display, or empty if
@@ -296,6 +362,38 @@ fn collapse_ws(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+    use std::io::Cursor;
+
+    struct TestBackend;
+
+    impl SessionBackend for TestBackend {
+        fn files(&self, home: &Path) -> Vec<PathBuf> {
+            walk_jsonl(&home.join("sessions"), |_| true)
+        }
+
+        fn id_of(&self, path: &Path) -> String {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
+        }
+
+        fn typed_text(&self, v: &Value) -> Option<String> {
+            v.get("typed").and_then(Value::as_str).map(str::to_string)
+        }
+
+        fn start_ts(&self, _lines: &[Value]) -> String {
+            String::new()
+        }
+    }
+
+    fn write_session(home: &Path, id: &str) -> PathBuf {
+        let path = home.join("sessions").join(format!("{id}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}\n").unwrap();
+        path
+    }
 
     #[test]
     fn fmt_ts_positional() {
@@ -307,5 +405,97 @@ mod tests {
     fn collapse_ws_runs() {
         assert_eq!(collapse_ws("a\n\nb\tc"), "a b c");
         assert_eq!(collapse_ws("plain"), "plain");
+    }
+
+    #[test]
+    fn delete_no_ids_selects_all_sessions_with_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = write_session(dir.path(), "11111111");
+        let two = write_session(dir.path(), "22222222");
+
+        delete(&TestBackend, dir.path(), &[], true).unwrap();
+
+        assert!(!one.exists());
+        assert!(!two.exists());
+    }
+
+    #[test]
+    fn delete_no_ids_includes_sessions_without_typed_prompts() {
+        // No-id delete clears the whole profile — including tool/injected-only
+        // shells that carry no typed prompt. `list` shows those same shells
+        // (empty title), so the two stay consistent and nothing is unclearable.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_session(dir.path(), "11111111");
+        let shell = dir.path().join("sessions").join("22222222.jsonl");
+        std::fs::write(&shell, "{}\n").unwrap();
+
+        let targets = delete_targets(&TestBackend, dir.path(), &[]).unwrap();
+
+        assert_eq!(targets, vec![a, shell]);
+    }
+
+    #[test]
+    fn summarize_empty_shell_has_empty_title() {
+        // A transcript with no typed prompt still summarizes (so `list` shows it);
+        // the title just comes out empty.
+        let dir = tempfile::tempdir().unwrap();
+        let shell = dir.path().join("sessions").join("33333333.jsonl");
+        std::fs::create_dir_all(shell.parent().unwrap()).unwrap();
+        std::fs::write(&shell, "{}\n").unwrap();
+
+        let s = TestBackend.summarize(&shell);
+        assert_eq!(s.title, "");
+        assert!(s.id.starts_with("33333333"));
+    }
+
+    #[test]
+    fn delete_multiple_ids_confirms_each_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = write_session(dir.path(), "11111111");
+        let remove = write_session(dir.path(), "22222222");
+        let targets = delete_targets(
+            &TestBackend,
+            dir.path(),
+            &["2222".to_string(), "1111".to_string()],
+        )
+        .unwrap();
+        let mut input = Cursor::new(b"y\nn\n");
+
+        delete_targets_with_input(&TestBackend, targets, false, &mut input).unwrap();
+
+        assert!(keep.exists());
+        assert!(!remove.exists());
+    }
+
+    #[test]
+    fn delete_targets_dedupes_repeated_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_session(dir.path(), "11111111");
+
+        let targets = delete_targets(
+            &TestBackend,
+            dir.path(),
+            &["1111".to_string(), "11111111".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(targets, vec![path]);
+    }
+
+    #[test]
+    fn delete_resolves_all_ids_before_removing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = write_session(dir.path(), "11111111");
+
+        let err = delete(
+            &TestBackend,
+            dir.path(),
+            &["1111".to_string(), "missing".to_string()],
+            true,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("no session matches: missing"));
+        assert!(keep.exists());
     }
 }

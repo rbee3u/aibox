@@ -7,7 +7,7 @@
 //!   aibox build [claude|codex] [--force]
 //!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
 //!   aibox <claude|codex> sync [base|<relay>] [--dry-run]
-//!   aibox <claude|codex> session [list|get <id>|delete <id>] [-p <profile>]
+//!   aibox <claude|codex> [-p <profile>] session [list|get <id>|delete [id...]] [-y]
 //! ```
 //!
 //! ## Why we split argv ourselves
@@ -123,9 +123,14 @@ pub enum Action {
     /// Browse this profile's saved chat transcripts (host-side; no container).
     Session {
         /// `list` (default), `get`, or `delete`.
-        action: Option<String>,
-        /// Session short id or unique prefix (for `get` / `delete`).
-        id: Option<String>,
+        #[arg(default_value = "list")]
+        action: String,
+        /// Session short id or unique prefix. `delete` accepts many; none means all.
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+        /// Skip delete confirmations.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 
@@ -302,9 +307,72 @@ mod tests {
         let (l, _) = split_passthrough(v(&["aibox", "codex", "session", "get", "3f2a"]));
         let cli = Cli::try_parse_from(l).unwrap();
         match &cli.command.agent_args().unwrap().action {
-            Some(Action::Session { action, id }) => {
-                assert_eq!(action.as_deref(), Some("get"));
-                assert_eq!(id.as_deref(), Some("3f2a"));
+            Some(Action::Session { action, ids, yes }) => {
+                assert_eq!(action, "get");
+                assert_eq!(ids, &v(&["3f2a"]));
+                assert!(!yes);
+            }
+            _ => panic!("expected session action"),
+        }
+    }
+
+    #[test]
+    fn parses_session_default_list() {
+        let (l, _) = split_passthrough(v(&["aibox", "codex", "session"]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match &cli.command.agent_args().unwrap().action {
+            Some(Action::Session { action, ids, yes }) => {
+                assert_eq!(action, "list");
+                assert!(ids.is_empty());
+                assert!(!yes);
+            }
+            _ => panic!("expected session action"),
+        }
+    }
+
+    #[test]
+    fn parses_session_delete_many_yes() {
+        let (l, _) = split_passthrough(v(&[
+            "aibox", "codex", "session", "delete", "-y", "3f2a", "9d0e",
+        ]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match &cli.command.agent_args().unwrap().action {
+            Some(Action::Session { action, ids, yes }) => {
+                assert_eq!(action, "delete");
+                assert_eq!(ids, &v(&["3f2a", "9d0e"]));
+                assert!(*yes);
+            }
+            _ => panic!("expected session action"),
+        }
+    }
+
+    #[test]
+    fn parses_session_delete_without_ids() {
+        let (l, _) = split_passthrough(v(&["aibox", "codex", "session", "delete"]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match &cli.command.agent_args().unwrap().action {
+            Some(Action::Session { action, ids, yes }) => {
+                assert_eq!(action, "delete");
+                assert!(ids.is_empty());
+                assert!(!yes);
+            }
+            _ => panic!("expected session action"),
+        }
+    }
+
+    #[test]
+    fn parses_session_profile_before_action() {
+        let (l, _) = split_passthrough(v(&[
+            "aibox", "codex", "-p", "risky", "session", "get", "3f2a",
+        ]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        let args = cli.command.agent_args().unwrap();
+        assert_eq!(args.run.profile, "risky");
+        match &args.action {
+            Some(Action::Session { action, ids, yes }) => {
+                assert_eq!(action, "get");
+                assert_eq!(ids, &v(&["3f2a"]));
+                assert!(!yes);
             }
             _ => panic!("expected session action"),
         }
