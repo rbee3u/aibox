@@ -1,36 +1,58 @@
 //! Building and running the container.
 //!
-//! Two entry points: [`build_image`] (invoked by `--build`, or automatically
-//! when the image is missing) and [`run`] (assemble `docker run` and exec the
-//! agent). Both shell out to the `docker` CLI via [`std::process::Command`].
+//! Two entry points: [`build_image`] (invoked by `aibox build`) and [`run`]
+//! (assemble `docker run` and exec the agent). Both shell out to the `docker`
+//! CLI via [`std::process::Command`].
 //!
 //! ## Why the Dockerfile comes from stdin
 //!
-//! Neither Dockerfile has a `COPY`; they fetch everything with apt/curl/npm. So
-//! the build context is unused, and we feed the embedded Dockerfile
-//! (`AgentKind::dockerfile`) to `docker build -f - <ctx>` on stdin with an empty
-//! context directory, so there's no need to locate a Dockerfile on disk.
+//! The embedded Dockerfiles have no `COPY`; they fetch everything with
+//! apt/curl/npm. So the build context is unused, and we feed the Dockerfile to
+//! `docker build -f - <ctx>` on stdin with an empty context directory. The
+//! agent images build `FROM aibox-base:latest`, which is also built from an
+//! embedded Dockerfile first.
 
-use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// Build the image for `agent` into `image`. `fresh` is the `--build` path:
-/// `--no-cache --pull` so the Node/Go/Rust/agent "latest" layers actually
-/// re-resolve instead of reusing frozen cached versions. `fresh = false` is the
-/// auto-build-when-missing path (cached, fast).
+/// Local base image tag that agent Dockerfiles build FROM.
+pub const BASE_IMAGE: &str = "aibox-base:latest";
+
+/// Shared development-runtime Dockerfile.
+pub const BASE_DOCKERFILE: &str = include_str!("../assets/base.Dockerfile");
+
+/// Cache policy for a Docker build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildCache {
+    /// Keep Docker's cache enabled.
+    Cached,
+    /// Re-run every layer, but do not pull the `FROM` image.
+    NoCache,
+    /// Re-run every layer and pull a fresh `FROM` image.
+    NoCachePull,
+}
+
+impl BuildCache {
+    fn docker_args(self) -> &'static [&'static str] {
+        match self {
+            BuildCache::Cached => &[],
+            BuildCache::NoCache => &["--no-cache"],
+            BuildCache::NoCachePull => &["--no-cache", "--pull"],
+        }
+    }
+}
+
+/// Build `dockerfile` into `image` using `cache`.
 ///
 /// The Dockerfile is piped in on stdin; the context is an empty temp dir since
 /// no Dockerfile references it.
-pub fn build_image(agent: AgentKind, image: &str, fresh: bool) -> Result<()> {
+pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
     let ctx = tempfile::tempdir().context("create empty build context")?;
 
     let mut cmd = Command::new("docker");
     cmd.arg("build");
-    if fresh {
-        cmd.args(["--no-cache", "--pull"]);
-    }
+    cmd.args(cache.docker_args());
     cmd.args(["-f", "-", "-t", image]);
     cmd.arg(ctx.path());
     cmd.stdin(Stdio::piped());
@@ -42,7 +64,7 @@ pub fn build_image(agent: AgentKind, image: &str, fresh: bool) -> Result<()> {
         .stdin
         .take()
         .expect("stdin piped")
-        .write_all(agent.dockerfile().as_bytes())
+        .write_all(dockerfile.as_bytes())
         .context("write Dockerfile to docker build stdin")?;
 
     let status = child.wait().context("wait for docker build")?;
@@ -54,12 +76,15 @@ pub fn build_image(agent: AgentKind, image: &str, fresh: bool) -> Result<()> {
 
 /// True if an image with this tag exists locally (`docker image ls -q` prints
 /// nothing for a missing tag).
-pub fn image_exists(image: &str) -> bool {
-    Command::new("docker")
+pub fn image_exists(image: &str) -> Result<bool> {
+    let output = Command::new("docker")
         .args(["image", "ls", "-q", image])
         .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
-        .unwrap_or(false)
+        .context("query docker image list (is docker installed?)")?;
+    if !output.status.success() {
+        bail!("docker image lookup failed ({})", output.status);
+    }
+    Ok(!output.stdout.is_empty())
 }
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its

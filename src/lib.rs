@@ -23,7 +23,8 @@ pub mod template;
 
 use agent::AgentKind;
 use anyhow::{Context, Result};
-use cli::{Action, Cli, RunArgs};
+use cli::{Action, BuildArgs, BuildTarget, Cli, Command, RunArgs};
+use docker::BuildCache;
 use envfile::MergedEnv;
 use profile::Profile;
 use runspec::RunOpts;
@@ -35,12 +36,21 @@ fn image_for(agent: AgentKind) -> String {
 
 /// Top-level dispatch. `passthrough` is the argv tail after `--` (agent args).
 ///
-/// `sync` / `session` short-circuit a run and never touch docker. A plain run
-/// flows through [`run_agent`].
+/// `build` owns image construction. `sync` / `session` short-circuit a run and
+/// never touch docker. A plain run flows through [`run_agent`].
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
-    let agent = cli.agent.kind();
-    let args = cli.agent.args();
+    match cli.command {
+        Command::Build(args) => run_build(&args),
+        Command::Claude(args) => run_agent_command(AgentKind::Claude, &args, &passthrough),
+        Command::Codex(args) => run_agent_command(AgentKind::Codex, &args, &passthrough),
+    }
+}
 
+fn run_agent_command(
+    agent: AgentKind,
+    args: &cli::AgentArgs,
+    passthrough: &[String],
+) -> Result<i32> {
     if let Some(action) = &args.action {
         let root = profile::config_root(agent)?;
         let prof = Profile::resolve(agent, &root, &args.run.profile);
@@ -53,29 +63,71 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
         };
     }
 
-    run_agent(agent, &args.run, &passthrough)
+    run_agent(agent, &args.run, passthrough)
 }
 
-/// A normal (non-sync, non-session) run: build if asked, resolve the profile and
-/// relay, merge config, stage credentials, assemble `docker run`, and exec the
-/// agent as a child (so credential cleanup fires afterwards).
+/// Build the shared base image, then one or both embedded agent images. Cached
+/// by default. `--force` pulls a fresh Debian image for the base build, then
+/// rebuilds the agent image(s) without pulling `aibox-base` from a registry.
+fn run_build(args: &BuildArgs) -> Result<i32> {
+    if args.target.is_none() && std::env::var_os("AIBOX_IMAGE").is_some() {
+        anyhow::bail!(
+            "AIBOX_IMAGE is ambiguous with `aibox build`; choose `aibox build claude` or `aibox build codex`"
+        );
+    }
+
+    let agents = match args.target {
+        None => vec![AgentKind::Claude, AgentKind::Codex],
+        Some(BuildTarget::Claude) => vec![AgentKind::Claude],
+        Some(BuildTarget::Codex) => vec![AgentKind::Codex],
+    };
+
+    let base_cache = if args.force {
+        BuildCache::NoCachePull
+    } else {
+        BuildCache::Cached
+    };
+    if args.force {
+        eprintln!(
+            ">> building {} (no cache, pulling fresh Debian base) ...",
+            docker::BASE_IMAGE
+        );
+    } else {
+        eprintln!(">> building {} (cache enabled) ...", docker::BASE_IMAGE);
+    }
+    docker::build_image(docker::BASE_DOCKERFILE, docker::BASE_IMAGE, base_cache)
+        .context("build base image")?;
+
+    let agent_cache = if args.force {
+        BuildCache::NoCache
+    } else {
+        BuildCache::Cached
+    };
+    for agent in agents {
+        let image = image_for(agent);
+        if args.force {
+            eprintln!(">> building {image} (no cache) ...");
+        } else {
+            eprintln!(">> building {image} (cache enabled) ...");
+        }
+        docker::build_image(agent.dockerfile(), &image, agent_cache)
+            .with_context(|| format!("build {}", agent.tag()))?;
+    }
+
+    Ok(0)
+}
+
+/// A normal (non-sync, non-session) run: resolve the profile and relay, require
+/// a pre-built image, merge config, stage credentials, assemble `docker run`,
+/// and exec the agent as a child (so credential cleanup fires afterwards).
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
     let image = image_for(agent);
 
     // Reject --exec for agents without a headless subcommand (Claude) before any
-    // work — notably before --build, so `aibox claude --build --exec` fails fast
-    // instead of building an image first. The flag is shared in the CLI struct;
-    // whether it's supported is an AgentKind question (see `supports_exec`).
+    // work. The flag is shared in the CLI struct; whether it's supported is an
+    // AgentKind question (see `supports_exec`).
     if run.exec && !agent.supports_exec() {
         anyhow::bail!("--exec is codex-only");
-    }
-
-    // --- explicit build --------------------------------------------------
-    // `--build` always rebuilds fresh (--no-cache --pull); a missing image is
-    // auto-built (cached, fast) just before the run below.
-    if run.build {
-        eprintln!(">> building {image} (no cache, pulling fresh base) ...");
-        docker::build_image(agent, &image, true).context("--build")?;
     }
 
     // --- resolve profile paths ------------------------------------------
@@ -83,16 +135,8 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     let prof = Profile::resolve(agent, &root, &run.profile);
 
     // --- a relay is required --------------------------------------------
-    // No default endpoint: every run picks one with -e. A bare --build built
-    // above, so it just reports and stops.
+    // No default endpoint: every run picks one with -e.
     let Some(env_name) = run.env.as_deref() else {
-        if run.build {
-            eprintln!(
-                ">> image built. run it with a relay: aibox {} -e <name>",
-                agent.tag()
-            );
-            return Ok(0);
-        }
         eprintln!("!! no relay selected — pick one with -e <name>:");
         let names = prof.relay_names();
         if names.is_empty() {
@@ -119,15 +163,16 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
         return Ok(0);
     };
 
+    // Runs never build implicitly. Build explicitly so cache policy is obvious.
+    if !docker::image_exists(&image)? {
+        anyhow::bail!(
+            "{image} is not present locally; build it first with `aibox build {}`",
+            agent.tag()
+        );
+    }
+
     // Nudge (don't touch) if base or the relay predates the current template.
     prof.nudge_if_stale(relay.path());
-
-    // --- build if the image is missing ----------------------------------
-    // Cached on purpose (speed); upgrading is --build's job.
-    if !run.build && !docker::image_exists(&image) {
-        eprintln!(">> {image} not present — building from cache (fast; --build to refresh) ...");
-        docker::build_image(agent, &image, false).context("auto-build")?;
-    }
 
     // --- merge base + relay ---------------------------------------------
     let sources = prof.merge_sources(relay.path())?;

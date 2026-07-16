@@ -4,10 +4,11 @@ Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that
 **is** the sandbox boundary — so the agent can skip every permission prompt and
 work unrestricted, while the blast radius stays inside the container.
 
-One binary, `aibox`, with a subcommand per agent — same design for both:
+One binary, `aibox`, with explicit image builds and a subcommand per agent:
 
 | Subcommand     | Agent        | Wraps            |
 | -------------- | ------------ | ---------------- |
+| `aibox build`  | image build  | embedded Dockerfiles |
 | `aibox claude` | Claude Code  | `@anthropic-ai/claude-code` |
 | `aibox codex`  | OpenAI Codex | `@openai/codex`  |
 
@@ -54,8 +55,8 @@ else to place on disk — `aibox` builds its images from what it carries.
 ## Quick start
 
 ```sh
-# 1. Build the image (also re-run any time to upgrade to latest upstream)
-aibox codex --build
+# 1. Build the image
+aibox build codex
 
 # 2. First use of a relay name scaffolds a config stub, then stops
 aibox codex -e myrelay
@@ -66,7 +67,9 @@ cd ~/code/some-project
 aibox codex -e myrelay
 ```
 
-`aibox claude` works the same way (`aibox claude --build`, `-e <relay>`, …).
+`aibox claude` works the same way (`aibox build claude`, `aibox claude -e <relay>`, ...).
+Normal runs never build images automatically; if the image is missing, `aibox`
+prints the build command and exits.
 
 Pass arguments straight through to the underlying agent after `--`:
 
@@ -181,15 +184,39 @@ Both agents share these (see `aibox claude -h` / `aibox codex -h` for the full l
 | `-w, --work <dir>` | project dir mounted at `/work` (default `$PWD`) |
 | `-m, --mount <spec>` | extra bind mount (`host:container[:ro]`, repeatable) |
 | `--safe` | keep the agent's normal prompts/sandbox instead of bypassing |
-| `--build` | rebuild the image from scratch (this is how you upgrade) |
 
 `aibox codex` also has `--exec` for headless runs: `aibox codex -e r --exec -- "fix the build"`.
 
-## Upgrading
+## Building images
 
-`--build` forces `--no-cache --pull`, which re-pulls the base image and
-re-resolves the "latest" Node / Go / Rust / agent versions. A plain cached build would
-freeze them, so `--build` is the way to pick up new upstream releases.
+Build one agent image, or omit the target to build both:
+
+```sh
+aibox build codex
+aibox build claude
+aibox build          # builds both
+```
+
+`aibox build` first builds the shared local base image (`aibox-base:latest`),
+then the requested agent image(s). Docker's cache stays enabled by default.
+Node, Rust, and Go are pinned in `assets/base.Dockerfile`, so repeated builds
+stay stable and fast. To upgrade one of those, edit the pinned `ARG`, reinstall
+or rebuild `aibox` so the embedded Dockerfile changes, then run `aibox build`
+or `aibox build <agent>`.
+
+Use `--force` (or `-f`) when you want Docker to ignore cache and pull a fresh
+`debian:bookworm-slim` for the shared base image:
+
+```sh
+aibox build codex --force
+aibox build codex -f
+```
+
+With `--force`, aibox rebuilds `aibox-base:latest` with
+`docker build --no-cache --pull`, then rebuilds the agent image(s) with
+`--no-cache` against that local base image. `aibox build --force` rebuilds the
+base once, then both agents. The pinned Node/Rust/Go versions stay pinned until
+you change their Dockerfile `ARG`s.
 
 That upgrades the *images*. To upgrade `aibox` itself, pull the repo and
 `cargo install --path .` again.

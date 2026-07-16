@@ -84,10 +84,10 @@ single source, shared by first-run scaffolding (`profile.rs`) and `sync`
 
 ## Dockerfiles
 
-Neither Dockerfile has a `COPY` — they fetch everything via apt/curl/npm. That's
-load-bearing: the build context is unused, so `docker.rs` feeds the embedded
-Dockerfile to `docker build -f -` on stdin with an empty context. Keep them
-`COPY`-free, or the stdin-build has to change.
+No embedded Dockerfile has a `COPY` — they fetch everything via apt/curl/npm.
+That's load-bearing: the build context is unused, so `docker.rs` feeds each
+embedded Dockerfile to `docker build -f -` on stdin with an empty context.
+Keep them `COPY`-free, or the stdin-build has to change.
 
 ## After editing
 

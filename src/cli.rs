@@ -4,6 +4,7 @@
 //! Invocation shape — one binary with agent subcommands:
 //!
 //! ```text
+//!   aibox build [claude|codex] [--force]
 //!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
 //!   aibox <claude|codex> sync [base|<relay>] [--dry-run]
 //!   aibox <claude|codex> session [list|get <id>|delete <id>] [-p <profile>]
@@ -23,7 +24,7 @@
 //! silently.
 
 use crate::agent::AgentKind;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// Top-level parser. Only the left half of argv (before the first `--`) reaches
 /// this; see [`split_passthrough`].
@@ -41,31 +42,58 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub agent: AgentCmd,
+    pub command: Command,
 }
 
-/// The agent selector — the first positional word (`claude` / `codex`).
+/// Top-level commands. Agent commands run or manage one agent profile; `build`
+/// owns image construction so normal runs never build implicitly.
 #[derive(Debug, Subcommand)]
-pub enum AgentCmd {
+pub enum Command {
+    /// Build aibox Docker image(s).
+    Build(BuildArgs),
     /// Run Claude Code (wraps `@anthropic-ai/claude-code`).
     Claude(AgentArgs),
     /// Run OpenAI Codex (wraps `@openai/codex`).
     Codex(AgentArgs),
 }
 
-impl AgentCmd {
-    pub fn kind(&self) -> AgentKind {
+impl Command {
+    pub fn agent_kind(&self) -> Option<AgentKind> {
         match self {
-            AgentCmd::Claude(_) => AgentKind::Claude,
-            AgentCmd::Codex(_) => AgentKind::Codex,
+            Command::Build(_) => None,
+            Command::Claude(_) => Some(AgentKind::Claude),
+            Command::Codex(_) => Some(AgentKind::Codex),
         }
     }
 
-    pub fn args(&self) -> &AgentArgs {
+    pub fn agent_args(&self) -> Option<&AgentArgs> {
         match self {
-            AgentCmd::Claude(a) | AgentCmd::Codex(a) => a,
+            Command::Build(_) => None,
+            Command::Claude(a) | Command::Codex(a) => Some(a),
         }
     }
+}
+
+/// Image build options. A cached build is the default; `--force` refreshes the
+/// shared base image and rebuilds the requested agent image(s) without cache.
+#[derive(Debug, Args)]
+pub struct BuildArgs {
+    /// Which agent image to build. Omit to build both.
+    #[arg(value_enum)]
+    pub target: Option<BuildTarget>,
+
+    /// Disable the Docker build cache and pull a fresh Debian base image.
+    #[arg(short, long)]
+    pub force: bool,
+}
+
+/// Build target for `aibox build`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BuildTarget {
+    /// Build only the Claude image.
+    Claude,
+    /// Build only the Codex image.
+    Codex,
 }
 
 /// Everything under an agent subcommand. The `sync` / `session` sub-subcommands
@@ -126,10 +154,6 @@ pub struct RunArgs {
     /// Keep the agent's normal permission prompts / sandbox instead of bypassing.
     #[arg(long)]
     pub safe: bool,
-
-    /// Rebuild the image from scratch (--no-cache --pull) before running.
-    #[arg(long)]
-    pub build: bool,
 
     /// Codex only: run headless `codex exec`. Pass the prompt after `--`.
     #[arg(long)]
@@ -194,23 +218,77 @@ mod tests {
     fn parses_claude_run() {
         let (l, _) = split_passthrough(v(&["aibox", "claude", "-e", "openrouter"]));
         let cli = Cli::try_parse_from(l).unwrap();
-        assert_eq!(cli.agent.kind(), AgentKind::Claude);
-        assert_eq!(cli.agent.args().run.env.as_deref(), Some("openrouter"));
+        assert_eq!(cli.command.agent_kind(), Some(AgentKind::Claude));
+        assert_eq!(
+            cli.command.agent_args().unwrap().run.env.as_deref(),
+            Some("openrouter")
+        );
     }
 
     #[test]
     fn parses_codex_exec() {
         let (l, _) = split_passthrough(v(&["aibox", "codex", "-e", "r", "--exec"]));
         let cli = Cli::try_parse_from(l).unwrap();
-        assert_eq!(cli.agent.kind(), AgentKind::Codex);
-        assert!(cli.agent.args().run.exec);
+        assert_eq!(cli.command.agent_kind(), Some(AgentKind::Codex));
+        assert!(cli.command.agent_args().unwrap().run.exec);
+    }
+
+    #[test]
+    fn parses_build_defaults_to_all_cached() {
+        let (l, _) = split_passthrough(v(&["aibox", "build"]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match cli.command {
+            Command::Build(BuildArgs { target, force }) => {
+                assert_eq!(target, None);
+                assert!(!force);
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn parses_build_codex_force() {
+        let (l, _) = split_passthrough(v(&["aibox", "build", "codex", "--force"]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match cli.command {
+            Command::Build(BuildArgs { target, force }) => {
+                assert_eq!(target, Some(BuildTarget::Codex));
+                assert!(force);
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn parses_build_short_force() {
+        let (l, _) = split_passthrough(v(&["aibox", "build", "-f"]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        match cli.command {
+            Command::Build(BuildArgs { target, force }) => {
+                assert_eq!(target, None);
+                assert!(force);
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_all_is_not_exposed() {
+        let (l, _) = split_passthrough(v(&["aibox", "build", "all"]));
+        assert!(Cli::try_parse_from(l).is_err());
+    }
+
+    #[test]
+    fn agent_build_flag_is_rejected() {
+        let (l, _) = split_passthrough(v(&["aibox", "codex", "--build"]));
+        assert!(Cli::try_parse_from(l).is_err());
     }
 
     #[test]
     fn parses_sync_dry_run() {
         let (l, _) = split_passthrough(v(&["aibox", "claude", "sync", "base", "--dry-run"]));
         let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.agent.args().action {
+        match &cli.command.agent_args().unwrap().action {
             Some(Action::Sync { target, dry_run }) => {
                 assert_eq!(target.as_deref(), Some("base"));
                 assert!(dry_run);
@@ -223,7 +301,7 @@ mod tests {
     fn parses_session_get() {
         let (l, _) = split_passthrough(v(&["aibox", "codex", "session", "get", "3f2a"]));
         let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.agent.args().action {
+        match &cli.command.agent_args().unwrap().action {
             Some(Action::Session { action, id }) => {
                 assert_eq!(action.as_deref(), Some("get"));
                 assert_eq!(id.as_deref(), Some("3f2a"));

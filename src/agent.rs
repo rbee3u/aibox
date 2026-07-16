@@ -70,10 +70,10 @@ impl AgentKind {
         }
     }
 
-    /// The Dockerfile for this agent, embedded at compile time. Because neither
-    /// Dockerfile has a `COPY` (they fetch everything via apt/curl/npm), the
-    /// build context is irrelevant and we can feed this straight to
-    /// `docker build -f -` on stdin with an empty context.
+    /// The Dockerfile for this agent, embedded at compile time. It extends the
+    /// shared `aibox-base:latest` image and has no `COPY`, so the build context
+    /// is irrelevant and we can feed this straight to `docker build -f -` on
+    /// stdin with an empty context.
     pub fn dockerfile(self) -> &'static str {
         match self {
             AgentKind::Claude => include_str!("../assets/claude.Dockerfile"),
