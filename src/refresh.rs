@@ -137,33 +137,49 @@ fn run_refresh_with_printer(
                     failed = true;
                 }
             }
-            if let Ok(rd) = fs::read_dir(&prof.envs_dir) {
-                let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
-                entries.sort();
-                for path in entries {
-                    if !path.is_file() {
-                        continue;
-                    }
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    // Hidden files (`.DS_Store` and friends) are never named
-                    // relays; skipping them keeps a stray binary file from
-                    // aborting the sweep. Explicit path targets still reach
-                    // them.
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    match refresh_one(prof, &path, Some(&name), dry_run, false, &mut print) {
-                        Ok(true) => {}
-                        Ok(false) => return Ok(0),
-                        Err(e) => {
-                            eprintln!("!! {e:#}");
-                            failed = true;
+            match fs::read_dir(&prof.envs_dir) {
+                Ok(rd) => {
+                    let mut entries = Vec::new();
+                    for entry in rd {
+                        match entry {
+                            Ok(entry) => entries.push(entry.path()),
+                            Err(e) => {
+                                eprintln!("!! read entry under {}: {e}", prof.envs_dir.display());
+                                failed = true;
+                            }
                         }
                     }
+                    entries.sort();
+                    for path in entries {
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        // Hidden files (`.DS_Store` and friends) are never named
+                        // relays; skipping them keeps a stray binary file from
+                        // aborting the sweep. Explicit path targets still reach
+                        // them.
+                        if name.starts_with('.') {
+                            continue;
+                        }
+                        match refresh_one(prof, &path, Some(&name), dry_run, false, &mut print) {
+                            Ok(true) => {}
+                            Ok(false) => return Ok(0),
+                            Err(e) => {
+                                eprintln!("!! {e:#}");
+                                failed = true;
+                            }
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    eprintln!("!! read relay directory {}: {e}", prof.envs_dir.display());
+                    failed = true;
                 }
             }
             if failed {
@@ -270,6 +286,25 @@ mod tests {
             z.starts_with("# aibox-template:"),
             "files after the bad one are still refreshed"
         );
+    }
+
+    #[test]
+    fn run_refresh_sweep_reports_an_unreadable_relay_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.dir).unwrap();
+        std::fs::write(
+            &prof.base_file,
+            template::base_template(AgentKind::Claude, TEMPLATE_VERSION),
+        )
+        .unwrap();
+        // A non-directory at the expected envs path deterministically exercises
+        // read_dir failure even when tests run as root.
+        std::fs::write(&prof.envs_dir, "not a directory\n").unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "a skipped relay directory must not report success");
     }
 
     #[test]

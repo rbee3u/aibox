@@ -227,6 +227,13 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         // login with no tokens (auth.json presence = "logged in"), a phantom
         // auth state alongside the real env_key auth. It's ours
         // (content-checked), so clear it; a real login file stays.
+        //
+        // Caveat: this content check can't tell our own leftover from the `{}`
+        // placeholder an auth.json-mode run is *actively* using on the same
+        // profile — clearing it here would break that concurrent run before it
+        // establishes its bind mount. Running both auth modes against one
+        // profile at the same time is unsupported for this reason; use separate
+        // profiles (`-p`) if you need them concurrently.
         crate::creds::remove_stale_placeholder(&auth_mount, AUTH_PLACEHOLDER);
 
         let key_env =

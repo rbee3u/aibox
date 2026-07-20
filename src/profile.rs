@@ -15,6 +15,7 @@ use crate::agent::{AgentKind, TEMPLATE_VERSION};
 use crate::template;
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 /// Resolved per-profile paths. Built from the agent, the config root, and the
@@ -49,11 +50,27 @@ impl RelayRef {
 
 /// The config root: `$AIBOX_CONFIG_ROOT` if set, else `$HOME/.aibox/<agent>`.
 pub fn config_root(agent: AgentKind) -> Result<PathBuf> {
-    if let Some(root) = crate::env_override("AIBOX_CONFIG_ROOT")? {
-        return Ok(PathBuf::from(root));
+    let root = if let Some(root) = crate::env_override("AIBOX_CONFIG_ROOT")? {
+        PathBuf::from(root)
+    } else {
+        let home = crate::env_override("HOME")?.context("$HOME is not set")?;
+        agent.config_root_default(&home)
+    };
+    absolutize(root)
+}
+
+/// Docker bind sources must be absolute: a relative source is interpreted as a
+/// named volume (or rejected as an invalid volume name). Keep a relative custom
+/// config root useful by resolving it against the launch directory, just like
+/// `-w` and the host side of `-m`.
+fn absolutize(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .context("get current dir for config root")?
+            .join(path))
     }
-    let home = crate::env_override("HOME")?.context("$HOME is not set")?;
-    Ok(agent.config_root_default(&home))
 }
 
 /// Validate user-facing names that become one path segment under the config
@@ -68,7 +85,7 @@ fn validate_path_name(kind: &str, name: &str) -> Result<()> {
     if safe {
         return Ok(());
     }
-    bail!("{kind} name must be a single path segment, not {:?}", name);
+    bail!("{kind} name must be a single path segment, not {name:?}");
 }
 
 fn validate_relay_name(name: &str) -> Result<()> {
@@ -250,39 +267,49 @@ fn read_env_source(path: &Path) -> Result<String> {
     Ok(contents)
 }
 
-/// Write `contents` to `path` with 0600 permissions (create or truncate). Used
-/// for every scaffolded config file.
+/// Write `contents` to `path` with 0600 permissions. The complete replacement
+/// is prepared beside the target and then atomically persisted, so a short
+/// write, disk error, or process interruption cannot leave a credential file
+/// half-truncated. Existing symlinks are resolved first so refreshing a
+/// deliberately shared config updates its target rather than replacing the
+/// link itself.
 pub fn write_600(path: &Path, contents: &str) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-        // Existing config files may hold real credentials. Tighten their mode
-        // before truncating/writing so refresh never writes secrets through a
-        // world/group-readable file descriptor.
-        if path.exists() {
-            set_600(path)?;
+    let target = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path)
+            .with_context(|| format!("resolve config symlink {}", path.display()))?,
+        Ok(meta) if !meta.is_file() => {
+            bail!("config path is not a file: {}", path.display());
         }
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("write {}", path.display()))?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 600 {}", path.display()))?;
-        file.write_all(contents.as_bytes())
-            .with_context(|| format!("write {}", path.display()))?;
-        Ok(())
+        Ok(_) => path.to_path_buf(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(e) => return Err(e).with_context(|| format!("inspect {}", path.display())),
+    };
+
+    if target.exists() && !target.is_file() {
+        bail!("config path is not a file: {}", target.display());
     }
 
-    #[cfg(not(unix))]
-    {
-        fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
-        set_600(path)
-    }
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut replacement = tempfile::Builder::new()
+        .prefix(".aibox-write.")
+        .tempfile_in(parent)
+        .with_context(|| format!("create replacement beside {}", target.display()))?;
+    set_600(replacement.path())?;
+    replacement
+        .write_all(contents.as_bytes())
+        .with_context(|| format!("write replacement for {}", target.display()))?;
+    replacement
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("sync replacement for {}", target.display()))?;
+    replacement
+        .persist(&target)
+        .map_err(|e| e.error)
+        .with_context(|| format!("replace {}", target.display()))?;
+    Ok(())
 }
 
 /// chmod 0600 on Unix; a no-op elsewhere.
@@ -313,6 +340,15 @@ mod tests {
         assert_eq!(p.home_dir, Path::new("/root/default/home"));
         assert_eq!(p.envs_dir, Path::new("/root/default/envs"));
         assert_eq!(p.base_file, Path::new("/root/default/base"));
+    }
+
+    #[test]
+    fn relative_config_roots_are_absolutized_for_docker_mounts() {
+        let got = absolutize(PathBuf::from("relative-root")).unwrap();
+        assert_eq!(got, std::env::current_dir().unwrap().join("relative-root"));
+        assert!(absolutize(PathBuf::from("/absolute-root"))
+            .unwrap()
+            .is_absolute());
     }
 
     #[test]
@@ -473,6 +509,45 @@ mod tests {
         assert_eq!(fs::read_to_string(&existing).unwrap(), "new-secret\n");
         let mode = fs::metadata(&existing).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_600_rejects_directories_without_changing_their_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tmp();
+        let dir = root.path().join("not-a-config-file");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = write_600(&dir, "secret\n").unwrap_err().to_string();
+
+        assert!(err.contains("config path is not a file"));
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_600_refreshes_a_symlink_target_without_replacing_the_link() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let target = root.path().join("shared.env");
+        let link = root.path().join("relay.env");
+        fs::write(&target, "old\n").unwrap();
+        symlink(&target, &link).unwrap();
+
+        write_600(&link, "new\n").unwrap();
+
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new\n");
     }
 
     #[cfg(unix)]

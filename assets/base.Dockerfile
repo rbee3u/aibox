@@ -7,7 +7,7 @@
 #   aibox build codex
 #   aibox build claude
 
-FROM debian:bookworm-slim
+FROM debian:bookworm
 
 # Resolve curl|jq pipelines correctly (fail the layer if either side fails).
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

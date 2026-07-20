@@ -13,7 +13,7 @@ pub mod codex;
 
 use crate::agent::AgentKind;
 use crate::print_line;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -22,42 +22,56 @@ use std::path::{Path, PathBuf};
 /// those whose file name passes `keep`. Empty if `base` isn't a directory. Shared
 /// by both backends' `files()`; they differ only in the base dir and the filter
 /// (Claude keeps all, Codex keeps `rollout-` names).
-pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
-    if !base.is_dir() {
-        return Vec::new();
+pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>> {
+    match std::fs::symlink_metadata(base) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => bail!("session path is not a directory: {}", base.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(e).with_context(|| format!("inspect session directory {}", base.display()));
+        }
     }
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(base).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(base) {
+        let entry = entry.with_context(|| format!("walk session directory {}", base.display()))?;
         let p = entry.path();
-        if p.is_file()
+        // Do not follow a transcript-shaped symlink created inside the mounted
+        // profile home. Host-side session browsing must stay inside the
+        // container's transcript tree rather than becoming a path out of the
+        // sandbox boundary.
+        if entry.file_type().is_file()
             && p.extension().is_some_and(|e| e == "jsonl")
             && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
         {
             out.push(p.to_path_buf());
         }
     }
-    out
+    Ok(out)
 }
 
 /// Read a transcript line by line, parsing each as JSON and feeding it to `f`
 /// along with its index among the *parsed* lines (unparseable lines are
-/// skipped, matching the old collect-then-filter behavior). Stops quietly if
-/// the file can't be opened or a line can't be read (e.g. not UTF-8).
+/// skipped, matching the old collect-then-filter behavior). Open and read
+/// failures are returned to the caller instead of being misreported as an empty
+/// session.
 ///
 /// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
 /// held in memory at once.
-pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(usize, &Value)) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
+pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(usize, &Value)) -> Result<()> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("open session transcript {}", path.display()))?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
     let mut idx = 0usize;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => return, // EOF, or unreadable from here on
+            Ok(0) => return Ok(()),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("read session transcript {}", path.display()));
+            }
             Ok(_) => {}
         }
         if let Ok(v) = serde_json::from_str::<Value>(&line) {
@@ -107,7 +121,7 @@ pub struct Prompt {
 /// two backends can't drift out of sync.
 pub trait SessionBackend {
     /// All transcript files under this profile home (empty if none yet).
-    fn files(&self, home: &Path) -> Vec<PathBuf>;
+    fn files(&self, home: &Path) -> Result<Vec<PathBuf>>;
 
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
@@ -137,7 +151,7 @@ pub trait SessionBackend {
     /// `title_of` finds something else, like Claude's `ai-title`), so tool/
     /// injected-only shells still list and can be cleared. One streaming pass
     /// with O(1) state; the per-agent answers come from the methods above.
-    fn summarize(&self, path: &Path) -> SessionSummary {
+    fn summarize(&self, path: &Path) -> Result<SessionSummary> {
         let mut start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
@@ -153,18 +167,18 @@ pub trait SessionBackend {
                     title = Some(t);
                 }
             }
-        });
-        SessionSummary {
+        })?;
+        Ok(SessionSummary {
             id: self.id_of(path),
             start_ts: start_ts.unwrap_or_default(),
             title: title.or(first_typed).unwrap_or_default(),
-        }
+        })
     }
 
     /// Every typed prompt in one transcript, in order, for `get`. Shared
     /// streaming loop; the per-line text (and wrapper filtering) is
     /// [`typed_text`](Self::typed_text).
-    fn prompts(&self, path: &Path) -> Vec<Prompt> {
+    fn prompts(&self, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
         for_each_json_line(path, |_idx, v| {
             if let Some(text) = self.typed_text(v) {
@@ -173,8 +187,8 @@ pub trait SessionBackend {
                     text,
                 });
             }
-        });
-        out
+        })?;
+        Ok(out)
     }
 }
 
@@ -233,7 +247,7 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
         bail!("need a session id (or unique prefix)");
     }
     let mut matches: Vec<PathBuf> = Vec::new();
-    for f in backend.files(home) {
+    for f in backend.files(home)? {
         let id = backend.id_of(&f);
         if id == query {
             return Ok(f);
@@ -260,8 +274,8 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 /// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     let mut rows: Vec<(String, String, String)> = Vec::new();
-    for f in backend.files(home) {
-        let s = backend.summarize(&f);
+    for f in backend.files(home)? {
+        let s = backend.summarize(&f)?;
         // Titles can contain newlines/tabs; collapse them to single spaces.
         let title = collapse_ws(&s.title);
         rows.push((s.start_ts, s.id, title));
@@ -291,7 +305,7 @@ fn get(backend: &dyn SessionBackend, home: &Path, id: &str) -> Result<i32> {
     let path = resolve(backend, home, id)?;
     let sid = backend.id_of(&path);
     eprintln!(">> session {sid}");
-    let prompts = backend.prompts(&path);
+    let prompts = backend.prompts(&path)?;
     if prompts.is_empty() {
         print_line("(no typed prompts in this session)")?;
         return Ok(0);
@@ -327,7 +341,7 @@ fn delete_targets(
     if ids.is_empty() {
         // Every transcript, matching `list` (which now shows them all). No-id
         // delete clears the whole profile, tool/injected-only shells included.
-        let mut targets = backend.files(home);
+        let mut targets = backend.files(home)?;
         targets.sort_by_key(|p| backend.id_of(p));
         return Ok(targets);
     }
@@ -410,7 +424,7 @@ mod tests {
     struct TestBackend;
 
     impl SessionBackend for TestBackend {
-        fn files(&self, home: &Path) -> Vec<PathBuf> {
+        fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
             walk_jsonl(&home.join("sessions"), |_| true)
         }
 
@@ -450,6 +464,41 @@ mod tests {
     }
 
     #[test]
+    fn transcript_read_errors_are_not_reported_as_empty_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("sessions").join("missing.jsonl");
+
+        let err = TestBackend
+            .prompts(&missing)
+            .err()
+            .expect("missing transcript should fail")
+            .to_string();
+
+        assert!(err.contains("open session transcript"));
+        assert!(err.contains("missing.jsonl"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_discovery_does_not_follow_transcript_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.jsonl");
+        std::fs::write(&outside, "{}\n").unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        symlink(&outside, sessions.join("linked.jsonl")).unwrap();
+
+        let files = TestBackend.files(dir.path()).unwrap();
+
+        assert!(
+            files.is_empty(),
+            "host-side browsing must not follow symlinks"
+        );
+    }
+
+    #[test]
     fn delete_no_ids_selects_all_sessions_with_yes() {
         let dir = tempfile::tempdir().unwrap();
         let one = write_session(dir.path(), "11111111");
@@ -485,7 +534,7 @@ mod tests {
         std::fs::create_dir_all(shell.parent().unwrap()).unwrap();
         std::fs::write(&shell, "{}\n").unwrap();
 
-        let s = TestBackend.summarize(&shell);
+        let s = TestBackend.summarize(&shell).unwrap();
         assert_eq!(s.title, "");
         assert!(s.id.starts_with("33333333"));
     }

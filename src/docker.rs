@@ -107,7 +107,7 @@ pub fn run(run_args: &[String], image: &str, cmd: &[String]) -> Result<i32> {
     // Register the cidfile *before* spawning: a signal landing between spawn
     // and registration could otherwise find neither a pid nor a container id,
     // leaving the container running unsupervised.
-    crate::creds::set_cidfile(&cid_path);
+    crate::creds::set_cidfile(&cid_path)?;
     let spawned = Command::new("docker")
         .arg("run")
         .arg("--cidfile")
@@ -126,7 +126,7 @@ pub fn run(run_args: &[String], image: &str, cmd: &[String]) -> Result<i32> {
 
     crate::creds::set_child(child.id());
     let waited = child.wait();
-    crate::creds::clear_child();
+    crate::creds::finish_child();
     let status = waited.context("wait for docker run")?;
 
     Ok(exit_code(status))

@@ -41,8 +41,8 @@ use anyhow::{Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const DOCKER_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
@@ -96,16 +96,23 @@ static STAGING: Mutex<()> = Mutex::new(());
 /// running without interrupt-path cleanup.
 static HANDLER_INSTALLED: Mutex<bool> = Mutex::new(false);
 
-/// Set by the raw signal handler on *every* watched-signal delivery. The
-/// watcher clears it when it starts handling a signal, so a `true` seen during
-/// [`stop_container`]'s grace wait means a *second* signal arrived — the cue to
-/// stop waiting and SIGKILL the container now (a user mashing Ctrl-C, or a
-/// service manager about to escalate to an uncatchable SIGKILL).
-static ESCALATE: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+/// Number of watched fatal signals delivered to this process. A raw handler
+/// increments it before the iterator handler wakes the watcher, so the watcher
+/// can distinguish the first signal from a second one without a clear/store
+/// race. The latter skips the graceful container-stop wait.
+static SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static LAST_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
-fn escalate_flag() -> &'static Arc<AtomicBool> {
-    ESCALATE.get_or_init(|| Arc::new(AtomicBool::new(false)))
-}
+const RUN_IDLE: usize = 0;
+const RUN_ACTIVE: usize = 1;
+const RUN_SIGNALLED: usize = 2;
+
+/// Coordinates the signal watcher with the main thread reaping `docker run`.
+/// A foreground Ctrl-C reaches both processes: the Docker CLI can exit before
+/// the watcher has read the cidfile. Marking the active run here lets the main
+/// thread keep the cidfile registered until the watcher has stopped the
+/// container, instead of racing ahead and clearing the only daemon-side handle.
+static RUN_STATE: AtomicUsize = AtomicUsize::new(RUN_IDLE);
 
 /// The pid of the running `docker run` child, or 0 when none. The watcher
 /// forwards the fatal signal to it: with no TTY the docker CLI proxies the
@@ -126,9 +133,11 @@ fn cidfile() -> &'static Mutex<Option<PathBuf>> {
 /// it first closes the window where a signal lands after spawn but before any
 /// registration — the watcher could then stop the container via the daemon even
 /// with no child pid recorded yet. Pair with [`clear_child`].
-pub fn set_cidfile(cidfile_path: &Path) {
-    install_signal_handler();
+pub fn set_cidfile(cidfile_path: &Path) -> Result<()> {
+    install_signal_handler()?;
     *cidfile().lock().unwrap() = Some(cidfile_path.to_path_buf());
+    RUN_STATE.store(RUN_ACTIVE, Ordering::SeqCst);
+    Ok(())
 }
 
 /// Register the spawned `docker run` child's pid for signal forwarding. Call
@@ -142,7 +151,39 @@ pub fn set_child(pid: u32) {
 /// be recycled). Also the cleanup for a spawn that failed after [`set_cidfile`].
 pub fn clear_child() {
     CHILD_PID.store(0, Ordering::SeqCst);
+    RUN_STATE.store(RUN_IDLE, Ordering::SeqCst);
     *cidfile().lock().unwrap() = None;
+}
+
+/// Finish a successfully spawned child after `wait` returns. When no fatal
+/// signal raced with the wait, unregister it normally. If a signal did race,
+/// the Docker CLI may already be reaped while its container is still running;
+/// clear the now-stale pid, retain the cidfile, and keep this thread alive until
+/// the watcher terminates the process after daemon-side cleanup.
+pub fn finish_child() {
+    CHILD_PID.store(0, Ordering::SeqCst);
+    match RUN_STATE.compare_exchange(RUN_ACTIVE, RUN_IDLE, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) | Err(RUN_IDLE) => {
+            *cidfile().lock().unwrap() = None;
+        }
+        Err(RUN_SIGNALLED) => {
+            // The watcher is stopping the container and will terminate the
+            // whole process (`process::exit(128+sig)`) once daemon-side cleanup
+            // is done, tearing down this parked thread with it. Park until it
+            // does — but not forever: if the watcher thread died unexpectedly
+            // (e.g. it panicked), parking with no bound would hang the wrapper.
+            // The deadline covers the container grace period plus slack for the
+            // bounded docker commands; past it, exit here as the signal would.
+            let deadline = Instant::now() + CONTAINER_GRACE + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                std::thread::park_timeout(Duration::from_secs(1));
+            }
+            let sig = LAST_SIGNAL.load(Ordering::SeqCst);
+            let _ = signal_hook::low_level::emulate_default_handler(sig);
+            std::process::exit(128 + sig);
+        }
+        Err(_) => unreachable!("invalid run state"),
+    }
 }
 
 /// Forward `sig` to the registered docker CLI child, if any.
@@ -288,7 +329,7 @@ fn stop_container(sig: i32) {
     eprintln!(">> stopping the container (up to 10s; signal again to kill it now)");
     let started = Instant::now();
     while started.elapsed() < CONTAINER_GRACE {
-        if escalate_flag().load(Ordering::SeqCst) {
+        if SIGNAL_COUNT.load(Ordering::SeqCst) > 1 {
             break;
         }
         std::thread::sleep(CONTAINER_POLL_INTERVAL);
@@ -319,37 +360,59 @@ fn signal_is_ignored(sig: i32) -> bool {
 /// thread parks in [`signal_hook::iterator::Signals::forever`] and never blocks
 /// process exit. Idempotent; a failed install is retried on the next call
 /// instead of being remembered as installed.
-fn install_signal_handler() {
+fn install_signal_handler() -> Result<()> {
     let mut installed = HANDLER_INSTALLED.lock().unwrap();
     if *installed {
-        return;
+        return Ok(());
     }
     let mut watched = vec![signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM];
     if !signal_is_ignored(signal_hook::consts::SIGHUP) {
         watched.push(signal_hook::consts::SIGHUP);
     }
+
+    let initial_signal_count = SIGNAL_COUNT.load(Ordering::SeqCst);
+
+    // Register the state/count action before the iterator actions. signal-hook
+    // preserves registration order; this guarantees that once the watcher is
+    // woken, RUN_STATE already records the signal that woke it.
+    let mut registrations = Vec::new();
+    for &sig in &watched {
+        let registration = unsafe {
+            signal_hook::low_level::register(sig, move || {
+                LAST_SIGNAL.store(sig, Ordering::SeqCst);
+                SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst);
+                let _ = RUN_STATE.compare_exchange(
+                    RUN_ACTIVE,
+                    RUN_SIGNALLED,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+            })
+        };
+        match registration {
+            Ok(id) => registrations.push(id),
+            Err(e) => {
+                for id in registrations {
+                    signal_hook::low_level::unregister(id);
+                }
+                return Err(e).context("install signal state handler");
+            }
+        }
+    }
+
     let mut signals = match signal_hook::iterator::Signals::new(&watched) {
         Ok(s) => s,
         Err(e) => {
-            // Staging still works; only the interrupt-path cleanup is lost.
-            eprintln!("!! cannot install signal cleanup handler: {e}");
-            return;
+            for id in registrations {
+                signal_hook::low_level::unregister(id);
+            }
+            return Err(e).context("install signal cleanup handler");
         }
     };
-    // Every delivery also sets the escalation flag (best-effort: without it the
-    // grace wait just runs its full course). The watcher clears the flag when it
-    // starts handling, so only a *second* signal leaves it set.
-    for sig in &watched {
-        let _ = signal_hook::flag::register(*sig, escalate_flag().clone());
-    }
     let spawned = std::thread::Builder::new()
         .name("aibox-signals".into())
         .spawn(move || {
             if let Some(sig) = signals.forever().next() {
-                // The delivery that woke us set the escalation flag too; clear
-                // it so only a signal arriving *during* handling reads as "skip
-                // the grace wait".
-                escalate_flag().store(false, Ordering::SeqCst);
                 // Secrets first: gone even if everything below goes wrong.
                 cleanup_pending();
                 // Stop the container via the daemon. Must come before touching
@@ -367,13 +430,28 @@ fn install_signal_handler() {
             }
         });
     match spawned {
-        Ok(_) => *installed = true,
+        Ok(_) => {
+            *installed = true;
+            // A signal can land in the tiny interval after the state action is
+            // registered but before `Signals` installs its wakeup action. It
+            // was recorded but could not wake the watcher, so re-deliver it
+            // now that the complete handler is live. This happens before any
+            // credential is staged or Docker child is spawned.
+            if SIGNAL_COUNT.load(Ordering::SeqCst) > initial_signal_count {
+                let sig = LAST_SIGNAL.load(Ordering::SeqCst);
+                if sig != 0 {
+                    let _ = signal_hook::low_level::raise(sig);
+                }
+            }
+        }
         Err(e) => {
-            // Same failure mode as Signals::new above: staging still works, only
-            // the interrupt-path cleanup is lost — but say so instead of silence.
-            eprintln!("!! cannot spawn signal cleanup thread: {e}");
+            for id in registrations {
+                signal_hook::low_level::unregister(id);
+            }
+            return Err(e).context("spawn signal cleanup thread");
         }
     }
+    Ok(())
 }
 
 /// Unlink every pending path. Runs on the watcher thread in normal context
@@ -438,7 +516,7 @@ impl StagedFile {
         contents: &str,
         after_register: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<Self> {
-        install_signal_handler();
+        install_signal_handler()?;
 
         let dir = staging_temp_dir();
         // NamedTempFile is created 0600 on Unix. `keep()` disarms tempfile's
@@ -527,7 +605,7 @@ impl GuardedPath {
         placeholder: &str,
         after_register: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<Self> {
-        install_signal_handler();
+        install_signal_handler()?;
         let created = !path.exists()
             || std::fs::read_to_string(&path).is_ok_and(|contents| contents == placeholder);
         if created {

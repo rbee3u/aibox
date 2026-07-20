@@ -195,9 +195,10 @@ for the full list):
 
 ## Environment overrides
 
-`AIBOX_CONFIG_ROOT` overrides the host config root as-is instead of
-`~/.aibox/<agent>`. Because the override is literal and not agent-suffixed, set
-it per command if you want separate custom roots for Claude and Codex.
+`AIBOX_CONFIG_ROOT` overrides the host config root instead of
+`~/.aibox/<agent>`. Relative values resolve from the directory where `aibox` is
+launched. Because the override is not agent-suffixed, set it per command if you
+want separate custom roots for Claude and Codex.
 `AIBOX_IMAGE` overrides the image tag used by a normal run, and by
 `aibox build claude` / `aibox build codex`; `aibox build` without a target rejects
 it because one tag cannot name both agent images.

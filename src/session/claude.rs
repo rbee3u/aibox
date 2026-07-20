@@ -12,13 +12,14 @@
 //! The session id is just the transcript filename without `.jsonl`.
 
 use super::SessionBackend;
+use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub struct Claude;
 
 impl SessionBackend for Claude {
-    fn files(&self, home: &Path) -> Vec<PathBuf> {
+    fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
         let base = home.join(".claude").join("projects");
         super::walk_jsonl(&base, |_| true)
     }
@@ -119,7 +120,7 @@ mod tests {
                 r#"{"type":"user","promptSource":"typed","message":{"role":"user","content":"second"}}"#,
             ],
         );
-        let s = Claude.summarize(&path);
+        let s = Claude.summarize(&path).unwrap();
         assert_eq!(s.title, "A Nice Title");
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert!(s.id.starts_with("3f2a1b6c"));
@@ -135,7 +136,7 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"only prompt"}}"#,
             ],
         );
-        let s = Claude.summarize(&path);
+        let s = Claude.summarize(&path).unwrap();
         assert_eq!(s.title, "only prompt");
     }
 
@@ -152,10 +153,10 @@ mod tests {
                 r#"{"type":"assistant","message":{"role":"assistant","content":"hi"}}"#,
             ],
         );
-        let s = Claude.summarize(&path);
+        let s = Claude.summarize(&path).unwrap();
         assert_eq!(s.title, "");
         assert_eq!(s.start_ts, "2026-01-01T00:00:00Z");
-        assert!(Claude.prompts(&path).is_empty());
+        assert!(Claude.prompts(&path).unwrap().is_empty());
     }
 
     #[test]
@@ -169,7 +170,7 @@ mod tests {
                 r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T09:00:00Z","message":{"role":"user","content":"line1\nline2 测试"}}"#,
             ],
         );
-        let ps = Claude.prompts(&path);
+        let ps = Claude.prompts(&path).unwrap();
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].text, "line1\nline2 测试");
         assert_eq!(ps[0].timestamp, "2026-07-14T09:00:00Z");

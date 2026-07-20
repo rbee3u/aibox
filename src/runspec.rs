@@ -26,6 +26,22 @@ const CLAUDE_SETTINGS: &str = r#"{
 }
 "#;
 
+/// Reject a bind *source* path containing `:`. Docker's `-v host:container[:ro]`
+/// short syntax splits on `:`, so a source with a literal colon (a legal Linux
+/// filename) would be misparsed into the wrong fields — a silent wrong mount or
+/// an opaque Docker error. Fail early and clearly instead. Only the host side
+/// needs this: container targets are fixed (`/work`, the agent home) or
+/// validated separately.
+pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
+    if path.to_string_lossy().contains(':') {
+        bail!(
+            "{kind} path contains ':', which docker -v cannot represent: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Resolve the `-w` work dir (or the launch cwd when absent) to an absolute
 /// path and require an existing directory. Docker reads a bare name (no `/`)
 /// as a *named volume*, so passing a relative path through would silently
@@ -46,6 +62,7 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
     if !path.is_dir() {
         bail!("work dir is not a directory: {}", path.display());
     }
+    reject_colon_in_bind_source("work dir", &path)?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -72,6 +89,7 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
             if !host_path.exists() {
                 bail!("mount host path does not exist: {}", host_path.display());
             }
+            reject_colon_in_bind_source("mount host", &host_path)?;
             Ok(format!("{}:{rest}", host_path.display()))
         })
         .collect()
@@ -229,6 +247,29 @@ mod tests {
         assert!(resolve_work_dir(Some("/no/such/dir")).is_err());
         let f = tempfile::NamedTempFile::new().unwrap();
         assert!(resolve_work_dir(Some(f.path().to_str().unwrap())).is_err());
+    }
+
+    #[test]
+    fn resolve_work_dir_rejects_colon_in_path() {
+        // A `:` in the bind source can't be represented in docker's `-v`
+        // short syntax; fail clearly instead of silently misparsing the mount.
+        let parent = tempfile::tempdir().unwrap();
+        let colon_dir = parent.path().join("a:b");
+        fs::create_dir(&colon_dir).unwrap();
+        let err = resolve_work_dir(Some(colon_dir.to_str().unwrap())).unwrap_err();
+        assert!(err.to_string().contains("contains ':'"), "{err}");
+    }
+
+    #[test]
+    fn reject_colon_in_bind_source_flags_colon_paths() {
+        // The guard the run path applies to every bind source (work dir, extra
+        // -m host side after absolutization, and the profile home). A `:` in
+        // the source can't survive docker's `-v host:container` short syntax.
+        assert!(reject_colon_in_bind_source("home", Path::new("/a/b")).is_ok());
+        let err = reject_colon_in_bind_source("home", Path::new("/a:b/home"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("contains ':'"), "{err}");
     }
 
     #[test]

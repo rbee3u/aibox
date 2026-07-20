@@ -98,6 +98,7 @@ fn run_agent_command(
                 "`-- <args>` applies only to a run; refresh/session take no pass-through args"
             );
         }
+        reject_run_only_options(&args.run)?;
         let root = profile::config_root(agent)?;
         let prof = Profile::resolve(agent, &root, &args.run.profile)?;
         return match action {
@@ -111,6 +112,36 @@ fn run_agent_command(
     }
 
     run_agent(agent, &args.run, passthrough)
+}
+
+/// Management actions use only `--profile`; accepting the other flattened run
+/// flags and then silently ignoring them makes a mistyped command appear to do
+/// something it did not. Reject every such option before touching profile
+/// state.
+fn reject_run_only_options(run: &RunArgs) -> Result<()> {
+    let mut used = Vec::new();
+    if run.env.is_some() {
+        used.push("--env");
+    }
+    if run.work.is_some() {
+        used.push("--work");
+    }
+    if !run.mount.is_empty() {
+        used.push("--mount");
+    }
+    if run.safe {
+        used.push("--safe");
+    }
+    if run.exec {
+        used.push("--exec");
+    }
+    if !used.is_empty() {
+        anyhow::bail!(
+            "refresh/session do not accept run-only options: {}",
+            used.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// Build the shared base image, then one or both embedded agent images. Cached
@@ -239,6 +270,10 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     // mounts get the same treatment for their host side.
     let work_dir = runspec::resolve_work_dir(run.work.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
+    // The profile home is bind-mounted at the container home; its path (from
+    // $HOME / $AIBOX_CONFIG_ROOT / the profile name) is a bind source too, so it
+    // must survive docker's `-v` colon splitting like `/work` and `-m` do.
+    runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
     let opts = RunOpts {
         env: &merged,
@@ -323,6 +358,22 @@ mod tests {
             let err = run(cli, vec!["--model".into(), "opus".into()]).unwrap_err();
             assert!(
                 err.to_string().contains("no pass-through args"),
+                "unexpected error for {argv:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_and_session_reject_ignored_run_only_options() {
+        for argv in [
+            ["aibox", "codex", "-e", "relay", "session"].as_slice(),
+            ["aibox", "claude", "--safe", "refresh"].as_slice(),
+            ["aibox", "codex", "--exec", "session"].as_slice(),
+        ] {
+            let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
+            let err = run(cli, Vec::new()).unwrap_err().to_string();
+            assert!(
+                err.contains("run-only options"),
                 "unexpected error for {argv:?}: {err}"
             );
         }

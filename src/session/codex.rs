@@ -17,6 +17,7 @@
 //! stem after `rollout-<date>-`).
 
 use super::SessionBackend;
+use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -44,7 +45,7 @@ fn is_wrapper(t: &str) -> bool {
 pub struct Codex;
 
 impl SessionBackend for Codex {
-    fn files(&self, home: &Path) -> Vec<PathBuf> {
+    fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
         let base = home.join(".codex").join("sessions");
         super::walk_jsonl(&base, |name| name.starts_with("rollout-"))
     }
@@ -135,7 +136,7 @@ mod tests {
                 r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"real question"}]}}"#,
             ],
         );
-        let s = Codex.summarize(&path);
+        let s = Codex.summarize(&path).unwrap();
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert_eq!(s.title, "real question");
     }
@@ -171,7 +172,7 @@ mod tests {
                 r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"text","text":"<environment_context>cwd=/work</environment_context>"},{"type":"input_text","text":"the real ask"}]}}"#,
             ],
         );
-        let ps = Codex.prompts(&path);
+        let ps = Codex.prompts(&path).unwrap();
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].text, "the real ask");
     }
@@ -190,9 +191,9 @@ mod tests {
                 r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"text","text":"<user_instructions>be nice</user_instructions>"}]}}"#,
             ],
         );
-        let s = Codex.summarize(&path);
+        let s = Codex.summarize(&path).unwrap();
         assert_eq!(s.title, "");
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
-        assert!(Codex.prompts(&path).is_empty());
+        assert!(Codex.prompts(&path).unwrap().is_empty());
     }
 }
