@@ -15,7 +15,7 @@ use crate::agent::{AgentKind, TEMPLATE_VERSION};
 use crate::template;
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Resolved per-profile paths. Built from the agent, the config root, and the
 /// profile name.
@@ -49,38 +49,65 @@ impl RelayRef {
 
 /// The config root: `$AIBOX_CONFIG_ROOT` if set, else `$HOME/.aibox/<agent>`.
 pub fn config_root(agent: AgentKind) -> Result<PathBuf> {
-    if let Ok(root) = std::env::var("AIBOX_CONFIG_ROOT") {
+    if let Some(root) = crate::env_override("AIBOX_CONFIG_ROOT")? {
         return Ok(PathBuf::from(root));
     }
-    let home = std::env::var("HOME").context("$HOME is not set")?;
+    let home = crate::env_override("HOME")?.context("$HOME is not set")?;
     Ok(agent.config_root_default(&home))
+}
+
+/// Validate user-facing names that become one path segment under the config
+/// root. Explicit relay paths are handled separately; profile names and named
+/// relays must not be able to escape their container directory.
+fn validate_path_name(kind: &str, name: &str) -> Result<()> {
+    let mut components = Path::new(name).components();
+    let safe = matches!(components.next(), Some(Component::Normal(part)) if part.to_str() == Some(name))
+        && components.next().is_none()
+        && !name.contains('/')
+        && !name.contains('\\');
+    if safe {
+        return Ok(());
+    }
+    bail!("{kind} name must be a single path segment, not {:?}", name);
+}
+
+fn validate_relay_name(name: &str) -> Result<()> {
+    validate_path_name("relay", name)?;
+    if name.starts_with('.') {
+        bail!(
+            "relay name must not start with '.', use an explicit path for hidden files: {name:?}"
+        );
+    }
+    Ok(())
 }
 
 impl Profile {
     /// Resolve the paths for `agent`/`profile` under `root`. Pure — creates
     /// nothing.
-    pub fn resolve(agent: AgentKind, root: &Path, profile: &str) -> Self {
+    pub fn resolve(agent: AgentKind, root: &Path, profile: &str) -> Result<Self> {
+        validate_path_name("profile", profile)?;
         let dir = root.join(profile);
-        Profile {
+        Ok(Profile {
             agent,
             home_dir: dir.join("home"),
             envs_dir: dir.join("envs"),
             base_file: dir.join("base"),
             dir,
-        }
+        })
     }
 
     /// Resolve an `-e <name|path>` argument to a [`RelayRef`], without touching
     /// disk. A value containing `/` or ending in `.env` is a path; otherwise a
     /// name under `envs/`.
-    pub fn relay_ref(&self, env: &str) -> RelayRef {
+    pub fn relay_ref(&self, env: &str) -> Result<RelayRef> {
         if env.contains('/') || env.ends_with(".env") {
-            RelayRef::Path(PathBuf::from(env))
+            Ok(RelayRef::Path(PathBuf::from(env)))
         } else {
-            RelayRef::Named {
+            validate_relay_name(env)?;
+            Ok(RelayRef::Named {
                 name: env.to_string(),
                 path: self.envs_dir.join(env),
-            }
+            })
         }
     }
 
@@ -98,7 +125,7 @@ impl Profile {
     ///   user can fill in credentials;
     /// - `Err` — an explicit path that doesn't exist.
     pub fn resolve_relay_for_run(&self, env: &str) -> Result<Option<RelayRef>> {
-        let relay = self.relay_ref(env);
+        let relay = self.relay_ref(env)?;
         if relay.path().is_file() {
             return Ok(Some(relay));
         }
@@ -186,10 +213,15 @@ impl Profile {
     /// The `refresh` argument that resolves back to `path`: the bare file name
     /// when that name round-trips through [`Self::relay_ref`] to the same path
     /// (a named relay under `envs/`), else the full path — so the hinted command
-    /// always targets the file it was printed for.
+    /// always targets the file it was printed for. `base` is excluded from the
+    /// round-trip: `refresh base` is reserved for the profile's base file, so a
+    /// relay that happens to be named `base` must be hinted by path.
     fn refresh_arg_for(&self, path: &Path) -> String {
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if self.relay_ref(name).path() == path {
+            if name != "base"
+                && validate_relay_name(name).is_ok()
+                && self.envs_dir.join(name) == path
+            {
                 return name.to_string();
             }
         }
@@ -197,28 +229,60 @@ impl Profile {
     }
 
     /// The merge sources for a run: `base` (if present) then the relay. Returned
-    /// as contents so the merge is a pure operation on strings.
+    /// as contents so the merge is a pure operation on strings. Keys are
+    /// validated here, where each source still has its file name — a bad line
+    /// reported later (or by docker) couldn't point back at the file to fix.
     pub fn merge_sources(&self, relay_path: &Path) -> Result<Vec<String>> {
         let mut out = Vec::new();
         if self.base_file.is_file() {
-            out.push(
-                fs::read_to_string(&self.base_file)
-                    .with_context(|| format!("read {}", self.base_file.display()))?,
-            );
+            out.push(read_env_source(&self.base_file)?);
         }
-        out.push(
-            fs::read_to_string(relay_path)
-                .with_context(|| format!("read {}", relay_path.display()))?,
-        );
+        out.push(read_env_source(relay_path)?);
         Ok(out)
     }
+}
+
+/// Read one env-file source and validate its keys against the file it came
+/// from (see [`crate::envfile::check_keys`]).
+fn read_env_source(path: &Path) -> Result<String> {
+    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    crate::envfile::check_keys(path, &contents)?;
+    Ok(contents)
 }
 
 /// Write `contents` to `path` with 0600 permissions (create or truncate). Used
 /// for every scaffolded config file.
 pub fn write_600(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
-    set_600(path)
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        // Existing config files may hold real credentials. Tighten their mode
+        // before truncating/writing so refresh never writes secrets through a
+        // world/group-readable file descriptor.
+        if path.exists() {
+            set_600(path)?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("write {}", path.display()))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 600 {}", path.display()))?;
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
+        set_600(path)
+    }
 }
 
 /// chmod 0600 on Unix; a no-op elsewhere.
@@ -244,7 +308,7 @@ mod tests {
 
     #[test]
     fn path_layout() {
-        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default");
+        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").unwrap();
         assert_eq!(p.dir, Path::new("/root/default"));
         assert_eq!(p.home_dir, Path::new("/root/default/home"));
         assert_eq!(p.envs_dir, Path::new("/root/default/envs"));
@@ -252,29 +316,80 @@ mod tests {
     }
 
     #[test]
+    fn profile_name_must_be_one_safe_path_segment() {
+        assert!(Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").is_ok());
+        assert!(Profile::resolve(AgentKind::Claude, Path::new("/root"), ".hidden").is_ok());
+
+        for bad in ["", ".", "..", "a/b", "a\\b"] {
+            let err = Profile::resolve(AgentKind::Claude, Path::new("/root"), bad)
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("profile name must be a single path segment"),
+                "bad profile {bad:?} should be rejected clearly: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn relay_ref_name_vs_path() {
-        let p = Profile::resolve(AgentKind::Codex, Path::new("/root"), "default");
+        let p = Profile::resolve(AgentKind::Codex, Path::new("/root"), "default").unwrap();
         assert_eq!(
-            p.relay_ref("openrouter"),
+            p.relay_ref("openrouter").unwrap(),
             RelayRef::Named {
                 name: "openrouter".into(),
                 path: PathBuf::from("/root/default/envs/openrouter")
             }
         );
         assert_eq!(
-            p.relay_ref("/abs/path"),
+            p.relay_ref("/abs/path").unwrap(),
             RelayRef::Path(PathBuf::from("/abs/path"))
         );
         assert_eq!(
-            p.relay_ref("my.env"),
+            p.relay_ref("my.env").unwrap(),
             RelayRef::Path(PathBuf::from("my.env"))
+        );
+    }
+
+    #[test]
+    fn named_relay_must_be_one_safe_path_segment() {
+        let p = Profile::resolve(AgentKind::Codex, Path::new("/root"), "default").unwrap();
+
+        for bad in ["", ".", "..", "a\\b"] {
+            let err = p.relay_ref(bad).unwrap_err().to_string();
+            assert!(
+                err.contains("relay name must be a single path segment"),
+                "bad relay {bad:?} should be rejected clearly: {err}"
+            );
+        }
+        let err = p.relay_ref(".hidden").unwrap_err().to_string();
+        assert!(
+            err.contains("relay name must not start with '.'"),
+            "hidden relay names should be rejected clearly: {err}"
+        );
+
+        assert_eq!(
+            p.relay_ref("nested/relay").unwrap(),
+            RelayRef::Path(PathBuf::from("nested/relay")),
+            "values containing / remain explicit paths, not named relays"
+        );
+        assert_eq!(
+            p.relay_ref("../relay.env").unwrap(),
+            RelayRef::Path(PathBuf::from("../relay.env")),
+            "explicit path relays keep their existing behavior"
+        );
+        assert_eq!(
+            p.relay_ref("./.hidden").unwrap(),
+            RelayRef::Path(PathBuf::from("./.hidden")),
+            "hidden files are still reachable as explicit paths"
         );
     }
 
     #[test]
     fn scaffold_creates_base_and_relay_then_signals_stop() {
         let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         let got = p.resolve_relay_for_run("openrouter").unwrap();
         assert!(got.is_none(), "first use should scaffold and stop");
         assert!(p.base_file.is_file());
@@ -284,7 +399,7 @@ mod tests {
     #[test]
     fn existing_relay_resolves() {
         let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         p.resolve_relay_for_run("r").unwrap(); // scaffold
         let got = p.resolve_relay_for_run("r").unwrap();
         assert!(got.is_some(), "second use should resolve the existing file");
@@ -293,13 +408,13 @@ mod tests {
     #[test]
     fn missing_explicit_path_errors() {
         let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         assert!(p.resolve_relay_for_run("/no/such/file.env").is_err());
     }
 
     #[test]
     fn refresh_arg_round_trips_named_relay_and_falls_back_to_path() {
-        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default");
+        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").unwrap();
         // A named relay under envs/ hints its bare name.
         assert_eq!(
             p.refresh_arg_for(Path::new("/root/default/envs/openrouter")),
@@ -308,15 +423,56 @@ mod tests {
         // A path-style relay hints the full path (its bare name wouldn't
         // resolve back to the same file).
         assert_eq!(p.refresh_arg_for(Path::new("/tmp/x.env")), "/tmp/x.env");
+        // A relay literally named `base` also hints the full path: the bare
+        // name would make `refresh base` hit the profile's base file instead.
+        assert_eq!(
+            p.refresh_arg_for(Path::new("/root/default/envs/base")),
+            "/root/default/envs/base"
+        );
     }
 
     #[test]
     fn relay_names_skips_hidden_files() {
         let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         p.resolve_relay_for_run("r").unwrap(); // scaffold
         fs::write(p.envs_dir.join(".DS_Store"), b"junk").unwrap();
         assert_eq!(p.relay_names(), vec!["r".to_string()]);
+    }
+
+    #[test]
+    fn merge_sources_rejects_malformed_key_naming_the_file() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        p.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let relay = p.envs_dir.join("r");
+        fs::write(&relay, "CODEX_API_KEY = sk-x\n").unwrap();
+
+        let err = p.merge_sources(&relay).unwrap_err().to_string();
+
+        assert!(err.contains(&relay.display().to_string()), "{err}");
+        assert!(err.contains("CODEX_API_KEY = sk-x"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_600_creates_and_restricts_existing_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tmp();
+        let fresh = root.path().join("fresh");
+        write_600(&fresh, "secret\n").unwrap();
+        assert_eq!(fs::read_to_string(&fresh).unwrap(), "secret\n");
+        let mode = fs::metadata(&fresh).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let existing = root.path().join("existing");
+        fs::write(&existing, "old\n").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
+        write_600(&existing, "new-secret\n").unwrap();
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "new-secret\n");
+        let mode = fs::metadata(&existing).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[cfg(unix)]
@@ -324,7 +480,7 @@ mod tests {
     fn scaffolded_files_are_0600() {
         use std::os::unix::fs::PermissionsExt;
         let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default");
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
         p.resolve_relay_for_run("r").unwrap();
         let mode = fs::metadata(&p.base_file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);

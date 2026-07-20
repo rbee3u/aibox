@@ -49,6 +49,34 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Resolve the host side of each `-m host:container[:ro]` mount to an absolute
+/// path (against the launch cwd, like `-w`) and require it to exist. Same trap
+/// as `/work`: Docker reads a bare relative name as a *named volume* and would
+/// silently mount an empty one at the container path. The container side must be
+/// present and absolute, matching Docker's bind-mount target rules.
+pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
+    mounts
+        .iter()
+        .map(|m| {
+            let (host, rest) = m
+                .split_once(':')
+                .filter(|(host, rest)| !host.is_empty() && rest.starts_with('/'))
+                .with_context(|| format!("invalid mount (need host:container[:ro]): {m}"))?;
+            let p = Path::new(host);
+            let host_path = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                let cwd = std::env::current_dir().context("get current dir for mounts")?;
+                cwd.join(p)
+            };
+            if !host_path.exists() {
+                bail!("mount host path does not exist: {}", host_path.display());
+            }
+            Ok(format!("{}:{rest}", host_path.display()))
+        })
+        .collect()
+}
+
 /// Seed agent-specific first-run files into a profile home. First use only:
 /// existing files are left untouched so customizations survive.
 ///
@@ -115,10 +143,14 @@ pub struct Invocation {
     pub guarded: Vec<crate::creds::GuardedPath>,
 }
 
-/// Build the full `docker run` argument list (everything between `docker run` and
-/// the image), folding in the agent's `extra_run_args`: `--rm`, the
-/// credential/auth args, `-it`/`-i`, hardening, Linux uid/gid + host-gateway, and
-/// the home / `/work` / extra mounts.
+/// Build the full `docker run` argument list (everything between `docker run`
+/// and the image): `--rm`, `-it`/`-i`, hardening, Linux uid/gid + host-gateway,
+/// the home / `/work` / extra mounts, then the agent's credential/auth args.
+///
+/// Agent-specific args come last because Codex's auth.json mode mounts a file
+/// nested under the profile home. Keeping that nested mount after the parent
+/// home mount avoids any runtime that applies bind mounts in argv order from
+/// shadowing the credential with the parent directory mount.
 pub fn assemble_run_args(
     agent: AgentKind,
     work_dir: &str,
@@ -127,9 +159,6 @@ pub fn assemble_run_args(
     invocation_extra: &[String],
 ) -> Vec<String> {
     let mut a: Vec<String> = vec!["--rm".into()];
-
-    // Agent-specific credential/auth args (env-files, auth.json mount).
-    a.extend(invocation_extra.iter().cloned());
 
     // Interactive TTY only when we actually have one (so pipes still work).
     if platform::has_tty() {
@@ -162,6 +191,9 @@ pub fn assemble_run_args(
         a.push("-v".into());
         a.push(m.clone());
     }
+
+    // Agent-specific credential/auth args (env-files, auth.json mount).
+    a.extend(invocation_extra.iter().cloned());
 
     a
 }
@@ -199,8 +231,41 @@ mod tests {
         assert!(resolve_work_dir(Some(f.path().to_str().unwrap())).is_err());
     }
 
+    #[test]
+    fn resolve_mounts_absolutizes_and_validates_host_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = dir.path().display();
+
+        // Absolute host path passes through unchanged, options intact.
+        let got = resolve_mounts(&[format!("{host}:/cache:ro")]).unwrap();
+        assert_eq!(got, vec![format!("{host}:/cache:ro")]);
+
+        // Relative host path resolves against the launch cwd (like -w). `src`
+        // exists relative to the crate root, where cargo runs tests.
+        let got = resolve_mounts(&["src:/src".to_string()]).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(got, vec![format!("{}:/src", cwd.join("src").display())]);
+
+        // A missing host path errors instead of becoming an empty named volume.
+        let err = resolve_mounts(&["/no/such/dir:/data".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+        let err = resolve_mounts(&["no-such-dir:/data".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+
+        // No host part at all is a usage error, not a silent volume mount.
+        assert!(resolve_mounts(&["/data".to_string()]).is_err());
+        assert!(resolve_mounts(&[":/data".to_string()]).is_err());
+        // The container target must be present and absolute.
+        assert!(resolve_mounts(&["src:".to_string()]).is_err());
+        assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
+    }
+
     fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
         args.windows(2).any(|w| w[0] == a && w[1] == b)
+    }
+
+    fn pair_pos(args: &[String], a: &str, b: &str) -> Option<usize> {
+        args.windows(2).position(|w| w[0] == a && w[1] == b)
     }
 
     #[test]
@@ -217,13 +282,8 @@ mod tests {
         );
 
         assert_eq!(args[0], "--rm");
-        assert_eq!(
-            &args[1..3],
-            ["--env-file", "/tmp/aibox-env.x"],
-            "invocation extras follow --rm"
-        );
         let tty = if platform::has_tty() { "-it" } else { "-i" };
-        assert_eq!(args[3], tty);
+        assert_eq!(args[1], tty);
 
         // The container is the sandbox boundary; the hardening flags must
         // survive any reshuffling of this assembly.
@@ -233,10 +293,11 @@ mod tests {
         assert!(contains_pair(&args, "-v", "/abs/home:/home/claude"));
         assert!(contains_pair(&args, "-v", "/abs/work:/work"));
         assert!(contains_pair(&args, "-w", "/work"));
+        assert!(contains_pair(&args, "-v", "/host/cache:/cache:ro"));
         assert_eq!(
             &args[args.len() - 2..],
-            ["-v", "/host/cache:/cache:ro"],
-            "extra mounts come last"
+            ["--env-file", "/tmp/aibox-env.x"],
+            "invocation extras come last so nested credential mounts cannot be shadowed"
         );
 
         // Linux-only flags mirror the host platform probes.
@@ -262,6 +323,25 @@ mod tests {
             &[],
         );
         assert!(contains_pair(&args, "-v", "/abs/home:/home/codex"));
+    }
+
+    #[test]
+    fn assemble_run_args_places_nested_invocation_mount_after_home_mount() {
+        let auth_mount = "/tmp/auth.json:/home/codex/.codex/auth.json:ro";
+        let args = assemble_run_args(
+            AgentKind::Codex,
+            "/abs/work",
+            Path::new("/abs/home"),
+            &[],
+            &["-v".to_string(), auth_mount.to_string()],
+        );
+
+        let home = pair_pos(&args, "-v", "/abs/home:/home/codex").expect("home mount");
+        let auth = pair_pos(&args, "-v", auth_mount).expect("auth mount");
+        assert!(
+            home < auth,
+            "nested auth.json mount must be listed after the parent home mount"
+        );
     }
 
     #[test]

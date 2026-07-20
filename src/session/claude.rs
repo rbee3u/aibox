@@ -40,30 +40,22 @@ impl SessionBackend for Claude {
         content_text(v)
     }
 
-    /// The first line bearing a top-level `timestamp` is the session start.
-    fn start_ts(&self, lines: &[Value]) -> String {
-        lines
-            .iter()
-            .find_map(|v| v.get("timestamp").and_then(Value::as_str))
-            .unwrap_or("")
-            .to_string()
+    /// Any line bearing a top-level `timestamp` is a candidate; the shared
+    /// streaming loop keeps the first, which is the session start.
+    fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+        v.get("timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 
-    /// Prefer the agent-generated `ai-title`; fall back to the first typed prompt.
-    /// A session can carry several `ai-title` lines (re-titled mid-run); the last
-    /// non-empty one wins.
-    fn title(&self, lines: &[Value], first_prompt: &str) -> String {
-        lines
-            .iter()
-            .rev()
-            .filter_map(|v| {
-                (v.get("type").and_then(Value::as_str) == Some("ai-title"))
-                    .then(|| v.get("aiTitle").and_then(Value::as_str))
-                    .flatten()
-            })
-            .find(|t| !t.is_empty())
-            .unwrap_or(first_prompt)
-            .to_string()
+    /// Surface the agent-generated `ai-title` lines. A session can carry
+    /// several (re-titled mid-run); the shared loop keeps the last non-empty
+    /// one, falling back to the first typed prompt when there is none.
+    fn title_of(&self, v: &Value) -> Option<String> {
+        (v.get("type").and_then(Value::as_str) == Some("ai-title"))
+            .then(|| v.get("aiTitle").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_string)
     }
 }
 

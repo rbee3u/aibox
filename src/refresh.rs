@@ -113,9 +113,30 @@ fn example_key(line: &str) -> Option<String> {
 ///
 /// `dry_run` prints the result instead of writing.
 pub fn run_refresh(prof: &Profile, target: Option<&str>, dry_run: bool) -> Result<i32> {
+    run_refresh_with_printer(prof, target, dry_run, crate::print_line)
+}
+
+fn run_refresh_with_printer(
+    prof: &Profile,
+    target: Option<&str>,
+    dry_run: bool,
+    mut print: impl FnMut(&str) -> Result<bool>,
+) -> Result<i32> {
     match target {
         None => {
-            refresh_one(prof, &prof.base_file, None, dry_run, false)?;
+            // Sweep mode: one bad file (unreadable, not UTF-8) must not abort
+            // the sweep half-done, with earlier files refreshed and later ones
+            // silently skipped — report it, keep going, exit non-zero at the
+            // end. Explicitly named targets below still fail fast.
+            let mut failed = false;
+            match refresh_one(prof, &prof.base_file, None, dry_run, false, &mut print) {
+                Ok(true) => {}
+                Ok(false) => return Ok(0),
+                Err(e) => {
+                    eprintln!("!! {e:#}");
+                    failed = true;
+                }
+            }
             if let Ok(rd) = fs::read_dir(&prof.envs_dir) {
                 let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
                 entries.sort();
@@ -128,30 +149,42 @@ pub fn run_refresh(prof: &Profile, target: Option<&str>, dry_run: bool) -> Resul
                         .and_then(|n| n.to_str())
                         .unwrap_or("")
                         .to_string();
-                    // Hidden files (`.DS_Store` and friends) are never relays;
-                    // skipping them keeps a stray binary file from aborting the
-                    // whole sweep. An explicit `refresh <name>` still reaches
+                    // Hidden files (`.DS_Store` and friends) are never named
+                    // relays; skipping them keeps a stray binary file from
+                    // aborting the sweep. Explicit path targets still reach
                     // them.
                     if name.starts_with('.') {
                         continue;
                     }
-                    refresh_one(prof, &path, Some(&name), dry_run, false)?;
+                    match refresh_one(prof, &path, Some(&name), dry_run, false, &mut print) {
+                        Ok(true) => {}
+                        Ok(false) => return Ok(0),
+                        Err(e) => {
+                            eprintln!("!! {e:#}");
+                            failed = true;
+                        }
+                    }
                 }
             }
+            if failed {
+                return Ok(1);
+            }
         }
-        Some("base") => refresh_one(prof, &prof.base_file, None, dry_run, true)?,
+        Some("base") => {
+            refresh_one(prof, &prof.base_file, None, dry_run, true, &mut print)?;
+        }
         Some(relay) => {
             // Resolve exactly like `-e` does (name under envs/ vs explicit
             // path), so `refresh X` always targets the same file a run with
             // `-e X` reads.
-            let rref = prof.relay_ref(relay);
+            let rref = prof.relay_ref(relay)?;
             let name = rref
                 .path()
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(relay)
                 .to_string();
-            refresh_one(prof, rref.path(), Some(&name), dry_run, true)?;
+            refresh_one(prof, rref.path(), Some(&name), dry_run, true, &mut print)?;
         }
     }
     Ok(0)
@@ -168,13 +201,14 @@ fn refresh_one(
     relay_name: Option<&str>,
     dry_run: bool,
     required: bool,
-) -> Result<()> {
+    print: &mut impl FnMut(&str) -> Result<bool>,
+) -> Result<bool> {
     if !file.is_file() {
         if required {
             bail!("not found: {}", file.display());
         }
         eprintln!("!! not found, skipping: {}", file.display());
-        return Ok(());
+        return Ok(true);
     }
     let old = fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let template = match relay_name {
@@ -183,7 +217,11 @@ fn refresh_one(
     };
     let result = merge(&old, &template);
     if dry_run {
-        println!("===== {} =====\n{result}\n", file.display());
+        // Bulk stdout: tolerate a hung-up reader (`--dry-run | head`) instead
+        // of panicking on the broken pipe.
+        if !print(&format!("===== {} =====\n{result}\n", file.display()))? {
+            return Ok(false);
+        }
     } else {
         // Exactly one trailing newline.
         profile::write_600(file, &format!("{result}\n"))?;
@@ -192,7 +230,7 @@ fn refresh_one(
             file.display()
         );
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -203,7 +241,7 @@ mod tests {
     #[test]
     fn run_refresh_skips_hidden_files_in_envs() {
         let root = tempfile::tempdir().unwrap();
-        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
         let junk = [0u8, 159, 146, 150]; // not valid UTF-8
         let ds = prof.envs_dir.join(".DS_Store");
@@ -215,9 +253,29 @@ mod tests {
     }
 
     #[test]
+    fn run_refresh_sweep_continues_past_bad_file_and_exits_nonzero() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("z").unwrap(); // scaffold base + relay z
+        std::fs::write(prof.envs_dir.join("z"), "ANTHROPIC_BASE_URL=https://x\n").unwrap();
+        // `bad` sorts before `z`: an unreadable (non-UTF-8) relay mid-sweep
+        // must not stop `z` from being refreshed.
+        std::fs::write(prof.envs_dir.join("bad"), [0u8, 159, 146, 150]).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "a failed file makes the sweep exit non-zero");
+        let z = std::fs::read_to_string(prof.envs_dir.join("z")).unwrap();
+        assert!(
+            z.starts_with("# aibox-template:"),
+            "files after the bad one are still refreshed"
+        );
+    }
+
+    #[test]
     fn run_refresh_explicit_missing_target_errors_but_sweep_skips() {
         let root = tempfile::tempdir().unwrap();
-        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         // Nothing scaffolded yet: naming a missing target (a typo'd relay,
         // or base before first use) must fail, not exit 0.
         assert!(run_refresh(&prof, Some("base"), false).is_err());
@@ -229,7 +287,7 @@ mod tests {
     #[test]
     fn run_refresh_resolves_path_target_like_a_run() {
         let root = tempfile::tempdir().unwrap();
-        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         // An explicit path target (`-e` would read this same file) is refreshed
         // in place, not looked up under envs/.
         let outside = root.path().join("outside.env");
@@ -241,6 +299,26 @@ mod tests {
         assert!(refreshed.starts_with("# aibox-template:"));
         assert!(refreshed.contains("ANTHROPIC_BASE_URL=https://x"));
         assert!(!prof.envs_dir.join("outside.env").exists());
+    }
+
+    #[test]
+    fn run_refresh_dry_run_stops_when_stdout_reader_hangs_up() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let mut writes = 0;
+
+        let code = run_refresh_with_printer(&prof, None, true, |_line| {
+            writes += 1;
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            writes, 1,
+            "sweep should stop after the first broken-pipe-style false"
+        );
     }
 
     #[test]

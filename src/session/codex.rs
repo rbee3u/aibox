@@ -66,9 +66,11 @@ impl SessionBackend for Codex {
         user_turn_text(v)
     }
 
-    /// Line 0 (the `session_meta`) carries the session start timestamp.
-    fn start_ts(&self, lines: &[Value]) -> String {
-        lines.first().map(super::ts_of).unwrap_or_default()
+    /// Line 0 (the `session_meta`) carries the session start timestamp. Always
+    /// `Some` for line 0 — even an empty timestamp there settles the lookup,
+    /// matching the old "line 0 or nothing" behavior — and `None` after it.
+    fn start_ts_of(&self, idx: usize, v: &Value) -> Option<String> {
+        (idx == 0).then(|| super::ts_of(v))
     }
 }
 

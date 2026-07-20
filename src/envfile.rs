@@ -6,13 +6,58 @@
 //! an earlier one (`base`), and a `KEY=` line with an empty value blanks a base
 //! default. An [`IndexMap`] gives order-plus-override directly.
 
+use anyhow::{bail, Result};
 use indexmap::IndexMap;
+use std::path::Path;
 
 /// A merged set of `KEY=VALUE` env lines, order-preserving. Stored values are
 /// the full original lines (so `KEY=` stays `KEY=`).
 pub struct MergedEnv {
     /// key -> full `KEY=VALUE` line, in first-seen order.
     entries: IndexMap<String, String>,
+}
+
+/// The key part of a real (non-comment) line: everything before the first `=`,
+/// or the whole line for a bare `KEY` pass-through.
+fn key_of(line: &str) -> &str {
+    match line.find('=') {
+        Some(eq) => &line[..eq],
+        None => line,
+    }
+}
+
+/// True for a key docker `--env-file` accepts: `[A-Za-z_][A-Za-z0-9_]*`.
+fn valid_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Validate every real line's key in one env-file source, naming the file and
+/// line on failure. Catches the classic `KEY = value` / `export KEY=value`
+/// edits *before* the run: left unchecked they surface as a misleading
+/// "missing required keys" (Codex reads the merge itself) or as a docker
+/// `--env-file` parse error pointing at a staged temp file that is already
+/// deleted by the time anyone could look at it.
+pub fn check_keys(source: &Path, src: &str) -> Result<()> {
+    for (i, raw) in src.lines().enumerate() {
+        let s = raw.trim_start();
+        if s.is_empty() || s.starts_with('#') {
+            continue;
+        }
+        if !valid_key(key_of(s)) {
+            bail!(
+                "{} line {}: {:?} is not a valid KEY=VALUE line \
+                 (keys match [A-Za-z_][A-Za-z0-9_]*; no spaces around '=', no `export`)",
+                source.display(),
+                i + 1,
+                raw
+            );
+        }
+    }
+    Ok(())
 }
 
 impl MergedEnv {
@@ -28,11 +73,7 @@ impl MergedEnv {
                     continue;
                 }
                 // A line with no '=' is treated as a bare key, stored as-is.
-                let key = match s.find('=') {
-                    Some(eq) => &s[..eq],
-                    None => s,
-                };
-                entries.insert(key.to_string(), s.to_string());
+                entries.insert(key_of(s).to_string(), s.to_string());
             }
         }
         MergedEnv { entries }
@@ -136,5 +177,33 @@ mod tests {
         let src = s("   KEY=val\n");
         let m = MergedEnv::merge(&[src]);
         assert_eq!(m.get("KEY").as_deref(), Some("val"));
+    }
+
+    #[test]
+    fn check_keys_accepts_valid_env_files() {
+        let src = "# comment\n\nKEY=value\n_UNDER=1\nBARE_PASSTHROUGH\nBLANKED=\n  INDENTED=ok\n";
+        assert!(check_keys(Path::new("/p/base"), src).is_ok());
+    }
+
+    #[test]
+    fn check_keys_rejects_malformed_keys_with_file_and_line() {
+        // The classic editing mistakes: spaces around '=', shell `export`,
+        // a missing key, and a bare non-key word.
+        for (src, line_no, bad) in [
+            ("GOOD=1\nCODEX_API_KEY = sk-x\n", 2, "CODEX_API_KEY = sk-x"),
+            ("export KEY=v\n", 1, "export KEY=v"),
+            ("=value\n", 1, "=value"),
+            ("2FOO=x\n", 1, "2FOO=x"),
+            ("some words\n", 1, "some words"),
+        ] {
+            let err = check_keys(Path::new("/p/envs/relay"), src)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("/p/envs/relay") && err.contains(&format!("line {line_no}")),
+                "error should name file and line: {err}"
+            );
+            assert!(err.contains(bad), "error should quote the raw line: {err}");
+        }
     }
 }

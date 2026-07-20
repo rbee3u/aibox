@@ -92,14 +92,59 @@ pub fn image_exists(image: &str) -> Result<bool> {
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
 /// exit code. A child (not `exec`) so the caller's credential cleanup still runs
-/// after it returns.
+/// after it returns. The child's pid and `--cidfile` are registered with `creds`
+/// for the run's duration, so a SIGINT/SIGTERM aimed at the wrapper alone stops
+/// the container instead of leaving it running unsupervised — killing just the
+/// docker CLI is not enough when a TTY is attached (the CLI only proxies
+/// signals without one; see `creds`).
 pub fn run(run_args: &[String], image: &str, cmd: &[String]) -> Result<i32> {
-    let status = Command::new("docker")
+    // Docker refuses to reuse an existing cidfile, so ask for a fresh path
+    // inside a temp dir. The id it holds is not a secret; if a signal kills us
+    // before the dir's cleanup, the leftover is harmless.
+    let cid_dir = tempfile::tempdir().context("create cidfile dir")?;
+    let cid_path = cid_dir.path().join("cid");
+
+    // Register the cidfile *before* spawning: a signal landing between spawn
+    // and registration could otherwise find neither a pid nor a container id,
+    // leaving the container running unsupervised.
+    crate::creds::set_cidfile(&cid_path);
+    let spawned = Command::new("docker")
         .arg("run")
+        .arg("--cidfile")
+        .arg(&cid_path)
         .args(run_args)
         .arg(image)
         .args(cmd)
-        .status()
-        .context("spawn docker run (is docker installed?)")?;
-    Ok(status.code().unwrap_or(1))
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            crate::creds::clear_child();
+            return Err(e).context("spawn docker run (is docker installed?)");
+        }
+    };
+
+    crate::creds::set_child(child.id());
+    let waited = child.wait();
+    crate::creds::clear_child();
+    let status = waited.context("wait for docker run")?;
+
+    Ok(exit_code(status))
+}
+
+/// Map an exit status to a code: the child's own code when it exited, the
+/// shell convention `128 + signal` when it was killed by a signal (so scripts
+/// can tell "agent failed" from "interrupted"), else 1.
+fn exit_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return 128 + sig;
+        }
+    }
+    1
 }

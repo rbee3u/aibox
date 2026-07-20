@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 /// Container path the Codex model-instructions file is mounted at (read-only).
 const CODEX_INSTRUCTIONS_CTR: &str = "/aibox-instructions.md";
 
+/// The placeholder written to the pre-created auth.json mount target. Also the
+/// ownership marker: a file holding exactly this is ours (a leftover from a
+/// SIGKILL'd run), anything else is the user's real login file.
+const AUTH_PLACEHOLDER: &str = "{}\n";
+
 /// Which agent a run targets. Selected by the `aibox claude` / `aibox codex`
 /// subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,18 +189,30 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // env_key mode (default): key crosses as OPENAI_API_KEY via a 0600 --env-file.
     // auth.json mode (CODEX_REQUIRES_OPENAI_AUTH truthy): key delivered as a
     // throwaway {"OPENAI_API_KEY":"..."} mounted read-only at
-    // CODEX_HOME/auth.json.
-    let use_auth_json = matches!(
-        requires_openai_auth.to_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    );
+    // CODEX_HOME/auth.json. Anything outside the two recognized sets is
+    // rejected here: a typo (`ture`) silently landing in env_key mode would
+    // only surface later as an opaque Codex-side auth failure.
+    let use_auth_json = match requires_openai_auth.to_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "" | "0" | "false" | "no" | "off" => false,
+        _ => bail!(
+            "CODEX_REQUIRES_OPENAI_AUTH={requires_openai_auth} is not recognized \
+             (1/true/yes/on for auth.json mode; 0/false/no/off or unset for env_key mode)"
+        ),
+    };
 
+    let auth_mount = opts.home_dir.join(".codex").join("auth.json");
+    if auth_mount.is_dir() {
+        bail!(
+            "Codex auth path is a directory, expected a file: {}",
+            auth_mount.display()
+        );
+    }
     if use_auth_json {
         // Pre-create the mount target so Docker over-mounts an existing file
         // (virtiofs can't create a target nested in the /home/codex mount). Only
         // a placeholder we create is removed later; a real login auth.json stays.
-        let auth_mount = opts.home_dir.join(".codex").join("auth.json");
-        guarded.push(GuardedPath::ensure(auth_mount.clone(), "{}\n")?);
+        guarded.push(GuardedPath::ensure(auth_mount.clone(), AUTH_PLACEHOLDER)?);
 
         let auth_json = StagedFile::create("aibox-codex-auth.", &codex_auth_json(&api_key))?;
         extra_run_args.push("-v".to_string());
@@ -205,6 +222,13 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         ));
         staged.push(auth_json);
     } else {
+        // A `{}` placeholder left by a SIGKILL'd auth.json-mode run would sit
+        // unmounted in the profile home this run: Codex parses it as a ChatGPT
+        // login with no tokens (auth.json presence = "logged in"), a phantom
+        // auth state alongside the real env_key auth. It's ours
+        // (content-checked), so clear it; a real login file stays.
+        crate::creds::remove_stale_placeholder(&auth_mount, AUTH_PLACEHOLDER);
+
         let key_env =
             StagedFile::create("aibox-codex-key.", &format!("OPENAI_API_KEY={api_key}\n"))?;
         extra_run_args.push("--env-file".to_string());
@@ -265,10 +289,22 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         );
     }
 
-    // query_params is a TOML inline table: split k=v[,k=v…] into per-key overrides.
+    // query_params is a TOML inline table: split k=v[,k=v…] into per-key
+    // overrides. Empty segments (a trailing comma, `a=b,,c=d`) are skipped; an
+    // empty key is rejected here instead of producing a keyless override that
+    // Codex rejects later with an opaque parse error.
     if !query_params.is_empty() {
-        for pair in query_params.split(',') {
+        for pair in query_params
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
             let (pk, pv) = pair.split_once('=').unwrap_or((pair, ""));
+            let pk = pk.trim();
+            let pv = pv.trim();
+            if pk.is_empty() {
+                bail!("CODEX_QUERY_PARAMS contains an empty key in segment {pair:?}");
+            }
             push_c(
                 &mut cmd,
                 format!("model_providers.aibox.query_params.{pk}={pv}"),
@@ -280,8 +316,15 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // sandbox. --safe puts the normal approvals + workspace-write sandbox back.
     // Prepended so an explicit flag in pass-through (e.g. -a/-s) still wins.
     if opts.safe {
-        cmd.push("-a".into());
-        cmd.push("on-request".into());
+        // The `exec` subcommand rejects a bare `-a` (approval flags are
+        // root-command only in Codex's CLI); the `-c approval_policy=…`
+        // override is the exec-safe spelling of the same setting.
+        if opts.exec {
+            push_c(&mut cmd, "approval_policy=on-request");
+        } else {
+            cmd.push("-a".into());
+            cmd.push("on-request".into());
+        }
         cmd.push("-s".into());
         cmd.push("workspace-write".into());
         eprintln!(">> permissions: prompting + workspace-write sandbox (--safe)");
@@ -501,6 +544,29 @@ mod tests {
     }
 
     #[test]
+    fn codex_env_key_mode_clears_stale_placeholder_but_keeps_real_auth_json() {
+        let env = env_of(CODEX_MIN);
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+
+        // A `{}` placeholder from a SIGKILL'd auth.json-mode run is ours: an
+        // env_key run must clear it instead of leaving a phantom login.
+        std::fs::write(&auth, AUTH_PLACEHOLDER).unwrap();
+        let _inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        assert!(!auth.exists(), "stale placeholder is cleared");
+
+        // A real `codex login` auth.json is never touched.
+        std::fs::write(&auth, "{\"OPENAI_API_KEY\":\"sk-real\"}\n").unwrap();
+        let _inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        assert!(auth.exists(), "real auth.json survives env_key mode");
+    }
+
+    #[test]
     fn codex_auth_json_mode_excludes_env_key() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".codex")).unwrap();
@@ -533,14 +599,45 @@ mod tests {
             );
         }
 
-        // A non-truthy value stays in env_key mode.
-        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=0\n"));
-        let inv = AgentKind::Codex
-            .build_invocation(&opts(&env, home.path()))
-            .unwrap();
-        let c = c_overrides(&inv.agent_cmd);
-        assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
-        assert!(inv.guarded.is_empty());
+        // An explicit falsy value stays in env_key mode.
+        for falsy in ["0", "false", "no", "off", "OFF", ""] {
+            let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH={falsy}\n"));
+            let inv = AgentKind::Codex
+                .build_invocation(&opts(&env, home.path()))
+                .unwrap();
+            let c = c_overrides(&inv.agent_cmd);
+            assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
+            assert!(inv.guarded.is_empty());
+        }
+    }
+
+    #[test]
+    fn codex_requires_openai_auth_rejects_unrecognized_values() {
+        // A typo must not silently pick an auth mode: it would surface much
+        // later as an opaque Codex-side auth failure.
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=ture\n"));
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+        assert!(
+            err.contains("CODEX_REQUIRES_OPENAI_AUTH=ture"),
+            "error names the key and bad value: {err}"
+        );
+    }
+
+    #[test]
+    fn codex_auth_json_directory_errors_before_docker() {
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        std::fs::create_dir_all(&auth).unwrap();
+
+        for mode in ["", "CODEX_REQUIRES_OPENAI_AUTH=1\n"] {
+            let env = env_of(&format!("{CODEX_MIN}{mode}"));
+            let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+            assert!(
+                err.contains("Codex auth path is a directory"),
+                "invalid auth path should fail clearly: {err}"
+            );
+        }
     }
 
     #[test]
@@ -556,6 +653,35 @@ mod tests {
             inv.agent_cmd[0], "exec",
             "exec must precede the -c overrides"
         );
+    }
+
+    #[test]
+    fn codex_exec_safe_uses_config_override_not_approval_flag() {
+        // `codex exec` rejects a bare `-a` (approval flags are root-command
+        // only), so --safe in exec mode must deliver the approval policy as a
+        // `-c` override instead.
+        let env = env_of(CODEX_MIN);
+        let home = tempfile::tempdir().unwrap();
+        let mut o = opts(&env, home.path());
+        o.exec = true;
+        o.safe = true;
+
+        let cmd = AgentKind::Codex.build_invocation(&o).unwrap().agent_cmd;
+
+        assert_eq!(cmd[0], "exec");
+        assert!(
+            !cmd.iter().any(|t| t == "-a"),
+            "no bare -a after the exec subcommand"
+        );
+        assert!(c_overrides(&cmd).contains(&"approval_policy=on-request"));
+        assert!(contains_pair(&cmd, "-s", "workspace-write"));
+
+        // The TUI (non-exec) path keeps the flag form so an explicit `-a` in
+        // pass-through still wins.
+        o.exec = false;
+        let cmd = AgentKind::Codex.build_invocation(&o).unwrap().agent_cmd;
+        assert!(contains_pair(&cmd, "-a", "on-request"));
+        assert!(!c_overrides(&cmd).contains(&"approval_policy=on-request"));
     }
 
     #[test]
@@ -606,7 +732,7 @@ mod tests {
 
         let env = env_of(&format!(
             "{CODEX_MIN}CODEX_REASONING=high\nCODEX_PLAN_REASONING=xhigh\n\
-             CODEX_QUERY_PARAMS=api-version=2025-04-01-preview,foo=bar\n"
+             CODEX_QUERY_PARAMS= api-version=2025-04-01-preview, foo=bar,compound=a=b, ,\n"
         ));
         let inv = AgentKind::Codex
             .build_invocation(&opts(&env, home.path()))
@@ -617,6 +743,21 @@ mod tests {
         // query_params: comma-separated k=v pairs become per-key overrides.
         assert!(c.contains(&"model_providers.aibox.query_params.api-version=2025-04-01-preview"));
         assert!(c.contains(&"model_providers.aibox.query_params.foo=bar"));
+        assert!(c.contains(&"model_providers.aibox.query_params.compound=a=b"));
+        // The trailing comma above must not become a keyless `query_params.=`.
+        assert!(!c.contains(&"model_providers.aibox.query_params.="));
+    }
+
+    #[test]
+    fn codex_query_params_reject_empty_key() {
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_QUERY_PARAMS=api-version=1,=oops\n"
+        ));
+
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+
+        assert!(err.contains("CODEX_QUERY_PARAMS contains an empty key"));
     }
 
     #[test]

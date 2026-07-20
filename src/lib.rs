@@ -29,9 +29,39 @@ use envfile::MergedEnv;
 use profile::Profile;
 use runspec::RunOpts;
 
+/// Read an optional environment override that must be non-empty when present.
+/// Empty values are almost always accidental for path/tag knobs, and treating
+/// them as real values can move state into surprising places.
+pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) if value.is_empty() => anyhow::bail!("{name} is set but empty"),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{name} is not valid UTF-8")
+        }
+    }
+}
+
 /// Resolve the image tag: `$AIBOX_IMAGE` wins, else the agent default.
-fn image_for(agent: AgentKind) -> String {
-    std::env::var("AIBOX_IMAGE").unwrap_or_else(|_| agent.image_default().to_string())
+fn image_for(agent: AgentKind, image_override: Option<&str>) -> String {
+    image_override
+        .unwrap_or_else(|| agent.image_default())
+        .to_string()
+}
+
+/// Write one line to stdout. `Ok(true)` on success; `Ok(false)` when the reader
+/// hung up (`session list | head` and friends) — the Rust runtime ignores
+/// SIGPIPE, so a plain `println!` would panic on the broken pipe instead. The
+/// caller should stop writing and exit cleanly. Other write errors are real.
+/// Shared by the bulk-stdout paths: `session list`/`get` and `refresh --dry-run`.
+pub(crate) fn print_line(line: &str) -> Result<bool> {
+    use std::io::Write;
+    match writeln!(std::io::stdout().lock(), "{line}") {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(e) => Err(e).context("write to stdout"),
+    }
 }
 
 /// Top-level dispatch. `passthrough` is the argv tail after `--` (agent args).
@@ -40,7 +70,16 @@ fn image_for(agent: AgentKind) -> String {
 /// and never touch Docker. A plain run flows through `run_agent`.
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
     match cli.command {
-        Command::Build(args) => run_build(&args),
+        Command::Build(args) => {
+            // Same rationale as refresh/session: `--` args are for an agent
+            // run, and silently dropping them would hide a misuse.
+            if !passthrough.is_empty() {
+                anyhow::bail!(
+                    "`-- <args>` applies only to a run; build takes no pass-through args"
+                );
+            }
+            run_build(&args)
+        }
         Command::Claude(args) => run_agent_command(AgentKind::Claude, &args, &passthrough),
         Command::Codex(args) => run_agent_command(AgentKind::Codex, &args, &passthrough),
     }
@@ -60,7 +99,7 @@ fn run_agent_command(
             );
         }
         let root = profile::config_root(agent)?;
-        let prof = Profile::resolve(agent, &root, &args.run.profile);
+        let prof = Profile::resolve(agent, &root, &args.run.profile)?;
         return match action {
             Action::Refresh { target, dry_run } => {
                 refresh::run_refresh(&prof, target.as_deref(), *dry_run)
@@ -78,7 +117,8 @@ fn run_agent_command(
 /// by default. `--force` pulls a fresh Debian image for the base build, then
 /// rebuilds the agent image(s) without pulling `aibox-base` from a registry.
 fn run_build(args: &BuildArgs) -> Result<i32> {
-    if args.target.is_none() && std::env::var_os("AIBOX_IMAGE").is_some() {
+    let image_override = env_override("AIBOX_IMAGE")?;
+    if args.target.is_none() && image_override.is_some() {
         anyhow::bail!(
             "AIBOX_IMAGE is ambiguous with `aibox build`; choose `aibox build claude` or `aibox build codex`"
         );
@@ -112,7 +152,7 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
         BuildCache::Cached
     };
     for agent in agents {
-        let image = image_for(agent);
+        let image = image_for(agent, image_override.as_deref());
         if args.force {
             eprintln!(">> building {image} (no cache) ...");
         } else {
@@ -129,7 +169,14 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
 /// a pre-built image, merge config, stage credentials, assemble `docker run`,
 /// and run the agent as a child (so credential cleanup fires afterwards).
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
-    let image = image_for(agent);
+    let image_override = env_override("AIBOX_IMAGE")?;
+    let image = image_for(agent, image_override.as_deref());
+    // The override applies to *both* agents, so a leftover export runs claude
+    // in the codex image (and vice versa) with only a confusing entrypoint
+    // error to show for it. Say which image is in play before anything fails.
+    if image_override.is_some() {
+        eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
+    }
 
     // Reject --exec before any work; see `AgentKind::supports_exec`.
     if run.exec && !agent.supports_exec() {
@@ -138,7 +185,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 
     // --- resolve profile paths ------------------------------------------
     let root = profile::config_root(agent)?;
-    let prof = Profile::resolve(agent, &root, &run.profile);
+    let prof = Profile::resolve(agent, &root, &run.profile)?;
 
     // --- a relay is required --------------------------------------------
     // No default endpoint: every run picks one with -e.
@@ -188,8 +235,10 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 
     // --- assemble and run -----------------------------------------------
     // Absolutized + validated: Docker would read a bare relative name as a
-    // *named volume* and silently mount an empty one at /work.
+    // *named volume* and silently mount an empty one at /work. Extra `-m`
+    // mounts get the same treatment for their host side.
     let work_dir = runspec::resolve_work_dir(run.work.as_deref())?;
+    let mounts = runspec::resolve_mounts(&run.mount)?;
 
     let opts = RunOpts {
         env: &merged,
@@ -207,7 +256,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
         agent,
         &work_dir,
         &prof.home_dir,
-        &run.mount,
+        &mounts,
         &invocation.extra_run_args,
     );
 
@@ -225,20 +274,55 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::ffi::OsString;
 
-    // Both guards below bail before any profile/env/Docker work, so these run
-    // without touching the filesystem or the config root.
+    // These guards bail before Docker work, so they run without requiring a
+    // built image.
+
+    struct EnvGuard {
+        name: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvGuard { name, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
 
     #[test]
-    fn refresh_and_session_reject_passthrough_args() {
+    fn env_override_rejects_empty_values() {
+        let _guard = EnvGuard::set("AIBOX_TEST_EMPTY_OVERRIDE", "");
+
+        let err = env_override("AIBOX_TEST_EMPTY_OVERRIDE")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("AIBOX_TEST_EMPTY_OVERRIDE is set but empty"));
+    }
+
+    #[test]
+    fn refresh_session_and_build_reject_passthrough_args() {
         for argv in [
             ["aibox", "claude", "refresh"].as_slice(),
             ["aibox", "codex", "session"].as_slice(),
+            ["aibox", "build"].as_slice(),
         ] {
             let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
             let err = run(cli, vec!["--model".into(), "opus".into()]).unwrap_err();
             assert!(
-                err.to_string().contains("take no pass-through args"),
+                err.to_string().contains("no pass-through args"),
                 "unexpected error for {argv:?}: {err}"
             );
         }
@@ -249,5 +333,20 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "claude", "--exec"]).unwrap();
         let err = run(cli, Vec::new()).unwrap_err();
         assert!(err.to_string().contains("--exec is codex-only"));
+    }
+
+    #[test]
+    fn unsafe_profile_name_is_rejected_before_run_or_session_paths() {
+        let cli = Cli::try_parse_from(["aibox", "codex", "-p", "..", "session"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("profile name must be a single path segment"));
+
+        let cli = Cli::try_parse_from(["aibox", "claude", "-p", "", "-e", "r"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("profile name must be a single path segment"));
     }
 }

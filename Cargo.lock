@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "clap",
  "indexmap",
+ "libc",
  "rustix 0.38.44",
  "serde_json",
  "signal-hook",

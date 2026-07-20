@@ -12,6 +12,7 @@ pub mod claude;
 pub mod codex;
 
 use crate::agent::AgentKind;
+use crate::print_line;
 use anyhow::{bail, Result};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -38,16 +39,32 @@ pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBu
     out
 }
 
-/// Read a transcript and parse each line as JSON, skipping unparseable lines.
-/// Empty if the file can't be read. Shared by both backends' `summarize`/`prompts`,
-/// which then extract their agent-specific fields from the parsed values.
-pub(crate) fn json_lines(path: &Path) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
+/// Read a transcript line by line, parsing each as JSON and feeding it to `f`
+/// along with its index among the *parsed* lines (unparseable lines are
+/// skipped, matching the old collect-then-filter behavior). Stops quietly if
+/// the file can't be opened or a line can't be read (e.g. not UTF-8).
+///
+/// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
+/// `list` visits every one, so no whole file — nor its parsed lines — is ever
+/// held in memory at once.
+pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(usize, &Value)) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
     };
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect()
+    let mut reader = io::BufReader::new(file);
+    let mut line = String::new();
+    let mut idx = 0usize;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return, // EOF, or unreadable from here on
+            Ok(_) => {}
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(&line) {
+            f(idx, &v);
+            idx += 1;
+        }
+    }
 }
 
 /// A line's top-level `timestamp` as a string (empty if absent). The one field
@@ -101,46 +118,63 @@ pub trait SessionBackend {
     /// Codex off a wrapper-filtered `response_item` user message.
     fn typed_text(&self, v: &Value) -> Option<String>;
 
-    /// The session start timestamp, given every parsed line. Claude takes the
-    /// first line bearing one; Codex takes line 0's (the `session_meta`).
-    fn start_ts(&self, lines: &[Value]) -> String;
+    /// The session start timestamp from one parsed line (fed in order with its
+    /// index); the first `Some` wins and stops the lookup. Claude answers for
+    /// any line bearing a top-level `timestamp`; Codex answers only for line 0
+    /// (the `session_meta`), even when its timestamp is empty.
+    fn start_ts_of(&self, idx: usize, v: &Value) -> Option<String>;
 
-    /// The `list` row title, given every parsed line and the first typed prompt.
-    /// Default is just the first prompt; Claude overrides to prefer an `ai-title`.
-    fn title(&self, _lines: &[Value], first_prompt: &str) -> String {
-        first_prompt.to_string()
+    /// A `list` row title candidate from one parsed line. The *last* non-empty
+    /// candidate wins; a session with none falls back to its first typed
+    /// prompt. Default: no candidates (Codex has no ai-title); Claude overrides
+    /// to surface `ai-title` lines.
+    fn title_of(&self, _v: &Value) -> Option<String> {
+        None
     }
 
     /// Summarize one transcript for `list`. Every transcript summarizes — a
     /// session with no typed prompt just gets an empty title (unless a backend's
-    /// `title` finds something else, like Claude's `ai-title`), so tool/injected-
-    /// only shells still list and can be cleared. Shared loop over both formats;
-    /// the per-agent answers come from the required methods above.
+    /// `title_of` finds something else, like Claude's `ai-title`), so tool/
+    /// injected-only shells still list and can be cleared. One streaming pass
+    /// with O(1) state; the per-agent answers come from the methods above.
     fn summarize(&self, path: &Path) -> SessionSummary {
-        let lines = json_lines(path);
-        let first_typed = lines
-            .iter()
-            .find_map(|v| self.typed_text(v))
-            .unwrap_or_default();
+        let mut start_ts: Option<String> = None;
+        let mut first_typed: Option<String> = None;
+        let mut title: Option<String> = None;
+        for_each_json_line(path, |idx, v| {
+            if start_ts.is_none() {
+                start_ts = self.start_ts_of(idx, v);
+            }
+            if first_typed.is_none() {
+                first_typed = self.typed_text(v);
+            }
+            if let Some(t) = self.title_of(v) {
+                if !t.is_empty() {
+                    title = Some(t);
+                }
+            }
+        });
         SessionSummary {
             id: self.id_of(path),
-            start_ts: self.start_ts(&lines),
-            title: self.title(&lines, &first_typed),
+            start_ts: start_ts.unwrap_or_default(),
+            title: title.or(first_typed).unwrap_or_default(),
         }
     }
 
-    /// Every typed prompt in one transcript, in order, for `get`. Shared loop; the
-    /// per-line text (and wrapper filtering) is [`typed_text`](Self::typed_text).
+    /// Every typed prompt in one transcript, in order, for `get`. Shared
+    /// streaming loop; the per-line text (and wrapper filtering) is
+    /// [`typed_text`](Self::typed_text).
     fn prompts(&self, path: &Path) -> Vec<Prompt> {
-        json_lines(path)
-            .into_iter()
-            .filter_map(|v| {
-                self.typed_text(&v).map(|text| Prompt {
-                    timestamp: ts_of(&v),
+        let mut out = Vec::new();
+        for_each_json_line(path, |_idx, v| {
+            if let Some(text) = self.typed_text(v) {
+                out.push(Prompt {
+                    timestamp: ts_of(v),
                     text,
-                })
-            })
-            .collect()
+                });
+            }
+        });
+        out
     }
 }
 
@@ -190,16 +224,21 @@ fn reject_yes(action: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a full id or unique prefix to exactly one transcript path. Zero
-/// matches or an ambiguous prefix fail with a message (the ambiguous case lists
-/// the candidates).
+/// Resolve a full id or unique prefix to exactly one transcript path. An exact
+/// id always wins, even when it prefixes other ids (otherwise that session
+/// could never be addressed at all). Zero matches or an ambiguous prefix fail
+/// with a message (the ambiguous case lists the candidates).
 fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
     if query.is_empty() {
         bail!("need a session id (or unique prefix)");
     }
     let mut matches: Vec<PathBuf> = Vec::new();
     for f in backend.files(home) {
-        if backend.id_of(&f).starts_with(query) {
+        let id = backend.id_of(&f);
+        if id == query {
+            return Ok(f);
+        }
+        if id.starts_with(query) {
             matches.push(f);
         }
     }
@@ -239,7 +278,9 @@ fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
         // and a byte slice could split a multi-byte char and panic.
         let short: String = id.chars().take(8).collect();
         let disp = fmt_ts(&ts);
-        println!("{short:<8}  {disp:<16}  {title}");
+        if !print_line(&format!("{short:<8}  {disp:<16}  {title}"))? {
+            break; // reader hung up; nothing left to show
+        }
     }
     Ok(0)
 }
@@ -252,12 +293,14 @@ fn get(backend: &dyn SessionBackend, home: &Path, id: &str) -> Result<i32> {
     eprintln!(">> session {sid}");
     let prompts = backend.prompts(&path);
     if prompts.is_empty() {
-        println!("(no typed prompts in this session)");
+        print_line("(no typed prompts in this session)")?;
         return Ok(0);
     }
     for (i, p) in prompts.iter().enumerate() {
         let d = fmt_ts(&p.timestamp);
-        println!("\n[{}] {d}\n{}", i + 1, p.text);
+        if !print_line(&format!("\n[{}] {d}\n{}", i + 1, p.text))? {
+            break; // reader hung up; nothing left to show
+        }
     }
     Ok(0)
 }
@@ -382,8 +425,8 @@ mod tests {
             v.get("typed").and_then(Value::as_str).map(str::to_string)
         }
 
-        fn start_ts(&self, _lines: &[Value]) -> String {
-            String::new()
+        fn start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
+            None
         }
     }
 
@@ -498,6 +541,19 @@ mod tests {
         assert!(err("get", &[], false).contains("need a session id"));
         assert!(err("get", &["a", "b"], false).contains("accepts exactly one id"));
         assert!(err("get", &[], true).contains("does not use -y"));
+    }
+
+    #[test]
+    fn resolve_exact_id_wins_over_prefix_ambiguity() {
+        // An id that happens to prefix another id must still be addressable:
+        // the exact match wins instead of reading as an ambiguous prefix.
+        let dir = tempfile::tempdir().unwrap();
+        let exact = write_session(dir.path(), "1111");
+        write_session(dir.path(), "11112222");
+
+        let got = resolve(&TestBackend, dir.path(), "1111").unwrap();
+
+        assert_eq!(got, exact);
     }
 
     #[test]
