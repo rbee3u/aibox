@@ -142,14 +142,17 @@ impl Profile {
     }
 
     /// List relay names under `envs/` (for the "no relay selected" hint). Empty
-    /// if the dir is absent.
+    /// if the dir is absent. Hidden files (`.DS_Store` and friends) are skipped —
+    /// they're never relays.
     pub fn relay_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         if let Ok(rd) = fs::read_dir(&self.envs_dir) {
             for entry in rd.flatten() {
                 if entry.path().is_file() {
                     if let Some(n) = entry.file_name().to_str() {
-                        names.push(n.to_string());
+                        if !n.starts_with('.') {
+                            names.push(n.to_string());
+                        }
                     }
                 }
             }
@@ -159,22 +162,38 @@ impl Profile {
     }
 
     /// Nudge (without touching the file) when `base` or the relay predates the
-    /// current template, so stale docs can be refreshed with `sync`.
+    /// current template, so stale docs can be refreshed with `refresh`.
     pub fn nudge_if_stale(&self, relay_path: &Path) {
-        for f in [self.base_file.as_path(), relay_path] {
+        let targets = [
+            (self.base_file.as_path(), "base".to_string()),
+            (relay_path, self.refresh_arg_for(relay_path)),
+        ];
+        for (f, arg) in targets {
             let Ok(contents) = fs::read_to_string(f) else {
                 continue;
             };
             let fv = template::file_template_version(&contents);
             if fv < TEMPLATE_VERSION {
-                let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 eprintln!(
-                    ">> {} is template v{fv} (current v{TEMPLATE_VERSION}) — refresh docs with: aibox {} sync {name}",
+                    ">> {} is template v{fv} (current v{TEMPLATE_VERSION}) — refresh docs with: aibox {} refresh {arg}",
                     f.display(),
                     self.agent.tag()
                 );
             }
         }
+    }
+
+    /// The `refresh` argument that resolves back to `path`: the bare file name
+    /// when that name round-trips through [`Self::relay_ref`] to the same path
+    /// (a named relay under `envs/`), else the full path — so the hinted command
+    /// always targets the file it was printed for.
+    fn refresh_arg_for(&self, path: &Path) -> String {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if self.relay_ref(name).path() == path {
+                return name.to_string();
+            }
+        }
+        path.display().to_string()
     }
 
     /// The merge sources for a run: `base` (if present) then the relay. Returned
@@ -276,6 +295,28 @@ mod tests {
         let root = tmp();
         let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
         assert!(p.resolve_relay_for_run("/no/such/file.env").is_err());
+    }
+
+    #[test]
+    fn refresh_arg_round_trips_named_relay_and_falls_back_to_path() {
+        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default");
+        // A named relay under envs/ hints its bare name.
+        assert_eq!(
+            p.refresh_arg_for(Path::new("/root/default/envs/openrouter")),
+            "openrouter"
+        );
+        // A path-style relay hints the full path (its bare name wouldn't
+        // resolve back to the same file).
+        assert_eq!(p.refresh_arg_for(Path::new("/tmp/x.env")), "/tmp/x.env");
+    }
+
+    #[test]
+    fn relay_names_skips_hidden_files() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default");
+        p.resolve_relay_for_run("r").unwrap(); // scaffold
+        fs::write(p.envs_dir.join(".DS_Store"), b"junk").unwrap();
+        assert_eq!(p.relay_names(), vec!["r".to_string()]);
     }
 
     #[cfg(unix)]

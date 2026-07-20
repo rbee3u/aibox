@@ -55,12 +55,18 @@ impl MergedEnv {
     }
 
     /// Look up the value part (after `=`) of a key, if present. Used by Codex to
-    /// read specific keys (CODEX_BASE_URL, …) out of the merge.
-    pub fn get(&self, key: &str) -> Option<&str> {
+    /// read specific keys (CODEX_BASE_URL, …) out of the merge, and by Claude's
+    /// endpoint warning.
+    ///
+    /// A bare `KEY` line (no `=`) passes the host's value through — docker
+    /// `--env-file` semantics — so it resolves to `$KEY` from the wrapper's
+    /// environment (empty if unset). That keeps required-key checks and
+    /// warnings consistent with what the container will actually see.
+    pub fn get(&self, key: &str) -> Option<String> {
         let line = self.entries.get(key)?;
         match line.find('=') {
-            Some(eq) => Some(&line[eq + 1..]),
-            None => Some(""),
+            Some(eq) => Some(line[eq + 1..].to_string()),
+            None => Some(std::env::var(key).unwrap_or_default()),
         }
     }
 }
@@ -78,9 +84,9 @@ mod tests {
         let base = s("A=1\nB=2\n");
         let relay = s("B=3\nC=4\n");
         let m = MergedEnv::merge(&[base, relay]);
-        assert_eq!(m.get("A"), Some("1"));
-        assert_eq!(m.get("B"), Some("3")); // relay wins
-        assert_eq!(m.get("C"), Some("4"));
+        assert_eq!(m.get("A").as_deref(), Some("1"));
+        assert_eq!(m.get("B").as_deref(), Some("3")); // relay wins
+        assert_eq!(m.get("C").as_deref(), Some("4"));
     }
 
     #[test]
@@ -98,7 +104,23 @@ mod tests {
         let base = s("A=default\n");
         let relay = s("A=\n");
         let m = MergedEnv::merge(&[base, relay]);
-        assert_eq!(m.get("A"), Some("")); // blanked
+        assert_eq!(m.get("A").as_deref(), Some("")); // blanked
+    }
+
+    #[test]
+    fn bare_key_resolves_from_host_env() {
+        // A bare `KEY` line passes the host value through (docker --env-file
+        // semantics); `get` must agree with what the container will see.
+        let m = MergedEnv::merge(&[s("AIBOX_TEST_BARE_PASSTHROUGH\n")]);
+        std::env::set_var("AIBOX_TEST_BARE_PASSTHROUGH", "host-value");
+        assert_eq!(
+            m.get("AIBOX_TEST_BARE_PASSTHROUGH").as_deref(),
+            Some("host-value")
+        );
+        std::env::remove_var("AIBOX_TEST_BARE_PASSTHROUGH");
+        assert_eq!(m.get("AIBOX_TEST_BARE_PASSTHROUGH").as_deref(), Some(""));
+        // A key that appears nowhere is still None.
+        assert_eq!(m.get("AIBOX_TEST_NOT_THERE"), None);
     }
 
     #[test]
@@ -113,6 +135,6 @@ mod tests {
     fn leading_whitespace_trimmed() {
         let src = s("   KEY=val\n");
         let m = MergedEnv::merge(&[src]);
-        assert_eq!(m.get("KEY"), Some("val"));
+        assert_eq!(m.get("KEY").as_deref(), Some("val"));
     }
 }

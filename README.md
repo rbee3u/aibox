@@ -125,22 +125,22 @@ SIGINT/SIGTERM.
 | --- | --- |
 | `ANTHROPIC_BASE_URL` | required |
 | `ANTHROPIC_AUTH_TOKEN` | required |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `_SONNET_` / `_OPUS_` / `_FABLE_` | model tiers |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `_SONNET_` / `_OPUS_` / `_FABLE_` | optional — override base model tiers |
 
-## Keeping templates fresh: `sync`
+## Keeping templates fresh: `refresh`
 
 Config files carry a template version stamp (`# aibox-template: vN`). When the
 embedded templates evolve, a normal run nudges you if a file is stale. Refresh
 the docs without losing your config:
 
 ```sh
-aibox codex sync            # base + every relay in the profile
-aibox codex sync base       # just base
-aibox codex sync myrelay    # one relay
-aibox codex sync --dry-run  # print the result instead of writing
+aibox codex refresh            # base + every relay in the profile
+aibox codex refresh base       # just base
+aibox codex refresh myrelay    # one relay
+aibox codex refresh --dry-run  # print the result instead of writing
 ```
 
-`sync` rewrites the doc/example comments to the current template while keeping
+`refresh` rewrites the doc/example comments to the current template while keeping
 every real config line you added — each re-inserted under its matching example.
 A real key whose example no longer exists is kept in a trailing block, so
 nothing is lost.
@@ -151,11 +151,11 @@ The agent's chat transcripts live in the profile home on the host, so both
 tools can browse them straight from disk — no container, no relay:
 
 ```sh
-aibox claude session                  # list this profile's sessions, newest first
-aibox claude session list             # same thing
-aibox claude session get 3f2a         # print your prompts from that session
-aibox claude session delete 3f2a 9d0e # remove sessions, asking for each one
-aibox claude session delete -y        # remove every session without asking
+aibox claude session                    # list this profile's sessions, newest first
+aibox claude session list               # same thing
+aibox claude session get 3f2a           # print your prompts from that session
+aibox claude session delete 3f2a 9d0e   # remove sessions, asking for each one
+aibox claude session delete -y          # remove every session without asking
 aibox claude -p risky session get 3f2a  # a different profile
 ```
 

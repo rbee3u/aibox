@@ -220,7 +220,6 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 /// transcript lists (tool/injected-only shells show an empty title) so nothing is
 /// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
-    // Collect (start_ts, id, title) for every transcript.
     let mut rows: Vec<(String, String, String)> = Vec::new();
     for f in backend.files(home) {
         let s = backend.summarize(&f);
@@ -232,14 +231,14 @@ fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
         eprintln!(">> no sessions in this profile");
         return Ok(0);
     }
-    // Newest first: sort by the raw ISO timestamp descending (matches `sort -r`
-    // on the ts-prefixed lines — ISO-8601 sorts lexically).
+    // Newest first: ISO-8601 sorts lexically, so a plain string sort works.
     rows.sort_by(|a, b| b.0.cmp(&a.0));
 
     for (ts, id, title) in rows {
-        let short = &id[..id.len().min(8)];
+        // By chars, not bytes: ids come from arbitrary transcript file names,
+        // and a byte slice could split a multi-byte char and panic.
+        let short: String = id.chars().take(8).collect();
         let disp = fmt_ts(&ts);
-        // %-8s  %-16s  %s
         println!("{short:<8}  {disp:<16}  {title}");
     }
     Ok(0)
@@ -480,6 +479,40 @@ mod tests {
         .unwrap();
 
         assert_eq!(targets, vec![path]);
+    }
+
+    #[test]
+    fn dispatch_rejects_bad_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let err = |action: &str, ids: &[&str], yes: bool| -> String {
+            let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+            dispatch(AgentKind::Claude, home, action, &ids, yes)
+                .unwrap_err()
+                .to_string()
+        };
+
+        assert!(err("frobnicate", &[], false).contains("unknown session action"));
+        assert!(err("list", &["3f2a"], false).contains("does not accept ids"));
+        assert!(err("list", &[], true).contains("does not use -y"));
+        assert!(err("get", &[], false).contains("need a session id"));
+        assert!(err("get", &["a", "b"], false).contains("accepts exactly one id"));
+        assert!(err("get", &[], true).contains("does not use -y"));
+    }
+
+    #[test]
+    fn resolve_ambiguous_prefix_lists_all_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session(dir.path(), "11112222");
+        write_session(dir.path(), "11113333");
+
+        let err = resolve(&TestBackend, dir.path(), "1111")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("ambiguous id '1111' matches 2 sessions"));
+        assert!(err.contains("11112222"));
+        assert!(err.contains("11113333"));
     }
 
     #[test]

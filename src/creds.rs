@@ -17,17 +17,30 @@
 //! cleanup, so secrets must never be written into profile homes.
 
 use anyhow::{Context, Result};
+use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 /// Paths to unlink if a fatal signal arrives. A plain `Mutex<Vec<..>>` behind a
 /// `OnceLock`; the signal handler only does `unlink`, which is async-signal-safe
 /// via `rustix`, and a best-effort `try_lock` (see [`cleanup_from_signal`]).
-static PENDING: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+///
+/// Stored pre-converted to NUL-terminated [`CString`]s: the conversion from
+/// `Path` allocates, so it happens at registration time (normal context), never
+/// inside the signal handler.
+static PENDING: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
 static HANDLER_INSTALLED: OnceLock<()> = OnceLock::new();
 
-fn pending() -> &'static Mutex<Vec<PathBuf>> {
+fn pending() -> &'static Mutex<Vec<CString>> {
     PENDING.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Convert a path to the NUL-terminated form `unlink` takes, so the signal
+/// handler can pass it through without allocating. Unix paths cannot contain
+/// NUL, so the conversion cannot fail for paths that exist on disk.
+fn path_cstring(path: &Path) -> CString {
+    use std::os::unix::ffi::OsStrExt;
+    CString::new(path.as_os_str().as_bytes()).expect("on-disk path contains no NUL")
 }
 
 /// Install SIGINT/SIGTERM handlers (once per process) that unlink every pending
@@ -50,14 +63,15 @@ fn install_signal_handler() {
     }
 }
 
-/// Unlink every pending path. Called from a signal handler, so it avoids
-/// allocation and uses only `unlink`. `try_lock` avoids deadlock if we were
-/// interrupted mid-`register`; in the worst case a file is missed.
+/// Unlink every pending path. Called from a signal handler, so it must not
+/// allocate: the paths are already `CString`s and `unlink(&CStr)` passes them
+/// straight to the syscall. `try_lock` avoids deadlock if we were interrupted
+/// mid-`register`; in the worst case a file is missed.
 fn cleanup_from_signal() {
     if let Some(lock) = PENDING.get() {
         if let Ok(paths) = lock.try_lock() {
             for p in paths.iter() {
-                let _ = rustix::fs::unlink(p);
+                let _ = rustix::fs::unlink(p.as_c_str());
             }
         }
     }
@@ -67,8 +81,9 @@ fn cleanup_from_signal() {
 /// guards' `Drop`, so the normal-exit cleanup can't diverge between them.
 fn remove_and_unregister(path: &Path) {
     let _ = std::fs::remove_file(path);
+    let c = path_cstring(path);
     if let Ok(mut v) = pending().lock() {
-        v.retain(|p| p != path);
+        v.retain(|p| *p != c);
     }
 }
 
@@ -87,9 +102,9 @@ impl StagedFile {
         install_signal_handler();
 
         let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-        // NamedTempFile is created 0600 on Unix. We persist it to a stable path
-        // we control so we can hand the path to Docker, then manage deletion
-        // ourselves (persist disarms tempfile's own drop-time unlink).
+        // NamedTempFile is created 0600 on Unix. `keep()` disarms tempfile's
+        // drop-time unlink so the file survives for Docker to read; deletion is
+        // ours (StagedFile's Drop + the signal handler) from here on.
         let named = tempfile::Builder::new()
             .prefix(prefix)
             .rand_bytes(6)
@@ -103,7 +118,7 @@ impl StagedFile {
             .keep()
             .map_err(|e| anyhow::anyhow!("persist temp file: {e}"))?;
 
-        pending().lock().unwrap().push(path.clone());
+        pending().lock().unwrap().push(path_cstring(&path));
         Ok(StagedFile { path })
     }
 
@@ -135,15 +150,19 @@ pub struct GuardedPath {
 impl GuardedPath {
     /// Ensure `path` exists as a file. If it was absent, create it with
     /// `placeholder` contents at 0600 and mark it for removal on drop / signal.
-    /// If it already existed, leave it untouched and don't remove it later.
+    /// If it already existed, leave it untouched and don't remove it later —
+    /// unless it holds exactly `placeholder`: that's our own leftover from a
+    /// run killed before cleanup (SIGKILL skips both `Drop` and the signal
+    /// handler), so re-adopt it rather than mistake it for a real login file.
     pub fn ensure(path: PathBuf, placeholder: &str) -> Result<Self> {
         install_signal_handler();
-        let created = !path.exists();
+        let created = !path.exists()
+            || std::fs::read_to_string(&path).is_ok_and(|contents| contents == placeholder);
         if created {
             std::fs::write(&path, placeholder)
                 .with_context(|| format!("pre-create mount target {}", path.display()))?;
             crate::profile::set_600(&path)?;
-            pending().lock().unwrap().push(path.clone());
+            pending().lock().unwrap().push(path_cstring(&path));
         }
         Ok(GuardedPath { path, created })
     }
@@ -154,5 +173,74 @@ impl Drop for GuardedPath {
         if self.created {
             remove_and_unregister(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One test, not two: the pending set is process-global, and a parallel test
+    // touching it while `cleanup_from_signal` runs would make `try_lock` miss.
+    #[test]
+    fn staged_file_cleanup_paths() {
+        // Drop path: file unlinked and unregistered.
+        let staged = StagedFile::create("aibox-test-drop.", "secret\n").unwrap();
+        let path = staged.path().to_path_buf();
+        let c = path_cstring(&path);
+        assert!(pending().lock().unwrap().contains(&c));
+        // Staged secrets must never be readable by anyone else.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        drop(staged);
+        assert!(!path.exists());
+        assert!(!pending().lock().unwrap().contains(&c));
+
+        // Signal path: the handler-side unlink removes a registered file.
+        // `cleanup_from_signal` is deliberately best-effort (`try_lock`), so a
+        // parallel test staging its own file can turn one attempt into a
+        // no-op — retry instead of flaking.
+        let staged = StagedFile::create("aibox-test-signal.", "secret\n").unwrap();
+        let path = staged.path().to_path_buf();
+        assert!(path.exists());
+        for _ in 0..100 {
+            cleanup_from_signal();
+            if !path.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!path.exists(), "signal cleanup should unlink staged file");
+        drop(staged); // remove is a no-op on the already-gone file
+
+        // GuardedPath: an absent path is created as our placeholder and
+        // removed again on drop.
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.json");
+        let g = GuardedPath::ensure(fresh.clone(), "{}\n").unwrap();
+        assert!(g.created, "absent path means we own the file");
+        assert!(fresh.is_file());
+        drop(g);
+        assert!(!fresh.exists(), "created placeholder is removed on drop");
+
+        // GuardedPath: a pre-existing real file is never touched.
+        let real = dir.path().join("auth.json");
+        std::fs::write(&real, "{\"OPENAI_API_KEY\":\"k\"}\n").unwrap();
+        let g = GuardedPath::ensure(real.clone(), "{}\n").unwrap();
+        assert!(!g.created);
+        drop(g);
+        assert!(real.exists(), "real auth.json must survive");
+
+        // GuardedPath: a leftover placeholder (SIGKILL'd run) is re-adopted
+        // and cleaned up instead of being treated as a real file forever.
+        let leftover = dir.path().join("leftover.json");
+        std::fs::write(&leftover, "{}\n").unwrap();
+        let g = GuardedPath::ensure(leftover.clone(), "{}\n").unwrap();
+        assert!(g.created, "placeholder contents mean we own the file");
+        drop(g);
+        assert!(!leftover.exists(), "re-adopted placeholder is removed");
     }
 }

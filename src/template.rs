@@ -1,9 +1,9 @@
 //! Env-file templates (single source, shared by first-run scaffolding and
-//! `sync`) plus the version-stamp reader.
+//! `refresh`) plus the version-stamp reader.
 //!
 //! Every line is a comment: each key is documented, then shown as a commented
 //! `#KEY=example`. The user sets one by adding a real line under its example. The
-//! first line is a `# aibox-template: vN` stamp so `sync` can tell a file's
+//! first line is a `# aibox-template: vN` stamp so `refresh` can tell a file's
 //! vintage — bump [`crate::agent::TEMPLATE_VERSION`] whenever a template here
 //! changes.
 
@@ -94,8 +94,8 @@ const CODEX_BASE: &str = "\
 # Each item is documented, then shown as a commented #EXAMPLE. To set one, add
 # a real line under its example — leave the example itself as living reference.
 
-# The model this relay serves. Codex uses ONE model plus a reasoning knob
-# (no haiku/sonnet/opus tiers).
+# Default model for every relay; a relay that sets CODEX_MODEL overrides it.
+# Codex uses ONE model plus a reasoning knob (no haiku/sonnet/opus tiers).
 #CODEX_MODEL=replace-with-model
 
 # Reasoning effort: none|minimal|low|medium|high|xhigh|max|ultra.

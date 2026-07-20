@@ -3,7 +3,7 @@
 //!
 //! This library holds all the logic; the `aibox` binary (`main.rs`) is a thin
 //! shell that parses argv and calls [`run`]. Splitting it this way keeps the
-//! merge, `sync`, session parsing, and arg handling as plain functions with
+//! merge, `refresh`, session parsing, and arg handling as plain functions with
 //! `#[test]`s.
 //!
 //! The two agents diverge only through [`agent::AgentKind`]; everything else is
@@ -16,9 +16,9 @@ pub mod docker;
 pub mod envfile;
 pub mod platform;
 pub mod profile;
+pub mod refresh;
 pub mod runspec;
 pub mod session;
-pub mod sync;
 pub mod template;
 
 use agent::AgentKind;
@@ -36,8 +36,8 @@ fn image_for(agent: AgentKind) -> String {
 
 /// Top-level dispatch. `passthrough` is the argv tail after `--` (agent args).
 ///
-/// `build` owns image construction. `sync` / `session` short-circuit a run and
-/// never touch Docker. A plain run flows through `run_agent`.
+/// `build` owns image construction. `refresh` / `session` short-circuit a run
+/// and never touch Docker. A plain run flows through `run_agent`.
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
     match cli.command {
         Command::Build(args) => run_build(&args),
@@ -52,10 +52,19 @@ fn run_agent_command(
     passthrough: &[String],
 ) -> Result<i32> {
     if let Some(action) = &args.action {
+        // `--` args are for the agent; refresh/session never start one, and
+        // silently dropping them would hide a misuse.
+        if !passthrough.is_empty() {
+            anyhow::bail!(
+                "`-- <args>` applies only to a run; refresh/session take no pass-through args"
+            );
+        }
         let root = profile::config_root(agent)?;
         let prof = Profile::resolve(agent, &root, &args.run.profile);
         return match action {
-            Action::Sync { target, dry_run } => sync::run_sync(&prof, target.as_deref(), *dry_run),
+            Action::Refresh { target, dry_run } => {
+                refresh::run_refresh(&prof, target.as_deref(), *dry_run)
+            }
             Action::Session { action, ids, yes } => {
                 session::dispatch(agent, &prof.home_dir, action, ids, *yes)
             }
@@ -116,15 +125,13 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// A normal (non-sync, non-session) run: resolve the profile and relay, require
+/// A normal (non-refresh, non-session) run: resolve the profile and relay, require
 /// a pre-built image, merge config, stage credentials, assemble `docker run`,
 /// and run the agent as a child (so credential cleanup fires afterwards).
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
     let image = image_for(agent);
 
-    // Reject --exec for agents without a headless subcommand (Claude) before any
-    // work. The flag is shared in the CLI struct; whether it's supported is an
-    // AgentKind question (see `supports_exec`).
+    // Reject --exec before any work; see `AgentKind::supports_exec`.
     if run.exec && !agent.supports_exec() {
         anyhow::bail!("--exec is codex-only");
     }
@@ -157,9 +164,11 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     runspec::seed_home(agent, &prof.home_dir)?;
 
     // First use of a named relay scaffolds a stub and stops so credentials can be
-    // filled in (Ok(None)); an explicit missing path errors.
+    // filled in (Ok(None)); an explicit missing path errors. Exit 1 like the
+    // no-relay case: the agent never ran, and scripts must not read the stop
+    // as a successful run.
     let Some(relay) = prof.resolve_relay_for_run(env_name)? else {
-        return Ok(0);
+        return Ok(1);
     };
 
     // Runs never build implicitly. Build explicitly so cache policy is obvious.
@@ -178,13 +187,9 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     let merged = MergedEnv::merge(&sources);
 
     // --- assemble and run -----------------------------------------------
-    let work_dir = match &run.work {
-        Some(w) => w.clone(),
-        None => std::env::current_dir()
-            .context("get current dir for /work")?
-            .to_string_lossy()
-            .into_owned(),
-    };
+    // Absolutized + validated: Docker would read a bare relative name as a
+    // *named volume* and silently mount an empty one at /work.
+    let work_dir = runspec::resolve_work_dir(run.work.as_deref())?;
 
     let opts = RunOpts {
         env: &merged,
@@ -214,4 +219,35 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     // nothing ephemeral outlives the run.
     drop(invocation);
     Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // Both guards below bail before any profile/env/Docker work, so these run
+    // without touching the filesystem or the config root.
+
+    #[test]
+    fn refresh_and_session_reject_passthrough_args() {
+        for argv in [
+            ["aibox", "claude", "refresh"].as_slice(),
+            ["aibox", "codex", "session"].as_slice(),
+        ] {
+            let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
+            let err = run(cli, vec!["--model".into(), "opus".into()]).unwrap_err();
+            assert!(
+                err.to_string().contains("take no pass-through args"),
+                "unexpected error for {argv:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_exec_is_rejected() {
+        let cli = Cli::try_parse_from(["aibox", "claude", "--exec"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err();
+        assert!(err.to_string().contains("--exec is codex-only"));
+    }
 }

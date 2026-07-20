@@ -60,17 +60,20 @@ pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<(
     let mut child = cmd
         .spawn()
         .context("spawn docker build (is docker installed?)")?;
-    child
-        .stdin
-        .take()
-        .expect("stdin piped")
-        .write_all(dockerfile.as_bytes())
-        .context("write Dockerfile to docker build stdin")?;
+
+    // Feed the Dockerfile, then drop stdin so docker sees EOF. If docker exited
+    // early (bad flag, daemon down) the write fails with EPIPE — reap the child
+    // first and report *its* status, which carries the real error; a broken-pipe
+    // message would only mask it.
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let write_res = stdin.write_all(dockerfile.as_bytes());
+    drop(stdin);
 
     let status = child.wait().context("wait for docker build")?;
     if !status.success() {
         bail!("docker build failed ({status})");
     }
+    write_res.context("write Dockerfile to docker build stdin")?;
     Ok(())
 }
 

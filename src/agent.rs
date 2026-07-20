@@ -2,8 +2,8 @@
 //!
 //! Everything the wrapper does that differs between Claude Code and Codex is
 //! funneled through [`AgentKind`] and its methods. Shared logic (profile
-//! resolution, env merge, sync, session resolve/delete, Docker hardening) lives
-//! elsewhere and takes an `AgentKind` only to ask these questions. A divergence
+//! resolution, env merge, refresh, session resolve/delete, Docker hardening)
+//! lives elsewhere and takes an `AgentKind` only to ask these questions. A divergence
 //! that isn't expressed here is visible at the type boundary instead of hidden
 //! in copy-pasted run paths.
 
@@ -25,8 +25,8 @@ pub enum AgentKind {
 
 /// Bump when a template in [`crate::template`] changes. Existing env files carry
 /// the version they were written with (first line `# aibox-template: vN`); a run
-/// whose file lags this prints a hint to `sync`. Shared by both agents.
-pub const TEMPLATE_VERSION: u32 = 5;
+/// whose file lags this prints a hint to `refresh`. Shared by both agents.
+pub const TEMPLATE_VERSION: u32 = 6;
 
 impl AgentKind {
     /// Short lowercase tag used in paths and messages: `claude` / `codex`.
@@ -53,8 +53,7 @@ impl AgentKind {
 
     /// Whether the agent has a headless `exec` subcommand (the `--exec` flag).
     /// Codex does (`codex exec`); Claude doesn't. The flag is shared in the CLI
-    /// struct so the subcommands can share one arg type, so the rejection lives
-    /// here rather than as an inline Claude/Codex branch in [`crate::run`].
+    /// struct, so [`crate::run`] rejects it per-agent by asking here.
     pub fn supports_exec(self) -> bool {
         match self {
             AgentKind::Claude => false,
@@ -104,6 +103,21 @@ impl AgentKind {
 /// pass-through. Prepending the default flag means an explicit `--permission-mode`
 /// in the pass-through still wins.
 fn build_claude(opts: &RunOpts) -> Result<Invocation> {
+    // A relay without ANTHROPIC_BASE_URL means Claude talks to its default
+    // endpoint. Legitimate for subscription logins (credentials live in the
+    // profile home), so only warn — but say it, because a scaffolded-but-empty
+    // relay would otherwise silently skip the relay the user thinks is active.
+    if opts
+        .env
+        .get("ANTHROPIC_BASE_URL")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        eprintln!(
+            ">> note: ANTHROPIC_BASE_URL is not set in this relay — Claude will use its default endpoint"
+        );
+    }
+
     // Stage the merged env as a 0600 file Docker reads with --env-file. Held in
     // `staged` so it's unlinked once the run returns (or on signal; see creds).
     let env_file = crate::creds::StagedFile::create("aibox-env.", &opts.env.to_env_file())?;
@@ -138,14 +152,14 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // Read the keys we translate out of the merge. Unknown keys are ignored —
     // this understands exactly the set below.
     let env = opts.env;
-    let base_url = env.get("CODEX_BASE_URL").unwrap_or("");
-    let api_key = env.get("CODEX_API_KEY").unwrap_or("");
-    let model = env.get("CODEX_MODEL").unwrap_or("");
-    let reasoning = env.get("CODEX_REASONING").unwrap_or("");
-    let plan_reasoning = env.get("CODEX_PLAN_REASONING").unwrap_or("");
-    let query_params = env.get("CODEX_QUERY_PARAMS").unwrap_or("");
-    let requires_openai_auth = env.get("CODEX_REQUIRES_OPENAI_AUTH").unwrap_or("");
-    let instructions_file = env.get("CODEX_INSTRUCTIONS_FILE").unwrap_or("");
+    let base_url = env.get("CODEX_BASE_URL").unwrap_or_default();
+    let api_key = env.get("CODEX_API_KEY").unwrap_or_default();
+    let model = env.get("CODEX_MODEL").unwrap_or_default();
+    let reasoning = env.get("CODEX_REASONING").unwrap_or_default();
+    let plan_reasoning = env.get("CODEX_PLAN_REASONING").unwrap_or_default();
+    let query_params = env.get("CODEX_QUERY_PARAMS").unwrap_or_default();
+    let requires_openai_auth = env.get("CODEX_REQUIRES_OPENAI_AUTH").unwrap_or_default();
+    let instructions_file = env.get("CODEX_INSTRUCTIONS_FILE").unwrap_or_default();
 
     // Required keys.
     let mut missing = Vec::new();
@@ -183,10 +197,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         let auth_mount = opts.home_dir.join(".codex").join("auth.json");
         guarded.push(GuardedPath::ensure(auth_mount.clone(), "{}\n")?);
 
-        let auth_json = StagedFile::create(
-            "aibox-codex-auth.",
-            &format!("{{\"OPENAI_API_KEY\": \"{api_key}\"}}\n"),
-        )?;
+        let auth_json = StagedFile::create("aibox-codex-auth.", &codex_auth_json(&api_key))?;
         extra_run_args.push("-v".to_string());
         extra_run_args.push(format!(
             "{}:/home/codex/.codex/auth.json:ro",
@@ -203,7 +214,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
 
     // --- model_instructions_file: a host path bind-mounted read-only -----
     if !instructions_file.is_empty() {
-        let host = resolve_instructions_path(instructions_file)?;
+        let host = resolve_instructions_path(&instructions_file)?;
         if !host.is_file() {
             bail!("CODEX_INSTRUCTIONS_FILE not found: {}", host.display());
         }
@@ -297,12 +308,22 @@ fn push_c(cmd: &mut Vec<String>, kv: impl Into<String>) {
     cmd.push(kv.into());
 }
 
+/// The throwaway auth.json body for Codex's `requires_openai_auth` mode.
+/// Serialized with serde_json so a key containing `"` or `\` still yields
+/// valid JSON.
+fn codex_auth_json(api_key: &str) -> String {
+    format!("{}\n", serde_json::json!({ "OPENAI_API_KEY": api_key }))
+}
+
 /// Resolve a `CODEX_INSTRUCTIONS_FILE` value (a host path) to an absolute path.
-/// A leading `~/` expands against `$HOME`; an absolute path is taken as-is; a
-/// relative path is taken against the launch dir (`$PWD`). Note this is the
-/// launch cwd, *not* the `-w` work dir — the two differ when `-w` is passed.
+/// A bare `~` or leading `~/` expands against `$HOME`; an absolute path is taken
+/// as-is; a relative path is taken against the launch dir (`$PWD`). Note this is
+/// the launch cwd, *not* the `-w` work dir — the two differ when `-w` is passed.
 fn resolve_instructions_path(value: &str) -> Result<PathBuf> {
-    if let Some(rest) = value.strip_prefix("~/") {
+    if value == "~" {
+        let home = std::env::var("HOME").context("$HOME is not set for ~ expansion")?;
+        Ok(PathBuf::from(home))
+    } else if let Some(rest) = value.strip_prefix("~/") {
         let home = std::env::var("HOME").context("$HOME is not set for ~/ expansion")?;
         Ok(Path::new(&home).join(rest))
     } else if value.starts_with('/') {
@@ -321,5 +342,305 @@ mod tests {
     fn only_codex_supports_exec() {
         assert!(!AgentKind::Claude.supports_exec());
         assert!(AgentKind::Codex.supports_exec());
+    }
+
+    #[test]
+    fn instructions_path_tilde_expansion() {
+        let home = std::env::var("HOME").expect("HOME set in test env");
+        assert_eq!(
+            resolve_instructions_path("~").unwrap(),
+            PathBuf::from(&home)
+        );
+        assert_eq!(
+            resolve_instructions_path("~/x.md").unwrap(),
+            Path::new(&home).join("x.md")
+        );
+        assert_eq!(
+            resolve_instructions_path("/abs/x.md").unwrap(),
+            PathBuf::from("/abs/x.md")
+        );
+    }
+
+    #[test]
+    fn codex_auth_json_escapes_special_chars() {
+        let key = r#"sk-we"ird\key"#;
+        let body = codex_auth_json(key);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["OPENAI_API_KEY"], key);
+    }
+
+    // --- invocation building ----------------------------------------------
+    //
+    // These assert on the argv the agents actually receive. They deliberately
+    // never assert that a staged file exists on disk: staged paths live in the
+    // process-global pending set, and the creds test's signal-path check may
+    // unlink them concurrently (see creds::tests).
+
+    use crate::envfile::MergedEnv;
+
+    /// Minimal relay config satisfying build_codex's required keys.
+    const CODEX_MIN: &str =
+        "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-test\nCODEX_MODEL=gpt-test\n";
+
+    fn env_of(src: &str) -> MergedEnv {
+        MergedEnv::merge(&[src.to_string()])
+    }
+
+    fn opts<'a>(env: &'a MergedEnv, home: &'a Path) -> RunOpts<'a> {
+        RunOpts {
+            env,
+            safe: false,
+            exec: false,
+            passthrough: &[],
+            home_dir: home,
+        }
+    }
+
+    /// The value token following each `-c` flag.
+    fn c_overrides(cmd: &[String]) -> Vec<&str> {
+        cmd.windows(2)
+            .filter(|w| w[0] == "-c")
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
+        args.windows(2).any(|w| w[0] == a && w[1] == b)
+    }
+
+    /// Build and expect failure, returning the error message (`Invocation`
+    /// itself has no `Debug`, so `unwrap_err` needs the Ok side dropped first).
+    fn build_err(agent: AgentKind, o: &RunOpts) -> String {
+        agent
+            .build_invocation(o)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn claude_default_prepends_skip_permissions_before_passthrough() {
+        let env = env_of("ANTHROPIC_BASE_URL=https://relay.example\n");
+        let home = tempfile::tempdir().unwrap();
+        let passthrough = vec!["--permission-mode".to_string(), "plan".to_string()];
+        let mut o = opts(&env, home.path());
+        o.passthrough = &passthrough;
+
+        let inv = AgentKind::Claude.build_invocation(&o).unwrap();
+
+        assert_eq!(
+            inv.agent_cmd,
+            vec![
+                "--dangerously-skip-permissions",
+                "--permission-mode",
+                "plan"
+            ],
+            "default flag is prepended so an explicit pass-through flag wins"
+        );
+        assert_eq!(inv.extra_run_args[0], "--env-file");
+        assert!(inv.extra_run_args[1].contains("aibox-env."));
+        assert_eq!(inv.staged.len(), 1, "merged env is staged for cleanup");
+        assert!(inv.guarded.is_empty());
+    }
+
+    #[test]
+    fn claude_safe_keeps_permission_prompts() {
+        let env = env_of("ANTHROPIC_BASE_URL=https://relay.example\n");
+        let home = tempfile::tempdir().unwrap();
+        let mut o = opts(&env, home.path());
+        o.safe = true;
+
+        let inv = AgentKind::Claude.build_invocation(&o).unwrap();
+
+        assert!(inv.agent_cmd.is_empty(), "--safe adds no bypass flag");
+    }
+
+    #[test]
+    fn codex_missing_required_keys_are_all_listed() {
+        let home = tempfile::tempdir().unwrap();
+
+        let env = env_of("");
+        assert_eq!(
+            build_err(AgentKind::Codex, &opts(&env, home.path())),
+            "relay is missing required keys: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MODEL"
+        );
+
+        let env = env_of("CODEX_BASE_URL=https://x\nCODEX_MODEL=m\n");
+        assert_eq!(
+            build_err(AgentKind::Codex, &opts(&env, home.path())),
+            "relay is missing required keys: CODEX_API_KEY"
+        );
+    }
+
+    #[test]
+    fn codex_env_key_mode_is_the_default() {
+        let env = env_of(CODEX_MIN);
+        let home = tempfile::tempdir().unwrap();
+
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+
+        assert_eq!(inv.extra_run_args[0], "--env-file");
+        assert!(inv.extra_run_args[1].contains("aibox-codex-key."));
+        assert_eq!(inv.staged.len(), 1);
+        assert!(
+            inv.guarded.is_empty(),
+            "no auth.json mount target in env_key mode"
+        );
+
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(c.contains(&"model_provider=aibox"));
+        assert!(c.contains(&"model_providers.aibox.base_url=https://relay.example/v1"));
+        assert!(c.contains(&"model_providers.aibox.wire_api=responses"));
+        assert!(c.contains(&"model=gpt-test"));
+        assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
+        // The two auth wirings conflict in Codex's provider validation; env_key
+        // mode must not also set requires_openai_auth.
+        assert!(!c.iter().any(|v| v.contains("requires_openai_auth")));
+    }
+
+    #[test]
+    fn codex_auth_json_mode_excludes_env_key() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+
+        for truthy in ["1", "true", "yes", "on", "YES"] {
+            let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH={truthy}\n"));
+            let inv = AgentKind::Codex
+                .build_invocation(&opts(&env, home.path()))
+                .unwrap();
+
+            let mount = inv
+                .extra_run_args
+                .windows(2)
+                .find(|w| w[0] == "-v")
+                .map(|w| w[1].clone())
+                .expect("auth.json bind mount present");
+            assert!(mount.contains("aibox-codex-auth."));
+            assert!(mount.ends_with(":/home/codex/.codex/auth.json:ro"));
+            assert_eq!(inv.guarded.len(), 1, "mount target is guarded");
+            assert!(
+                !inv.extra_run_args.contains(&"--env-file".to_string()),
+                "no env-file key delivery in auth.json mode"
+            );
+
+            let c = c_overrides(&inv.agent_cmd);
+            assert!(c.contains(&"model_providers.aibox.requires_openai_auth=true"));
+            assert!(
+                !c.iter().any(|v| v.contains("env_key")),
+                "auth modes are mutually exclusive"
+            );
+        }
+
+        // A non-truthy value stays in env_key mode.
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=0\n"));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
+        assert!(inv.guarded.is_empty());
+    }
+
+    #[test]
+    fn codex_exec_subcommand_comes_first() {
+        let env = env_of(CODEX_MIN);
+        let home = tempfile::tempdir().unwrap();
+        let mut o = opts(&env, home.path());
+        o.exec = true;
+
+        let inv = AgentKind::Codex.build_invocation(&o).unwrap();
+
+        assert_eq!(
+            inv.agent_cmd[0], "exec",
+            "exec must precede the -c overrides"
+        );
+    }
+
+    #[test]
+    fn codex_permission_flags_precede_passthrough() {
+        let env = env_of(CODEX_MIN);
+        let home = tempfile::tempdir().unwrap();
+        let passthrough = vec!["-a".to_string(), "never".to_string()];
+
+        let mut o = opts(&env, home.path());
+        o.passthrough = &passthrough;
+        let cmd = AgentKind::Codex.build_invocation(&o).unwrap().agent_cmd;
+        assert_eq!(
+            &cmd[cmd.len() - 2..],
+            passthrough.as_slice(),
+            "passthrough is appended last"
+        );
+        let bypass = cmd
+            .iter()
+            .position(|t| t == "--dangerously-bypass-approvals-and-sandbox")
+            .expect("default bypasses approvals and sandbox");
+        assert!(
+            bypass < cmd.len() - 2,
+            "default flag precedes passthrough so an explicit flag wins"
+        );
+
+        o.safe = true;
+        let cmd = AgentKind::Codex.build_invocation(&o).unwrap().agent_cmd;
+        assert!(!cmd.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+        assert!(contains_pair(&cmd, "-a", "on-request"));
+        assert!(contains_pair(&cmd, "-s", "workspace-write"));
+        assert_eq!(&cmd[cmd.len() - 2..], passthrough.as_slice());
+    }
+
+    #[test]
+    fn codex_optional_overrides_injected_only_when_set() {
+        let home = tempfile::tempdir().unwrap();
+
+        let env = env_of(CODEX_MIN);
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(!c.iter().any(|v| v.starts_with("model_reasoning_effort=")));
+        assert!(!c
+            .iter()
+            .any(|v| v.starts_with("plan_mode_reasoning_effort=")));
+        assert!(!c.iter().any(|v| v.contains("query_params")));
+
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_REASONING=high\nCODEX_PLAN_REASONING=xhigh\n\
+             CODEX_QUERY_PARAMS=api-version=2025-04-01-preview,foo=bar\n"
+        ));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(c.contains(&"model_reasoning_effort=high"));
+        assert!(c.contains(&"plan_mode_reasoning_effort=xhigh"));
+        // query_params: comma-separated k=v pairs become per-key overrides.
+        assert!(c.contains(&"model_providers.aibox.query_params.api-version=2025-04-01-preview"));
+        assert!(c.contains(&"model_providers.aibox.query_params.foo=bar"));
+    }
+
+    #[test]
+    fn codex_instructions_file_mounts_ro_or_errors_when_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_INSTRUCTIONS_FILE={}\n",
+            file.path().display()
+        ));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let mount = format!("{}:{CODEX_INSTRUCTIONS_CTR}:ro", file.path().display());
+        assert!(contains_pair(&inv.extra_run_args, "-v", &mount));
+        let c = c_overrides(&inv.agent_cmd);
+        let expected = format!("model_instructions_file={CODEX_INSTRUCTIONS_CTR}");
+        assert!(c.contains(&expected.as_str()));
+
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_INSTRUCTIONS_FILE=/no/such/file.md\n"
+        ));
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+        assert!(err.contains("CODEX_INSTRUCTIONS_FILE not found"));
     }
 }

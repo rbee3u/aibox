@@ -8,7 +8,7 @@
 use crate::agent::AgentKind;
 use crate::creds::StagedFile;
 use crate::platform;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::Path;
 
@@ -25,6 +25,29 @@ const CLAUDE_SETTINGS: &str = r#"{
   }
 }
 "#;
+
+/// Resolve the `-w` work dir (or the launch cwd when absent) to an absolute
+/// path and require an existing directory. Docker reads a bare name (no `/`)
+/// as a *named volume*, so passing a relative path through would silently
+/// mount an empty volume at `/work` instead of the project.
+pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
+    let cwd = std::env::current_dir().context("get current dir for /work")?;
+    let path = match work {
+        Some(w) => {
+            let p = Path::new(w);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                cwd.join(p)
+            }
+        }
+        None => cwd,
+    };
+    if !path.is_dir() {
+        bail!("work dir is not a directory: {}", path.display());
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
 
 /// Seed agent-specific first-run files into a profile home. First use only:
 /// existing files are left untouched so customizations survive.
@@ -78,8 +101,8 @@ pub struct RunOpts<'a> {
 /// What an agent wants from a run, after translating its relay config. Combines
 /// with the shared Docker flags in [`assemble_run_args`].
 pub struct Invocation {
-    /// Extra `docker run` args the agent needs (e.g. Codex's `--env-file` for the
-    /// key, or a read-only `auth.json` / instructions mount).
+    /// Extra `docker run` args the agent needs: Claude's merged `--env-file`;
+    /// Codex's key `--env-file`, or a read-only `auth.json` / instructions mount.
     pub extra_run_args: Vec<String>,
     /// The agent command line (after the image): e.g. `--dangerously-skip-permissions`
     /// plus pass-through, or Codex's `-c` overrides.
@@ -105,7 +128,7 @@ pub fn assemble_run_args(
 ) -> Vec<String> {
     let mut a: Vec<String> = vec!["--rm".into()];
 
-    // Agent-specific credential/auth args (Codex's --env-file or auth.json mount).
+    // Agent-specific credential/auth args (env-files, auth.json mount).
     a.extend(invocation_extra.iter().cloned());
 
     // Interactive TTY only when we actually have one (so pipes still work).
@@ -141,4 +164,128 @@ pub fn assemble_run_args(
     }
 
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_work_dir_absolute_dir_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let got = resolve_work_dir(Some(dir.path().to_str().unwrap())).unwrap();
+        assert_eq!(got, dir.path().to_string_lossy());
+    }
+
+    #[test]
+    fn resolve_work_dir_relative_resolves_against_cwd() {
+        // `src` exists relative to the crate root, where cargo runs tests.
+        let got = resolve_work_dir(Some("src")).unwrap();
+        let p = Path::new(&got);
+        assert!(p.is_absolute());
+        assert_eq!(p, std::env::current_dir().unwrap().join("src"));
+    }
+
+    #[test]
+    fn resolve_work_dir_none_uses_cwd() {
+        let got = resolve_work_dir(None).unwrap();
+        assert_eq!(got, std::env::current_dir().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn resolve_work_dir_missing_or_file_errors() {
+        assert!(resolve_work_dir(Some("/no/such/dir")).is_err());
+        let f = tempfile::NamedTempFile::new().unwrap();
+        assert!(resolve_work_dir(Some(f.path().to_str().unwrap())).is_err());
+    }
+
+    fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
+        args.windows(2).any(|w| w[0] == a && w[1] == b)
+    }
+
+    #[test]
+    fn assemble_run_args_hardening_and_mount_order() {
+        let extra = vec!["--env-file".to_string(), "/tmp/aibox-env.x".to_string()];
+        let mounts = vec!["/host/cache:/cache:ro".to_string()];
+
+        let args = assemble_run_args(
+            AgentKind::Claude,
+            "/abs/work",
+            Path::new("/abs/home"),
+            &mounts,
+            &extra,
+        );
+
+        assert_eq!(args[0], "--rm");
+        assert_eq!(
+            &args[1..3],
+            ["--env-file", "/tmp/aibox-env.x"],
+            "invocation extras follow --rm"
+        );
+        let tty = if platform::has_tty() { "-it" } else { "-i" };
+        assert_eq!(args[3], tty);
+
+        // The container is the sandbox boundary; the hardening flags must
+        // survive any reshuffling of this assembly.
+        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
+        assert!(contains_pair(&args, "--cap-drop", "ALL"));
+
+        assert!(contains_pair(&args, "-v", "/abs/home:/home/claude"));
+        assert!(contains_pair(&args, "-v", "/abs/work:/work"));
+        assert!(contains_pair(&args, "-w", "/work"));
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["-v", "/host/cache:/cache:ro"],
+            "extra mounts come last"
+        );
+
+        // Linux-only flags mirror the host platform probes.
+        assert_eq!(
+            args.iter().any(|a| a == "--user"),
+            platform::is_linux(),
+            "--user is Linux-only"
+        );
+        assert_eq!(
+            contains_pair(&args, "--add-host", "host.docker.internal:host-gateway"),
+            platform::is_linux(),
+            "--add-host is Linux-only"
+        );
+    }
+
+    #[test]
+    fn assemble_run_args_mounts_home_at_agent_container_home() {
+        let args = assemble_run_args(
+            AgentKind::Codex,
+            "/abs/work",
+            Path::new("/abs/home"),
+            &[],
+            &[],
+        );
+        assert!(contains_pair(&args, "-v", "/abs/home:/home/codex"));
+    }
+
+    #[test]
+    fn seed_home_claude_seeds_once_and_preserves_customizations() {
+        let home = tempfile::tempdir().unwrap();
+
+        seed_home(AgentKind::Claude, home.path()).unwrap();
+        let status = home.path().join(".claude").join("statusline.sh");
+        let settings = home.path().join(".claude").join("settings.json");
+        assert_eq!(fs::read_to_string(&status).unwrap(), CLAUDE_STATUS_SH);
+        assert_eq!(fs::read_to_string(&settings).unwrap(), CLAUDE_SETTINGS);
+
+        // A second run must not clobber user customizations.
+        fs::write(&status, "my custom status").unwrap();
+        fs::write(&settings, "{\"mine\":true}\n").unwrap();
+        seed_home(AgentKind::Claude, home.path()).unwrap();
+        assert_eq!(fs::read_to_string(&status).unwrap(), "my custom status");
+        assert_eq!(fs::read_to_string(&settings).unwrap(), "{\"mine\":true}\n");
+    }
+
+    #[test]
+    fn seed_home_codex_creates_codex_home_dir() {
+        let home = tempfile::tempdir().unwrap();
+        seed_home(AgentKind::Codex, home.path()).unwrap();
+        assert!(home.path().join(".codex").is_dir());
+    }
 }

@@ -6,7 +6,7 @@
 //! ```text
 //!   aibox build [claude|codex] [--force]
 //!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
-//!   aibox <claude|codex> sync [base|<relay>] [--dry-run]
+//!   aibox <claude|codex> refresh [base|<relay>] [--dry-run]
 //!   aibox <claude|codex> [-p <profile>] session [list|get <id>|delete [-y] [id...]]
 //! ```
 //!
@@ -14,7 +14,7 @@
 //!
 //! The first `--` means "everything after this goes to the agent verbatim".
 //! clap's trailing-var-arg has sharp edges when it has to coexist with
-//! subcommands (`sync`/`session`), so we sidestep the whole problem:
+//! subcommands (`refresh`/`session`), so we sidestep the whole problem:
 //! [`split_passthrough`] cuts argv at the first `--` before clap ever sees it.
 //! clap parses only the left side; the right side is handed to the agent as-is.
 //!
@@ -96,8 +96,8 @@ pub enum BuildTarget {
     Codex,
 }
 
-/// Everything under an agent subcommand. The `sync` / `session` sub-subcommands
-/// are optional; with neither present this is a normal run.
+/// Everything under an agent subcommand. The `refresh` / `session`
+/// sub-subcommands are optional; with neither present this is a normal run.
 #[derive(Debug, Args)]
 pub struct AgentArgs {
     #[command(subcommand)]
@@ -107,13 +107,13 @@ pub struct AgentArgs {
     pub run: RunArgs,
 }
 
-/// The management sub-subcommands that short-circuit a run (`sync`, `session`).
-/// A plain run has no [`Action`].
+/// The management sub-subcommands that short-circuit a run (`refresh`,
+/// `session`). A plain run has no [`Action`].
 #[derive(Debug, Subcommand)]
 pub enum Action {
     /// Refresh a config file's doc/example comments to the current template,
     /// keeping every real line you added.
-    Sync {
+    Refresh {
         /// `base`, a relay name, or omitted for base + every relay.
         target: Option<String>,
         /// Print the result instead of writing it.
@@ -290,15 +290,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_sync_dry_run() {
-        let (l, _) = split_passthrough(v(&["aibox", "claude", "sync", "base", "--dry-run"]));
+    fn parses_refresh_dry_run() {
+        let (l, _) = split_passthrough(v(&["aibox", "claude", "refresh", "base", "--dry-run"]));
         let cli = Cli::try_parse_from(l).unwrap();
         match &cli.command.agent_args().unwrap().action {
-            Some(Action::Sync { target, dry_run }) => {
+            Some(Action::Refresh { target, dry_run }) => {
                 assert_eq!(target.as_deref(), Some("base"));
                 assert!(dry_run);
             }
-            _ => panic!("expected sync action"),
+            _ => panic!("expected refresh action"),
         }
     }
 
