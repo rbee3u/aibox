@@ -258,25 +258,22 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         cmd.push("exec".to_string());
     }
 
-    push_c(&mut cmd, "model_provider=aibox");
-    push_c(&mut cmd, "model_providers.aibox.name=aibox relay");
-    push_c(
-        &mut cmd,
-        format!("model_providers.aibox.base_url={base_url}"),
-    );
-    push_c(&mut cmd, "model_providers.aibox.wire_api=responses");
-    push_c(&mut cmd, format!("model={model}"));
+    push_c_string(&mut cmd, "model_provider", "aibox");
+    push_c_string(&mut cmd, "model_providers.aibox.name", "aibox relay");
+    push_c_string(&mut cmd, "model_providers.aibox.base_url", &base_url);
+    push_c_string(&mut cmd, "model_providers.aibox.wire_api", "responses");
+    push_c_string(&mut cmd, "model", &model);
 
     // Exactly one auth wiring — the two conflict in Codex's provider.validate(),
     // and Codex's built-in auth.json path only engages when env_key is unset.
     if use_auth_json {
         push_c(&mut cmd, "model_providers.aibox.requires_openai_auth=true");
     } else {
-        push_c(&mut cmd, "model_providers.aibox.env_key=OPENAI_API_KEY");
+        push_c_string(&mut cmd, "model_providers.aibox.env_key", "OPENAI_API_KEY");
     }
 
     if !reasoning.is_empty() {
-        push_c(&mut cmd, format!("model_reasoning_effort={reasoning}"));
+        push_c_string(&mut cmd, "model_reasoning_effort", &reasoning);
     }
     let effective_plan_reasoning = if plan_reasoning.is_empty() {
         reasoning.as_str()
@@ -284,16 +281,14 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         plan_reasoning.as_str()
     };
     if !effective_plan_reasoning.is_empty() {
-        push_c(
+        push_c_string(
             &mut cmd,
-            format!("plan_mode_reasoning_effort={effective_plan_reasoning}"),
+            "plan_mode_reasoning_effort",
+            effective_plan_reasoning,
         );
     }
     if !instructions_file.is_empty() {
-        push_c(
-            &mut cmd,
-            format!("model_instructions_file={CODEX_INSTRUCTIONS_CTR}"),
-        );
+        push_c_string(&mut cmd, "model_instructions_file", CODEX_INSTRUCTIONS_CTR);
     }
 
     // query_params is a TOML inline table: split k=v[,k=v…] into per-key
@@ -312,9 +307,10 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
             if pk.is_empty() {
                 bail!("CODEX_QUERY_PARAMS contains an empty key in segment {pair:?}");
             }
-            push_c(
+            push_c_string(
                 &mut cmd,
-                format!("model_providers.aibox.query_params.{pk}={pv}"),
+                &format!("model_providers.aibox.query_params.{pk}"),
+                pv,
             );
         }
     }
@@ -327,7 +323,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         // root-command only in Codex's CLI); the `-c approval_policy=…`
         // override is the exec-safe spelling of the same setting.
         if opts.exec {
-            push_c(&mut cmd, "approval_policy=on-request");
+            push_c_string(&mut cmd, "approval_policy", "on-request");
         } else {
             cmd.push("-a".into());
             cmd.push("on-request".into());
@@ -356,6 +352,17 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
 fn push_c(cmd: &mut Vec<String>, kv: impl Into<String>) {
     cmd.push("-c".to_string());
     cmd.push(kv.into());
+}
+
+/// Push a Codex string `-c key=value` override with the value encoded as a TOML
+/// basic string. Codex tries to parse `value` as TOML before falling back to a
+/// raw string; quoting here keeps values like `true` and `1` from changing type.
+fn push_c_string(cmd: &mut Vec<String>, key: &str, value: &str) {
+    push_c(cmd, format!("{key}={}", codex_config_string(value)));
+}
+
+fn codex_config_string(value: &str) -> String {
+    serde_json::Value::String(value.to_string()).to_string()
 }
 
 /// The throwaway auth.json body for Codex's `requires_openai_auth` mode.
@@ -485,6 +492,11 @@ mod tests {
         args.windows(2).any(|w| w[0] == a && w[1] == b)
     }
 
+    fn contains_c_string(overrides: &[&str], key: &str, value: &str) -> bool {
+        let expected = format!("{key}={}", codex_config_string(value));
+        overrides.iter().any(|got| *got == expected)
+    }
+
     /// Build and expect failure, returning the error message (`Invocation`
     /// itself has no `Debug`, so `unwrap_err` needs the Ok side dropped first).
     fn build_err(agent: AgentKind, o: &RunOpts) -> String {
@@ -567,11 +579,23 @@ mod tests {
         );
 
         let c = c_overrides(&inv.agent_cmd);
-        assert!(c.contains(&"model_provider=aibox"));
-        assert!(c.contains(&"model_providers.aibox.base_url=https://relay.example/v1"));
-        assert!(c.contains(&"model_providers.aibox.wire_api=responses"));
-        assert!(c.contains(&"model=gpt-test"));
-        assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
+        assert!(contains_c_string(&c, "model_provider", "aibox"));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.base_url",
+            "https://relay.example/v1"
+        ));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.wire_api",
+            "responses"
+        ));
+        assert!(contains_c_string(&c, "model", "gpt-test"));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.env_key",
+            "OPENAI_API_KEY"
+        ));
         // The two auth wirings conflict in Codex's provider validation; env_key
         // mode must not also set requires_openai_auth.
         assert!(!c.iter().any(|v| v.contains("requires_openai_auth")));
@@ -640,7 +664,11 @@ mod tests {
                 .build_invocation(&opts(&env, home.path()))
                 .unwrap();
             let c = c_overrides(&inv.agent_cmd);
-            assert!(c.contains(&"model_providers.aibox.env_key=OPENAI_API_KEY"));
+            assert!(contains_c_string(
+                &c,
+                "model_providers.aibox.env_key",
+                "OPENAI_API_KEY"
+            ));
             assert!(inv.guarded.is_empty());
         }
     }
@@ -780,7 +808,11 @@ mod tests {
             !cmd.iter().any(|t| t == "-a"),
             "no bare -a after the exec subcommand"
         );
-        assert!(c_overrides(&cmd).contains(&"approval_policy=on-request"));
+        assert!(contains_c_string(
+            &c_overrides(&cmd),
+            "approval_policy",
+            "on-request"
+        ));
         assert!(contains_pair(&cmd, "-s", "workspace-write"));
 
         // The TUI (non-exec) path keeps the flag form so an explicit `-a` in
@@ -788,7 +820,9 @@ mod tests {
         o.exec = false;
         let cmd = AgentKind::Codex.build_invocation(&o).unwrap().agent_cmd;
         assert!(contains_pair(&cmd, "-a", "on-request"));
-        assert!(!c_overrides(&cmd).contains(&"approval_policy=on-request"));
+        assert!(!c_overrides(&cmd)
+            .iter()
+            .any(|v| v.starts_with("approval_policy=")));
     }
 
     #[test]
@@ -842,9 +876,9 @@ mod tests {
             .build_invocation(&opts(&env, home.path()))
             .unwrap();
         let c = c_overrides(&inv.agent_cmd);
-        assert!(c.contains(&"model_reasoning_effort=high"));
+        assert!(contains_c_string(&c, "model_reasoning_effort", "high"));
         assert!(
-            c.contains(&"plan_mode_reasoning_effort=high"),
+            contains_c_string(&c, "plan_mode_reasoning_effort", "high"),
             "plan mode defaults to CODEX_REASONING unless explicitly overridden"
         );
 
@@ -856,14 +890,57 @@ mod tests {
             .build_invocation(&opts(&env, home.path()))
             .unwrap();
         let c = c_overrides(&inv.agent_cmd);
-        assert!(c.contains(&"model_reasoning_effort=high"));
-        assert!(c.contains(&"plan_mode_reasoning_effort=xhigh"));
+        assert!(contains_c_string(&c, "model_reasoning_effort", "high"));
+        assert!(contains_c_string(&c, "plan_mode_reasoning_effort", "xhigh"));
         // query_params: comma-separated k=v pairs become per-key overrides.
-        assert!(c.contains(&"model_providers.aibox.query_params.api-version=2025-04-01-preview"));
-        assert!(c.contains(&"model_providers.aibox.query_params.foo=bar"));
-        assert!(c.contains(&"model_providers.aibox.query_params.compound=a=b"));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.api-version",
+            "2025-04-01-preview"
+        ));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.foo",
+            "bar"
+        ));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.compound",
+            "a=b"
+        ));
         // The trailing comma above must not become a keyless `query_params.=`.
         assert!(!c.contains(&"model_providers.aibox.query_params.="));
+    }
+
+    #[test]
+    fn codex_string_overrides_are_toml_quoted() {
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_QUERY_PARAMS=enabled=true,count=1,label=needs \"quotes\"\n"
+        ));
+
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.enabled",
+            "true"
+        ));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.count",
+            "1"
+        ));
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.label",
+            "needs \"quotes\""
+        ));
+        assert!(!c.contains(&"model_providers.aibox.query_params.enabled=true"));
+        assert!(!c.contains(&"model_providers.aibox.query_params.count=1"));
     }
 
     #[test]
@@ -893,8 +970,11 @@ mod tests {
         let mount = format!("{}:{CODEX_INSTRUCTIONS_CTR}:ro", file.path().display());
         assert!(contains_pair(&inv.extra_run_args, "-v", &mount));
         let c = c_overrides(&inv.agent_cmd);
-        let expected = format!("model_instructions_file={CODEX_INSTRUCTIONS_CTR}");
-        assert!(c.contains(&expected.as_str()));
+        assert!(contains_c_string(
+            &c,
+            "model_instructions_file",
+            CODEX_INSTRUCTIONS_CTR
+        ));
 
         let env = env_of(&format!(
             "{CODEX_MIN}CODEX_INSTRUCTIONS_FILE=/no/such/file.md\n"

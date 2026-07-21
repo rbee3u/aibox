@@ -230,6 +230,7 @@ fn refresh_one(
         return Ok(true);
     }
     let old = fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    crate::envfile::check_keys(file, &old)?;
     let template = match relay_name {
         None => template::base_template(prof.agent, TEMPLATE_VERSION),
         Some(name) => template::relay_template(prof.agent, name, TEMPLATE_VERSION),
@@ -288,6 +289,35 @@ mod tests {
         assert!(
             z.starts_with("# aibox-template:"),
             "files after the bad one are still refreshed"
+        );
+    }
+
+    #[test]
+    fn run_refresh_sweep_skips_malformed_env_lines_and_exits_nonzero() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("z").unwrap(); // scaffold base + relay z
+        std::fs::write(
+            prof.envs_dir.join("z"),
+            "CODEX_BASE_URL=https://x\nCODEX_API_KEY=sk-x\nCODEX_MODEL=m\n",
+        )
+        .unwrap();
+        let bad = prof.envs_dir.join("bad");
+        let malformed = "CODEX_API_KEY = sk-x\n";
+        std::fs::write(&bad, malformed).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "a malformed env line makes the sweep fail");
+        assert_eq!(
+            std::fs::read_to_string(&bad).unwrap(),
+            malformed,
+            "malformed files are reported but not rewritten"
+        );
+        let z = std::fs::read_to_string(prof.envs_dir.join("z")).unwrap();
+        assert!(
+            z.starts_with("# aibox-template:"),
+            "valid files after the malformed one are still refreshed"
         );
     }
 
@@ -351,6 +381,27 @@ mod tests {
         assert!(run_refresh(&prof, Some("nope"), false).is_err());
         // The no-target sweep still skips missing files quietly.
         assert!(run_refresh(&prof, None, false).is_ok());
+    }
+
+    #[test]
+    fn run_refresh_explicit_malformed_env_line_errors_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("bad").unwrap(); // scaffold base + relay
+        let relay = prof.envs_dir.join("bad");
+        let malformed = "CODEX_API_KEY = sk-x\n";
+        std::fs::write(&relay, malformed).unwrap();
+
+        let err = run_refresh(&prof, Some("bad"), false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("CODEX_API_KEY = sk-x"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&relay).unwrap(),
+            malformed,
+            "explicit refresh must not rewrite a malformed env file"
+        );
     }
 
     #[test]

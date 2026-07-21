@@ -150,9 +150,15 @@ pub trait SessionBackend {
 
     /// The session start timestamp from one parsed line (fed in order with its
     /// index); the first `Some` wins and stops the lookup. Claude answers for
-    /// any line bearing a top-level `timestamp`; Codex answers only for line 0
-    /// (the `session_meta`), even when its timestamp is empty.
+    /// any line bearing a top-level `timestamp`; Codex answers for the first
+    /// `session_meta` timestamp.
     fn start_ts_of(&self, idx: usize, v: &Value) -> Option<String>;
+
+    /// Lower-confidence timestamp candidate used only when
+    /// [`start_ts_of`](Self::start_ts_of) never finds one.
+    fn fallback_start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
+        None
+    }
 
     /// A `list` row title candidate from one parsed line. The *last* non-empty
     /// candidate wins; a session with none falls back to its first typed
@@ -169,11 +175,15 @@ pub trait SessionBackend {
     /// with O(1) state; the per-agent answers come from the methods above.
     fn summarize(&self, path: &Path) -> Result<SessionSummary> {
         let mut start_ts: Option<String> = None;
+        let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
         for_each_json_line(path, |idx, v| {
             if start_ts.is_none() {
                 start_ts = self.start_ts_of(idx, v);
+            }
+            if fallback_start_ts.is_none() {
+                fallback_start_ts = self.fallback_start_ts_of(idx, v);
             }
             if first_typed.is_none() {
                 first_typed = self.typed_text(v);
@@ -186,7 +196,7 @@ pub trait SessionBackend {
         })?;
         Ok(SessionSummary {
             id: self.id_of(path),
-            start_ts: start_ts.unwrap_or_default(),
+            start_ts: start_ts.or(fallback_start_ts).unwrap_or_default(),
             title: title.or(first_typed).unwrap_or_default(),
         })
     }
