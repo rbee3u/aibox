@@ -19,6 +19,8 @@ pub mod profile;
 pub mod refresh;
 pub mod runspec;
 pub mod session;
+mod session_claude;
+mod session_codex;
 pub mod template;
 
 use agent::AgentKind;

@@ -77,12 +77,73 @@ impl PendingCleanup {
                 let _ = std::fs::remove_file(path);
             }
             PendingCleanup::Placeholder { path, contents } => {
-                if std::fs::read_to_string(path).is_ok_and(|found| found == *contents) {
+                if placeholder_matches(path, contents) {
                     let _ = std::fs::remove_file(path);
                 }
             }
         }
     }
+}
+
+/// Match an owned placeholder only when the path itself is a small regular
+/// file. Never follow a symlink or try to read a FIFO/socket: the fixed path is
+/// inside a container-writable profile home and may have changed while a run
+/// was active.
+fn placeholder_matches(path: &Path, expected: &str) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() || meta.len() != expected.len() as u64 {
+        return false;
+    }
+
+    let Ok(mut file) = open_placeholder_for_read(path) else {
+        return false;
+    };
+    let Ok(meta) = file.metadata() else {
+        return false;
+    };
+    if !meta.file_type().is_file() || meta.len() != expected.len() as u64 {
+        return false;
+    }
+
+    let mut found = Vec::with_capacity(expected.len());
+    file.read_to_end(&mut found)
+        .is_ok_and(|_| found == expected.as_bytes())
+}
+
+#[cfg(unix)]
+fn open_placeholder_for_read(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_placeholder_for_read(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().read(true).open(path)
+}
+
+fn create_placeholder_file(path: &Path, placeholder: &str) -> Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let mut file = opts
+        .open(path)
+        .with_context(|| format!("pre-create mount target {}", path.display()))?;
+    if let Err(e) = file.write_all(placeholder.as_bytes()) {
+        let _ = std::fs::remove_file(path);
+        return Err(e).with_context(|| format!("write mount target {}", path.display()));
+    }
+    Ok(())
 }
 
 /// Serializes staged-file creation with signal/test cleanup. A signal arriving
@@ -461,7 +522,19 @@ fn cleanup_pending() {
     if let Ok(_staging) = STAGING.lock() {
         if let Some(lock) = PENDING.get() {
             if let Ok(paths) = lock.lock() {
-                for p in paths.iter() {
+                // Unique staged files contain credentials; unlink every one
+                // before inspecting fixed-path placeholders, whose directory
+                // entries are writable from inside the container.
+                for p in paths
+                    .iter()
+                    .filter(|p| matches!(p, PendingCleanup::File(_)))
+                {
+                    p.cleanup();
+                }
+                for p in paths
+                    .iter()
+                    .filter(|p| matches!(p, PendingCleanup::Placeholder { .. }))
+                {
                     p.cleanup();
                 }
             }
@@ -483,7 +556,7 @@ fn unregister(path: &Path) {
 }
 
 fn remove_placeholder_and_unregister(path: &Path, placeholder: &str) {
-    if std::fs::read_to_string(path).is_ok_and(|contents| contents == placeholder) {
+    if placeholder_matches(path, placeholder) {
         let _ = std::fs::remove_file(path);
     }
     unregister(path);
@@ -609,28 +682,57 @@ impl GuardedPath {
         after_register: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<Self> {
         install_signal_handler()?;
-        let created = !path.exists()
-            || std::fs::read_to_string(&path).is_ok_and(|contents| contents == placeholder);
-        if created {
-            let _staging = STAGING.lock().unwrap();
-            pending().lock().unwrap().push(PendingCleanup::Placeholder {
-                path: path.clone(),
-                contents: placeholder.to_string(),
-            });
-            if let Err(e) = after_register(&path) {
-                remove_placeholder_and_unregister(&path, placeholder);
-                return Err(e);
-            }
-            if let Err(e) = std::fs::write(&path, placeholder) {
-                remove_placeholder_and_unregister(&path, placeholder);
-                return Err(e)
-                    .with_context(|| format!("pre-create mount target {}", path.display()));
-            }
-            if let Err(e) = crate::profile::set_600(&path) {
-                remove_placeholder_and_unregister(&path, placeholder);
-                return Err(e);
-            }
+        #[derive(Clone, Copy)]
+        enum MountTarget {
+            Missing,
+            Placeholder,
+            RealFile,
         }
+
+        let target = match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_file() => {
+                if placeholder_matches(&path, placeholder) {
+                    MountTarget::Placeholder
+                } else {
+                    MountTarget::RealFile
+                }
+            }
+            Ok(_) => anyhow::bail!("mount target is not a regular file: {}", path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => MountTarget::Missing,
+            Err(e) => {
+                return Err(e).with_context(|| format!("inspect mount target {}", path.display()));
+            }
+        };
+
+        let created = match target {
+            MountTarget::RealFile => false,
+            MountTarget::Placeholder | MountTarget::Missing => {
+                let needs_create = matches!(target, MountTarget::Missing);
+                let _staging = STAGING.lock().unwrap();
+                pending().lock().unwrap().push(PendingCleanup::Placeholder {
+                    path: path.clone(),
+                    contents: placeholder.to_string(),
+                });
+                if let Err(e) = after_register(&path) {
+                    unregister(&path);
+                    return Err(e);
+                }
+                if needs_create {
+                    if let Err(e) = create_placeholder_file(&path, placeholder) {
+                        unregister(&path);
+                        return Err(e);
+                    }
+                }
+                if !placeholder_matches(&path, placeholder) {
+                    unregister(&path);
+                    anyhow::bail!(
+                        "mount target changed before use, expected placeholder: {}",
+                        path.display()
+                    );
+                }
+                true
+            }
+        };
         Ok(GuardedPath {
             path,
             created,
@@ -654,7 +756,7 @@ impl Drop for GuardedPath {
 /// callers that won't guard the path this run but shouldn't ship a stale
 /// placeholder either (Codex env_key mode vs a dead auth.json-mode run).
 pub fn remove_stale_placeholder(path: &Path, placeholder: &str) -> Result<()> {
-    if std::fs::read_to_string(path).is_ok_and(|contents| contents == placeholder) {
+    if placeholder_matches(path, placeholder) {
         std::fs::remove_file(path)
             .with_context(|| format!("remove stale placeholder {}", path.display()))?;
     }
@@ -769,6 +871,63 @@ mod tests {
             ContainerState::Unknown
         );
         assert_eq!(parse_container_state(None), ContainerState::Unknown);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn placeholder_matcher_does_not_follow_mutated_paths() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.json");
+        let link = dir.path().join("link.json");
+        std::fs::write(&target, "{}\n").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(!placeholder_matches(&link, "{}\n"));
+
+        let fifo = dir.path().join("auth.fifo");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo {}: {}",
+            fifo.display(),
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            !placeholder_matches(&fifo, "{}\n"),
+            "special files must be rejected without a blocking read"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_path_create_new_does_not_follow_raced_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("auth.json");
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&outside, "real\n").unwrap();
+
+        let raced_auth = auth.clone();
+        let err = GuardedPath::ensure_after_register(auth.clone(), "{}\n", |_| {
+            symlink(&outside, &raced_auth).unwrap();
+            Ok(())
+        })
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("pre-create mount target"), "{err}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "real\n");
+        assert!(std::fs::symlink_metadata(&auth)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     // One test, not two: the pending set is process-global, and

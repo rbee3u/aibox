@@ -10,20 +10,22 @@ transcripts host-side). User docs in `README.md`.
 
 ```
 src/
-  main.rs        # thin bin: split argv at `--`, clap parse, call lib::run
-  lib.rs         # orchestration (run / run_agent) + module wiring
-  cli.rs         # clap types + split_passthrough
-  agent.rs       # AgentKind enum + trait-like methods — divergence point
-  profile.rs     # profile paths, config root, relay resolve/scaffold
-  envfile.rs     # base+relay merge (IndexMap: order + last-wins)
-  template.rs    # env-file templates + TEMPLATE_VERSION + stamp reader
-  refresh.rs     # refresh merge engine + file dispatch
-  session/       # transcript browsing: mod.rs (shared) + claude.rs + codex.rs
-  docker.rs      # docker build/run child processes
-  creds.rs       # 0600 temp creds + Drop + signal cleanup
-  runspec.rs     # docker-run arg assembly + Invocation + home seeding
-  platform.rs    # uid/gid, TTY, OS gate
-assets/          # Dockerfiles + status script, embedded via include_str!
+  main.rs              # thin bin: split argv at `--`, clap parse, call lib::run
+  lib.rs               # orchestration (run / run_agent) + module wiring
+  cli.rs               # clap types + split_passthrough
+  agent.rs             # AgentKind enum + trait-like methods — divergence point
+  profile.rs           # profile paths, config root, relay resolve/scaffold
+  envfile.rs           # base+relay merge (IndexMap: order + last-wins)
+  template.rs          # env-file templates + TEMPLATE_VERSION + stamp reader
+  refresh.rs           # refresh merge engine + file dispatch
+  session.rs           # transcript browsing shared dispatch + backend trait
+  session_claude.rs    # Claude transcript backend
+  session_codex.rs     # Codex transcript backend
+  docker.rs            # docker build/run child processes
+  creds.rs             # 0600 temp creds + Drop + signal cleanup
+  runspec.rs           # docker-run arg assembly + Invocation + home seeding
+  platform.rs          # uid/gid, TTY, OS gate
+assets/                # Dockerfiles + status script, embedded via include_str!
 ```
 
 ## Hard constraints
@@ -31,8 +33,9 @@ assets/          # Dockerfiles + status script, embedded via include_str!
 **Agent divergence is centralized in `AgentKind` (`agent.rs`).** Everything
 per-agent — image name, config root, container home, Dockerfile, templates,
 Docker invocation, session backend — hangs off it; shared logic is written once
-and takes an `AgentKind`. Sole exception: transcript parsing, behind `session/`
-backends. Don't special-case Claude vs Codex anywhere else.
+and takes an `AgentKind`. Sole exception: transcript parsing, behind the
+`session_claude.rs` and `session_codex.rs` backends. Don't special-case Claude
+vs Codex anywhere else.
 
 **Credentials never persist across handled exits.** API keys are staged in
 `0600` temp files and unlinked after the run — `StagedFile::drop` on the

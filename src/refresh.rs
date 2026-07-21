@@ -131,7 +131,7 @@ fn run_refresh_with_printer(
             let mut failed = false;
             match refresh_one(prof, &prof.base_file, None, dry_run, false, &mut print) {
                 Ok(true) => {}
-                Ok(false) => return Ok(0),
+                Ok(false) => return Ok(if failed { 1 } else { 0 }),
                 Err(e) => {
                     eprintln!("!! {e:#}");
                     failed = true;
@@ -171,7 +171,7 @@ fn run_refresh_with_printer(
                         }
                         match refresh_one(prof, &path, Some(name), dry_run, false, &mut print) {
                             Ok(true) => {}
-                            Ok(false) => return Ok(0),
+                            Ok(false) => return Ok(if failed { 1 } else { 0 }),
                             Err(e) => {
                                 eprintln!("!! {e:#}");
                                 failed = true;
@@ -323,7 +323,17 @@ mod tests {
             .envs_dir
             .join(OsString::from_vec(b"relay-\xff".to_vec()));
         let original = b"ANTHROPIC_BASE_URL=https://x\n";
-        std::fs::write(&invalid, original).unwrap();
+        match std::fs::write(&invalid, original) {
+            Ok(()) => {}
+            Err(e)
+                if e.kind() == std::io::ErrorKind::InvalidInput
+                    || e.kind() == std::io::ErrorKind::PermissionDenied
+                    || e.raw_os_error() == Some(libc::EILSEQ) =>
+            {
+                return;
+            }
+            Err(e) => panic!("write non-UTF-8 relay fixture: {e}"),
+        }
 
         let code = run_refresh(&prof, None, false).unwrap();
 
@@ -377,6 +387,28 @@ mod tests {
         assert_eq!(
             writes, 1,
             "sweep should stop after the first broken-pipe-style false"
+        );
+    }
+
+    #[test]
+    fn run_refresh_dry_run_preserves_prior_failure_on_hung_up_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("z").unwrap(); // scaffold base + relay z
+        std::fs::write(prof.envs_dir.join("z"), "ANTHROPIC_BASE_URL=https://x\n").unwrap();
+        std::fs::write(prof.envs_dir.join("bad"), [0u8, 159, 146, 150]).unwrap();
+        let mut writes = 0;
+
+        let code = run_refresh_with_printer(&prof, None, true, |_line| {
+            writes += 1;
+            Ok(writes < 2)
+        })
+        .unwrap();
+
+        assert_eq!(code, 1, "a prior failed file must not be hidden");
+        assert_eq!(
+            writes, 2,
+            "base prints first, bad fails, then z sees the hung-up reader"
         );
     }
 

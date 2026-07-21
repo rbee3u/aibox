@@ -28,6 +28,36 @@ pub struct Profile {
     pub base_file: PathBuf,
 }
 
+/// Whether `path` exists as an actual directory entry rather than a symlink to
+/// one. The profile home is writable from inside the container, so host-side
+/// code must not follow directory links planted there into unrelated host
+/// paths.
+pub(crate) fn real_dir_exists(path: &Path, kind: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(true),
+        Ok(_) => bail!("{kind} is not a real directory: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+}
+
+/// Create `path` when absent, then require its final directory entry to be a
+/// real directory. In particular, never accept a symlink as a Docker bind
+/// source or as an agent state directory that later host-side writes enter.
+pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
+    if real_dir_exists(path, kind)? {
+        return Ok(());
+    }
+    fs::create_dir_all(path).with_context(|| format!("create {kind} {}", path.display()))?;
+    if real_dir_exists(path, kind)? {
+        Ok(())
+    } else {
+        // `create_dir_all` returned successfully, so absence here means the
+        // path changed concurrently. Do not continue to a host bind/write.
+        bail!("{kind} disappeared while being created: {}", path.display())
+    }
+}
+
 /// How a relay endpoint was resolved. A bare name lives under `envs/` and may be
 /// scaffolded on first use; a path (contains `/` or ends `.env`) is taken as-is
 /// and never scaffolded.
@@ -131,8 +161,7 @@ impl Profile {
     /// Ensure the profile home exists (created before `docker run` so the mount
     /// doesn't shadow an image path with a root-owned empty dir).
     pub fn ensure_home(&self) -> Result<()> {
-        fs::create_dir_all(&self.home_dir)
-            .with_context(|| format!("create profile home {}", self.home_dir.display()))
+        ensure_real_dir(&self.home_dir, "profile home")
     }
 
     /// Resolve the relay for a run, scaffolding a named relay (and `base`) on
@@ -365,6 +394,27 @@ mod tests {
         assert_eq!(p.home_dir, Path::new("/root/default/home"));
         assert_eq!(p.envs_dir, Path::new("/root/default/envs"));
         assert_eq!(p.base_file, Path::new("/root/default/base"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_home_rejects_a_symlink_bind_source() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&p.dir).unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, &p.home_dir).unwrap();
+
+        let err = p.ensure_home().unwrap_err().to_string();
+
+        assert!(
+            err.contains("profile home is not a real directory"),
+            "{err}"
+        );
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
     }
 
     #[test]

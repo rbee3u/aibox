@@ -278,10 +278,15 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     if !reasoning.is_empty() {
         push_c(&mut cmd, format!("model_reasoning_effort={reasoning}"));
     }
-    if !plan_reasoning.is_empty() {
+    let effective_plan_reasoning = if plan_reasoning.is_empty() {
+        reasoning.as_str()
+    } else {
+        plan_reasoning.as_str()
+    };
+    if !effective_plan_reasoning.is_empty() {
         push_c(
             &mut cmd,
-            format!("plan_mode_reasoning_effort={plan_reasoning}"),
+            format!("plan_mode_reasoning_effort={effective_plan_reasoning}"),
         );
     }
     if !instructions_file.is_empty() {
@@ -360,27 +365,22 @@ fn codex_auth_json(api_key: &str) -> String {
     format!("{}\n", serde_json::json!({ "OPENAI_API_KEY": api_key }))
 }
 
-/// Require Codex's fixed auth path to be absent or a regular file. Reading a
-/// FIFO/socket can block forever, while writing through a dangling symlink can
-/// create a target somewhere the user did not ask us to touch.
+/// Require Codex's fixed auth path to be absent or a real regular-file entry.
+/// The profile home is container-writable, so following an auth symlink on the
+/// host could inspect or chmod a path outside the profile; FIFO/socket reads can
+/// block forever.
 fn validate_auth_path(path: &Path) -> Result<()> {
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => Ok(()),
-        Ok(meta) if meta.is_dir() => bail!(
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => Ok(()),
+        Ok(meta) if meta.file_type().is_dir() => bail!(
             "Codex auth path is a directory, expected a file: {}",
             path.display()
         ),
-        Ok(_) => bail!("Codex auth path is not a regular file: {}", path.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::symlink_metadata(path) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    bail!("Codex auth path is a dangling symlink: {}", path.display())
-                }
-                Ok(_) => bail!("Codex auth path is not a regular file: {}", path.display()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e).with_context(|| format!("inspect {}", path.display())),
-            }
+        Ok(meta) if meta.file_type().is_symlink() => {
+            bail!("Codex auth path must not be a symlink: {}", path.display())
         }
+        Ok(_) => bail!("Codex auth path is not a regular file: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("inspect {}", path.display())),
     }
 }
@@ -677,12 +677,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn codex_auth_json_special_file_errors_before_reading() {
-        use std::os::unix::net::UnixListener;
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
 
         let home = tempfile::tempdir().unwrap();
         let auth = home.path().join(".codex").join("auth.json");
         std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
-        let _socket = UnixListener::bind(&auth).unwrap();
+        let auth_c = CString::new(auth.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe { libc::mkfifo(auth_c.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo {}: {}",
+            auth.display(),
+            std::io::Error::last_os_error()
+        );
 
         for mode in ["", "CODEX_REQUIRES_OPENAI_AUTH=1\n"] {
             let env = env_of(&format!("{CODEX_MIN}{mode}"));
@@ -708,8 +717,34 @@ mod tests {
         let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=1\n"));
         let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
 
-        assert!(err.contains("Codex auth path is a dangling symlink"));
+        assert!(err.contains("Codex auth path must not be a symlink"));
         assert!(!missing.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_json_regular_symlink_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        let outside = home.path().join("outside-auth.json");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        std::fs::write(&outside, AUTH_PLACEHOLDER).unwrap();
+        symlink(&outside, &auth).unwrap();
+
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=1\n"));
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+
+        assert!(
+            err.contains("Codex auth path must not be a symlink"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), AUTH_PLACEHOLDER);
+        assert!(std::fs::symlink_metadata(&auth)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]
@@ -801,6 +836,17 @@ mod tests {
             .iter()
             .any(|v| v.starts_with("plan_mode_reasoning_effort=")));
         assert!(!c.iter().any(|v| v.contains("query_params")));
+
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REASONING=high\n"));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(c.contains(&"model_reasoning_effort=high"));
+        assert!(
+            c.contains(&"plan_mode_reasoning_effort=high"),
+            "plan mode defaults to CODEX_REASONING unless explicitly overridden"
+        );
 
         let env = env_of(&format!(
             "{CODEX_MIN}CODEX_REASONING=high\nCODEX_PLAN_REASONING=xhigh\n\

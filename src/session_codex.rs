@@ -16,7 +16,7 @@
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
 
-use super::SessionBackend;
+use crate::session::{self, SessionBackend};
 use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -46,8 +46,10 @@ pub struct Codex;
 
 impl SessionBackend for Codex {
     fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
-        let base = home.join(".codex").join("sessions");
-        super::walk_jsonl(&base, |name| name.starts_with("rollout-"))
+        let Some(base) = session::checked_session_dir(home, &[".codex", "sessions"])? else {
+            return Ok(Vec::new());
+        };
+        session::walk_jsonl(&base, |name| name.starts_with("rollout-"))
     }
 
     fn id_of(&self, path: &Path) -> String {
@@ -71,7 +73,7 @@ impl SessionBackend for Codex {
     /// `Some` for line 0 — even an empty timestamp there settles the lookup,
     /// matching the old "line 0 or nothing" behavior — and `None` after it.
     fn start_ts_of(&self, idx: usize, v: &Value) -> Option<String> {
-        (idx == 0).then(|| super::ts_of(v))
+        (idx == 0).then(|| session::ts_of(v))
     }
 }
 

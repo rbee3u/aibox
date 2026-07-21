@@ -4,12 +4,9 @@
 //!
 //! [`serde_json`] parses each JSONL line, so string decoding (UTF-8, `\uXXXX`,
 //! surrogate pairs) falls out for free. The two agents differ only in *where* the
-//! fields live; that difference is the two [`SessionBackend`] impls ([`claude`],
-//! [`codex`]). Everything below — file discovery glue, id-prefix resolution,
-//! newest-first listing, and delete confirmation — is shared.
-
-pub mod claude;
-pub mod codex;
+//! fields live; that difference is the two agent-specific backend modules.
+//! Everything below — file discovery glue, id-prefix resolution, newest-first
+//! listing, and delete confirmation — is shared.
 
 use crate::agent::AgentKind;
 use crate::print_line;
@@ -17,6 +14,24 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+
+/// Resolve a transcript directory only through real directory entries beneath
+/// the profile home. The home is writable by the container, so following an
+/// agent-planted `.claude`/`.codex` ancestor link here could make host-side
+/// `session delete` remove transcripts outside the profile.
+pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {
+    let mut path = home.to_path_buf();
+    if !crate::profile::real_dir_exists(&path, "profile home")? {
+        return Ok(None);
+    }
+    for component in components {
+        path.push(component);
+        if !crate::profile::real_dir_exists(&path, "session directory")? {
+            return Ok(None);
+        }
+    }
+    Ok(Some(path))
+}
 
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
 /// those whose file name passes `keep`. Empty if `base` isn't a directory. Shared
@@ -113,8 +128,9 @@ pub struct Prompt {
     pub text: String,
 }
 
-/// The per-agent on-disk transcript format. The two impls ([`claude::Claude`],
-/// [`codex::Codex`]) diverge only in the four required methods below — *where*
+/// The per-agent on-disk transcript format. The two impls
+/// (`session_claude::Claude`, `session_codex::Codex`) diverge only in the four
+/// required methods below — *where*
 /// each field lives on a line and which lines count as a real prompt. The two
 /// summary/get loops that consume those answers ([`summarize`](Self::summarize) /
 /// [`prompts`](Self::prompts)) are written once here as provided methods, so the
@@ -196,8 +212,8 @@ pub trait SessionBackend {
 /// session trait objects.
 pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     match agent {
-        AgentKind::Claude => Box::new(claude::Claude),
-        AgentKind::Codex => Box::new(codex::Codex),
+        AgentKind::Claude => Box::new(crate::session_claude::Claude),
+        AgentKind::Codex => Box::new(crate::session_codex::Codex),
     }
 }
 
@@ -431,7 +447,10 @@ mod tests {
 
     impl SessionBackend for TestBackend {
         fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
-            walk_jsonl(&home.join("sessions"), |_| true)
+            let Some(base) = checked_session_dir(home, &["sessions"])? else {
+                return Ok(Vec::new());
+            };
+            walk_jsonl(&base, |_| true)
         }
 
         fn id_of(&self, path: &Path) -> String {
@@ -501,6 +520,54 @@ mod tests {
         assert!(
             files.is_empty(),
             "host-side browsing must not follow symlinks"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_discovery_rejects_a_symlinked_profile_home() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let actual_home = root.path().join("actual-home");
+        let linked_home = root.path().join("linked-home");
+        write_session(&actual_home, "11111111");
+        symlink(&actual_home, &linked_home).unwrap();
+
+        let err = TestBackend.files(&linked_home).unwrap_err().to_string();
+
+        assert!(
+            err.contains("profile home is not a real directory"),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_discovery_rejects_a_symlinked_agent_state_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let outside = root.path().join("outside-claude");
+        let transcript = outside.join("projects/p/11111111.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "{}\n").unwrap();
+        std::fs::create_dir(&home).unwrap();
+        symlink(&outside, home.join(".claude")).unwrap();
+
+        let err = crate::session_claude::Claude
+            .files(&home)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("session directory is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            transcript.exists(),
+            "outside transcript must remain untouched"
         );
     }
 

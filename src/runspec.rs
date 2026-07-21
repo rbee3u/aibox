@@ -9,7 +9,9 @@ use crate::agent::AgentKind;
 use crate::creds::StagedFile;
 use crate::platform;
 use anyhow::{bail, Context, Result};
+#[cfg(test)]
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 /// The Claude status-line script, embedded so a fresh profile home gets it
@@ -33,7 +35,13 @@ const CLAUDE_SETTINGS: &str = r#"{
 /// needs this: container targets are fixed (`/work`, the agent home) or
 /// validated separately.
 pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
-    if path.to_string_lossy().contains(':') {
+    let Some(path_str) = path.to_str() else {
+        bail!(
+            "{kind} path is not valid UTF-8 and cannot be represented safely for docker: {}",
+            path.display()
+        );
+    };
+    if path_str.contains(':') {
         bail!(
             "{kind} path contains ':', which docker -v cannot represent: {}",
             path.display()
@@ -63,7 +71,10 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
         bail!("work dir is not a directory: {}", path.display());
     }
     reject_colon_in_bind_source("work dir", &path)?;
-    Ok(path.to_string_lossy().into_owned())
+    Ok(path
+        .to_str()
+        .context("work dir path is not valid UTF-8")?
+        .to_string())
 }
 
 /// Resolve the host side of each `-m host:container[:ro]` mount to an absolute
@@ -90,13 +101,37 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
                 bail!("mount host path does not exist: {}", host_path.display());
             }
             reject_colon_in_bind_source("mount host", &host_path)?;
-            Ok(format!("{}:{rest}", host_path.display()))
+            let host_path = host_path
+                .to_str()
+                .context("mount host path is not valid UTF-8")?;
+            Ok(format!("{host_path}:{rest}"))
         })
         .collect()
 }
 
+/// Atomically seed one file without replacing any existing directory entry —
+/// including a dangling symlink. Agent homes are writable inside the container,
+/// so a check-then-`fs::write` sequence could otherwise follow a link planted by
+/// an earlier run and create a file outside the profile on the host.
+fn seed_file_if_absent(path: &Path, contents: &str) -> Result<()> {
+    let parent = path.parent().context("seed path has no parent directory")?;
+    let mut replacement = tempfile::Builder::new()
+        .prefix(".aibox-seed.")
+        .tempfile_in(parent)
+        .with_context(|| format!("prepare seed file for {}", path.display()))?;
+    replacement
+        .write_all(contents.as_bytes())
+        .with_context(|| format!("write seed file for {}", path.display()))?;
+    match replacement.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e.error).with_context(|| format!("seed {}", path.display())),
+    }
+}
+
 /// Seed agent-specific first-run files into a profile home. First use only:
-/// existing files are left untouched so customizations survive.
+/// existing files are left untouched so customizations survive. Agent state
+/// directories must be real directories, never links out of the writable home.
 ///
 /// - Claude: the status-line script + a `settings.json` wiring it.
 /// - Codex: `.codex/` (CODEX_HOME), which Codex refuses to start without and
@@ -105,25 +140,17 @@ pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
     match agent {
         AgentKind::Claude => {
             let claude_dir = home_dir.join(".claude");
-            fs::create_dir_all(&claude_dir)
-                .with_context(|| format!("create {}", claude_dir.display()))?;
+            crate::profile::ensure_real_dir(&claude_dir, "Claude state directory")?;
             let status_dst = claude_dir.join("statusline.sh");
-            if !status_dst.exists() {
-                fs::write(&status_dst, CLAUDE_STATUS_SH)
-                    .with_context(|| format!("seed {}", status_dst.display()))?;
-            }
+            seed_file_if_absent(&status_dst, CLAUDE_STATUS_SH)?;
             let settings = claude_dir.join("settings.json");
-            if !settings.exists() {
-                fs::write(&settings, CLAUDE_SETTINGS)
-                    .with_context(|| format!("seed {}", settings.display()))?;
-            }
+            seed_file_if_absent(&settings, CLAUDE_SETTINGS)?;
         }
         AgentKind::Codex => {
             // Codex refuses to start if CODEX_HOME (=/home/codex/.codex) is not a
             // directory; the mount shadows the image copy, so create it host-side.
             let codex_dir = home_dir.join(".codex");
-            fs::create_dir_all(&codex_dir)
-                .with_context(|| format!("create {}", codex_dir.display()))?;
+            crate::profile::ensure_real_dir(&codex_dir, "Codex state directory")?;
         }
     }
     Ok(())
@@ -272,6 +299,20 @@ mod tests {
         assert!(err.contains("contains ':'"), "{err}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn reject_bind_source_that_would_be_lossily_rewritten() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"/tmp/non-utf8-\xff"));
+        let err = reject_colon_in_bind_source("work dir", path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not valid UTF-8"), "{err}");
+    }
+
     #[test]
     fn resolve_mounts_absolutizes_and_validates_host_side() {
         let dir = tempfile::tempdir().unwrap();
@@ -408,5 +449,47 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         seed_home(AgentKind::Codex, home.path()).unwrap();
         assert!(home.path().join(".codex").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_home_rejects_symlinked_agent_state_directories() {
+        use std::os::unix::fs::symlink;
+
+        for (agent, state) in [(AgentKind::Claude, ".claude"), (AgentKind::Codex, ".codex")] {
+            let home = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            symlink(outside.path(), home.path().join(state)).unwrap();
+
+            let err = seed_home(agent, home.path()).unwrap_err().to_string();
+
+            assert!(err.contains("is not a real directory"), "{err}");
+            assert!(
+                fs::read_dir(outside.path()).unwrap().next().is_none(),
+                "seeding {agent:?} must not write through its state-directory link"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_seed_does_not_follow_a_dangling_file_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude");
+        fs::create_dir(&claude).unwrap();
+        let outside = home.path().join("outside-statusline");
+        let status = claude.join("statusline.sh");
+        symlink(&outside, &status).unwrap();
+
+        seed_home(AgentKind::Claude, home.path()).unwrap();
+
+        assert!(!outside.exists(), "seed must not create the symlink target");
+        assert!(fs::symlink_metadata(&status)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(claude.join("settings.json").is_file());
     }
 }
