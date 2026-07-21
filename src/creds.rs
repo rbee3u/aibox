@@ -38,7 +38,7 @@
 //! forever.
 
 use anyhow::{Context, Result};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -519,16 +519,19 @@ impl StagedFile {
         install_signal_handler()?;
 
         let dir = staging_temp_dir();
+        // Hold the staging lock before the file exists. Otherwise a fatal
+        // signal could land after tempfile creation but before registration;
+        // the watcher would have no path to unlink before exiting the process.
+        let _staging = STAGING.lock().unwrap();
         // NamedTempFile is created 0600 on Unix. `keep()` disarms tempfile's
         // drop-time unlink so the file survives for Docker to read; deletion is
         // ours (StagedFile's Drop + the signal watcher) from here on.
-        let named = tempfile::Builder::new()
+        let mut named = tempfile::Builder::new()
             .prefix(prefix)
             .rand_bytes(6)
             .tempfile_in(&dir)
             .with_context(|| format!("create temp file in {}", dir.display()))?;
         let path = named.path().to_path_buf();
-        let _staging = STAGING.lock().unwrap();
         pending()
             .lock()
             .unwrap()
@@ -543,7 +546,7 @@ impl StagedFile {
             remove_and_unregister(&path);
             return Err(e);
         }
-        if let Err(e) = std::fs::write(&path, contents) {
+        if let Err(e) = named.write_all(contents.as_bytes()) {
             remove_and_unregister(&path);
             return Err(e).with_context(|| format!("write staged file {}", path.display()));
         }
@@ -650,10 +653,12 @@ impl Drop for GuardedPath {
 /// [`GuardedPath::ensure`]'s re-adoption; anything else is left alone. For
 /// callers that won't guard the path this run but shouldn't ship a stale
 /// placeholder either (Codex env_key mode vs a dead auth.json-mode run).
-pub fn remove_stale_placeholder(path: &Path, placeholder: &str) {
+pub fn remove_stale_placeholder(path: &Path, placeholder: &str) -> Result<()> {
     if std::fs::read_to_string(path).is_ok_and(|contents| contents == placeholder) {
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path)
+            .with_context(|| format!("remove stale placeholder {}", path.display()))?;
     }
+    Ok(())
 }
 
 #[cfg(test)]

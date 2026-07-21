@@ -238,31 +238,37 @@ fn reject_yes(action: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a full id or unique prefix to exactly one transcript path. An exact
-/// id always wins, even when it prefixes other ids (otherwise that session
-/// could never be addressed at all). Zero matches or an ambiguous prefix fail
-/// with a message (the ambiguous case lists the candidates).
+/// Resolve a full id or unique prefix to exactly one transcript path. A single
+/// exact id wins even when it prefixes other ids (otherwise that session could
+/// never be addressed at all), but duplicate exact ids remain ambiguous rather
+/// than selecting whichever directory the filesystem happened to visit first.
+/// Zero matches or ambiguous candidates fail with a message.
 fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
     if query.is_empty() {
         bail!("need a session id (or unique prefix)");
     }
-    let mut matches: Vec<PathBuf> = Vec::new();
+    let mut exact_matches: Vec<PathBuf> = Vec::new();
+    let mut prefix_matches: Vec<PathBuf> = Vec::new();
     for f in backend.files(home)? {
         let id = backend.id_of(&f);
         if id == query {
-            return Ok(f);
-        }
-        if id.starts_with(query) {
-            matches.push(f);
+            exact_matches.push(f);
+        } else if id.starts_with(query) {
+            prefix_matches.push(f);
         }
     }
+    let matches = if exact_matches.is_empty() {
+        prefix_matches
+    } else {
+        exact_matches
+    };
     match matches.len() {
         0 => bail!("no session matches: {query}"),
         1 => Ok(matches.into_iter().next().unwrap()),
         n => {
             let mut msg = format!("ambiguous id '{query}' matches {n} sessions:");
             for m in &matches {
-                msg.push_str(&format!("\n     {}", backend.id_of(m)));
+                msg.push_str(&format!("\n     {}  {}", backend.id_of(m), m.display()));
             }
             bail!(msg)
         }
@@ -603,6 +609,25 @@ mod tests {
         let got = resolve(&TestBackend, dir.path(), "1111").unwrap();
 
         assert_eq!(got, exact);
+    }
+
+    #[test]
+    fn resolve_duplicate_exact_ids_is_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("sessions/a/11111111.jsonl");
+        let second = dir.path().join("sessions/b/11111111.jsonl");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(&first, "{}\n").unwrap();
+        std::fs::write(&second, "{}\n").unwrap();
+
+        let err = resolve(&TestBackend, dir.path(), "11111111")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("ambiguous id '11111111' matches 2 sessions"));
+        assert!(err.contains(&first.display().to_string()));
+        assert!(err.contains(&second.display().to_string()));
     }
 
     #[test]

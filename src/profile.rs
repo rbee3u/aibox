@@ -251,8 +251,33 @@ impl Profile {
     /// reported later (or by docker) couldn't point back at the file to fix.
     pub fn merge_sources(&self, relay_path: &Path) -> Result<Vec<String>> {
         let mut out = Vec::new();
-        if self.base_file.is_file() {
-            out.push(read_env_source(&self.base_file)?);
+        match fs::metadata(&self.base_file) {
+            Ok(meta) if meta.is_file() => out.push(read_env_source(&self.base_file)?),
+            Ok(_) => bail!(
+                "base config path is not a regular file: {}",
+                self.base_file.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // `metadata` follows symlinks. Distinguish a genuinely absent
+                // optional base from a dangling symlink, which must not be
+                // silently treated as "no base".
+                match fs::symlink_metadata(&self.base_file) {
+                    Ok(_) => bail!(
+                        "base config path is not a regular file: {}",
+                        self.base_file.display()
+                    ),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("inspect base config {}", self.base_file.display())
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("inspect base config {}", self.base_file.display()));
+            }
         }
         out.push(read_env_source(relay_path)?);
         Ok(out)
@@ -488,6 +513,42 @@ mod tests {
 
         assert!(err.contains(&relay.display().to_string()), "{err}");
         assert!(err.contains("CODEX_API_KEY = sk-x"), "{err}");
+    }
+
+    #[test]
+    fn merge_sources_rejects_non_file_base_instead_of_ignoring_it() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        p.resolve_relay_for_run("r").unwrap();
+        fs::remove_file(&p.base_file).unwrap();
+        fs::create_dir(&p.base_file).unwrap();
+
+        let err = p
+            .merge_sources(&p.envs_dir.join("r"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("base config path is not a regular file"));
+        assert!(err.contains(&p.base_file.display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_sources_rejects_dangling_base_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        p.resolve_relay_for_run("r").unwrap();
+        fs::remove_file(&p.base_file).unwrap();
+        symlink(root.path().join("missing-base"), &p.base_file).unwrap();
+
+        let err = p
+            .merge_sources(&p.envs_dir.join("r"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("base config path is not a regular file"));
     }
 
     #[cfg(unix)]

@@ -154,11 +154,14 @@ fn run_refresh_with_printer(
                         if !path.is_file() {
                             continue;
                         }
-                        let name = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("")
-                            .to_string();
+                        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                            eprintln!(
+                                "!! relay filename is not valid UTF-8, skipping: {}",
+                                path.display()
+                            );
+                            failed = true;
+                            continue;
+                        };
                         // Hidden files (`.DS_Store` and friends) are never named
                         // relays; skipping them keeps a stray binary file from
                         // aborting the sweep. Explicit path targets still reach
@@ -166,7 +169,7 @@ fn run_refresh_with_printer(
                         if name.starts_with('.') {
                             continue;
                         }
-                        match refresh_one(prof, &path, Some(&name), dry_run, false, &mut print) {
+                        match refresh_one(prof, &path, Some(name), dry_run, false, &mut print) {
                             Ok(true) => {}
                             Ok(false) => return Ok(0),
                             Err(e) => {
@@ -305,6 +308,27 @@ mod tests {
         let code = run_refresh(&prof, None, false).unwrap();
 
         assert_eq!(code, 1, "a skipped relay directory must not report success");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_sweep_leaves_non_utf8_relay_names_untouched() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap();
+        let invalid = prof
+            .envs_dir
+            .join(OsString::from_vec(b"relay-\xff".to_vec()));
+        let original = b"ANTHROPIC_BASE_URL=https://x\n";
+        std::fs::write(&invalid, original).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1);
+        assert_eq!(std::fs::read(&invalid).unwrap(), original);
     }
 
     #[test]

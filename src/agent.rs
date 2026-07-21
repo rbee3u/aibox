@@ -202,12 +202,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     };
 
     let auth_mount = opts.home_dir.join(".codex").join("auth.json");
-    if auth_mount.is_dir() {
-        bail!(
-            "Codex auth path is a directory, expected a file: {}",
-            auth_mount.display()
-        );
-    }
+    validate_auth_path(&auth_mount)?;
     if use_auth_json {
         // Pre-create the mount target so Docker over-mounts an existing file
         // (virtiofs can't create a target nested in the /home/codex mount). Only
@@ -216,10 +211,10 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
 
         let auth_json = StagedFile::create("aibox-codex-auth.", &codex_auth_json(&api_key))?;
         extra_run_args.push("-v".to_string());
-        extra_run_args.push(format!(
-            "{}:/home/codex/.codex/auth.json:ro",
-            auth_json.path().display()
-        ));
+        extra_run_args.push(read_only_bind(
+            auth_json.path(),
+            "/home/codex/.codex/auth.json",
+        )?);
         staged.push(auth_json);
     } else {
         // A `{}` placeholder left by a SIGKILL'd auth.json-mode run would sit
@@ -234,7 +229,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         // establishes its bind mount. Running both auth modes against one
         // profile at the same time is unsupported for this reason; use separate
         // profiles (`-p`) if you need them concurrently.
-        crate::creds::remove_stale_placeholder(&auth_mount, AUTH_PLACEHOLDER);
+        crate::creds::remove_stale_placeholder(&auth_mount, AUTH_PLACEHOLDER)?;
 
         let key_env =
             StagedFile::create("aibox-codex-key.", &format!("OPENAI_API_KEY={api_key}\n"))?;
@@ -250,7 +245,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
             bail!("CODEX_INSTRUCTIONS_FILE not found: {}", host.display());
         }
         extra_run_args.push("-v".to_string());
-        extra_run_args.push(format!("{}:{CODEX_INSTRUCTIONS_CTR}:ro", host.display()));
+        extra_run_args.push(read_only_bind(&host, CODEX_INSTRUCTIONS_CTR)?);
     }
 
     // --- build the Codex invocation --------------------------------------
@@ -365,16 +360,48 @@ fn codex_auth_json(api_key: &str) -> String {
     format!("{}\n", serde_json::json!({ "OPENAI_API_KEY": api_key }))
 }
 
+/// Require Codex's fixed auth path to be absent or a regular file. Reading a
+/// FIFO/socket can block forever, while writing through a dangling symlink can
+/// create a target somewhere the user did not ask us to touch.
+fn validate_auth_path(path: &Path) -> Result<()> {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => Ok(()),
+        Ok(meta) if meta.is_dir() => bail!(
+            "Codex auth path is a directory, expected a file: {}",
+            path.display()
+        ),
+        Ok(_) => bail!("Codex auth path is not a regular file: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    bail!("Codex auth path is a dangling symlink: {}", path.display())
+                }
+                Ok(_) => bail!("Codex auth path is not a regular file: {}", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e).with_context(|| format!("inspect {}", path.display())),
+            }
+        }
+        Err(e) => Err(e).with_context(|| format!("inspect {}", path.display())),
+    }
+}
+
+/// Render a read-only Docker bind after applying the same source-path check as
+/// `/work`, profile home, and user-supplied mounts.
+fn read_only_bind(source: &Path, target: &str) -> Result<String> {
+    crate::runspec::reject_colon_in_bind_source("bind source", source)?;
+    Ok(format!("{}:{target}:ro", source.display()))
+}
+
 /// Resolve a `CODEX_INSTRUCTIONS_FILE` value (a host path) to an absolute path.
 /// A bare `~` or leading `~/` expands against `$HOME`; an absolute path is taken
 /// as-is; a relative path is taken against the launch dir (`$PWD`). Note this is
 /// the launch cwd, *not* the `-w` work dir — the two differ when `-w` is passed.
 fn resolve_instructions_path(value: &str) -> Result<PathBuf> {
     if value == "~" {
-        let home = std::env::var("HOME").context("$HOME is not set for ~ expansion")?;
+        let home = crate::env_override("HOME")?.context("$HOME is not set for ~ expansion")?;
         Ok(PathBuf::from(home))
     } else if let Some(rest) = value.strip_prefix("~/") {
-        let home = std::env::var("HOME").context("$HOME is not set for ~/ expansion")?;
+        let home = crate::env_override("HOME")?.context("$HOME is not set for ~/ expansion")?;
         Ok(Path::new(&home).join(rest))
     } else if value.starts_with('/') {
         Ok(PathBuf::from(value))
@@ -647,6 +674,44 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_json_special_file_errors_before_reading() {
+        use std::os::unix::net::UnixListener;
+
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        let _socket = UnixListener::bind(&auth).unwrap();
+
+        for mode in ["", "CODEX_REQUIRES_OPENAI_AUTH=1\n"] {
+            let env = env_of(&format!("{CODEX_MIN}{mode}"));
+            let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+            assert!(
+                err.contains("Codex auth path is not a regular file"),
+                "special auth paths should fail without being read: {err}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_json_dangling_symlink_errors_before_write() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        let missing = home.path().join("missing-target");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        symlink(&missing, &auth).unwrap();
+
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=1\n"));
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+
+        assert!(err.contains("Codex auth path is a dangling symlink"));
+        assert!(!missing.exists());
+    }
+
     #[test]
     fn codex_exec_subcommand_comes_first() {
         let env = env_of(CODEX_MIN);
@@ -790,5 +855,13 @@ mod tests {
         ));
         let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
         assert!(err.contains("CODEX_INSTRUCTIONS_FILE not found"));
+    }
+
+    #[test]
+    fn codex_read_only_binds_reject_colons_in_host_path() {
+        let err = read_only_bind(Path::new("/tmp/with:colon"), CODEX_INSTRUCTIONS_CTR)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("contains ':'"), "{err}");
     }
 }

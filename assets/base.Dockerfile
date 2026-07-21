@@ -7,7 +7,7 @@
 #   aibox build codex
 #   aibox build claude
 
-FROM debian:bookworm
+FROM debian:bookworm-slim
 
 # Resolve curl|jq pipelines correctly (fail the layer if either side fails).
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -18,18 +18,48 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG TARGETARCH
 
 # Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo,
-# Rust crates, and node native modules), jq, and the handful of CLIs coding
-# agents shell out to.
+# Rust crates, and node native modules), plus the common development and
+# diagnostic commands an agent needs while investigating a project.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git \
-        curl \
-        ca-certificates \
-        less \
-        jq \
-        xz-utils \
-        ripgrep \
-        openssh-client \
+        bind9-dnsutils \
         build-essential \
+        bzip2 \
+        ca-certificates \
+        cmake \
+        curl \
+        file \
+        gawk \
+        gdb \
+        git \
+        htop \
+        iproute2 \
+        iputils-ping \
+        jq \
+        less \
+        libssl-dev \
+        lsof \
+        netcat-openbsd \
+        ninja-build \
+        openssh-client \
+        openssl \
+        patch \
+        pkg-config \
+        procps \
+        psmisc \
+        ripgrep \
+        rsync \
+        shellcheck \
+        socat \
+        sqlite3 \
+        strace \
+        tree \
+        unzip \
+        vim-tiny \
+        wget \
+        xxd \
+        xz-utils \
+        zip \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Python ------------------------------------------------------------------
