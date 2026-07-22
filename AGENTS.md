@@ -10,21 +10,21 @@ transcripts host-side). User docs in `README.md`.
 
 ```
 src/
-  main.rs              # thin bin: split argv at `--`, clap parse, call lib::run
   lib.rs               # orchestration (run / run_agent) + module wiring
-  cli.rs               # clap types + split_passthrough
+  main.rs              # thin bin: split argv at `--`, clap parse, call lib::run
   agent.rs             # AgentKind enum + trait-like methods — divergence point
-  profile.rs           # profile paths, config root, relay resolve/scaffold
+  cli.rs               # clap types + split_passthrough
+  creds.rs             # 0600 temp creds + Drop + signal cleanup
+  docker.rs            # docker build/run child processes
   envfile.rs           # base+relay merge (IndexMap: order + last-wins)
-  template.rs          # env-file templates + TEMPLATE_VERSION + stamp reader
+  platform.rs          # uid/gid, TTY, OS gate
+  profile.rs           # profile paths, config root, relay resolve/scaffold
   refresh.rs           # refresh merge engine + file dispatch
+  runspec.rs           # docker-run arg assembly + Invocation + home seeding
   session.rs           # transcript browsing shared dispatch + backend trait
   session_claude.rs    # Claude transcript backend
   session_codex.rs     # Codex transcript backend
-  docker.rs            # docker build/run child processes
-  creds.rs             # 0600 temp creds + Drop + signal cleanup
-  runspec.rs           # docker-run arg assembly + Invocation + home seeding
-  platform.rs          # uid/gid, TTY, OS gate
+  template.rs          # env-file templates + TEMPLATE_VERSION + stamp reader
 assets/                # Dockerfiles + status script, embedded via include_str!
 ```
 
@@ -39,11 +39,20 @@ vs Codex anywhere else.
 
 **Credentials never persist across handled exits.** API keys are staged in
 `0600` temp files and unlinked after the run — `StagedFile::drop` on the
-normal/error path, a SIGINT/SIGTERM handler on the interrupt path (`Drop` does
-**not** run on a signal); both live in `creds.rs`. Docker runs as a child
-(`Command::status()`), never an exec-replace, so the guards get to drop.
-Register any new staged credential through `creds.rs`, and never write secrets
-into profile homes — SIGKILL skips all cleanup.
+normal/error path, a SIGINT/SIGTERM/SIGHUP watcher on the interrupt path
+(`Drop` does **not** run on a signal); both live in `creds.rs`. Docker runs as a
+spawned child (`Command::spawn()` + `wait()`), never an exec-replace, so the
+guards get to drop. Register any new staged credential or fixed-path placeholder
+through `creds.rs`; the `docker run` pid and cidfile are registered there too,
+so don't bypass `docker::run` or wrapper-only signals can leave a container
+running. Never write secrets into profile homes — SIGKILL skips all cleanup.
+
+**Managed Docker mounts define the boundary.** `runspec.rs` owns `/work`, the
+per-agent container home, and every extra bind mount. Always resolve and
+validate host bind sources before passing them to Docker: relative sources can
+become named volumes, and `:` breaks `-v` parsing. User `-m` mounts may be
+nested under managed targets, but must not replace `/work` or
+`AgentKind::container_home()`.
 
 **config.toml stays the user's (Codex).** The endpoint is injected only via
 runtime `-c key=value` overrides (`agent.rs::build_codex`), never written to

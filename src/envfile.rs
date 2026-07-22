@@ -150,6 +150,7 @@ mod tests {
 
     #[test]
     fn bare_key_resolves_from_host_env() {
+        let _env_lock = crate::test_env_lock();
         // A bare `KEY` line passes the host value through (docker --env-file
         // semantics); `get` must agree with what the container will see.
         let m = MergedEnv::merge(&[s("AIBOX_TEST_BARE_PASSTHROUGH\n")]);

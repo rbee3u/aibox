@@ -60,6 +60,16 @@ impl SessionBackend for Codex {
         session::walk_jsonl(&base, |name| name.starts_with("rollout-"))
     }
 
+    fn list_files(&self, home: &Path) -> Result<session::SessionDiscovery> {
+        let Some(base) = session::checked_session_dir(home, &[".codex", "sessions"])? else {
+            return Ok(session::SessionDiscovery {
+                files: Vec::new(),
+                errors: Vec::new(),
+            });
+        };
+        session::walk_jsonl_tolerant(&base, |name| name.starts_with("rollout-"))
+    }
+
     fn id_of(&self, path: &Path) -> String {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         // The uuid is the trailing 36 chars of the stem (rollout-<date>-<uuid>).

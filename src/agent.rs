@@ -19,6 +19,7 @@ const CODEX_INSTRUCTIONS_CTR: &str = "/aibox-instructions.md";
 /// ownership marker: a file holding exactly this is ours (a leftover from a
 /// SIGKILL'd run), anything else is the user's real login file.
 const AUTH_PLACEHOLDER: &str = "{}\n";
+const CODEX_AUTH_LOCK: &str = "codex-auth-json.lock";
 
 /// Which agent a run targets. Selected by the `aibox claude` / `aibox codex`
 /// subcommand.
@@ -202,12 +203,17 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     };
 
     let auth_mount = opts.home_dir.join(".codex").join("auth.json");
+    let auth_lock = codex_auth_lock_path(opts.profile_dir);
     validate_auth_path(&auth_mount)?;
     if use_auth_json {
         // Pre-create the mount target so Docker over-mounts an existing file
         // (virtiofs can't create a target nested in the /home/codex mount). Only
         // a placeholder we create is removed later; a real login auth.json stays.
-        guarded.push(GuardedPath::ensure(auth_mount.clone(), AUTH_PLACEHOLDER)?);
+        guarded.push(GuardedPath::ensure(
+            auth_mount.clone(),
+            auth_lock.clone(),
+            AUTH_PLACEHOLDER,
+        )?);
 
         let auth_json = StagedFile::create("aibox-codex-auth.", &codex_auth_json(&api_key))?;
         extra_run_args.push("-v".to_string());
@@ -222,15 +228,11 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         // login with no tokens (auth.json presence = "logged in"), a phantom
         // auth state alongside the real env_key auth. It's ours
         // (content-checked), so clear it; a real login file stays.
-        //
-        // Caveat: this content check can't tell our own leftover from the `{}`
-        // placeholder an auth.json-mode run is *actively* using on the same
-        // profile — clearing it here would break that concurrent run before it
-        // establishes its bind mount. Running both auth modes against one
-        // profile at the same time is unsupported for this reason; use separate
-        // profiles (`-p`) if you need them concurrently.
-        crate::creds::remove_stale_placeholder(&auth_mount, AUTH_PLACEHOLDER)?;
+        // A host-only profile lock keeps this cleanup from racing an auth.json
+        // mode run that is still waiting for Docker to establish its bind mount.
+        crate::creds::remove_stale_placeholder(&auth_mount, &auth_lock, AUTH_PLACEHOLDER)?;
 
+        validate_env_file_value("CODEX_API_KEY", &api_key)?;
         let key_env =
             StagedFile::create("aibox-codex-key.", &format!("OPENAI_API_KEY={api_key}\n"))?;
         extra_run_args.push("--env-file".to_string());
@@ -301,12 +303,17 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
             .map(str::trim)
             .filter(|p| !p.is_empty())
         {
-            let (pk, pv) = pair.split_once('=').unwrap_or((pair, ""));
+            let Some((pk, pv)) = pair.split_once('=') else {
+                bail!(
+                    "CODEX_QUERY_PARAMS segment {pair:?} must be k=v (use {pair}= for an empty value)"
+                );
+            };
             let pk = pk.trim();
             let pv = pv.trim();
             if pk.is_empty() {
                 bail!("CODEX_QUERY_PARAMS contains an empty key in segment {pair:?}");
             }
+            let pk = toml_key_segment(pk);
             push_c_string(
                 &mut cmd,
                 &format!("model_providers.aibox.query_params.{pk}"),
@@ -365,11 +372,33 @@ fn codex_config_string(value: &str) -> String {
     serde_json::Value::String(value.to_string()).to_string()
 }
 
+fn toml_key_segment(key: &str) -> String {
+    if key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        key.to_string()
+    } else {
+        codex_config_string(key)
+    }
+}
+
 /// The throwaway auth.json body for Codex's `requires_openai_auth` mode.
 /// Serialized with serde_json so a key containing `"` or `\` still yields
 /// valid JSON.
 fn codex_auth_json(api_key: &str) -> String {
     format!("{}\n", serde_json::json!({ "OPENAI_API_KEY": api_key }))
+}
+
+fn codex_auth_lock_path(profile_dir: &Path) -> PathBuf {
+    profile_dir.join(".locks").join(CODEX_AUTH_LOCK)
+}
+
+fn validate_env_file_value(name: &str, value: &str) -> Result<()> {
+    if value.chars().any(char::is_control) {
+        bail!("{name} must not contain control characters when staged as a Docker env-file value");
+    }
+    Ok(())
 }
 
 /// Require Codex's fixed auth path to be absent or a real regular-file entry.
@@ -470,14 +499,23 @@ mod tests {
         MergedEnv::merge(&[src.to_string()])
     }
 
-    fn opts<'a>(env: &'a MergedEnv, home: &'a Path) -> RunOpts<'a> {
+    fn opts_with_profile<'a>(
+        env: &'a MergedEnv,
+        home: &'a Path,
+        profile_dir: &'a Path,
+    ) -> RunOpts<'a> {
         RunOpts {
             env,
             safe: false,
             exec: false,
             passthrough: &[],
             home_dir: home,
+            profile_dir,
         }
+    }
+
+    fn opts<'a>(env: &'a MergedEnv, home: &'a Path) -> RunOpts<'a> {
+        opts_with_profile(env, home, home)
     }
 
     /// The value token following each `-c` flag.
@@ -622,6 +660,68 @@ mod tests {
             .build_invocation(&opts(&env, home.path()))
             .unwrap();
         assert!(auth.exists(), "real auth.json survives env_key mode");
+    }
+
+    #[test]
+    fn codex_auth_lock_is_host_only_profile_state() {
+        let profile = tempfile::tempdir().unwrap();
+        let home = profile.path().join("home");
+        let auth = home.join(".codex").join("auth.json");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        let lock = codex_auth_lock_path(profile.path());
+        let old_home_lock = home.join(".codex").join(".auth.json.aibox.lock");
+
+        let env = env_of(CODEX_MIN);
+        std::fs::write(&auth, AUTH_PLACEHOLDER).unwrap();
+        let _inv = AgentKind::Codex
+            .build_invocation(&opts_with_profile(&env, &home, profile.path()))
+            .unwrap();
+
+        assert!(!auth.exists(), "env_key mode clears stale placeholders");
+        assert!(
+            lock.is_file(),
+            "env_key stale cleanup uses the profile-level lock"
+        );
+        assert!(
+            !old_home_lock.exists(),
+            "auth lock must not live under the mounted Codex home"
+        );
+
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=1\n"));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts_with_profile(&env, &home, profile.path()))
+            .unwrap();
+
+        assert_eq!(inv.guarded.len(), 1);
+        assert!(
+            lock.is_file(),
+            "auth_json mode uses the same profile-level lock"
+        );
+        assert!(
+            !old_home_lock.exists(),
+            "auth_json mode must not recreate the old home-side lock"
+        );
+    }
+
+    #[test]
+    fn codex_env_key_mode_rejects_control_chars_in_key() {
+        let env = env_of(
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-bad\tkey\nCODEX_MODEL=gpt-test\n",
+        );
+        let home = tempfile::tempdir().unwrap();
+
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+
+        assert!(err.contains("CODEX_API_KEY"), "{err}");
+    }
+
+    #[test]
+    fn env_file_value_validation_rejects_newlines() {
+        let err = validate_env_file_value("CODEX_API_KEY", "sk-line1\nINJECTED=1")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("CODEX_API_KEY"), "{err}");
     }
 
     #[test]
@@ -944,6 +1044,53 @@ mod tests {
     }
 
     #[test]
+    fn codex_query_param_keys_are_toml_key_segments() {
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_QUERY_PARAMS=api-version=1,$select=id,foo.bar=baz,needs\"quote=value\n"
+        ));
+
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+
+        assert_eq!(toml_key_segment("api-version"), "api-version");
+        assert_eq!(toml_key_segment("$select"), "\"$select\"");
+        assert_eq!(toml_key_segment("foo.bar"), "\"foo.bar\"");
+        assert_eq!(toml_key_segment("needs\"quote"), "\"needs\\\"quote\"");
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.api-version",
+            "1"
+        ));
+        assert!(contains_c_string(
+            &c,
+            &format!(
+                "model_providers.aibox.query_params.{}",
+                toml_key_segment("$select")
+            ),
+            "id"
+        ));
+        assert!(contains_c_string(
+            &c,
+            &format!(
+                "model_providers.aibox.query_params.{}",
+                toml_key_segment("foo.bar")
+            ),
+            "baz"
+        ));
+        assert!(contains_c_string(
+            &c,
+            &format!(
+                "model_providers.aibox.query_params.{}",
+                toml_key_segment("needs\"quote")
+            ),
+            "value"
+        ));
+    }
+
+    #[test]
     fn codex_query_params_reject_empty_key() {
         let home = tempfile::tempdir().unwrap();
         let env = env_of(&format!(
@@ -953,6 +1100,28 @@ mod tests {
         let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
 
         assert!(err.contains("CODEX_QUERY_PARAMS contains an empty key"));
+    }
+
+    #[test]
+    fn codex_query_params_require_equals_but_allow_explicit_empty_value() {
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!("{CODEX_MIN}CODEX_QUERY_PARAMS=api-version\n"));
+
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+
+        assert!(err.contains("CODEX_QUERY_PARAMS segment"), "{err}");
+        assert!(err.contains("must be k=v"), "{err}");
+
+        let env = env_of(&format!("{CODEX_MIN}CODEX_QUERY_PARAMS=api-version=\n"));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.api-version",
+            ""
+        ));
     }
 
     #[test]

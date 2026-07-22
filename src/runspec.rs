@@ -109,6 +109,69 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
+/// Reject extra bind mounts that replace or shadow a mount `aibox` manages
+/// itself. Nested mounts are allowed; replacing `/work`, the agent home, or an
+/// ancestor of either silently changes the wrapper's core isolation/state
+/// semantics.
+pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Result<()> {
+    for mount in mounts {
+        let target = bind_target(mount)?;
+        let target = normalize_container_target(target)?;
+        if shadows_managed_target(&target, "/work")
+            || shadows_managed_target(&target, agent.container_home())
+        {
+            bail!(
+                "extra mount target {target:?} would override or shadow an aibox-managed mount; choose a nested target instead: {mount}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn shadows_managed_target(target: &str, managed: &str) -> bool {
+    target == managed
+        || target == "/"
+        || managed
+            .strip_prefix(target)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn bind_target(mount: &str) -> Result<&str> {
+    let (_, rest) = mount
+        .split_once(':')
+        .with_context(|| format!("invalid resolved mount: {mount}"))?;
+    let target = rest
+        .split_once(':')
+        .map(|(target, _)| target)
+        .unwrap_or(rest);
+    if target.is_empty() {
+        bail!("invalid resolved mount target: {mount}");
+    }
+    Ok(target)
+}
+
+fn normalize_container_target(target: &str) -> Result<String> {
+    if !target.starts_with('/') {
+        bail!("container mount target must be absolute: {target:?}");
+    }
+
+    let mut parts: Vec<&str> = Vec::new();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        Ok("/".to_string())
+    } else {
+        Ok(format!("/{}", parts.join("/")))
+    }
+}
+
 /// Atomically seed one file without replacing any existing directory entry —
 /// including a dangling symlink. Agent homes are writable inside the container,
 /// so a check-then-`fs::write` sequence could otherwise follow a link planted by
@@ -169,6 +232,9 @@ pub struct RunOpts<'a> {
     pub passthrough: &'a [String],
     /// The profile home dir on the host (mounted at the container home).
     pub home_dir: &'a Path,
+    /// The profile root on the host. Not mounted into the container; used for
+    /// host-only coordination state such as short-lived lock files.
+    pub profile_dir: &'a Path,
 }
 
 /// What an agent wants from a run, after translating its relay config. Combines
@@ -186,6 +252,16 @@ pub struct Invocation {
     /// Guarded fixed-path files (Codex's pre-created `auth.json` mount target),
     /// removed on drop only if we created them. Held for the run's duration.
     pub guarded: Vec<crate::creds::GuardedPath>,
+}
+
+impl Invocation {
+    /// Release locks that are only needed until Docker has accepted the bind
+    /// mount setup. The guarded paths themselves stay alive until the run ends.
+    pub fn release_spawn_locks(&mut self) {
+        for guarded in &mut self.guarded {
+            guarded.release_spawn_lock();
+        }
+    }
 }
 
 /// Build the full `docker run` argument list (everything between `docker run`
@@ -340,6 +416,49 @@ mod tests {
         // The container target must be present and absolute.
         assert!(resolve_mounts(&["src:".to_string()]).is_err());
         assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
+    }
+
+    #[test]
+    fn extra_mounts_must_not_replace_managed_targets() {
+        for (agent, target) in [
+            (AgentKind::Claude, "/work"),
+            (AgentKind::Claude, "/work/"),
+            (AgentKind::Claude, "/work/."),
+            (AgentKind::Claude, "/work/../work"),
+            (AgentKind::Claude, "/work/.."),
+            (AgentKind::Claude, "//work"),
+            (AgentKind::Claude, "/"),
+            (AgentKind::Claude, "/home"),
+            (AgentKind::Claude, "/home/claude"),
+            (AgentKind::Claude, "/home/claude/.."),
+            (AgentKind::Codex, "/"),
+            (AgentKind::Codex, "/home"),
+            (AgentKind::Codex, "/home/codex/../codex"),
+            (AgentKind::Codex, "/home/codex/.."),
+            (AgentKind::Codex, "/home/codex"),
+        ] {
+            let err = validate_extra_mount_targets(agent, &[format!("/host:{target}:ro")])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("would override or shadow an aibox-managed mount"),
+                "managed target {target:?} should be rejected: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_mounts_allow_nested_and_unmanaged_targets() {
+        validate_extra_mount_targets(
+            AgentKind::Codex,
+            &[
+                "/host:/work/cache:ro".to_string(),
+                "/host:/home/codex/.cache:ro".to_string(),
+                "/host:/cache:ro".to_string(),
+                "/host:/home/claude:ro".to_string(),
+            ],
+        )
+        .unwrap();
     }
 
     fn contains_pair(args: &[String], a: &str, b: &str) -> bool {

@@ -23,12 +23,20 @@ pub fn base_template(agent: AgentKind, ver: u32) -> String {
 /// line.
 pub fn relay_template(agent: AgentKind, name: &str, ver: u32) -> String {
     let stamp = format!("# aibox-template: v{ver}\n");
+    let name = one_line_header_value(name);
     let header = format!("# {name} — relay endpoint, merged onto ../base (this file wins).\n");
     let body = match agent {
         AgentKind::Claude => CLAUDE_RELAY,
         AgentKind::Codex => CODEX_RELAY,
     };
     format!("{stamp}{header}{body}")
+}
+
+fn one_line_header_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Read a file's first-line `# aibox-template: vN` stamp, returning N (0 if the
@@ -160,6 +168,17 @@ mod tests {
     fn relay_header_names_the_relay() {
         let t = relay_template(AgentKind::Codex, "openrouter", 3);
         assert!(t.contains("# openrouter — relay endpoint"));
+    }
+
+    #[test]
+    fn relay_header_replaces_control_chars_with_spaces() {
+        let t = relay_template(AgentKind::Claude, "bad\nACTIVE=1\tname", 3);
+        assert!(t.contains("# bad ACTIVE=1 name — relay endpoint"));
+        assert!(
+            t.lines()
+                .all(|line| line.is_empty() || line.starts_with('#')),
+            "control characters in a relay display name must not create active lines"
+        );
     }
 
     #[test]

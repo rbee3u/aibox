@@ -26,6 +26,16 @@ impl SessionBackend for Claude {
         session::walk_jsonl(&base, |_| true)
     }
 
+    fn list_files(&self, home: &Path) -> Result<session::SessionDiscovery> {
+        let Some(base) = session::checked_session_dir(home, &[".claude", "projects"])? else {
+            return Ok(session::SessionDiscovery {
+                files: Vec::new(),
+                errors: Vec::new(),
+            });
+        };
+        session::walk_jsonl_tolerant(&base, |_| true)
+    }
+
     fn id_of(&self, path: &Path) -> String {
         path.file_stem()
             .and_then(|s| s.to_str())

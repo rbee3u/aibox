@@ -33,6 +33,22 @@ pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Op
     Ok(Some(path))
 }
 
+/// Transcript discovery for `session list`: usable files plus non-fatal walk
+/// errors that should be reported without hiding every readable transcript.
+pub struct SessionDiscovery {
+    pub files: Vec<PathBuf>,
+    pub errors: Vec<String>,
+}
+
+impl SessionDiscovery {
+    fn from_files(files: Vec<PathBuf>) -> Self {
+        SessionDiscovery {
+            files,
+            errors: Vec::new(),
+        }
+    }
+}
+
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
 /// those whose file name passes `keep`. Empty if `base` isn't a directory. Shared
 /// by both backends' `files()`; they differ only in the base dir and the filter
@@ -59,6 +75,41 @@ pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec
             && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
         {
             out.push(p.to_path_buf());
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn walk_jsonl_tolerant(
+    base: &Path,
+    keep: impl Fn(&str) -> bool,
+) -> Result<SessionDiscovery> {
+    match std::fs::symlink_metadata(base) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => bail!("session path is not a directory: {}", base.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionDiscovery::from_files(Vec::new()));
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("inspect session directory {}", base.display()));
+        }
+    }
+    let mut out = SessionDiscovery::from_files(Vec::new());
+    for entry in walkdir::WalkDir::new(base) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                out.errors
+                    .push(format!("walk session directory {}: {e}", base.display()));
+                continue;
+            }
+        };
+        let p = entry.path();
+        if entry.file_type().is_file()
+            && p.extension().is_some_and(|e| e == "jsonl")
+            && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
+        {
+            out.files.push(p.to_path_buf());
         }
     }
     Ok(out)
@@ -138,6 +189,12 @@ pub struct Prompt {
 pub trait SessionBackend {
     /// All transcript files under this profile home (empty if none yet).
     fn files(&self, home: &Path) -> Result<Vec<PathBuf>>;
+
+    /// Transcript files for `session list`. Backends can override this with a
+    /// tolerant walk so one bad child path does not hide every readable session.
+    fn list_files(&self, home: &Path) -> Result<SessionDiscovery> {
+        self.files(home).map(SessionDiscovery::from_files)
+    }
 
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
@@ -305,16 +362,38 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 /// transcript lists (tool/injected-only shells show an empty title) so nothing is
 /// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
+    list_with_printer(backend, home, crate::print_line)
+}
+
+fn list_with_printer(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    mut print: impl FnMut(&str) -> Result<bool>,
+) -> Result<i32> {
     let mut rows: Vec<(String, String, String)> = Vec::new();
-    for f in backend.files(home)? {
-        let s = backend.summarize(&f)?;
-        // Titles can contain newlines/tabs; collapse them to single spaces.
-        let title = collapse_ws(&s.title);
-        rows.push((s.start_ts, s.id, title));
+    let discovery = backend.list_files(home)?;
+    let mut failed = !discovery.errors.is_empty();
+    for e in discovery.errors {
+        eprintln!("!! {e}");
+    }
+    for f in discovery.files {
+        match backend.summarize(&f) {
+            Ok(s) => {
+                // Titles can contain newlines/tabs; collapse them to single spaces.
+                let title = collapse_ws(&s.title);
+                rows.push((s.start_ts, s.id, title));
+            }
+            Err(e) => {
+                eprintln!("!! {}: {e:#}", f.display());
+                failed = true;
+            }
+        }
     }
     if rows.is_empty() {
-        eprintln!(">> no sessions in this profile");
-        return Ok(0);
+        if !failed {
+            eprintln!(">> no sessions in this profile");
+        }
+        return Ok(i32::from(failed));
     }
     // Newest first: ISO-8601 sorts lexically, so a plain string sort works.
     rows.sort_by(|a, b| b.0.cmp(&a.0));
@@ -324,11 +403,11 @@ fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
         // and a byte slice could split a multi-byte char and panic.
         let short: String = id.chars().take(8).collect();
         let disp = fmt_ts(&ts);
-        if !print_line(&format!("{short:<8}  {disp:<16}  {title}"))? {
+        if !print(&format!("{short:<8}  {disp:<16}  {title}"))? {
             break; // reader hung up; nothing left to show
         }
     }
-    Ok(0)
+    Ok(i32::from(failed))
 }
 
 /// Print your typed prompts from one session, numbered + timestamped, full text
@@ -486,6 +565,69 @@ mod tests {
         path
     }
 
+    struct ExplicitFilesBackend {
+        files: Vec<PathBuf>,
+        list_errors: Vec<String>,
+        files_error: Option<String>,
+    }
+
+    impl ExplicitFilesBackend {
+        fn new(files: Vec<PathBuf>) -> Self {
+            ExplicitFilesBackend {
+                files,
+                list_errors: Vec::new(),
+                files_error: None,
+            }
+        }
+
+        fn with_list_errors(files: Vec<PathBuf>, list_errors: Vec<String>) -> Self {
+            ExplicitFilesBackend {
+                files,
+                list_errors,
+                files_error: None,
+            }
+        }
+
+        fn with_files_error(message: &str) -> Self {
+            ExplicitFilesBackend {
+                files: Vec::new(),
+                list_errors: Vec::new(),
+                files_error: Some(message.to_string()),
+            }
+        }
+    }
+
+    impl SessionBackend for ExplicitFilesBackend {
+        fn files(&self, _home: &Path) -> Result<Vec<PathBuf>> {
+            if let Some(message) = &self.files_error {
+                bail!("{message}");
+            }
+            Ok(self.files.clone())
+        }
+
+        fn list_files(&self, _home: &Path) -> Result<SessionDiscovery> {
+            Ok(SessionDiscovery {
+                files: self.files.clone(),
+                errors: self.list_errors.clone(),
+            })
+        }
+
+        fn id_of(&self, path: &Path) -> String {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
+        }
+
+        fn typed_text(&self, v: &Value) -> Option<String> {
+            v.get("typed").and_then(Value::as_str).map(str::to_string)
+        }
+
+        fn start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
+            None
+        }
+    }
+
     #[test]
     fn fmt_ts_positional() {
         assert_eq!(fmt_ts("2026-07-14T02:16:33.123Z"), "2026-07-14 02:16");
@@ -511,6 +653,78 @@ mod tests {
 
         assert!(err.contains("open session transcript"));
         assert!(err.contains("missing.jsonl"));
+    }
+
+    #[test]
+    fn list_skips_bad_transcripts_but_returns_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.jsonl");
+        let good = dir.path().join("good.jsonl");
+        std::fs::write(&good, "{\"typed\":\"hello\"}\n").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![missing, good]);
+        let mut lines = Vec::new();
+
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 1, "one skipped transcript makes list non-zero");
+        assert_eq!(lines.len(), 1, "the readable session still lists");
+        assert!(lines[0].contains("good"));
+        assert!(lines[0].contains("hello"));
+    }
+
+    #[test]
+    fn get_still_fails_fast_on_bad_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.jsonl");
+        let backend = ExplicitFilesBackend::new(vec![missing]);
+
+        let err = get(&backend, dir.path(), "missing")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("open session transcript"), "{err}");
+    }
+
+    #[test]
+    fn list_reports_discovery_errors_but_keeps_readable_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.jsonl");
+        std::fs::write(&good, "{\"typed\":\"hello\"}\n").unwrap();
+        let backend = ExplicitFilesBackend::with_list_errors(
+            vec![good],
+            vec!["walk session directory /sessions: permission denied".to_string()],
+        );
+        let mut lines = Vec::new();
+
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 1, "discovery errors make list non-zero");
+        assert_eq!(lines.len(), 1, "readable sessions still list");
+        assert!(lines[0].contains("hello"));
+    }
+
+    #[test]
+    fn get_and_delete_still_fail_fast_on_discovery_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = ExplicitFilesBackend::with_files_error("discovery failed");
+
+        let err = get(&backend, dir.path(), "anything")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("discovery failed"), "{err}");
+
+        let err = delete(&backend, dir.path(), &[], true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("discovery failed"), "{err}");
     }
 
     #[cfg(unix)]

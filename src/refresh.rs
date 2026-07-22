@@ -122,6 +122,7 @@ fn run_refresh_with_printer(
     dry_run: bool,
     mut print: impl FnMut(&str) -> Result<bool>,
 ) -> Result<i32> {
+    prof.validate_existing_layout_boundary()?;
     match target {
         None => {
             // Sweep mode: one bad file (unreadable, not UTF-8) must not abort
@@ -335,9 +336,44 @@ mod tests {
         // read_dir failure even when tests run as root.
         std::fs::write(&prof.envs_dir, "not a directory\n").unwrap();
 
-        let code = run_refresh(&prof, None, false).unwrap();
+        let err = run_refresh(&prof, None, false).unwrap_err().to_string();
 
-        assert_eq!(code, 1, "a skipped relay directory must not report success");
+        assert!(
+            err.contains("relay directory is not a real directory"),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_sweep_rejects_symlinked_envs_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        let outside = root.path().join("outside-envs");
+        let relay = outside.join("relay");
+        std::fs::create_dir_all(&prof.dir).unwrap();
+        std::fs::write(
+            &prof.base_file,
+            template::base_template(AgentKind::Codex, TEMPLATE_VERSION),
+        )
+        .unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(&relay, "CODEX_MODEL=outside\n").unwrap();
+        symlink(&outside, &prof.envs_dir).unwrap();
+
+        let err = run_refresh(&prof, None, false).unwrap_err().to_string();
+
+        assert!(
+            err.contains("relay directory is not a real directory"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&relay).unwrap(),
+            "CODEX_MODEL=outside\n",
+            "refresh sweep must not write through envs symlink"
+        );
     }
 
     #[cfg(unix)]
