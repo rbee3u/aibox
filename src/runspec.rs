@@ -86,11 +86,8 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
     mounts
         .iter()
         .map(|m| {
-            let (host, rest) = m
-                .split_once(':')
-                .filter(|(host, rest)| !host.is_empty() && rest.starts_with('/'))
-                .with_context(|| format!("invalid mount (need host:container[:ro]): {m}"))?;
-            let p = Path::new(host);
+            let spec = parse_mount_spec(m)?;
+            let p = Path::new(spec.host);
             let host_path = if p.is_absolute() {
                 p.to_path_buf()
             } else {
@@ -104,9 +101,37 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
             let host_path = host_path
                 .to_str()
                 .context("mount host path is not valid UTF-8")?;
-            Ok(format!("{host_path}:{rest}"))
+            Ok(format!(
+                "{host_path}:{}{}",
+                spec.target,
+                spec.mode.map(|m| format!(":{m}")).unwrap_or_default()
+            ))
         })
         .collect()
+}
+
+struct MountSpec<'a> {
+    host: &'a str,
+    target: &'a str,
+    mode: Option<&'a str>,
+}
+
+fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
+    let mut parts = mount.split(':');
+    let host = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    let mode = parts.next();
+    if parts.next().is_some() {
+        bail!("invalid mount (need host:container[:ro]): {mount}");
+    }
+    if host.is_empty() || target.is_empty() || !target.starts_with('/') {
+        bail!("invalid mount (need host:container[:ro]): {mount}");
+    }
+    match mode {
+        None | Some("ro") => Ok(MountSpec { host, target, mode }),
+        Some("") => bail!("invalid mount mode in {mount:?}: use :ro or omit the mode"),
+        Some(other) => bail!("invalid mount mode {other:?} in {mount:?}: only :ro is supported"),
+    }
 }
 
 /// Reject extra bind mounts that replace or shadow a mount `aibox` manages
@@ -397,6 +422,8 @@ mod tests {
         // Absolute host path passes through unchanged, options intact.
         let got = resolve_mounts(&[format!("{host}:/cache:ro")]).unwrap();
         assert_eq!(got, vec![format!("{host}:/cache:ro")]);
+        let got = resolve_mounts(&[format!("{host}:/cache")]).unwrap();
+        assert_eq!(got, vec![format!("{host}:/cache")]);
 
         // Relative host path resolves against the launch cwd (like -w). `src`
         // exists relative to the crate root, where cargo runs tests.
@@ -416,6 +443,16 @@ mod tests {
         // The container target must be present and absolute.
         assert!(resolve_mounts(&["src:".to_string()]).is_err());
         assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
+
+        // Only Docker's read-only shorthand is accepted; reject malformed specs
+        // before profile state exists and before Docker would fail opaquely.
+        for bad in ["src:/cache:", "src:/cache:rw", "src:/cache:ro:extra"] {
+            let err = resolve_mounts(&[bad.to_string()]).unwrap_err().to_string();
+            assert!(
+                err.contains("invalid mount"),
+                "bad mount {bad:?} should fail clearly: {err}"
+            );
+        }
     }
 
     #[test]

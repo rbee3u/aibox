@@ -507,13 +507,14 @@ fn fmt_ts(ts: &str) -> String {
     format!("{date} {time}").trim_end().to_string()
 }
 
-/// Collapse runs of newlines/tabs to a single space (titles are one-liners in the
-/// listing).
+/// Collapse runs of control characters and non-plain-space whitespace to a
+/// single space (titles are one-liners in the listing). Keep ordinary spaces as
+/// authored so readable prompt snippets do not get over-normalized.
 fn collapse_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_run = false;
     for c in s.chars() {
-        if c == '\n' || c == '\t' {
+        if c.is_control() || (c.is_whitespace() && c != ' ') {
             if !in_run {
                 out.push(' ');
                 in_run = true;
@@ -637,6 +638,8 @@ mod tests {
     #[test]
     fn collapse_ws_runs() {
         assert_eq!(collapse_ws("a\n\nb\tc"), "a b c");
+        assert_eq!(collapse_ws("a\rb\u{7f}c\u{00a0}d"), "a b c d");
+        assert_eq!(collapse_ws("a  b"), "a  b");
         assert_eq!(collapse_ws("plain"), "plain");
     }
 

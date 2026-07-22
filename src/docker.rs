@@ -84,22 +84,44 @@ pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<(
 
 /// True if an image reference exists locally.
 pub fn image_exists(image: &str) -> Result<bool> {
-    let output = Command::new("docker")
+    let inspect = Command::new("docker")
         .args(["image", "inspect", "--format", "{{.Id}}", image])
         .output()
         .context("inspect docker image (is docker installed?)")?;
-    if output.status.success() {
+    if inspect.status.success() {
         return Ok(true);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("No such image") || stderr.contains("No such object") {
-        return Ok(false);
+
+    let list_ref = image_ref_for_exact_ls(image);
+    let list = Command::new("docker")
+        .args(["image", "ls", "--quiet", "--no-trunc", &list_ref])
+        .output()
+        .context("list docker image (is docker installed?)")?;
+    if list.status.success() {
+        return Ok(!String::from_utf8_lossy(&list.stdout).trim().is_empty());
     }
+
+    let inspect_stderr = String::from_utf8_lossy(&inspect.stderr);
+    let list_stderr = String::from_utf8_lossy(&list.stderr);
     bail!(
-        "docker image inspect failed ({}): {}",
-        output.status,
-        stderr.trim()
+        "docker image inspect failed ({}): {}; docker image ls failed ({}): {}",
+        inspect.status,
+        inspect_stderr.trim(),
+        list.status,
+        list_stderr.trim()
     )
+}
+
+fn image_ref_for_exact_ls(image: &str) -> String {
+    if image.contains('@') {
+        return image.to_string();
+    }
+    let last = image.rsplit('/').next().unwrap_or(image);
+    if last.contains(':') {
+        image.to_string()
+    } else {
+        format!("{image}:latest")
+    }
 }
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
@@ -304,8 +326,14 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
             printf 'sha256:fake-image\n'
             exit 0
             ;;
-        missing)
-            printf 'Error response from daemon: No such image: %s\n' "${5:-}" >&2
+        missing-localized)
+            printf 'image not found: %s\n' "${5:-}" >&2
+            exit 1
+            ;;
+        missing-empty)
+            exit 1
+            ;;
+        list-exists-tagged|tagless-repository-match)
             exit 1
             ;;
         daemon-error)
@@ -314,6 +342,36 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
             ;;
         *)
             exit 97
+            ;;
+    esac
+fi
+if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
+    case "$AIBOX_FAKE_DOCKER_IMAGE_MODE" in
+        exists)
+            printf 'sha256:fake-image\n'
+            exit 0
+            ;;
+        missing-localized|missing-empty)
+            exit 0
+            ;;
+        list-exists-tagged)
+            if [ "${5:-}" = "repo/name:tag" ]; then
+                printf 'sha256:fake-image\n'
+            fi
+            exit 0
+            ;;
+        tagless-repository-match)
+            if [ "${5:-}" = "repo/name" ]; then
+                printf 'sha256:fake-image\n'
+            fi
+            exit 0
+            ;;
+        daemon-error)
+            printf 'Cannot connect to the Docker daemon\n' >&2
+            exit 1
+            ;;
+        *)
+            exit 96
             ;;
     esac
 fi
@@ -377,16 +435,50 @@ esac
         }
 
         {
-            let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing");
+            let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing-localized");
             assert!(!image_exists("repo/name:tag").unwrap());
+        }
+
+        {
+            let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing-empty");
+            assert!(!image_exists("repo/name:tag").unwrap());
+        }
+
+        {
+            let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "list-exists-tagged");
+            assert!(image_exists("repo/name:tag").unwrap());
+        }
+
+        {
+            let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "tagless-repository-match");
+            assert!(
+                !image_exists("repo/name").unwrap(),
+                "tagless lookup must query repo/name:latest, not broad repo/name"
+            );
         }
 
         {
             let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "daemon-error");
             let err = image_exists("repo/name:tag").unwrap_err().to_string();
             assert!(err.contains("docker image inspect failed"), "{err}");
+            assert!(err.contains("docker image ls failed"), "{err}");
             assert!(err.contains("Cannot connect"), "{err}");
         }
+    }
+
+    #[test]
+    fn image_ref_for_exact_ls_adds_latest_only_when_tagless() {
+        assert_eq!(image_ref_for_exact_ls("busybox"), "busybox:latest");
+        assert_eq!(image_ref_for_exact_ls("repo/name"), "repo/name:latest");
+        assert_eq!(
+            image_ref_for_exact_ls("registry.example:5000/repo/name"),
+            "registry.example:5000/repo/name:latest"
+        );
+        assert_eq!(image_ref_for_exact_ls("repo/name:dev"), "repo/name:dev");
+        assert_eq!(
+            image_ref_for_exact_ls("repo/name@sha256:abc"),
+            "repo/name@sha256:abc"
+        );
     }
 
     #[test]

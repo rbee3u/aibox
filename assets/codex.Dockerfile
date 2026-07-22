@@ -14,7 +14,9 @@ FROM aibox-base:latest
 # --- Codex CLI ---------------------------------------------------------------
 # The npm package delivers a per-platform native binary via optionalDependencies;
 # `npm -g` fetches the right one for this image's arch.
-RUN npm install -g @openai/codex \
+ARG CODEX_VERSION=0.145.0
+RUN npm install -g @openai/codex@${CODEX_VERSION} \
+    && codex --version \
     && npm cache clean --force
 
 # Recreate a predictable non-root user at uid/gid 1000 so the mounted home has

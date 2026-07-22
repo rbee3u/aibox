@@ -165,7 +165,7 @@ prompt/title):
 
 ```
 3f2a1b6c  2026-07-14 02:16  Debug the repeated image rebuild
-9d0e4a2f  2026-07-13 08:02  隔离环境下查找和切换会话
+9d0e4a2f  2026-07-13 08:02  Browse isolated session history
 ```
 
 `get <id>` prints your own prompts from a session, numbered and timestamped,
@@ -215,10 +215,11 @@ aibox build          # builds both
 
 `aibox build` first builds the shared local base image (`aibox-base:latest`),
 then the requested agent image(s). Docker's cache stays enabled by default.
-Node, Rust, and Go are pinned in `assets/base.Dockerfile`, so repeated builds
-stay stable and fast. To upgrade one of those, edit the pinned `ARG`, reinstall
-or rebuild `aibox` so the embedded Dockerfile changes, then run `aibox build`
-or `aibox build <agent>`.
+Node, Rust, and Go are pinned in `assets/base.Dockerfile`, and the agent CLIs
+are pinned in their agent Dockerfiles, so repeated builds stay stable and fast.
+To upgrade one of those, edit the pinned `ARG`, reinstall or rebuild `aibox` so
+the embedded Dockerfile changes, then run `aibox build` or
+`aibox build <agent>`.
 
 Use `--force` (or `-f`) when you want Docker to ignore cache and pull a fresh
 `debian:bookworm-slim` for the shared base image:

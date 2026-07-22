@@ -458,6 +458,19 @@ mod tests {
     }
 
     #[test]
+    fn agent_dockerfiles_pin_cli_versions_and_smoke_check() {
+        let codex = AgentKind::Codex.dockerfile();
+        assert!(codex.contains("ARG CODEX_VERSION=0.145.0"));
+        assert!(codex.contains("@openai/codex@${CODEX_VERSION}"));
+        assert!(codex.contains("codex --version"));
+
+        let claude = AgentKind::Claude.dockerfile();
+        assert!(claude.contains("ARG CLAUDE_CODE_VERSION=2.1.217"));
+        assert!(claude.contains("@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"));
+        assert!(claude.contains("claude --version"));
+    }
+
+    #[test]
     fn instructions_path_tilde_expansion() {
         let home = std::env::var("HOME").expect("HOME set in test env");
         assert_eq!(

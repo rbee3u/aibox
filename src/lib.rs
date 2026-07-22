@@ -303,11 +303,6 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     // must survive docker's `-v` colon splitting like `/work` and `-m` do.
     runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
-    // Home must exist before the run so the mount doesn't shadow the image with a
-    // root-owned empty dir. Also seeds agent-specific first-run files.
-    prof.ensure_home()?;
-    runspec::seed_home(agent, &prof.home_dir)?;
-
     // First use of a named relay scaffolds a stub and stops so credentials can be
     // filled in (Ok(None)); an explicit missing path errors. Exit 1 like the
     // no-relay case: the agent never ran, and scripts must not read the stop
@@ -323,6 +318,12 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
             agent.tag()
         );
     }
+
+    // Home is needed only once the relay and image are usable. Creating/seeding
+    // it later keeps bad `-e` values and missing images from leaving partial
+    // profile home state behind.
+    prof.ensure_home()?;
+    runspec::seed_home(agent, &prof.home_dir)?;
 
     // Nudge (don't touch) if base or the relay predates the current template.
     prof.nudge_if_stale(relay.path());
@@ -386,6 +387,18 @@ mod tests {
             std::env::set_var(name, value);
             EnvGuard { name, old }
         }
+
+        #[cfg(unix)]
+        fn prepend_path(dir: &std::path::Path) -> Self {
+            let old = std::env::var_os("PATH");
+            let mut paths = vec![dir.to_path_buf()];
+            if let Some(old_path) = &old {
+                paths.extend(std::env::split_paths(old_path));
+            }
+            let joined = std::env::join_paths(paths).unwrap();
+            std::env::set_var("PATH", joined);
+            EnvGuard { name: "PATH", old }
+        }
     }
 
     impl Drop for EnvGuard {
@@ -395,6 +408,30 @@ mod tests {
                 None => std::env::remove_var(self.name),
             }
         }
+    }
+
+    #[cfg(unix)]
+    fn write_missing_image_docker(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("docker");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+    printf 'Error response from daemon: No such image: %s\n' "${5:-}" >&2
+    exit 1
+fi
+if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
+    exit 0
+fi
+exit 99
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
     }
 
     #[test]
@@ -561,6 +598,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn invalid_relay_name_is_rejected_before_profile_home_creation() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", ""]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(
+            err.contains("relay name must be a single path segment"),
+            "{err}"
+        );
+        assert!(
+            !config_root.join("default").exists(),
+            "invalid relay name must not create profile state"
+        );
+    }
+
+    #[test]
+    fn missing_explicit_env_path_is_rejected_before_home_creation() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let missing_env = root.path().join("missing.env");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli =
+            Cli::try_parse_from(["aibox", "claude", "-e", missing_env.to_str().unwrap()]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("env file not found"), "{err}");
+        assert!(
+            !config_root.join("default").join("home").exists(),
+            "missing explicit env file must not create profile home"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_image_is_rejected_before_home_creation() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let relay = config_root.join("default").join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            &relay,
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-test\nCODEX_MODEL=gpt-test\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        write_missing_image_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("build it first"), "{err}");
+        assert!(
+            !config_root.join("default").join("home").exists(),
+            "missing image must not create profile home"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn run_rejects_symlinked_profile_dir_before_scaffold() {
@@ -679,6 +784,24 @@ mod tests {
         assert!(
             !config_root.join("default").exists(),
             "invalid extra mount must not create profile state"
+        );
+    }
+
+    #[test]
+    fn invalid_mount_mode_is_rejected_before_scaffold() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli =
+            Cli::try_parse_from(["aibox", "codex", "-e", "relay", "-m", "src:/cache:rw"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("invalid mount mode"), "{err}");
+        assert!(
+            !config_root.join("default").exists(),
+            "invalid mount mode must not create profile state"
         );
     }
 }

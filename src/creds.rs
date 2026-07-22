@@ -296,22 +296,24 @@ impl Drop for FileLock {
 }
 
 fn create_placeholder_file(path: &Path, placeholder: &str) -> Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("pre-create mount target {}", path.display()))?;
-    if let Err(e) = file.write_all(placeholder.as_bytes()) {
-        let _ = std::fs::remove_file(path);
-        return Err(e).with_context(|| format!("write mount target {}", path.display()));
-    }
-    Ok(())
+    let parent = mount_target_parent(path)?;
+    let mut replacement = tempfile::Builder::new()
+        .prefix(".aibox-placeholder.")
+        .tempfile_in(parent)
+        .with_context(|| format!("prepare mount target {}", path.display()))?;
+    crate::profile::set_600(replacement.path())?;
+    replacement
+        .write_all(placeholder.as_bytes())
+        .with_context(|| format!("write mount target {}", path.display()))?;
+    replacement
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("sync mount target {}", path.display()))?;
+    replacement
+        .persist_noclobber(path)
+        .map(|_| ())
+        .map_err(|e| e.error)
+        .with_context(|| format!("pre-create mount target {}", path.display()))
 }
 
 /// Serializes staged-file creation with signal/test cleanup. A signal arriving
@@ -1059,6 +1061,19 @@ mod tests {
             .join("codex-auth-json.lock")
     }
 
+    fn placeholder_temp_count(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".aibox-placeholder."))
+            })
+            .count()
+    }
+
     #[cfg(unix)]
     const LOCK_HELPER_LOCK: &str = "AIBOX_TEST_LOCK_HELPER_LOCK";
     #[cfg(unix)]
@@ -1280,6 +1295,72 @@ esac
             !placeholder_matches(&fifo, "{}\n"),
             "special files must be rejected without a blocking read"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_placeholder_file_persists_complete_restricted_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("auth.json");
+
+        create_placeholder_file(&auth, "{}\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "{}\n");
+        let mode = std::fs::metadata(&auth).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(
+            placeholder_temp_count(dir.path()),
+            0,
+            "atomic placeholder temp file must not remain beside the target"
+        );
+    }
+
+    #[test]
+    fn create_placeholder_file_does_not_clobber_existing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("auth.json");
+        std::fs::write(&auth, "{\"OPENAI_API_KEY\":\"real\"}\n").unwrap();
+
+        let err = create_placeholder_file(&auth, "{}\n")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("pre-create mount target"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&auth).unwrap(),
+            "{\"OPENAI_API_KEY\":\"real\"}\n"
+        );
+        assert_eq!(
+            placeholder_temp_count(dir.path()),
+            0,
+            "failed atomic persist must clean up its temp file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_placeholder_file_does_not_follow_existing_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("auth.json");
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&outside, "real\n").unwrap();
+        symlink(&outside, &auth).unwrap();
+
+        let err = create_placeholder_file(&auth, "{}\n")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("pre-create mount target"), "{err}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "real\n");
+        assert!(std::fs::symlink_metadata(&auth)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(placeholder_temp_count(dir.path()), 0);
     }
 
     #[cfg(unix)]

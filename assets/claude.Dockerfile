@@ -8,7 +8,9 @@
 FROM aibox-base:latest
 
 # --- Claude Code -------------------------------------------------------------
-RUN npm install -g @anthropic-ai/claude-code \
+ARG CLAUDE_CODE_VERSION=2.1.217
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && claude --version \
     && npm cache clean --force
 
 # Recreate a predictable non-root user at uid/gid 1000 so the mounted home has

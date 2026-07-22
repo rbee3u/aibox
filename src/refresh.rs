@@ -152,9 +152,6 @@ fn run_refresh_with_printer(
                     }
                     entries.sort();
                     for path in entries {
-                        if !path.is_file() {
-                            continue;
-                        }
                         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                             eprintln!(
                                 "!! relay filename is not valid UTF-8, skipping: {}",
@@ -170,6 +167,10 @@ fn run_refresh_with_printer(
                         if name.starts_with('.') {
                             continue;
                         }
+                        // Visible entries are intended relay configs. Let
+                        // refresh_one classify them so directories, dangling
+                        // symlinks, and other non-files are reported instead of
+                        // making the sweep look clean.
                         match refresh_one(prof, &path, Some(name), dry_run, false, &mut print) {
                             Ok(true) => {}
                             Ok(false) => return Ok(if failed { 1 } else { 0 }),
@@ -223,12 +224,15 @@ fn refresh_one(
     required: bool,
     print: &mut impl FnMut(&str) -> Result<bool>,
 ) -> Result<bool> {
-    if !file.is_file() {
-        if required {
-            bail!("not found: {}", file.display());
+    match refresh_file_state(file)? {
+        RefreshFileState::File => {}
+        RefreshFileState::Missing => {
+            if required {
+                bail!("not found: {}", file.display());
+            }
+            eprintln!("!! not found, skipping: {}", file.display());
+            return Ok(true);
         }
-        eprintln!("!! not found, skipping: {}", file.display());
-        return Ok(true);
     }
     let old = fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     crate::envfile::check_keys(file, &old)?;
@@ -252,6 +256,25 @@ fn refresh_one(
         );
     }
     Ok(true)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshFileState {
+    File,
+    Missing,
+}
+
+fn refresh_file_state(file: &Path) -> Result<RefreshFileState> {
+    match fs::metadata(file) {
+        Ok(meta) if meta.is_file() => Ok(RefreshFileState::File),
+        Ok(_) => bail!("config path is not a regular file: {}", file.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match fs::symlink_metadata(file) {
+            Ok(_) => bail!("config path is not a regular file: {}", file.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RefreshFileState::Missing),
+            Err(e) => Err(e).with_context(|| format!("inspect {}", file.display())),
+        },
+        Err(e) => Err(e).with_context(|| format!("inspect {}", file.display())),
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +431,81 @@ mod tests {
     }
 
     #[test]
+    fn run_refresh_sweep_reports_visible_non_file_relay() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("z").unwrap(); // scaffold base + relay z
+        let valid = "CODEX_BASE_URL=https://x\nCODEX_API_KEY=sk-x\nCODEX_MODEL=m\n";
+        std::fs::write(prof.envs_dir.join("z"), valid).unwrap();
+        let bad = prof.envs_dir.join("bad-dir");
+        std::fs::create_dir(&bad).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "visible non-file relays make sweep fail");
+        assert!(bad.is_dir(), "refresh must not replace a relay directory");
+        let z = std::fs::read_to_string(prof.envs_dir.join("z")).unwrap();
+        assert!(
+            z.starts_with("# aibox-template:"),
+            "valid relays after a non-file entry are still refreshed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_sweep_reports_dangling_relay_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap();
+        let link = prof.envs_dir.join("dangling");
+        symlink(root.path().join("missing-relay"), &link).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "dangling visible relay symlink makes sweep fail");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_sweep_refreshes_relay_symlink_target_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.envs_dir).unwrap();
+        std::fs::write(
+            &prof.base_file,
+            template::base_template(AgentKind::Codex, TEMPLATE_VERSION),
+        )
+        .unwrap();
+        let target = root.path().join("shared-relay.env");
+        std::fs::write(
+            &target,
+            "CODEX_BASE_URL=https://x\nCODEX_API_KEY=sk-x\nCODEX_MODEL=m\n",
+        )
+        .unwrap();
+        let link = prof.envs_dir.join("shared");
+        symlink(&target, &link).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let refreshed = std::fs::read_to_string(&target).unwrap();
+        assert!(refreshed.starts_with("# aibox-template:"));
+        assert!(refreshed.contains("CODEX_API_KEY=sk-x"));
+    }
+
+    #[test]
     fn run_refresh_explicit_missing_target_errors_but_sweep_skips() {
         let root = tempfile::tempdir().unwrap();
         let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
@@ -416,7 +514,67 @@ mod tests {
         assert!(run_refresh(&prof, Some("base"), false).is_err());
         assert!(run_refresh(&prof, Some("nope"), false).is_err());
         // The no-target sweep still skips missing files quietly.
-        assert!(run_refresh(&prof, None, false).is_ok());
+        assert_eq!(run_refresh(&prof, None, false).unwrap(), 0);
+    }
+
+    #[test]
+    fn run_refresh_sweep_reports_non_file_base_and_exits_nonzero() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.dir).unwrap();
+        std::fs::create_dir(&prof.base_file).unwrap();
+
+        let code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(code, 1, "a non-file base must make sweep fail");
+        assert!(
+            prof.base_file.is_dir(),
+            "refresh must not replace a non-file base path"
+        );
+    }
+
+    #[test]
+    fn run_refresh_explicit_non_file_base_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.dir).unwrap();
+        std::fs::create_dir(&prof.base_file).unwrap();
+
+        let err = run_refresh(&prof, Some("base"), false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("config path is not a regular file"), "{err}");
+        assert!(
+            prof.base_file.is_dir(),
+            "explicit refresh must not replace a non-file base path"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_refreshes_symlink_target_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.dir).unwrap();
+        let target = root.path().join("shared-base.env");
+        std::fs::write(&target, "CODEX_MODEL=real-model\n").unwrap();
+        symlink(&target, &prof.base_file).unwrap();
+
+        run_refresh(&prof, Some("base"), false).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&prof.base_file)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "refresh must preserve the symlink itself"
+        );
+        let refreshed = std::fs::read_to_string(&target).unwrap();
+        assert!(refreshed.starts_with("# aibox-template:"));
+        assert!(refreshed.contains("CODEX_MODEL=real-model"));
     }
 
     #[test]

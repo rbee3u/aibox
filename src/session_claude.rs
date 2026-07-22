@@ -174,17 +174,17 @@ mod tests {
     #[test]
     fn prompts_decodes_unicode_and_escapes() {
         let dir = tempfile::tempdir().unwrap();
-        // 测试 = 测试; embedded newline escape.
+        // Unicode escape plus an embedded newline escape.
         let path = write_jsonl(
             dir.path(),
             ".claude/projects/p/cccc.jsonl",
             &[
-                r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T09:00:00Z","message":{"role":"user","content":"line1\nline2 测试"}}"#,
+                r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T09:00:00Z","message":{"role":"user","content":"line1\nline2 caf\u00e9"}}"#,
             ],
         );
         let ps = Claude.prompts(&path).unwrap();
         assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "line1\nline2 测试");
+        assert_eq!(ps[0].text, "line1\nline2 caf\u{e9}");
         assert_eq!(ps[0].timestamp, "2026-07-14T09:00:00Z");
     }
 
