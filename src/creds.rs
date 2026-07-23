@@ -52,6 +52,13 @@ const LATE_CIDFILE_WAIT: Duration = Duration::from_secs(3);
 const CIDFILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINER_GRACE: Duration = Duration::from_secs(10);
 const CONTAINER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+// Main-thread fallback when a signal raced with `docker run` exiting. Covers
+// cid discovery on the *late-cidfile* path (the first bounded wait fails, then
+// the longer late wait succeeds), a graceful kill + inspect, the full grace
+// window (including one last bounded inspect), the final SIGKILL, and two
+// seconds of scheduling slack — so the main thread never exits before the
+// watcher can finish its worst-case bounded cleanup.
+const SIGNAL_FINISH_WAIT: Duration = Duration::from_secs(25);
 #[cfg(test)]
 const AUTH_LOCK_WAIT: Duration = Duration::from_millis(750);
 #[cfg(not(test))]
@@ -397,16 +404,20 @@ pub fn clear_child() {
     *cidfile().lock().unwrap() = None;
 }
 
-/// Finish a successfully spawned child after `wait` returns. When no fatal
-/// signal raced with the wait, unregister it normally. If a signal did race,
-/// the Docker CLI may already be reaped while its container is still running;
-/// clear the now-stale pid, retain the cidfile, and keep this thread alive until
-/// the watcher terminates the process after daemon-side cleanup.
-pub fn finish_child() {
+/// Finish a successfully spawned child after `wait` returns. An attached Docker
+/// CLI can exit while its container remains alive (most visibly via Docker's
+/// detach key sequence, but also after some client/daemon disconnects), so use
+/// the cidfile to stop a still-running container before unregistering the run.
+/// If a fatal signal raced with the wait, clear the now-stale pid, retain the
+/// cidfile, and keep this thread alive until the watcher terminates the process
+/// after daemon-side cleanup.
+pub fn finish_child() -> bool {
     CHILD_PID.store(0, Ordering::SeqCst);
+    let stopped_lingering_container = stop_container_left_by_child();
     match RUN_STATE.compare_exchange(RUN_ACTIVE, RUN_IDLE, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) | Err(RUN_IDLE) => {
             *cidfile().lock().unwrap() = None;
+            stopped_lingering_container
         }
         Err(RUN_SIGNALLED) => {
             // The watcher is stopping the container and will terminate the
@@ -416,7 +427,7 @@ pub fn finish_child() {
             // (e.g. it panicked), parking with no bound would hang the wrapper.
             // The deadline covers the container grace period plus slack for the
             // bounded docker commands; past it, exit here as the signal would.
-            let deadline = Instant::now() + CONTAINER_GRACE + Duration::from_secs(5);
+            let deadline = Instant::now() + SIGNAL_FINISH_WAIT;
             while Instant::now() < deadline {
                 std::thread::park_timeout(Duration::from_secs(1));
             }
@@ -426,6 +437,28 @@ pub fn finish_child() {
         }
         Err(_) => unreachable!("invalid run state"),
     }
+}
+
+/// Stop a container that outlived its attached `docker run` client. Checking
+/// daemon state first keeps the normal path cheap: after an ordinary `--rm`
+/// exit the id no longer resolves, while a detached container reports running
+/// and is stopped with the same bounded graceful/escalating path as a signal.
+fn stop_container_left_by_child() -> bool {
+    if RUN_STATE.load(Ordering::SeqCst) != RUN_ACTIVE {
+        return false;
+    }
+    let Some(cid) = current_cid() else {
+        return false;
+    };
+    if container_state(&cid) != ContainerState::Running {
+        return false;
+    }
+
+    eprintln!(
+        ">> docker run exited while container {cid} was still running; stopping the container"
+    );
+    stop_container_id(signal_hook::consts::SIGTERM, &cid);
+    true
 }
 
 /// Forward `sig` to the registered docker CLI child, if any.
@@ -472,40 +505,58 @@ fn wait_current_cid(timeout: Duration) -> Option<String> {
     }
 }
 
-/// Run a command silently with a timeout, returning stdout on success. Used by
-/// the signal watcher, where Docker may be wedged and must not prevent the
-/// wrapper from re-raising the fatal signal.
-fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(program)
+/// Outcome of a bounded, silent subprocess run.
+enum CommandOutcome {
+    /// Exited zero; carries captured stdout.
+    Ok(String),
+    /// Ran to completion but exited non-zero — a definitive failure, e.g.
+    /// `docker inspect` on a container id that no longer resolves.
+    Failed,
+    /// Did not finish within the timeout, or could not be spawned or reaped.
+    /// The subprocess may be wedged, so callers must not read this as a
+    /// definitive answer.
+    Unfinished,
+}
+
+/// Run a command silently with a timeout. Used by the signal watcher, where
+/// Docker may be wedged and must not prevent the wrapper from re-raising the
+/// fatal signal. A fast non-zero exit is distinguished from a timeout so
+/// callers can tell "definitively no" from "no answer yet".
+fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutcome {
+    let spawned = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(_) => return CommandOutcome::Unfinished,
+    };
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                if !status.success() {
+                    return CommandOutcome::Failed;
+                }
                 let mut stdout = Vec::new();
                 if let Some(mut pipe) = child.stdout.take() {
                     let _ = pipe.read_to_end(&mut stdout);
                 }
-                return status
-                    .success()
-                    .then(|| String::from_utf8_lossy(&stdout).into_owned());
+                return CommandOutcome::Ok(String::from_utf8_lossy(&stdout).into_owned());
             }
             Ok(None) => {}
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return CommandOutcome::Unfinished;
             }
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return None;
+            return CommandOutcome::Unfinished;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -515,7 +566,10 @@ fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> Option<Stri
 /// container-stopping calls are all best-effort: a dead daemon or an
 /// already-removed container just means there is nothing left to stop.
 fn docker_quiet(args: &[&str], timeout: Duration) -> Option<String> {
-    command_quiet("docker", args, timeout)
+    match command_quiet("docker", args, timeout) {
+        CommandOutcome::Ok(out) => Some(out),
+        CommandOutcome::Failed | CommandOutcome::Unfinished => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -525,22 +579,36 @@ enum ContainerState {
     Unknown,
 }
 
-fn parse_container_state(output: Option<&str>) -> ContainerState {
-    match output.map(str::trim) {
-        Some("true") => ContainerState::Running,
-        Some("false") => ContainerState::Stopped,
-        _ => ContainerState::Unknown,
+fn parse_container_state(outcome: CommandOutcome) -> ContainerState {
+    match outcome {
+        CommandOutcome::Ok(out) => match out.trim() {
+            "true" => ContainerState::Running,
+            "false" => ContainerState::Stopped,
+            // A zero exit with an unexpected body shouldn't happen for this
+            // format string; stay conservative rather than assume "stopped".
+            _ => ContainerState::Unknown,
+        },
+        // `inspect` ran and exited non-zero: the id no longer resolves because
+        // the container is gone (the common `--rm` case). That is effectively
+        // stopped — reporting it lets the grace loop exit immediately instead
+        // of waiting out the full window for a container that no longer exists.
+        CommandOutcome::Failed => ContainerState::Stopped,
+        // Timed out / unspawnable: the daemon may be wedged. Treating that as
+        // "done" could leave a container alive, so keep it unknown.
+        CommandOutcome::Unfinished => ContainerState::Unknown,
     }
 }
 
-/// The daemon's view of the container. Docker command failures are unknown, not
-/// stopped: treating a wedged daemon as "done" can leave the container alive.
+/// The daemon's view of the container. A wedged daemon is unknown, not stopped:
+/// treating it as "done" can leave the container alive. A definitive `inspect`
+/// failure (the id no longer resolves) is stopped: the container is gone.
 fn container_state(cid: &str) -> ContainerState {
-    let out = docker_quiet(
+    let outcome = command_quiet(
+        "docker",
         &["inspect", "-f", "{{.State.Running}}", cid],
         DOCKER_INSPECT_TIMEOUT,
     );
-    parse_container_state(out.as_deref())
+    parse_container_state(outcome)
 }
 
 /// Stop the active run without letting a slow cidfile create window orphan the
@@ -566,10 +634,10 @@ fn stop_active_run(sig: i32) {
 /// the signal never exits on it as PID 1. The 10s grace mirrors `docker stop`'s
 /// default.
 ///
-/// While this runs, the main thread stays blocked in `child.wait()` (the CLI
-/// only exits once its container does), so the process can't exit under the
-/// escalation. That's also why the watcher stops the container *before*
-/// touching the CLI child.
+/// On the signal path, the main thread normally stays blocked in `child.wait()`
+/// while the watcher performs this escalation; that is why the watcher stops
+/// the container *before* touching the CLI child. The post-wait orphan check
+/// also uses this function directly on the main thread when the CLI detached.
 fn stop_container_id(sig: i32, cid: &str) {
     let name = match sig {
         s if s == signal_hook::consts::SIGINT => "INT",
@@ -1165,16 +1233,39 @@ esac
 
     #[test]
     fn watcher_commands_are_bounded() {
-        assert_eq!(
-            command_quiet("/bin/sh", &["-c", "printf ok"], Duration::from_secs(1)).as_deref(),
-            Some("ok")
+        // Worst case is the late-cidfile path in `stop_active_run`: the first
+        // bounded wait fails (CIDFILE_WAIT), then after signalling the child the
+        // longer late wait succeeds (LATE_CIDFILE_WAIT), then `stop_container_id`
+        // runs its full graceful/escalating cleanup.
+        let worst_case_stop_container_id = DOCKER_KILL_TIMEOUT
+            + DOCKER_INSPECT_TIMEOUT
+            + CONTAINER_GRACE
+            + CONTAINER_POLL_INTERVAL
+            + DOCKER_INSPECT_TIMEOUT
+            + DOCKER_KILL_TIMEOUT;
+        let worst_case_signal_cleanup =
+            CIDFILE_WAIT + LATE_CIDFILE_WAIT + worst_case_stop_container_id;
+        assert!(
+            SIGNAL_FINISH_WAIT > worst_case_signal_cleanup,
+            "the main thread must not exit before the watcher can finish its bounded cleanup"
         );
+
+        assert!(matches!(
+            command_quiet("/bin/sh", &["-c", "printf ok"], Duration::from_secs(1)),
+            CommandOutcome::Ok(out) if out == "ok"
+        ));
+
+        // A fast non-zero exit is a definitive failure, distinct from a timeout.
+        assert!(matches!(
+            command_quiet("/bin/sh", &["-c", "exit 1"], Duration::from_secs(1)),
+            CommandOutcome::Failed
+        ));
 
         let started = Instant::now();
         let out = command_quiet("/bin/sh", &["-c", "sleep 5"], Duration::from_millis(50));
 
         assert!(
-            out.is_none(),
+            matches!(out, CommandOutcome::Unfinished),
             "timed-out command should be treated as best-effort failure"
         );
         assert!(
@@ -1252,19 +1343,33 @@ esac
     #[test]
     fn container_state_parser_distinguishes_running_stopped_unknown() {
         assert_eq!(
-            parse_container_state(Some("true\n")),
+            parse_container_state(CommandOutcome::Ok("true\n".into())),
             ContainerState::Running
         );
         assert_eq!(
-            parse_container_state(Some("false\n")),
+            parse_container_state(CommandOutcome::Ok("false\n".into())),
             ContainerState::Stopped
         );
-        assert_eq!(parse_container_state(Some("")), ContainerState::Unknown);
         assert_eq!(
-            parse_container_state(Some("docker error")),
+            parse_container_state(CommandOutcome::Ok(String::new())),
             ContainerState::Unknown
         );
-        assert_eq!(parse_container_state(None), ContainerState::Unknown);
+        assert_eq!(
+            parse_container_state(CommandOutcome::Ok("docker error".into())),
+            ContainerState::Unknown
+        );
+        // A definitive non-zero `inspect` means the id no longer resolves — the
+        // container is gone, so the grace loop can stop waiting immediately.
+        assert_eq!(
+            parse_container_state(CommandOutcome::Failed),
+            ContainerState::Stopped
+        );
+        // A timeout / unspawnable docker is not an answer: stay Unknown so a
+        // wedged daemon can't be mistaken for a stopped container.
+        assert_eq!(
+            parse_container_state(CommandOutcome::Unfinished),
+            ContainerState::Unknown
+        );
     }
 
     #[cfg(unix)]

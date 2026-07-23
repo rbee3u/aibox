@@ -327,17 +327,23 @@ fn reject_yes(action: &str, yes: bool) -> Result<()> {
 /// than selecting whichever directory the filesystem happened to visit first.
 /// Zero matches or ambiguous candidates fail with a message.
 fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
+    resolve_in(backend, &backend.files(home)?, query)
+}
+
+/// Resolve `query` against an already-discovered file list, so callers with many
+/// ids (`delete a b c`) can walk the transcript tree once instead of per id.
+fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> Result<PathBuf> {
     if query.is_empty() {
         bail!("need a session id (or unique prefix)");
     }
     let mut exact_matches: Vec<PathBuf> = Vec::new();
     let mut prefix_matches: Vec<PathBuf> = Vec::new();
-    for f in backend.files(home)? {
-        let id = backend.id_of(&f);
+    for f in files {
+        let id = backend.id_of(f);
         if id == query {
-            exact_matches.push(f);
+            exact_matches.push(f.clone());
         } else if id.starts_with(query) {
-            prefix_matches.push(f);
+            prefix_matches.push(f.clone());
         }
     }
     let matches = if exact_matches.is_empty() {
@@ -457,9 +463,12 @@ fn delete_targets(
         return Ok(targets);
     }
 
+    // Walk the transcript tree once, then resolve every id against that one
+    // snapshot — `delete a b c` used to re-walk per id.
+    let files = backend.files(home)?;
     let mut targets = Vec::new();
     for id in ids {
-        let path = resolve(backend, home, id)?;
+        let path = resolve_in(backend, &files, id)?;
         if !targets.iter().any(|existing| existing == &path) {
             targets.push(path);
         }

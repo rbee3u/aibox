@@ -369,7 +369,14 @@ fn push_c_string(cmd: &mut Vec<String>, key: &str, value: &str) {
 }
 
 fn codex_config_string(value: &str) -> String {
-    serde_json::Value::String(value.to_string()).to_string()
+    // Codex parses a `-c key=value` value as TOML before falling back to a raw
+    // string, so emit a TOML basic string. serde_json's string escaping matches
+    // TOML's for every control char *except* U+007F (DEL): JSON leaves it bare,
+    // TOML requires it escaped. Patch that one gap so a value containing DEL
+    // stays a valid TOML string instead of parsing back to the wrong value.
+    serde_json::Value::String(value.to_string())
+        .to_string()
+        .replace('\u{7f}', "\\u007F")
 }
 
 fn toml_key_segment(key: &str) -> String {
@@ -1054,6 +1061,16 @@ mod tests {
         ));
         assert!(!c.contains(&"model_providers.aibox.query_params.enabled=true"));
         assert!(!c.contains(&"model_providers.aibox.query_params.count=1"));
+    }
+
+    #[test]
+    fn codex_config_string_escapes_del_for_toml() {
+        // serde_json leaves U+007F (DEL) bare, but a TOML basic string requires
+        // it escaped; without the patch the `-c` value would parse back wrong.
+        assert_eq!(codex_config_string("a\u{7f}b"), "\"a\\u007Fb\"");
+        // Ordinary control chars serde_json already escapes stay as-is.
+        assert_eq!(codex_config_string("a\tb"), "\"a\\tb\"");
+        assert_eq!(codex_config_string("plain"), "\"plain\"");
     }
 
     #[test]

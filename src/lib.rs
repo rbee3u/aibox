@@ -73,14 +73,14 @@ fn validate_image_ref(agent: AgentKind, image: &str) -> Result<()> {
             "Docker image reference must not contain whitespace/control characters: {image:?}"
         );
     }
-    if image == docker::BASE_IMAGE {
+    if image_ref_is_default(image, docker::BASE_IMAGE) {
         anyhow::bail!("Docker image reference must not use aibox's internal base image: {image:?}");
     }
     let other_agent = match agent {
         AgentKind::Claude => AgentKind::Codex,
         AgentKind::Codex => AgentKind::Claude,
     };
-    if image == other_agent.image_default() {
+    if image_ref_is_default(image, other_agent.image_default()) {
         anyhow::bail!(
             "Docker image reference {image:?} is the default {} image, not {}",
             other_agent.tag(),
@@ -88,6 +88,65 @@ fn validate_image_ref(agent: AgentKind, image: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Docker normalizes familiar Docker Hub names (`busybox`, `library/busybox`,
+/// and `docker.io/library/busybox`) to the same repository, supplies `latest`
+/// when no tag is present, and permits a repository to be selected by digest.
+/// Keep the safety checks in `validate_image_ref` aligned with those rules so
+/// an equivalent spelling cannot bypass the agent/base-image guard.
+fn image_ref_is_default(image: &str, default: &str) -> bool {
+    let Some((image_repo, image_tag, image_has_digest)) = image_ref_parts(image) else {
+        return false;
+    };
+    let Some((default_repo, default_tag, _)) = image_ref_parts(default) else {
+        return image == default;
+    };
+
+    image_repo == default_repo
+        && (image_has_digest || image_tag.unwrap_or("latest") == default_tag.unwrap_or("latest"))
+}
+
+fn image_ref_parts(image: &str) -> Option<(String, Option<&str>, bool)> {
+    let (name_and_tag, has_digest) = match image.split_once('@') {
+        Some((name, _)) => (name, true),
+        None => (image, false),
+    };
+    if name_and_tag.is_empty() {
+        return None;
+    }
+
+    // A colon denotes a tag only when it occurs after the final slash; an
+    // earlier colon belongs to a registry port (`registry:5000/repo`).
+    let last_slash = name_and_tag.rfind('/');
+    let (repository, tag) = match name_and_tag.rfind(':') {
+        Some(colon) if last_slash.is_none_or(|slash| colon > slash) => {
+            (&name_and_tag[..colon], Some(&name_and_tag[colon + 1..]))
+        }
+        _ => (name_and_tag, None),
+    };
+    if repository.is_empty() {
+        return None;
+    }
+
+    Some((normalize_docker_repository(repository), tag, has_digest))
+}
+
+fn normalize_docker_repository(repository: &str) -> String {
+    let (domain, remainder) = match repository.split_once('/') {
+        None => return format!("docker.io/library/{repository}"),
+        Some(("docker.io" | "index.docker.io", remainder)) => ("docker.io", remainder),
+        Some((first, _)) if first == "localhost" || first.contains('.') || first.contains(':') => {
+            return repository.to_string();
+        }
+        Some(_) => ("docker.io", repository),
+    };
+
+    if remainder.contains('/') {
+        format!("{domain}/{remainder}")
+    } else {
+        format!("{domain}/library/{remainder}")
+    }
 }
 
 /// Write one line to stdout. `Ok(true)` on success; `Ok(false)` when the reader
@@ -272,11 +331,15 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     // --- resolve profile paths ------------------------------------------
     let root = profile::config_root(agent)?;
     let prof = Profile::resolve(agent, &root, &run.profile)?;
+    // Validate managed directories before resolving a named relay. Relay
+    // resolution may scaffold `base` and `envs/<name>`, so deferring this check
+    // would leave partial state when the mounted home or relay directory is a
+    // symlink and `ensure_home` rejects it later.
+    prof.validate_existing_layout_boundary()?;
 
     // --- a relay is required --------------------------------------------
     // No default endpoint: every run picks one with -e.
     let Some(env_name) = run.env.as_deref() else {
-        prof.validate_existing_layout_boundary()?;
         eprintln!("!! no relay selected — pick one with -e <name>:");
         let names = prof.relay_names();
         if names.is_empty() {
@@ -319,18 +382,19 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
         );
     }
 
-    // Home is needed only once the relay and image are usable. Creating/seeding
-    // it later keeps bad `-e` values and missing images from leaving partial
-    // profile home state behind.
+    // --- merge base + relay ---------------------------------------------
+    // Read and validate config before creating the mounted home. A malformed
+    // explicit relay or base file is not usable and must not leave profile-home
+    // state behind merely because the image happened to exist.
+    let sources = prof.merge_sources(relay.path())?;
+    let merged = MergedEnv::merge(&sources);
+
+    // Home is needed only once the relay, image, and env-file syntax are usable.
     prof.ensure_home()?;
     runspec::seed_home(agent, &prof.home_dir)?;
 
     // Nudge (don't touch) if base or the relay predates the current template.
     prof.nudge_if_stale(relay.path());
-
-    // --- merge base + relay ---------------------------------------------
-    let sources = prof.merge_sources(relay.path())?;
-    let merged = MergedEnv::merge(&sources);
 
     // --- assemble and run -----------------------------------------------
     let opts = RunOpts {
@@ -434,6 +498,27 @@ exit 99
         std::fs::set_permissions(path, perms).unwrap();
     }
 
+    #[cfg(unix)]
+    fn write_existing_image_docker(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("docker");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+    printf 'sha256:fake-image\n'
+    exit 0
+fi
+exit 99
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
     #[test]
     fn env_override_rejects_empty_values() {
         let _env_lock = test_env_lock();
@@ -458,29 +543,41 @@ exit 99
 
     #[test]
     fn image_refs_reject_internal_or_wrong_agent_images() {
-        let err = image_for(AgentKind::Codex, Some(docker::BASE_IMAGE))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("internal base image"),
-            "base image should not be runnable: {err}"
-        );
+        for base in [
+            docker::BASE_IMAGE,
+            "aibox-base",
+            "library/aibox-base",
+            "docker.io/aibox-base:latest",
+            "docker.io/library/aibox-base",
+            "index.docker.io/library/aibox-base:latest",
+            "aibox-base@sha256:deadbeef",
+            "aibox-base:dev@sha256:deadbeef",
+        ] {
+            let err = image_for(AgentKind::Codex, Some(base))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("internal base image"),
+                "base image should not be runnable: {err}"
+            );
+        }
 
-        let err = image_for(AgentKind::Codex, Some(AgentKind::Claude.image_default()))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("default claude image"),
-            "cross-agent default image should be rejected: {err}"
-        );
-
-        let err = image_for(AgentKind::Claude, Some(AgentKind::Codex.image_default()))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("default codex image"),
-            "cross-agent default image should be rejected: {err}"
-        );
+        for (agent, other, label) in [
+            (AgentKind::Codex, AgentKind::Claude, "claude"),
+            (AgentKind::Claude, AgentKind::Codex, "codex"),
+        ] {
+            let default = other.image_default();
+            let tagless = default.strip_suffix(":latest").unwrap();
+            let canonical = format!("docker.io/library/{tagless}");
+            let digest = format!("{tagless}@sha256:deadbeef");
+            for image in [default, tagless, &canonical, &digest] {
+                let err = image_for(agent, Some(image)).unwrap_err().to_string();
+                assert!(
+                    err.contains(&format!("default {label} image")),
+                    "cross-agent default image should be rejected: {err}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -493,6 +590,17 @@ exit 99
             image_for(AgentKind::Codex, Some("registry.example/aibox:dev")).unwrap(),
             "registry.example/aibox:dev"
         );
+        for distinct in [
+            "registry.example/aibox-base:latest",
+            "user/aibox-base:latest",
+            "localhost/aibox-base:latest",
+            "aibox-base:dev",
+        ] {
+            assert_eq!(
+                image_for(AgentKind::Codex, Some(distinct)).unwrap(),
+                distinct
+            );
+        }
     }
 
     #[test]
@@ -668,6 +776,31 @@ exit 99
 
     #[cfg(unix)]
     #[test]
+    fn malformed_env_is_rejected_before_home_creation() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let relay = config_root.join("default").join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(&relay, "CODEX_API_KEY = sk-invalid\n").unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        write_existing_image_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("not a valid KEY=VALUE line"), "{err}");
+        assert!(
+            !config_root.join("default").join("home").exists(),
+            "invalid env syntax must not create profile home state"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn run_rejects_symlinked_profile_dir_before_scaffold() {
         use std::os::unix::fs::symlink;
 
@@ -698,6 +831,41 @@ exit 99
         assert!(
             !outside.join("base").exists(),
             "run scaffolding must not create base through a symlinked profile"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_rejects_symlinked_home_before_named_relay_scaffold() {
+        use std::os::unix::fs::symlink;
+
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let outside = root.path().join("outside-home");
+        std::fs::create_dir_all(config_root.join("default")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        symlink(&outside, config_root.join("default/home")).unwrap();
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(
+            err.contains("profile home is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            !config_root.join("default/envs").exists(),
+            "named relay validation must not scaffold envs after a home boundary failure"
+        );
+        assert!(
+            !config_root.join("default/base").exists(),
+            "named relay validation must not scaffold base after a home boundary failure"
+        );
+        assert!(
+            !outside.join("envs").exists(),
+            "named relay validation must not write through the home symlink"
         );
     }
 

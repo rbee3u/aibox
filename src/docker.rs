@@ -170,22 +170,25 @@ pub fn run(
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
-            crate::creds::finish_child();
+            let _ = crate::creds::finish_child();
             return Err(e);
         }
     };
-    let status = match create {
+    let (status, stopped_lingering_container) = match create {
         ContainerCreate::Created => {
             if let Some(callback) = after_container_created.take() {
                 callback();
             }
             let waited = child.wait();
-            crate::creds::finish_child();
-            waited.context("wait for docker run")?
+            let stopped_lingering_container = crate::creds::finish_child();
+            (
+                waited.context("wait for docker run")?,
+                stopped_lingering_container,
+            )
         }
         ContainerCreate::ChildExited(status) => {
-            crate::creds::finish_child();
-            status
+            let stopped_lingering_container = crate::creds::finish_child();
+            (status, stopped_lingering_container)
         }
         ContainerCreate::TimedOut => {
             // If Docker is unusually slow to materialize the cidfile, keep any
@@ -197,12 +200,20 @@ pub fn run(
                 &cid_path,
                 &mut after_container_created,
             );
-            crate::creds::finish_child();
-            waited.context("wait for docker run")?
+            let stopped_lingering_container = crate::creds::finish_child();
+            (
+                waited.context("wait for docker run")?,
+                stopped_lingering_container,
+            )
         }
     };
 
-    Ok(exit_code(status))
+    let code = exit_code(status);
+    Ok(if stopped_lingering_container && code == 0 {
+        1
+    } else {
+        code
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +386,19 @@ if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
             ;;
     esac
 fi
+if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] && [ "$1" = "inspect" ]; then
+    if [ -e "$AIBOX_FAKE_DOCKER_STOPPED" ]; then
+        printf 'false\n'
+    else
+        printf 'true\n'
+    fi
+    exit 0
+fi
+if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] && [ "$1" = "kill" ]; then
+    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
+    : > "$AIBOX_FAKE_DOCKER_STOPPED"
+    exit 0
+fi
 if [ "$1" != "run" ]; then
     exit 99
 fi
@@ -409,6 +433,10 @@ case "$AIBOX_FAKE_DOCKER_MODE" in
         ;;
     no-cid)
         exit 23
+        ;;
+    lingering)
+        printf 'fake-container\n' > "$cid"
+        exit 0
         ;;
     *)
         exit 98
@@ -560,5 +588,29 @@ esac
             !callback_marker.exists(),
             "no container id means mount-target locks stay held for drop cleanup"
         );
+    }
+
+    #[test]
+    fn run_stops_a_lingering_container_and_returns_nonzero() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let stopped_marker = dir.path().join("stopped");
+        let docker_log = dir.path().join("docker.log");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering");
+        let _stopped = EnvGuard::set("AIBOX_FAKE_DOCKER_STOPPED", stopped_marker.as_os_str());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str());
+
+        let code = run(&[], "image:tag", &[], || {}).unwrap();
+
+        assert_eq!(
+            code, 1,
+            "a client-side zero exit is not a successful agent run when its container lingered"
+        );
+        assert!(stopped_marker.exists());
+        let log = fs::read_to_string(docker_log).unwrap();
+        assert!(log.contains("kill --signal TERM fake-container"), "{log}");
     }
 }
