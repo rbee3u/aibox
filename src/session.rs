@@ -364,9 +364,12 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
     }
 }
 
+const LIST_TITLE_MAX_CHARS: usize = 64;
+
 /// List this profile's sessions, newest first: `shortid  date  title`. Every
 /// transcript lists (tool/injected-only shells show an empty title) so nothing is
-/// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`.
+/// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`; titles
+/// are collapsed to one line and capped at 64 chars.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     list_with_printer(backend, home, crate::print_line)
 }
@@ -385,8 +388,7 @@ fn list_with_printer(
     for f in discovery.files {
         match backend.summarize(&f) {
             Ok(s) => {
-                // Titles can contain newlines/tabs; collapse them to single spaces.
-                let title = collapse_ws(&s.title);
+                let title = list_title(&s.title);
                 rows.push((s.start_ts, s.id, title));
             }
             Err(e) => {
@@ -536,6 +538,10 @@ fn collapse_ws(s: &str) -> String {
     out
 }
 
+fn list_title(s: &str) -> String {
+    collapse_ws(s).chars().take(LIST_TITLE_MAX_CHARS).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,8 +569,8 @@ mod tests {
             v.get("typed").and_then(Value::as_str).map(str::to_string)
         }
 
-        fn start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
-            None
+        fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+            v.get("ts").and_then(Value::as_str).map(str::to_string)
         }
     }
 
@@ -633,8 +639,8 @@ mod tests {
             v.get("typed").and_then(Value::as_str).map(str::to_string)
         }
 
-        fn start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
-            None
+        fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+            v.get("ts").and_then(Value::as_str).map(str::to_string)
         }
     }
 
@@ -653,6 +659,18 @@ mod tests {
     }
 
     #[test]
+    fn list_title_collapses_and_truncates_to_64_chars() {
+        assert_eq!(list_title("a\n\nb\tc"), "a b c");
+        let long: String = "0123456789".repeat(7); // 70 chars
+        assert_eq!(list_title(&long), long[..64].to_string());
+        assert_eq!(list_title(&long).chars().count(), 64);
+
+        let multibyte = "é".repeat(70);
+        assert_eq!(list_title(&multibyte), "é".repeat(64));
+        assert_eq!(list_title(&multibyte).chars().count(), 64);
+    }
+
+    #[test]
     fn transcript_read_errors_are_not_reported_as_empty_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("sessions").join("missing.jsonl");
@@ -665,6 +683,30 @@ mod tests {
 
         assert!(err.contains("open session transcript"));
         assert!(err.contains("missing.jsonl"));
+    }
+
+    #[test]
+    fn prompts_stream_typed_turns_in_order_after_bad_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            "\
+not json
+{\"timestamp\":\"2026-07-14T02:16:00Z\",\"typed\":\"first prompt\"}
+{\"timestamp\":\"2026-07-14T02:17:00Z\"}
+{\"timestamp\":\"2026-07-14T02:18:00Z\",\"typed\":\"second prompt\"}
+",
+        )
+        .unwrap();
+
+        let prompts = TestBackend.prompts(&path).unwrap();
+
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts[0].timestamp, "2026-07-14T02:16:00Z");
+        assert_eq!(prompts[0].text, "first prompt");
+        assert_eq!(prompts[1].timestamp, "2026-07-14T02:18:00Z");
+        assert_eq!(prompts[1].text, "second prompt");
     }
 
     #[test]
@@ -724,6 +766,107 @@ mod tests {
     }
 
     #[test]
+    fn list_orders_sessions_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.jsonl");
+        let new = dir.path().join("new.jsonl");
+        std::fs::write(
+            &old,
+            "{\"ts\":\"2026-07-14T02:16:00Z\",\"typed\":\"old prompt\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &new,
+            "{\"ts\":\"2026-07-14T02:17:00Z\",\"typed\":\"new prompt\"}\n",
+        )
+        .unwrap();
+        let backend = ExplicitFilesBackend::new(vec![old, new]);
+        let mut lines = Vec::new();
+
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].contains("new prompt") && lines[1].contains("old prompt"),
+            "list rows should be newest first: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn list_places_sessions_without_timestamps_after_timestamped_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.jsonl");
+        let new = dir.path().join("new.jsonl");
+        let no_ts = dir.path().join("no-ts.jsonl");
+        std::fs::write(
+            &old,
+            "{\"ts\":\"2026-07-14T02:16:00Z\",\"typed\":\"old prompt\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &new,
+            "{\"ts\":\"2026-07-14T02:17:00Z\",\"typed\":\"new prompt\"}\n",
+        )
+        .unwrap();
+        std::fs::write(&no_ts, "{\"typed\":\"no timestamp\"}\n").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![no_ts, new, old]);
+        let mut lines = Vec::new();
+
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(lines.len(), 3);
+        assert!(
+            lines[0].contains("new prompt")
+                && lines[1].contains("old prompt")
+                && lines[2].contains("no timestamp"),
+            "timestamp-less sessions should not sort above real timestamps: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn list_stops_cleanly_when_printer_hangs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.jsonl");
+        let second = dir.path().join("second.jsonl");
+        std::fs::write(
+            &first,
+            "{\"ts\":\"2026-07-14T02:17:00Z\",\"typed\":\"first\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &second,
+            "{\"ts\":\"2026-07-14T02:16:00Z\",\"typed\":\"second\"}\n",
+        )
+        .unwrap();
+        let backend = ExplicitFilesBackend::new(vec![first, second]);
+        let mut printed = Vec::new();
+
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            printed.push(line.to_string());
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            printed.len(),
+            1,
+            "list should stop writing after a broken-pipe-style false"
+        );
+        assert!(printed[0].contains("first"));
+    }
+
+    #[test]
     fn get_and_delete_still_fail_fast_on_discovery_errors() {
         let dir = tempfile::tempdir().unwrap();
         let backend = ExplicitFilesBackend::with_files_error("discovery failed");
@@ -756,6 +899,30 @@ mod tests {
         assert!(
             files.is_empty(),
             "host-side browsing must not follow symlinks"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tolerant_session_discovery_does_not_follow_transcript_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.jsonl");
+        std::fs::write(&outside, "{}\n").unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        symlink(&outside, sessions.join("linked.jsonl")).unwrap();
+
+        let discovery = walk_jsonl_tolerant(&sessions, |_| true).unwrap();
+
+        assert!(
+            discovery.files.is_empty(),
+            "list's tolerant walk must not follow transcript-shaped symlinks"
+        );
+        assert!(
+            discovery.errors.is_empty(),
+            "skipped transcript symlinks should not be reported as walk failures"
         );
     }
 
@@ -868,6 +1035,19 @@ mod tests {
     }
 
     #[test]
+    fn confirm_delete_accepts_only_explicit_yes_answers() {
+        for yes in ["y\n", "Y\n", "yes\n", " YES \n"] {
+            let mut input = Cursor::new(yes.as_bytes());
+            assert!(confirm_delete("11111111", &mut input), "{yes:?}");
+        }
+
+        for no in ["", "\n", "n\n", "yeah\n", "yep\n", " yes please\n"] {
+            let mut input = Cursor::new(no.as_bytes());
+            assert!(!confirm_delete("11111111", &mut input), "{no:?}");
+        }
+    }
+
+    #[test]
     fn delete_targets_dedupes_repeated_ids() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_session(dir.path(), "11111111");
@@ -880,6 +1060,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(targets, vec![path]);
+    }
+
+    #[test]
+    fn delete_no_ids_orders_targets_by_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let z = dir.path().join("z-session.jsonl");
+        let a = dir.path().join("a-session.jsonl");
+        std::fs::write(&z, "{}\n").unwrap();
+        std::fs::write(&a, "{}\n").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![z.clone(), a.clone()]);
+
+        let targets = delete_targets(&backend, dir.path(), &[]).unwrap();
+
+        assert_eq!(
+            targets,
+            vec![a, z],
+            "no-id delete should prompt in deterministic session-id order"
+        );
+    }
+
+    #[test]
+    fn dispatch_rm_alias_deletes_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".claude/projects/p/11111111-2222-3333-4444-555555555555.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"timestamp":"2026-07-14T02:16:00Z"}"#).unwrap();
+        let ids = vec!["1111".to_string()];
+
+        let code = dispatch(AgentKind::Claude, dir.path(), "rm", &ids, true).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(
+            !path.exists(),
+            "session rm must be the same destructive action as session delete"
+        );
     }
 
     #[test]

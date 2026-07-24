@@ -519,6 +519,145 @@ exit 99
         std::fs::set_permissions(path, perms).unwrap();
     }
 
+    #[cfg(unix)]
+    fn write_successful_run_docker(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("docker");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+log="$AIBOX_FAKE_DOCKER_LOG"
+printf 'ARGS:' >> "$log"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$log"
+done
+printf '\n' >> "$log"
+
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+    printf 'sha256:fake-image\n'
+    exit 0
+fi
+
+if [ "$1" = "inspect" ]; then
+    printf 'false\n'
+    exit 0
+fi
+
+if [ "$1" = "run" ]; then
+    shift
+    cid=
+    envfile=
+    authjson=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --cidfile)
+                cid="$2"
+                shift 2
+                ;;
+            --env-file)
+                envfile="$2"
+                shift 2
+                ;;
+            -v)
+                case "$2" in
+                    *:/home/codex/.codex/auth.json:ro)
+                        authjson="${2%:/home/codex/.codex/auth.json:ro}"
+                        ;;
+                esac
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    if [ -n "$envfile" ] && [ -f "$envfile" ]; then
+        sed 's/^/ENV:/' "$envfile" >> "$log"
+    fi
+    if [ -n "$authjson" ] && [ -f "$authjson" ]; then
+        sed 's/^/AUTH:/' "$authjson" >> "$log"
+    fi
+    printf 'fake-container\n' > "$cid"
+    exit 0
+fi
+
+exit 99
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn write_build_logging_docker(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("docker");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" != "build" ]; then
+    exit 99
+fi
+log="$AIBOX_FAKE_DOCKER_LOG"
+printf 'ARGS:' >> "$log"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$log"
+    last="$arg"
+done
+printf '\n' >> "$log"
+if [ ! -d "$last" ]; then
+    printf 'context is not a directory: %s\n' "$last" >&2
+    exit 98
+fi
+printf 'STDIN:' >> "$log"
+sed -n '1p' >> "$log"
+printf '\nEND\n' >> "$log"
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn write_docker_should_not_be_called(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("docker");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ -n "$AIBOX_FAKE_DOCKER_LOG" ]; then
+    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
+fi
+exit 97
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    fn token_after_arg(line: &str, arg: &str) -> Option<String> {
+        let marker = format!("<{arg}> <");
+        let start = line.find(&marker)? + marker.len();
+        let end = line[start..].find('>')?;
+        Some(line[start..start + end].to_string())
+    }
+
+    fn mounted_source_for(line: &str, target: &str) -> Option<String> {
+        let suffix = format!(":{target}:ro");
+        line.split(" <")
+            .map(|part| part.strip_suffix('>').unwrap_or(part))
+            .find_map(|arg| arg.strip_suffix(&suffix).map(str::to_string))
+    }
+
     #[test]
     fn env_override_rejects_empty_values() {
         let _env_lock = test_env_lock();
@@ -618,7 +757,118 @@ exit 99
     }
 
     #[test]
+    fn build_all_rejects_ambiguous_image_override() {
+        let args = BuildArgs {
+            target: None,
+            force: false,
+        };
+
+        let err = build_targets(&args, Some("custom/agent:dev"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("AIBOX_IMAGE is ambiguous with `aibox build`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn build_target_accepts_image_override_for_selected_agent() {
+        let args = BuildArgs {
+            target: Some(BuildTarget::Claude),
+            force: false,
+        };
+
+        let targets = build_targets(&args, Some("custom/claude:dev")).unwrap();
+
+        assert_eq!(
+            targets,
+            vec![(AgentKind::Claude, "custom/claude:dev".to_string())]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_codex_force_builds_base_then_only_codex_image() {
+        let _env_lock = test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("docker.log");
+        write_build_logging_docker(dir.path());
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "build", "codex", "--force"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(log).unwrap();
+        let build_lines: Vec<&str> = log
+            .lines()
+            .filter(|line| line.starts_with("ARGS:"))
+            .collect();
+        assert_eq!(build_lines.len(), 2, "force target build log:\n{log}");
+        assert!(
+            build_lines[0].contains("<--no-cache> <--pull>")
+                && build_lines[0].contains("<-t> <aibox-base:latest>"),
+            "base image must be rebuilt first with a fresh upstream base:\n{log}"
+        );
+        assert!(
+            build_lines[1].contains("<--no-cache>")
+                && !build_lines[1].contains("<--pull>")
+                && build_lines[1].contains("<-t> <aibox-codex:latest>"),
+            "target agent image should rebuild without pulling the local base:\n{log}"
+        );
+        assert!(
+            !log.contains("aibox-claude:latest"),
+            "a targeted codex build must not build the Claude image:\n{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_default_builds_base_then_both_agent_images_with_cache() {
+        let _env_lock = test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("docker.log");
+        write_build_logging_docker(dir.path());
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "build"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(log).unwrap();
+        let build_lines: Vec<&str> = log
+            .lines()
+            .filter(|line| line.starts_with("ARGS:"))
+            .collect();
+        assert_eq!(build_lines.len(), 3, "default build log:\n{log}");
+        assert!(
+            build_lines[0].contains("<-t> <aibox-base:latest>")
+                && !build_lines[0].contains("<--no-cache>")
+                && !build_lines[0].contains("<--pull>"),
+            "default build must build the shared base first with cache enabled:\n{log}"
+        );
+        assert!(
+            build_lines[1].contains("<-t> <aibox-claude:latest>")
+                && build_lines[2].contains("<-t> <aibox-codex:latest>"),
+            "default build must build both agent images after the base:\n{log}"
+        );
+        assert!(
+            !log.contains("<--no-cache>") && !log.contains("<--pull>"),
+            "cached default build should not force cache or pull flags:\n{log}"
+        );
+    }
+
+    #[test]
     fn refresh_session_and_build_reject_passthrough_args() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
         for argv in [
             ["aibox", "claude", "refresh"].as_slice(),
             ["aibox", "codex", "session"].as_slice(),
@@ -631,10 +881,19 @@ exit 99
                 "unexpected error for {argv:?}: {err}"
             );
         }
+        assert!(
+            !config_root.exists(),
+            "rejecting pass-through misuse must happen before profile state is created"
+        );
     }
 
     #[test]
     fn refresh_and_session_reject_ignored_run_only_options() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
         for argv in [
             ["aibox", "codex", "-e", "relay", "session"].as_slice(),
             ["aibox", "claude", "--safe", "refresh"].as_slice(),
@@ -647,13 +906,95 @@ exit 99
                 "unexpected error for {argv:?}: {err}"
             );
         }
+        assert!(
+            !config_root.exists(),
+            "rejecting ignored run-only options must happen before profile state is created"
+        );
     }
 
     #[test]
     fn claude_exec_is_rejected() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
         let cli = Cli::try_parse_from(["aibox", "claude", "--exec"]).unwrap();
         let err = run(cli, Vec::new()).unwrap_err();
+
         assert!(err.to_string().contains("--exec is codex-only"));
+        assert!(
+            !config_root.exists(),
+            "Claude --exec must fail before profile state is created"
+        );
+    }
+
+    #[test]
+    fn invalid_image_override_is_rejected_before_profile_state() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+        let _image = EnvGuard::set("AIBOX_IMAGE", "bad image");
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let err = run(cli, Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("Docker image reference"), "{err}");
+        assert!(
+            !config_root.exists(),
+            "invalid image overrides must fail before profile state is created"
+        );
+    }
+
+    #[test]
+    fn missing_relay_selection_returns_nonzero_without_profile_state() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "claude"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 1);
+        assert!(
+            !config_root.join("default").exists(),
+            "omitting -e should only print a relay hint, not create profile state"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_use_named_relay_scaffolds_without_checking_docker_image() {
+        let _env_lock = test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_docker_should_not_be_called(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(
+            code, 1,
+            "first use scaffolds config and asks the user to edit it"
+        );
+        let profile = config_root.join("default");
+        assert!(profile.join("base").is_file());
+        assert!(profile.join("envs/relay").is_file());
+        assert!(
+            !profile.join("home").exists(),
+            "scaffold-only run must stop before mounted home setup"
+        );
+        assert!(
+            !docker_log.exists(),
+            "scaffold-only run must not query or run Docker before credentials exist"
+        );
     }
 
     #[test]
@@ -796,6 +1137,351 @@ exit 99
         assert!(
             !config_root.join("default").join("home").exists(),
             "invalid env syntax must not create profile home state"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_claude_run_merges_env_and_cleans_staged_file() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let profile = config_root.join("default");
+        let relay = profile.join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            profile.join("base"),
+            "ANTHROPIC_BASE_URL=https://base.example\nANTHROPIC_DEFAULT_HAIKU_MODEL=base-haiku\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &relay,
+            "ANTHROPIC_BASE_URL=https://relay.example\nANTHROPIC_AUTH_TOKEN=sk-claude\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "claude", "-e", "relay"]).unwrap();
+        let code = run(cli, vec!["--model".to_string(), "opus".to_string()]).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(
+            profile
+                .join("home")
+                .join(".claude")
+                .join("statusline.sh")
+                .is_file(),
+            "a successful Claude run seeds the mounted home before docker run"
+        );
+
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        let run_line = log
+            .lines()
+            .find(|line| line.starts_with("ARGS: <run>"))
+            .expect("docker run was invoked");
+        let home_mount = format!("{}:/home/claude", profile.join("home").display());
+        let work_mount = format!("{}:/work", std::env::current_dir().unwrap().display());
+        assert!(run_line.contains(&format!("<{home_mount}>")), "{run_line}");
+        assert!(run_line.contains(&format!("<{work_mount}>")), "{run_line}");
+        assert!(
+            run_line.contains("<aibox-claude:latest> <--dangerously-skip-permissions>"),
+            "Claude runs permissive by default inside the container: {run_line}"
+        );
+        assert!(
+            run_line.ends_with("<--model> <opus>"),
+            "pass-through args should remain at the end of the Claude command: {run_line}"
+        );
+        assert!(
+            log.contains("ENV:ANTHROPIC_BASE_URL=https://relay.example\n"),
+            "relay values must override base values in the staged Docker env-file:\n{log}"
+        );
+        assert!(
+            log.contains("ENV:ANTHROPIC_DEFAULT_HAIKU_MODEL=base-haiku\n"),
+            "base-only values must survive the merge:\n{log}"
+        );
+        assert!(
+            log.contains("ENV:ANTHROPIC_AUTH_TOKEN=sk-claude\n"),
+            "{log}"
+        );
+        let staged_env = token_after_arg(run_line, "--env-file").expect("staged env-file");
+        assert!(
+            !std::path::Path::new(&staged_env).exists(),
+            "staged merged env-file must be removed after docker run returns"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_run_uses_image_override_for_selected_agent() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let profile = config_root.join("default");
+        let relay = profile.join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            &relay,
+            "ANTHROPIC_BASE_URL=https://relay.example\nANTHROPIC_AUTH_TOKEN=sk-claude\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+        let _image = EnvGuard::set("AIBOX_IMAGE", "registry.example/team/claude:dev");
+
+        let cli = Cli::try_parse_from(["aibox", "claude", "-e", "relay", "--safe"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        let run_line = log
+            .lines()
+            .find(|line| line.starts_with("ARGS: <run>"))
+            .expect("docker run was invoked");
+        assert!(
+            run_line.contains("<registry.example/team/claude:dev>"),
+            "run must use the validated AIBOX_IMAGE override: {run_line}"
+        );
+        assert!(
+            !run_line.contains("<aibox-claude:latest>"),
+            "custom image override must replace the default image: {run_line}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_run_uses_explicit_env_path_without_scaffolding_relay_files() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let explicit_relay = root.path().join("external.env");
+        std::fs::write(
+            &explicit_relay,
+            "ANTHROPIC_BASE_URL=https://external.example\nANTHROPIC_AUTH_TOKEN=sk-external\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "claude", "-e", explicit_relay.to_str().unwrap()])
+            .unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let profile = config_root.join("default");
+        assert!(
+            profile.join("home/.claude/statusline.sh").is_file(),
+            "a real run still creates and seeds the mounted home"
+        );
+        assert!(
+            !profile.join("base").exists() && !profile.join("envs").exists(),
+            "explicit env-file paths must not scaffold named-relay profile files"
+        );
+
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        assert!(
+            log.contains("ENV:ANTHROPIC_BASE_URL=https://external.example\n"),
+            "run must read the explicit relay path, not a named envs/ relay:\n{log}"
+        );
+        assert!(log.contains("ENV:ANTHROPIC_AUTH_TOKEN=sk-external\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_codex_run_assembles_docker_args_and_cleans_staged_key() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let relay = config_root.join("default").join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            &relay,
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-test\nCODEX_MODEL=gpt-test\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli =
+            Cli::try_parse_from(["aibox", "codex", "-e", "relay", "--safe", "--exec"]).unwrap();
+        let code = run(cli, vec!["explain the repo".to_string()]).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(
+            config_root
+                .join("default")
+                .join("home")
+                .join(".codex")
+                .is_dir(),
+            "a successful Codex run seeds CODEX_HOME before docker run"
+        );
+
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        let run_line = log
+            .lines()
+            .find(|line| line.starts_with("ARGS: <run>"))
+            .expect("docker run was invoked");
+        let home_mount = format!("{}:/home/codex", config_root.join("default/home").display());
+        let work_mount = format!("{}:/work", std::env::current_dir().unwrap().display());
+        assert!(run_line.contains(&format!("<{home_mount}>")), "{run_line}");
+        assert!(run_line.contains(&format!("<{work_mount}>")), "{run_line}");
+        assert!(
+            run_line.contains("<aibox-codex:latest> <exec>"),
+            "{run_line}"
+        );
+        assert!(
+            run_line.contains("<approval_policy=\"on-request\">")
+                && run_line.contains("<-s> <workspace-write>"),
+            "--safe exec must use Codex-compatible approval/sandbox args: {run_line}"
+        );
+        assert!(
+            run_line.ends_with("<explain the repo>"),
+            "pass-through args should remain at the end of the agent command: {run_line}"
+        );
+        let staged_key = token_after_arg(run_line, "--env-file").expect("staged key env-file");
+        assert!(
+            !std::path::Path::new(&staged_key).exists(),
+            "staged key env-file must be removed after docker run returns"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_codex_run_inherits_base_model_config() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let profile = config_root.join("default");
+        let relay = profile.join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            profile.join("base"),
+            "CODEX_MODEL=base-model\nCODEX_REASONING=high\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &relay,
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-test\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        let run_line = log
+            .lines()
+            .find(|line| line.starts_with("ARGS: <run>"))
+            .expect("docker run was invoked");
+        assert!(
+            run_line.contains("<model=\"base-model\">"),
+            "Codex must inherit CODEX_MODEL from profile/base when relay omits it: {run_line}"
+        );
+        assert!(
+            run_line.contains("<model_reasoning_effort=\"high\">"),
+            "Codex must inherit optional model config from profile/base: {run_line}"
+        );
+        assert!(
+            log.contains("ENV:OPENAI_API_KEY=sk-test\n"),
+            "relay-only API key still reaches the staged Codex env-file:\n{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_codex_auth_json_run_cleans_staged_mount_and_placeholder() {
+        let _env_lock = test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let root = tempfile::tempdir().unwrap();
+        let config_root = root.path().join("aibox-config");
+        let profile = config_root.join("default");
+        let relay = profile.join("envs").join("relay");
+        std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+        std::fs::write(
+            &relay,
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-we\"ird\\key\nCODEX_MODEL=gpt-test\nCODEX_REQUIRES_OPENAI_AUTH=1\n",
+        )
+        .unwrap();
+
+        let docker_dir = tempfile::tempdir().unwrap();
+        let docker_log = docker_dir.path().join("docker.log");
+        write_successful_run_docker(docker_dir.path());
+        let _path = EnvGuard::prepend_path(docker_dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.to_str().unwrap());
+        let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", config_root.to_str().unwrap());
+
+        let cli = Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(docker_log).unwrap();
+        let run_line = log
+            .lines()
+            .find(|line| line.starts_with("ARGS: <run>"))
+            .expect("docker run was invoked");
+        assert!(
+            !run_line.contains("<--env-file>"),
+            "auth.json mode must not also send OPENAI_API_KEY through env_key mode: {run_line}"
+        );
+        assert!(
+            run_line.contains("<model_providers.aibox.requires_openai_auth=true>"),
+            "Codex must be told to read the mounted auth.json: {run_line}"
+        );
+        assert!(
+            !run_line.contains("model_providers.aibox.env_key"),
+            "Codex auth modes must stay mutually exclusive: {run_line}"
+        );
+        let auth_json = log
+            .lines()
+            .find_map(|line| line.strip_prefix("AUTH:"))
+            .expect("fake docker records the staged auth.json body");
+        let auth: serde_json::Value = serde_json::from_str(auth_json).unwrap();
+        assert_eq!(
+            auth["OPENAI_API_KEY"], r#"sk-we"ird\key"#,
+            "auth.json mode must stage a valid JSON credential file with the relay key"
+        );
+        let staged_auth = mounted_source_for(run_line, "/home/codex/.codex/auth.json")
+            .expect("staged auth.json bind mount");
+        assert!(
+            !std::path::Path::new(&staged_auth).exists(),
+            "staged auth.json must be removed after docker run returns"
+        );
+        assert!(
+            !profile.join("home/.codex/auth.json").exists(),
+            "pre-created auth.json placeholder must be removed after docker run returns"
         );
     }
 

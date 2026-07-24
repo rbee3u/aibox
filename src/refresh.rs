@@ -616,6 +616,29 @@ mod tests {
     }
 
     #[test]
+    fn run_refresh_path_to_relay_named_base_does_not_refresh_profile_base() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("base").unwrap();
+        let relay = prof.envs_dir.join("base");
+        let base_original = "ANTHROPIC_DEFAULT_HAIKU_MODEL=base-haiku\n";
+        std::fs::write(&prof.base_file, base_original).unwrap();
+        std::fs::write(&relay, "ANTHROPIC_BASE_URL=https://relay.example\n").unwrap();
+
+        run_refresh(&prof, Some(relay.to_str().unwrap()), false).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&prof.base_file).unwrap(),
+            base_original,
+            "a relay literally named base must be refreshed by path, without touching profile/base"
+        );
+        let refreshed = std::fs::read_to_string(&relay).unwrap();
+        assert!(refreshed.contains("# base"));
+        assert!(refreshed.contains("relay endpoint"));
+        assert!(refreshed.contains("ANTHROPIC_BASE_URL=https://relay.example"));
+    }
+
+    #[test]
     fn run_refresh_dry_run_stops_when_stdout_reader_hangs_up() {
         let root = tempfile::tempdir().unwrap();
         let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
@@ -633,6 +656,65 @@ mod tests {
             writes, 1,
             "sweep should stop after the first broken-pipe-style false"
         );
+    }
+
+    #[test]
+    fn run_refresh_explicit_dry_run_prints_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let relay = prof.envs_dir.join("r");
+        let original = "ANTHROPIC_BASE_URL=https://relay.example\n";
+        std::fs::write(&relay, original).unwrap();
+        let mut printed = Vec::new();
+
+        let code = run_refresh_with_printer(&prof, Some("r"), true, |line| {
+            printed.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_to_string(&relay).unwrap(),
+            original,
+            "--dry-run must not rewrite the target file"
+        );
+        assert_eq!(printed.len(), 1);
+        assert!(printed[0].contains(&format!("===== {} =====", relay.display())));
+        assert!(printed[0].contains("#ANTHROPIC_BASE_URL="));
+        assert!(printed[0].contains("ANTHROPIC_BASE_URL=https://relay.example"));
+    }
+
+    #[test]
+    fn run_refresh_sweep_dry_run_prints_all_targets_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let base_original = "ANTHROPIC_DEFAULT_HAIKU_MODEL=custom-haiku\n";
+        let relay_original = "ANTHROPIC_BASE_URL=https://relay.example\n";
+        std::fs::write(&prof.base_file, base_original).unwrap();
+        let relay = prof.envs_dir.join("r");
+        std::fs::write(&relay, relay_original).unwrap();
+        let mut printed = Vec::new();
+
+        let code = run_refresh_with_printer(&prof, None, true, |line| {
+            printed.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_to_string(&prof.base_file).unwrap(),
+            base_original
+        );
+        assert_eq!(std::fs::read_to_string(&relay).unwrap(), relay_original);
+        assert_eq!(printed.len(), 2);
+        assert!(printed[0].contains(&format!("===== {} =====", prof.base_file.display())));
+        assert!(printed[0].contains("ANTHROPIC_DEFAULT_HAIKU_MODEL=custom-haiku"));
+        assert!(printed[1].contains(&format!("===== {} =====", relay.display())));
+        assert!(printed[1].contains("ANTHROPIC_BASE_URL=https://relay.example"));
     }
 
     #[test]
@@ -708,6 +790,23 @@ mod tests {
         let got = merge(old, template);
         assert!(got.contains("FOO=second"));
         assert!(!got.contains("FOO=first"));
+    }
+
+    #[test]
+    fn merge_preserves_indented_values_with_equals_after_the_key() {
+        let template = "#CODEX_QUERY_PARAMS=api-version=example\n";
+        let old = "  CODEX_QUERY_PARAMS=api-version=2025-04-01-preview,compound=a=b\n";
+
+        let got = merge(old, template);
+
+        assert_eq!(
+            got,
+            "#CODEX_QUERY_PARAMS=api-version=example\nCODEX_QUERY_PARAMS=api-version=2025-04-01-preview,compound=a=b"
+        );
+        assert!(
+            !got.contains(ORPHAN_HEADER),
+            "a value containing '=' must still match its shipped example key"
+        );
     }
 
     #[test]

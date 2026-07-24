@@ -9,10 +9,9 @@
 //!
 //! Codex has no ai-title, so a session's preview is its first *real* prompt. It
 //! also records injected wrapper turns (environment/instructions context blocks,
-//! `!`-shell commands, the per-project AGENTS.md preamble) as `text` content
-//! items; those are filtered by `is_wrapper_text`. Human `input_text` content is
-//! kept verbatim. A turn left with no text after filtering is skipped for previews
-//! and `get`.
+//! `!`-shell commands, skill payloads, the per-project AGENTS.md preamble) as
+//! text-like content items; those are filtered by `is_wrapper_text`. A turn left
+//! with no text after filtering is skipped for previews and `get`.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
@@ -22,14 +21,18 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-/// True if `t` is an injected wrapper text item Codex records as a user turn but
-/// that the user never typed. Only `text` items are tested with this; human
-/// `input_text` is kept verbatim even if it begins with the same literal text.
+/// True if `t` is an injected wrapper item Codex records as a user turn but
+/// that the user never typed.
 fn is_wrapper_text(t: &str) -> bool {
     const TAGS: &[(&str, &str)] = &[
         ("<environment_context>", "</environment_context>"),
         ("<user_instructions>", "</user_instructions>"),
         ("<INSTRUCTIONS>", "</INSTRUCTIONS>"),
+        ("<skill>", "</skill>"),
+        ("<permissions instructions>", "</permissions instructions>"),
+        ("<skills_instructions>", "</skills_instructions>"),
+        ("<collaboration_mode>", "</collaboration_mode>"),
+        ("<recommended_plugins>", "</recommended_plugins>"),
     ];
     if TAGS
         .iter()
@@ -103,7 +106,7 @@ impl SessionBackend for Codex {
 }
 
 /// If `v` is a `response_item` user message, join its content items' text with
-/// newlines, dropping injected wrapper `text` items. Returns `None` when `v`
+/// newlines, dropping injected wrapper items. Returns `None` when `v`
 /// isn't a user turn or nothing real survives filtering.
 fn user_turn_text(v: &Value) -> Option<String> {
     if v.get("type").and_then(Value::as_str) != Some("response_item") {
@@ -117,11 +120,10 @@ fn user_turn_text(v: &Value) -> Option<String> {
     let mut parts = Vec::new();
     for it in items {
         if let Some(t) = it.get("text").and_then(Value::as_str) {
-            let keep = match it.get("type").and_then(Value::as_str) {
-                Some("input_text") => true,
-                Some("text") => !is_wrapper_text(t),
-                _ => false,
-            };
+            let keep = matches!(
+                it.get("type").and_then(Value::as_str),
+                Some("input_text" | "text")
+            ) && !is_wrapper_text(t);
             if keep && !t.is_empty() {
                 parts.push(t.to_string());
             }
@@ -147,6 +149,31 @@ mod tests {
             writeln!(f, "{l}").unwrap();
         }
         path
+    }
+
+    #[test]
+    fn files_keep_only_rollout_jsonl_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
+            &[r#"{"type":"session_meta"}"#],
+        );
+        write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/session-x-ignored.jsonl",
+            &[r#"{"type":"session_meta"}"#],
+        );
+        std::fs::write(
+            dir.path()
+                .join(".codex/sessions/2026/07/14/rollout-x-ignored.txt"),
+            "{}\n",
+        )
+        .unwrap();
+
+        let files = Codex.files(dir.path()).unwrap();
+
+        assert_eq!(files, vec![rollout]);
     }
 
     #[test]
@@ -185,6 +212,19 @@ mod tests {
         assert!(is_wrapper_text("<user_shell name=\"ls\"></user_shell>"));
         assert!(is_wrapper_text("<user_shell name=\"ls\" />"));
         assert!(is_wrapper_text("<INSTRUCTIONS>x</INSTRUCTIONS>"));
+        assert!(is_wrapper_text("<skill>x</skill>"));
+        assert!(is_wrapper_text(
+            "<permissions instructions>x</permissions instructions>"
+        ));
+        assert!(is_wrapper_text(
+            "<skills_instructions>x</skills_instructions>"
+        ));
+        assert!(is_wrapper_text(
+            "<collaboration_mode>x</collaboration_mode>"
+        ));
+        assert!(is_wrapper_text(
+            "<recommended_plugins>x</recommended_plugins>"
+        ));
         assert!(is_wrapper_text("## My env\nlinux"));
         // The `#… instructions for ` branch (stays on the first line).
         assert!(is_wrapper_text("# Base instructions for gpt-5.5\nmore"));
@@ -216,24 +256,83 @@ mod tests {
     }
 
     #[test]
-    fn input_text_that_looks_like_a_wrapper_is_kept() {
+    fn non_wrapper_text_content_is_kept() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             dir.path(),
-            ".codex/sessions/2026/07/14/rollout-x-dddddddd-1111-2222-3333-444455556666.jsonl",
+            ".codex/sessions/2026/07/14/rollout-x-99999999-1111-2222-3333-444455556666.jsonl",
             &[
-                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"session_meta","payload":{}}"#,
-                r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"<environment_context>please explain this literal tag</environment_context>"}]}}"#,
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"response_item","payload":{"role":"user","content":[{"type":"text","text":"plain text prompt"},{"type":"input_text","text":"typed prompt"}]}}"#,
             ],
         );
 
         let ps = Codex.prompts(&path).unwrap();
 
         assert_eq!(ps.len(), 1);
-        assert_eq!(
-            ps[0].text,
-            "<environment_context>please explain this literal tag</environment_context>"
+        assert_eq!(ps[0].text, "plain text prompt\ntyped prompt");
+        assert_eq!(ps[0].timestamp, "2026-07-14T02:16:00Z");
+    }
+
+    #[test]
+    fn unsupported_user_content_items_are_not_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-13131313-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"response_item","payload":{"role":"user","content":[{"type":"output_text","text":"tool echo"},{"type":"input_image","text":"image alt"},{"type":"input_text","text":"real ask"}]}}"#,
+            ],
         );
+
+        let ps = Codex.prompts(&path).unwrap();
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(summary.title, "real ask");
+    }
+
+    #[test]
+    fn assistant_response_items_are_not_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-12121212-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"session_meta","payload":{}}"#,
+                r#"{"timestamp":"2026-07-14T02:17:00Z","type":"response_item","payload":{"role":"assistant","content":[{"type":"text","text":"assistant answer"}]}}"#,
+                r#"{"timestamp":"2026-07-14T02:18:00Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"real ask"}]}}"#,
+            ],
+        );
+
+        let ps = Codex.prompts(&path).unwrap();
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(summary.title, "real ask");
+    }
+
+    #[test]
+    fn injected_input_text_wrappers_are_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-dddddddd-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"session_meta","payload":{}}"#,
+                r##"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>\nignored\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/work</cwd>\n</environment_context>"}]}}"##,
+                r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"<skill>\nignored\n</skill>"}]}}"#,
+                r#"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"first real ask"}]}}"#,
+            ],
+        );
+
+        let ps = Codex.prompts(&path).unwrap();
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text, "first real ask");
+        assert_eq!(summary.title, "first real ask");
     }
 
     #[test]

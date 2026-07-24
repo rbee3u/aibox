@@ -456,6 +456,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_mounts_accepts_existing_file_sources() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let spec = format!("{}:/etc/aibox/config:ro", file.path().display());
+
+        let got = resolve_mounts(&[spec.clone()]).unwrap();
+
+        assert_eq!(got, vec![spec]);
+    }
+
+    #[test]
     fn extra_mounts_must_not_replace_managed_targets() {
         for (agent, target) in [
             (AgentKind::Claude, "/work"),
@@ -463,6 +473,7 @@ mod tests {
             (AgentKind::Claude, "/work/."),
             (AgentKind::Claude, "/work/../work"),
             (AgentKind::Claude, "/work/.."),
+            (AgentKind::Claude, "/../../work"),
             (AgentKind::Claude, "//work"),
             (AgentKind::Claude, "/"),
             (AgentKind::Claude, "/home"),
@@ -472,6 +483,8 @@ mod tests {
             (AgentKind::Codex, "/home"),
             (AgentKind::Codex, "/home/codex/../codex"),
             (AgentKind::Codex, "/home/codex/.."),
+            (AgentKind::Codex, "/home/codex/.codex/../../codex"),
+            (AgentKind::Codex, "/../../home/codex"),
             (AgentKind::Codex, "/home/codex"),
         ] {
             let err = validate_extra_mount_targets(agent, &[format!("/host:{target}:ro")])
@@ -493,6 +506,19 @@ mod tests {
                 "/host:/home/codex/.cache:ro".to_string(),
                 "/host:/cache:ro".to_string(),
                 "/host:/home/claude:ro".to_string(),
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn extra_mounts_allow_prefix_siblings_of_managed_targets() {
+        validate_extra_mount_targets(
+            AgentKind::Codex,
+            &[
+                "/host:/workspace:ro".to_string(),
+                "/host:/workbench".to_string(),
+                "/host:/home/codex-cache:ro".to_string(),
             ],
         )
         .unwrap();

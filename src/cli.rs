@@ -239,6 +239,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_run_bind_options_without_dropping_repeats() {
+        let (l, _) = split_passthrough(v(&[
+            "aibox",
+            "claude",
+            "-p",
+            "team",
+            "-e",
+            "relay",
+            "-w",
+            "src",
+            "-m",
+            "Cargo.toml:/repo/Cargo.toml:ro",
+            "--mount",
+            "src:/src",
+            "--safe",
+        ]));
+        let cli = Cli::try_parse_from(l).unwrap();
+        let args = cli.command.agent_args().unwrap();
+
+        assert_eq!(args.run.profile, "team");
+        assert_eq!(args.run.env.as_deref(), Some("relay"));
+        assert_eq!(args.run.work.as_deref(), Some("src"));
+        assert_eq!(
+            args.run.mount,
+            v(&["Cargo.toml:/repo/Cargo.toml:ro", "src:/src"])
+        );
+        assert!(args.run.safe);
+        assert!(!args.run.exec);
+    }
+
+    #[test]
     fn parses_build_defaults_to_all_cached() {
         let (l, _) = split_passthrough(v(&["aibox", "build"]));
         let cli = Cli::try_parse_from(l).unwrap();

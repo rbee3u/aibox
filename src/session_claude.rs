@@ -120,6 +120,30 @@ mod tests {
     }
 
     #[test]
+    fn files_discovers_jsonl_transcripts_under_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+            &[r#"{"type":"assistant"}"#],
+        );
+        write_jsonl(
+            dir.path(),
+            ".claude/not-projects/ignored.jsonl",
+            &[r#"{"type":"assistant"}"#],
+        );
+        std::fs::write(
+            dir.path().join(".claude/projects/p/not-a-transcript.txt"),
+            "{}\n",
+        )
+        .unwrap();
+
+        let files = Claude.files(dir.path()).unwrap();
+
+        assert_eq!(files, vec![transcript]);
+    }
+
+    #[test]
     fn summarize_prefers_ai_title() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
@@ -139,6 +163,25 @@ mod tests {
     }
 
     #[test]
+    fn summarize_uses_last_non_empty_ai_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000001.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"fallback prompt"}}"#,
+                r#"{"type":"ai-title","aiTitle":"Draft Title"}"#,
+                r#"{"type":"ai-title","aiTitle":""}"#,
+                r#"{"type":"ai-title","aiTitle":"Final Title"}"#,
+            ],
+        );
+
+        let s = Claude.summarize(&path).unwrap();
+
+        assert_eq!(s.title, "Final Title");
+    }
+
+    #[test]
     fn summarize_falls_back_to_first_typed() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
@@ -150,6 +193,26 @@ mod tests {
         );
         let s = Claude.summarize(&path).unwrap();
         assert_eq!(s.title, "only prompt");
+    }
+
+    #[test]
+    fn prompts_ignore_non_typed_user_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/aaaa-bbbb.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user","promptSource":"tool","message":{"role":"user","content":"tool echo"}}"#,
+                r#"{"timestamp":"2026-01-01T00:01:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"real prompt"}}"#,
+            ],
+        );
+
+        let prompts = Claude.prompts(&path).unwrap();
+        let summary = Claude.summarize(&path).unwrap();
+
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "real prompt");
+        assert_eq!(summary.title, "real prompt");
     }
 
     #[test]

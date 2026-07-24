@@ -141,11 +141,68 @@ mod tests {
     }
 
     #[test]
+    fn to_env_file_renders_the_merged_docker_env_body() {
+        let base = s("A=1\nB=2\n");
+        let relay = s("B=3\nHOST_ONLY\n");
+        let m = MergedEnv::merge(&[base, relay]);
+
+        assert_eq!(m.to_env_file(), "A=1\nB=3\nHOST_ONLY\n");
+        assert_eq!(MergedEnv::merge(&[]).to_env_file(), "");
+    }
+
+    #[test]
     fn empty_value_blanks_a_base_default() {
         let base = s("A=default\n");
         let relay = s("A=\n");
         let m = MergedEnv::merge(&[base, relay]);
         assert_eq!(m.get("A").as_deref(), Some("")); // blanked
+    }
+
+    #[test]
+    fn value_keeps_everything_after_the_first_equals() {
+        let m = MergedEnv::merge(&[s(
+            "QUERY=api-version=2025-04-01-preview\nTOKEN=sk = value\n",
+        )]);
+
+        assert_eq!(
+            m.get("QUERY").as_deref(),
+            Some("api-version=2025-04-01-preview")
+        );
+        assert_eq!(m.get("TOKEN").as_deref(), Some("sk = value"));
+        assert_eq!(
+            m.lines().collect::<Vec<_>>(),
+            vec!["QUERY=api-version=2025-04-01-preview", "TOKEN=sk = value"]
+        );
+    }
+
+    #[test]
+    fn bare_keys_and_explicit_values_override_each_other() {
+        let _env_lock = crate::test_env_lock();
+        std::env::set_var("AIBOX_TEST_BARE_OVERRIDE", "host-value");
+
+        let m = MergedEnv::merge(&[
+            s("AIBOX_TEST_BARE_OVERRIDE=base-value\n"),
+            s("AIBOX_TEST_BARE_OVERRIDE\n"),
+        ]);
+        assert_eq!(
+            m.get("AIBOX_TEST_BARE_OVERRIDE").as_deref(),
+            Some("host-value"),
+            "a later bare key should override a base default with host passthrough semantics"
+        );
+        assert_eq!(m.to_env_file(), "AIBOX_TEST_BARE_OVERRIDE\n");
+
+        let m = MergedEnv::merge(&[
+            s("AIBOX_TEST_BARE_OVERRIDE\n"),
+            s("AIBOX_TEST_BARE_OVERRIDE=relay-value\n"),
+        ]);
+        assert_eq!(
+            m.get("AIBOX_TEST_BARE_OVERRIDE").as_deref(),
+            Some("relay-value"),
+            "a later explicit value should override an earlier bare passthrough"
+        );
+        assert_eq!(m.to_env_file(), "AIBOX_TEST_BARE_OVERRIDE=relay-value\n");
+
+        std::env::remove_var("AIBOX_TEST_BARE_OVERRIDE");
     }
 
     #[test]
@@ -182,8 +239,27 @@ mod tests {
 
     #[test]
     fn check_keys_accepts_valid_env_files() {
-        let src = "# comment\n\nKEY=value\n_UNDER=1\nBARE_PASSTHROUGH\nBLANKED=\n  INDENTED=ok\n";
+        let src = "\
+# comment
+
+KEY=value
+_UNDER=1
+BARE_PASSTHROUGH
+BLANKED=
+  INDENTED=ok
+TOKEN=sk = value
+QUERY=api-version=2025-04-01-preview,compound=a=b
+";
         assert!(check_keys(Path::new("/p/base"), src).is_ok());
+    }
+
+    #[test]
+    fn crlf_files_merge_without_leaking_carriage_returns() {
+        let m = MergedEnv::merge(&[s("A=1\r\nB=2\r\n")]);
+
+        assert_eq!(m.get("A").as_deref(), Some("1"));
+        assert_eq!(m.to_env_file(), "A=1\nB=2\n");
+        assert!(check_keys(Path::new("/p/base"), "A=1\r\nB=2\r\n").is_ok());
     }
 
     #[test]

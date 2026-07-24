@@ -465,6 +465,32 @@ mod tests {
     }
 
     #[test]
+    fn agent_kind_carries_public_agent_contracts() {
+        for (agent, tag, image, home) in [
+            (
+                AgentKind::Claude,
+                "claude",
+                "aibox-claude:latest",
+                "/home/claude",
+            ),
+            (
+                AgentKind::Codex,
+                "codex",
+                "aibox-codex:latest",
+                "/home/codex",
+            ),
+        ] {
+            assert_eq!(agent.tag(), tag);
+            assert_eq!(agent.image_default(), image);
+            assert_eq!(agent.container_home(), home);
+            assert_eq!(
+                agent.config_root_default("/host-home"),
+                PathBuf::from("/host-home").join(".aibox").join(tag)
+            );
+        }
+    }
+
+    #[test]
     fn agent_dockerfiles_pin_cli_versions_and_smoke_check() {
         let codex = AgentKind::Codex.dockerfile();
         assert!(codex.contains("ARG CODEX_VERSION=0.145.0"));
@@ -479,6 +505,7 @@ mod tests {
 
     #[test]
     fn instructions_path_tilde_expansion() {
+        let _env_lock = crate::test_env_lock();
         let home = std::env::var("HOME").expect("HOME set in test env");
         assert_eq!(
             resolve_instructions_path("~").unwrap(),
@@ -491,6 +518,14 @@ mod tests {
         assert_eq!(
             resolve_instructions_path("/abs/x.md").unwrap(),
             PathBuf::from("/abs/x.md")
+        );
+    }
+
+    #[test]
+    fn instructions_path_relative_uses_launch_cwd() {
+        assert_eq!(
+            resolve_instructions_path("src/lib.rs").unwrap(),
+            std::env::current_dir().unwrap().join("src/lib.rs")
         );
     }
 

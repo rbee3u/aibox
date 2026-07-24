@@ -434,6 +434,10 @@ case "$AIBOX_FAKE_DOCKER_MODE" in
     no-cid)
         exit 23
         ;;
+    slow-no-cid)
+        sleep 1.2
+        exit 24
+        ;;
     lingering)
         printf 'fake-container\n' > "$cid"
         exit 0
@@ -448,6 +452,115 @@ esac
         let mut perms = fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).unwrap();
+    }
+
+    fn write_fake_build_docker(dir: &Path) {
+        let path = dir.join("docker");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" != "build" ]; then
+    exit 99
+fi
+if [ "$AIBOX_FAKE_DOCKER_BUILD_MODE" = "exit-early" ]; then
+    exit 23
+fi
+log="$AIBOX_FAKE_DOCKER_BUILD_LOG"
+printf 'ARGS:' >> "$log"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$log"
+    last="$arg"
+done
+printf '\n' >> "$log"
+if [ ! -d "$last" ]; then
+    printf 'context is not a directory: %s\n' "$last" >&2
+    exit 98
+fi
+printf 'STDIN:' >> "$log"
+cat >> "$log"
+printf '\nEND\n' >> "$log"
+"#,
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[test]
+    fn embedded_dockerfiles_do_not_require_build_context() {
+        for (name, dockerfile) in [
+            ("base", BASE_DOCKERFILE),
+            ("claude", crate::agent::AgentKind::Claude.dockerfile()),
+            ("codex", crate::agent::AgentKind::Codex.dockerfile()),
+        ] {
+            for line in dockerfile.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let instruction = trimmed
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                assert_ne!(
+                    instruction, "COPY",
+                    "{name} Dockerfile must stay build-context-free: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_image_uses_stdin_empty_context_and_cache_flags() {
+        let _env_lock = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("docker-build.log");
+        write_fake_build_docker(dir.path());
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_BUILD_LOG", log.as_os_str());
+
+        build_image("FROM scratch\n", "test/cached:latest", BuildCache::Cached).unwrap();
+        build_image("RUN true\n", "test/nocache:latest", BuildCache::NoCache).unwrap();
+        build_image("RUN false\n", "test/pull:latest", BuildCache::NoCachePull).unwrap();
+
+        let log = fs::read_to_string(log).unwrap();
+        assert!(
+            log.contains("ARGS: <build> <-f> <-> <-t> <test/cached:latest> <"),
+            "cached build should pass Dockerfile through stdin with only -f/-t: {log}"
+        );
+        assert!(
+            log.contains("ARGS: <build> <--no-cache> <-f> <-> <-t> <test/nocache:latest> <"),
+            "no-cache build should add only --no-cache: {log}"
+        );
+        assert!(
+            log.contains("ARGS: <build> <--no-cache> <--pull> <-f> <-> <-t> <test/pull:latest> <"),
+            "forced base build should add --no-cache and --pull: {log}"
+        );
+        assert!(log.contains("STDIN:FROM scratch\n"), "{log}");
+        assert!(log.contains("STDIN:RUN true\n"), "{log}");
+        assert!(log.contains("STDIN:RUN false\n"), "{log}");
+    }
+
+    #[test]
+    fn build_image_reports_docker_status_when_child_exits_early() {
+        let _env_lock = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("docker-build.log");
+        write_fake_build_docker(dir.path());
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_BUILD_LOG", log.as_os_str());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_BUILD_MODE", "exit-early");
+
+        let err = build_image("RUN true\n", "test/fails:latest", BuildCache::Cached)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("docker build failed"),
+            "docker status should be reported instead of masking it with stdin write errors: {err}"
+        );
     }
 
     #[test]
@@ -591,6 +704,29 @@ esac
     }
 
     #[test]
+    fn run_does_not_call_callback_when_delayed_child_exits_without_cidfile() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let callback_marker = dir.path().join("callback");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "slow-no-cid");
+        let _callback = EnvGuard::set("AIBOX_CALLBACK_MARKER", callback_marker.as_os_str());
+
+        let code = run(&[], "image:tag", &[], || {
+            fs::write(&callback_marker, "called\n").unwrap();
+        })
+        .unwrap();
+
+        assert_eq!(code, 24);
+        assert!(
+            !callback_marker.exists(),
+            "callback must remain locked out even after the initial create wait timed out"
+        );
+    }
+
+    #[test]
     fn run_stops_a_lingering_container_and_returns_nonzero() {
         let _env_lock = crate::test_env_lock();
         let _run_lock = crate::creds::run_registry_test_lock();
@@ -612,5 +748,17 @@ esac
         assert!(stopped_marker.exists());
         let log = fs::read_to_string(docker_log).unwrap();
         assert!(log.contains("kill --signal TERM fake-container"), "{log}");
+    }
+
+    #[test]
+    fn exit_code_maps_child_exit_and_signal_statuses() {
+        let exited = Command::new("sh").args(["-c", "exit 37"]).status().unwrap();
+        assert_eq!(exit_code(exited), 37);
+
+        let signaled = Command::new("sh")
+            .args(["-c", "kill -TERM $$"])
+            .status()
+            .unwrap();
+        assert_eq!(exit_code(signaled), 128 + signal_hook::consts::SIGTERM);
     }
 }

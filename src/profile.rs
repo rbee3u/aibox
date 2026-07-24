@@ -502,9 +502,38 @@ pub fn set_600(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    struct EnvGuard {
+        name: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvGuard { name, old }
+        }
+
+        fn remove(name: &'static str) -> Self {
+            let old = std::env::var_os(name);
+            std::env::remove_var(name);
+            EnvGuard { name, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
     }
 
     #[test]
@@ -514,6 +543,36 @@ mod tests {
         assert_eq!(p.home_dir, Path::new("/root/default/home"));
         assert_eq!(p.envs_dir, Path::new("/root/default/envs"));
         assert_eq!(p.base_file, Path::new("/root/default/base"));
+    }
+
+    #[test]
+    fn config_root_uses_override_or_agent_default_under_home() {
+        let _env_lock = crate::test_env_lock();
+        let cwd = std::env::current_dir().unwrap();
+
+        {
+            let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", "relative-config");
+            let _home = EnvGuard::set("HOME", "/unused-home");
+
+            assert_eq!(
+                config_root(AgentKind::Codex).unwrap(),
+                cwd.join("relative-config"),
+                "explicit config roots are absolutized against the launch cwd"
+            );
+        }
+
+        let home = tmp();
+        let _config = EnvGuard::remove("AIBOX_CONFIG_ROOT");
+        let _home = EnvGuard::set("HOME", home.path().to_str().unwrap());
+
+        assert_eq!(
+            config_root(AgentKind::Claude).unwrap(),
+            home.path().join(".aibox").join("claude")
+        );
+        assert_eq!(
+            config_root(AgentKind::Codex).unwrap(),
+            home.path().join(".aibox").join("codex")
+        );
     }
 
     #[cfg(unix)]
@@ -743,6 +802,50 @@ mod tests {
         assert!(err.contains("config path is not a file"), "{err}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn write_600_new_rejects_dangling_symlinks_without_creating_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let link = root.path().join("relay");
+        let missing = root.path().join("missing-target");
+        symlink(&missing, &link).unwrap();
+
+        let err = write_600_new(&link, "template\n").unwrap_err().to_string();
+
+        assert!(err.contains("resolve config symlink"), "{err}");
+        assert!(
+            !missing.exists(),
+            "scaffolding must not create a dangling symlink target"
+        );
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_600_new_preserves_existing_symlinked_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let target = root.path().join("shared.env");
+        let link = root.path().join("relay");
+        fs::write(&target, "real\n").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let got = write_600_new(&link, "template\n").unwrap();
+
+        assert_eq!(got, NewFile::AlreadyExists);
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "real\n");
+    }
+
     #[test]
     fn existing_relay_resolves() {
         let root = tmp();
@@ -757,6 +860,22 @@ mod tests {
         let root = tmp();
         let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
         assert!(p.resolve_relay_for_run("/no/such/file.env").is_err());
+    }
+
+    #[test]
+    fn existing_explicit_path_resolves_without_scaffolding_profile_state() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        let relay = root.path().join("external.env");
+        fs::write(&relay, "CODEX_BASE_URL=https://relay.example/v1\n").unwrap();
+
+        let got = p.resolve_relay_for_run(relay.to_str().unwrap()).unwrap();
+
+        assert_eq!(got, Some(RelayRef::Path(relay)));
+        assert!(
+            !p.dir.exists(),
+            "explicit env-file paths must not scaffold profile/base/envs state"
+        );
     }
 
     #[test]
@@ -788,6 +907,21 @@ mod tests {
     }
 
     #[test]
+    fn relay_names_lists_visible_files_sorted_without_directories() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        fs::create_dir_all(&p.envs_dir).unwrap();
+        fs::write(p.envs_dir.join("zeta"), "CODEX_BASE_URL=https://z\n").unwrap();
+        fs::write(p.envs_dir.join("alpha"), "CODEX_BASE_URL=https://a\n").unwrap();
+        fs::create_dir(p.envs_dir.join("not-a-relay")).unwrap();
+
+        assert_eq!(
+            p.relay_names(),
+            vec!["alpha".to_string(), "zeta".to_string()]
+        );
+    }
+
+    #[test]
     fn merge_sources_rejects_malformed_key_naming_the_file() {
         let root = tmp();
         let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
@@ -799,6 +933,35 @@ mod tests {
 
         assert!(err.contains(&relay.display().to_string()), "{err}");
         assert!(err.contains("CODEX_API_KEY = sk-x"), "{err}");
+    }
+
+    #[test]
+    fn merge_sources_reads_profile_base_before_explicit_relay_path() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        fs::create_dir_all(&p.dir).unwrap();
+        fs::write(
+            &p.base_file,
+            "CODEX_MODEL=base-model\nCODEX_REASONING=high\n",
+        )
+        .unwrap();
+        let relay = root.path().join("external.env");
+        fs::write(
+            &relay,
+            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_REASONING=low\n",
+        )
+        .unwrap();
+
+        let sources = p.merge_sources(&relay).unwrap();
+
+        assert_eq!(
+            sources,
+            vec![
+                "CODEX_MODEL=base-model\nCODEX_REASONING=high\n".to_string(),
+                "CODEX_BASE_URL=https://relay.example/v1\nCODEX_REASONING=low\n".to_string(),
+            ],
+            "explicit relay paths still inherit profile/base, with relay read last"
+        );
     }
 
     #[test]
