@@ -288,48 +288,14 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
+    use crate::testutil::EnvGuard;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
-    struct EnvGuard {
-        name: &'static str,
-        old: Option<OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(name: &'static str, value: impl Into<OsString>) -> Self {
-            let old = std::env::var_os(name);
-            std::env::set_var(name, value.into());
-            EnvGuard { name, old }
-        }
-
-        fn prepend_path(dir: &Path) -> Self {
-            let old = std::env::var_os("PATH");
-            let mut paths = vec![dir.to_path_buf()];
-            if let Some(old_path) = &old {
-                paths.extend(std::env::split_paths(old_path));
-            }
-            let joined = std::env::join_paths(paths).unwrap();
-            std::env::set_var("PATH", joined);
-            EnvGuard { name: "PATH", old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.old {
-                Some(value) => std::env::set_var(self.name, value),
-                None => std::env::remove_var(self.name),
-            }
-        }
-    }
-
     fn write_fake_docker(dir: &Path) {
-        let path = dir.join("docker");
-        fs::write(
-            &path,
+        crate::testutil::write_stub_script(
+            dir,
+            "docker",
             r#"#!/bin/sh
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
     case "$AIBOX_FAKE_DOCKER_IMAGE_MODE" in
@@ -386,7 +352,7 @@ if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
             ;;
     esac
 fi
-if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] && [ "$1" = "inspect" ]; then
+if { [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-stubborn" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-failure" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-kill-failure" ]; } && [ "$1" = "inspect" ]; then
     if [ -e "$AIBOX_FAKE_DOCKER_STOPPED" ]; then
         printf 'false\n'
     else
@@ -394,13 +360,22 @@ if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] && [ "$1" = "inspect" ]; then
     fi
     exit 0
 fi
-if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] && [ "$1" = "kill" ]; then
+if { [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-stubborn" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-failure" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-kill-failure" ]; } && [ "$1" = "kill" ]; then
     printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
+    if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-stubborn" ] && [ "$2" = "--signal" ]; then
+        exit 0
+    fi
+    if [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-kill-failure" ]; then
+        exit 39
+    fi
     : > "$AIBOX_FAKE_DOCKER_STOPPED"
     exit 0
 fi
 if [ "$1" != "run" ]; then
     exit 99
+fi
+if [ -n "$AIBOX_FAKE_DOCKER_RUN_LOG" ]; then
+    printf 'run%s\n' "$(for a in "$@"; do printf ' <%s>' "$a"; done)" >> "$AIBOX_FAKE_DOCKER_RUN_LOG"
 fi
 shift
 cid=
@@ -413,6 +388,10 @@ while [ "$#" -gt 0 ]; do
     fi
 done
 case "$AIBOX_FAKE_DOCKER_MODE" in
+    forwards-args)
+        printf 'fake-container\n' > "$cid"
+        exit 0
+        ;;
     delayed-cid)
         sleep 0.2
         if [ -n "$AIBOX_CALLBACK_MARKER" ] && [ -e "$AIBOX_CALLBACK_MARKER" ]; then
@@ -438,26 +417,26 @@ case "$AIBOX_FAKE_DOCKER_MODE" in
         sleep 1.2
         exit 24
         ;;
-    lingering)
+    lingering|lingering-stubborn|lingering-kill-failure)
         printf 'fake-container\n' > "$cid"
         exit 0
+        ;;
+    lingering-failure)
+        printf 'fake-container\n' > "$cid"
+        exit 47
         ;;
     *)
         exit 98
         ;;
 esac
 "#,
-        )
-        .unwrap();
-        let mut perms = fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).unwrap();
+        );
     }
 
     fn write_fake_build_docker(dir: &Path) {
-        let path = dir.join("docker");
-        fs::write(
-            &path,
+        crate::testutil::write_stub_script(
+            dir,
+            "docker",
             r#"#!/bin/sh
 if [ "$1" != "build" ]; then
     exit 99
@@ -480,11 +459,7 @@ printf 'STDIN:' >> "$log"
 cat >> "$log"
 printf '\nEND\n' >> "$log"
 "#,
-        )
-        .unwrap();
-        let mut perms = fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).unwrap();
+        );
     }
 
     #[test]
@@ -623,6 +598,84 @@ printf '\nEND\n' >> "$log"
     }
 
     #[test]
+    fn cidfile_has_id_requires_a_non_empty_container_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let cid = dir.path().join("cid");
+
+        assert!(!cidfile_has_id(&cid), "missing cidfile is not a create");
+        fs::write(&cid, "").unwrap();
+        assert!(!cidfile_has_id(&cid), "empty cidfile is not a create");
+        fs::write(&cid, " \n\t").unwrap();
+        assert!(
+            !cidfile_has_id(&cid),
+            "whitespace-only cidfile must not release spawn locks"
+        );
+        fs::write(&cid, "fake-container\n").unwrap();
+        assert!(cidfile_has_id(&cid));
+    }
+
+    #[test]
+    fn run_spawn_failure_does_not_call_container_created_callback() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let callback_marker = dir.path().join("callback");
+        let _path = EnvGuard::set("PATH", dir.path().as_os_str());
+
+        let err = run(&[], "image:tag", &[], || {
+            fs::write(&callback_marker, "called\n").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("spawn docker run"), "{err}");
+        assert!(
+            !callback_marker.exists(),
+            "spawn failure means no container exists, so spawn locks must not be released"
+        );
+    }
+
+    #[test]
+    fn run_forwards_run_args_image_and_cmd_in_order() {
+        // The sandbox boundary lives entirely in `run_args` (--cap-drop ALL,
+        // --security-opt no-new-privileges, --user, every bind mount). `run`
+        // must deliver them to `docker run` unchanged, with the image after the
+        // run args and the command after the image. A dropped run_args or a
+        // swapped image/cmd would silently strip the isolation the tool exists
+        // to enforce, so assert the whole assembled line, not just --cidfile.
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let run_log = dir.path().join("run.log");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "forwards-args");
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_RUN_LOG", run_log.as_os_str());
+
+        let run_args = vec![
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
+            "--security-opt".to_string(),
+            "no-new-privileges".to_string(),
+        ];
+        let cmd = vec!["exec".to_string(), "--flag".to_string()];
+        let code = run(&run_args, "aibox-claude:latest", &cmd, || {}).unwrap();
+
+        assert_eq!(code, 0);
+        let log = fs::read_to_string(&run_log).unwrap();
+        // --cidfile is inserted first (before run_args) so its own tests keep
+        // working; assert the rest follows it in order and the image sits
+        // between the run args and the command.
+        assert!(
+            log.contains(
+                "<--cap-drop> <ALL> <--security-opt> <no-new-privileges> \
+                 <aibox-claude:latest> <exec> <--flag>"
+            ),
+            "run must forward run_args, then image, then cmd, in order: {log}"
+        );
+    }
+
+    #[test]
     fn run_callback_waits_until_cidfile_has_container_id() {
         let _env_lock = crate::test_env_lock();
         let _run_lock = crate::creds::run_registry_test_lock();
@@ -727,7 +780,7 @@ printf '\nEND\n' >> "$log"
     }
 
     #[test]
-    fn run_stops_a_lingering_container_and_returns_nonzero() {
+    fn run_immediately_kills_a_lingering_container_and_returns_nonzero() {
         let _env_lock = crate::test_env_lock();
         let _run_lock = crate::creds::run_registry_test_lock();
         let dir = tempfile::tempdir().unwrap();
@@ -735,10 +788,11 @@ printf '\nEND\n' >> "$log"
         let stopped_marker = dir.path().join("stopped");
         let docker_log = dir.path().join("docker.log");
         let _path = EnvGuard::prepend_path(dir.path());
-        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering");
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering-stubborn");
         let _stopped = EnvGuard::set("AIBOX_FAKE_DOCKER_STOPPED", stopped_marker.as_os_str());
         let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str());
 
+        let started = Instant::now();
         let code = run(&[], "image:tag", &[], || {}).unwrap();
 
         assert_eq!(
@@ -746,8 +800,69 @@ printf '\nEND\n' >> "$log"
             "a client-side zero exit is not a successful agent run when its container lingered"
         );
         assert!(stopped_marker.exists());
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "orphan cleanup must not wait through the ten-second graceful signal path"
+        );
         let log = fs::read_to_string(docker_log).unwrap();
-        assert!(log.contains("kill --signal TERM fake-container"), "{log}");
+        assert!(log.contains("kill fake-container"), "{log}");
+        assert!(!log.contains("--signal"), "{log}");
+    }
+
+    #[test]
+    fn run_kills_a_lingering_container_even_when_client_failed() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let stopped_marker = dir.path().join("stopped");
+        let docker_log = dir.path().join("docker.log");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering-failure");
+        let _stopped = EnvGuard::set("AIBOX_FAKE_DOCKER_STOPPED", stopped_marker.as_os_str());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str());
+
+        let code = run(&[], "image:tag", &[], || {}).unwrap();
+
+        assert_eq!(
+            code, 47,
+            "the Docker client's failure code must be preserved after orphan cleanup"
+        );
+        assert!(
+            stopped_marker.exists(),
+            "an orphan must be killed even when docker run itself exits non-zero"
+        );
+        let log = fs::read_to_string(docker_log).unwrap();
+        assert!(log.contains("kill fake-container"), "{log}");
+        assert!(!log.contains("--signal"), "{log}");
+    }
+
+    #[test]
+    fn run_reports_failure_when_lingering_container_kill_fails() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let stopped_marker = dir.path().join("stopped");
+        let docker_log = dir.path().join("docker.log");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering-kill-failure");
+        let _stopped = EnvGuard::set("AIBOX_FAKE_DOCKER_STOPPED", stopped_marker.as_os_str());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str());
+
+        let code = run(&[], "image:tag", &[], || {}).unwrap();
+
+        assert_eq!(
+            code, 1,
+            "a zero-exit Docker client must not make an uncleaned orphan look successful"
+        );
+        assert!(
+            !stopped_marker.exists(),
+            "the fixture must prove the daemon-side kill failed"
+        );
+        let log = fs::read_to_string(docker_log).unwrap();
+        assert!(log.contains("kill fake-container"), "{log}");
+        assert!(!log.contains("--signal"), "{log}");
     }
 
     #[test]

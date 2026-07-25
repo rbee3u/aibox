@@ -107,17 +107,7 @@ fn content_text(v: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn write_jsonl(dir: &Path, rel: &str, lines: &[&str]) -> PathBuf {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut f = std::fs::File::create(&path).unwrap();
-        for l in lines {
-            writeln!(f, "{l}").unwrap();
-        }
-        path
-    }
+    use crate::testutil::write_jsonl;
 
     #[test]
     fn files_discovers_jsonl_transcripts_under_projects() {
@@ -141,6 +131,35 @@ mod tests {
         let files = Claude.files(dir.path()).unwrap();
 
         assert_eq!(files, vec![transcript]);
+    }
+
+    #[test]
+    fn list_files_discovers_the_same_transcripts_tolerantly() {
+        // `list` uses the tolerant walk so one bad path can't hide every
+        // readable session; on a healthy tree it must still agree with `files`.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+            &[r#"{"type":"assistant"}"#],
+        );
+
+        let discovery = Claude.list_files(dir.path()).unwrap();
+
+        assert_eq!(discovery.files, vec![transcript]);
+        assert!(discovery.errors.is_empty());
+    }
+
+    #[test]
+    fn list_files_and_files_are_empty_before_the_first_claude_run() {
+        // A fresh profile home has no `.claude/projects` yet. Both discovery
+        // paths must report empty rather than erroring on the missing tree.
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(Claude.files(dir.path()).unwrap().is_empty());
+        let discovery = Claude.list_files(dir.path()).unwrap();
+        assert!(discovery.files.is_empty());
+        assert!(discovery.errors.is_empty());
     }
 
     #[test]
@@ -258,5 +277,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(content_text(&v).as_deref(), Some("a\nb"));
+    }
+
+    /// A real image-paste turn: the content array mixes a non-text block (an
+    /// `image`, which carries no `text` field) with the typed text block. Only
+    /// the text survives, through the public `prompts` path — not just the
+    /// `content_text` helper. This also pins Claude's divergence from Codex:
+    /// Claude pulls `text` from any block regardless of `type`, where Codex
+    /// filters to `input_text`/`text`. A change either direction should fail here.
+    #[test]
+    fn typed_prompt_with_mixed_content_array_keeps_only_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+            &[
+                r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T02:16:00Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"iVBORw0KGgo="}},{"type":"text","text":"what is this"}]}}"#,
+            ],
+        );
+
+        let prompts = Claude.prompts(&path).unwrap();
+
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(
+            prompts[0].text, "what is this",
+            "the image block contributes no text; only the typed text block remains"
+        );
     }
 }

@@ -167,13 +167,18 @@ mod tests {
     #[test]
     fn relay_header_names_the_relay() {
         let t = relay_template(AgentKind::Codex, "openrouter", 3);
-        assert!(t.contains("# openrouter — relay endpoint"));
+        // The relay's display name must appear in a header line; the surrounding
+        // header prose is incidental and left unpinned so wording can change.
+        assert!(t
+            .lines()
+            .any(|line| line.starts_with('#') && line.contains("openrouter")));
     }
 
     #[test]
     fn relay_header_replaces_control_chars_with_spaces() {
         let t = relay_template(AgentKind::Claude, "bad\nACTIVE=1\tname", 3);
-        assert!(t.contains("# bad ACTIVE=1 name — relay endpoint"));
+        // Control chars collapse to spaces so the name stays on one comment line.
+        assert!(t.contains("bad ACTIVE=1 name"));
         assert!(
             t.lines()
                 .all(|line| line.is_empty() || line.starts_with('#')),

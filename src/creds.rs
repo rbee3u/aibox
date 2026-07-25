@@ -439,10 +439,11 @@ pub fn finish_child() -> bool {
     }
 }
 
-/// Stop a container that outlived its attached `docker run` client. Checking
+/// Kill a container that outlived its attached `docker run` client. Checking
 /// daemon state first keeps the normal path cheap: after an ordinary `--rm`
-/// exit the id no longer resolves, while a detached container reports running
-/// and is stopped with the same bounded graceful/escalating path as a signal.
+/// exit the id no longer resolves. If the client has already gone away, there
+/// is no interactive session left to drain, so do not make an EOF-triggered
+/// exit wait through the signal path's ten-second grace period.
 fn stop_container_left_by_child() -> bool {
     if RUN_STATE.load(Ordering::SeqCst) != RUN_ACTIVE {
         return false;
@@ -455,9 +456,9 @@ fn stop_container_left_by_child() -> bool {
     }
 
     eprintln!(
-        ">> docker run exited while container {cid} was still running; stopping the container"
+        ">> docker run exited while container {cid} was still running; killing the container"
     );
-    stop_container_id(signal_hook::consts::SIGTERM, &cid);
+    let _ = docker_quiet(&["kill", &cid], DOCKER_KILL_TIMEOUT);
     true
 }
 
@@ -1064,44 +1065,10 @@ pub fn remove_stale_placeholder(path: &Path, lock_path: &Path, placeholder: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
+    use crate::testutil::EnvGuard;
     use std::sync::Mutex;
 
     static PENDING_CLEANUP_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvGuard {
-        name: &'static str,
-        old: Option<OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(name: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(name);
-            std::env::set_var(name, value);
-            EnvGuard { name, old }
-        }
-
-        #[cfg(unix)]
-        fn prepend_path(dir: &Path) -> Self {
-            let old = std::env::var_os("PATH");
-            let mut paths = vec![dir.to_path_buf()];
-            if let Some(old_path) = &old {
-                paths.extend(std::env::split_paths(old_path));
-            }
-            let joined = std::env::join_paths(paths).unwrap();
-            std::env::set_var("PATH", joined);
-            EnvGuard { name: "PATH", old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.old {
-                Some(value) => std::env::set_var(self.name, value),
-                None => std::env::remove_var(self.name),
-            }
-        }
-    }
 
     fn pending_contains(path: &Path) -> bool {
         pending().lock().unwrap().iter().any(|p| p.path() == path)
@@ -1198,12 +1165,220 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_signal_fake_docker(dir: &Path) {
-        use std::os::unix::fs::PermissionsExt;
+    const SIGNAL_HELPER_DIR: &str = "AIBOX_TEST_SIGNAL_HELPER_DIR";
+    #[cfg(unix)]
+    const IGNORED_HUP_HELPER_DIR: &str = "AIBOX_TEST_IGNORED_HUP_HELPER_DIR";
 
-        let path = dir.join("docker");
-        std::fs::write(
-            &path,
+    #[cfg(unix)]
+    #[test]
+    fn ignored_hup_helper_process() {
+        let Some(dir) = std::env::var_os(IGNORED_HUP_HELPER_DIR) else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = libc::SIG_IGN;
+            libc::sigemptyset(&mut action.sa_mask);
+            let rc = libc::sigaction(signal_hook::consts::SIGHUP, &action, std::ptr::null_mut());
+            assert_eq!(
+                rc,
+                0,
+                "set SIGHUP to SIG_IGN: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        assert!(signal_is_ignored(signal_hook::consts::SIGHUP));
+        install_signal_handler().unwrap();
+        assert!(
+            signal_is_ignored(signal_hook::consts::SIGHUP),
+            "installing cleanup handlers must not un-ignore inherited SIGHUP"
+        );
+
+        unsafe {
+            libc::raise(signal_hook::consts::SIGHUP);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::write(dir.join("survived"), "survived\n").unwrap();
+    }
+
+    /// Under `nohup` (or an equivalent parent), SIGHUP starts as SIG_IGN. The
+    /// cleanup watcher must not install over that inherited disposition: doing
+    /// so would turn a deliberately survivable hangup into a fatal signal.
+    #[cfg(unix)]
+    #[test]
+    fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
+        let scratch = stable_tempdir();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("creds::tests::ignored_hup_helper_process")
+            .env(IGNORED_HUP_HELPER_DIR, scratch.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        assert!(
+            status.success(),
+            "helper should survive ignored SIGHUP, got {status:?}"
+        );
+        assert!(
+            scratch.path().join("survived").exists(),
+            "helper did not continue after raising ignored SIGHUP"
+        );
+    }
+
+    /// Body of the SIGTERM subprocess: arm exactly what a real run arms — a
+    /// staged credential, a guarded auth.json placeholder, and a populated
+    /// cidfile — then report ready and block. It must never exit on its own; the
+    /// parent's signal is what ends it, and the parent asserts on what survived.
+    #[cfg(unix)]
+    #[test]
+    fn signal_helper_process() {
+        let Some(dir) = std::env::var_os(SIGNAL_HELPER_DIR) else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let auth = dir.join("home").join(".codex").join("auth.json");
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+
+        let cid_path = dir.join("cid");
+        std::fs::write(&cid_path, "signal-container\n").unwrap();
+        // Installs the watcher thread and marks the run active, exactly as
+        // `docker::run` does before spawning the Docker CLI.
+        set_cidfile(&cid_path).unwrap();
+
+        let staged = StagedFile::create("aibox-signal-key.", "OPENAI_API_KEY=sk-secret\n").unwrap();
+        let guarded = GuardedPath::ensure(
+            auth.clone(),
+            dir.join(".locks").join("codex-auth-json.lock"),
+            "{}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("staged-path"), staged.path().display().to_string()).unwrap();
+
+        std::fs::write(dir.join("ready"), "ready\n").unwrap();
+        // Hold both guards past the signal. `Drop` must not be what cleans up
+        // here — a signal death skips it — so park until the watcher exits us.
+        std::thread::sleep(Duration::from_secs(60));
+        drop(staged);
+        drop(guarded);
+    }
+
+    /// Run `signal_helper_process` as a subprocess with a stubbed `docker`, wait
+    /// for it to arm its credentials, then deliver `sig`. Returns the scratch dir
+    /// and the child's exit status.
+    #[cfg(unix)]
+    fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) {
+        let scratch = stable_tempdir();
+        let fake_docker = scratch.path().join("bin");
+        std::fs::create_dir_all(&fake_docker).unwrap();
+        write_signal_fake_docker(&fake_docker);
+        let ready = scratch.path().join("ready");
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("creds::tests::signal_helper_process")
+            .env(SIGNAL_HELPER_DIR, scratch.path())
+            // Staged credentials land here, so the parent can assert the dir is
+            // empty afterwards rather than guessing the random temp name.
+            .env("TMPDIR", scratch.path().join("staging"))
+            .env("PATH", &fake_docker)
+            .env("AIBOX_FAKE_DOCKER_LOG", scratch.path().join("docker.log"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::fs::create_dir_all(scratch.path().join("staging")).unwrap();
+
+        let started = Instant::now();
+        while !ready.exists() {
+            if started.elapsed() > Duration::from_secs(10) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("signal helper never armed its credentials");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
+        let rsig = match sig {
+            s if s == signal_hook::consts::SIGINT => rustix::process::Signal::Int,
+            s if s == signal_hook::consts::SIGHUP => rustix::process::Signal::Hup,
+            _ => rustix::process::Signal::Term,
+        };
+        rustix::process::kill_process(pid, rsig).unwrap();
+
+        let status = child.wait().unwrap();
+        (scratch, status)
+    }
+
+    /// The module's headline invariant, on the path `Drop` cannot cover. Ctrl-C
+    /// (and a service-manager SIGTERM) must leave no secret on disk and no
+    /// container running — AGENTS.md flags this as the manual check for any
+    /// `creds.rs` change, so cover it here instead.
+    #[cfg(unix)]
+    #[test]
+    fn fatal_signal_removes_credentials_and_stops_the_container() {
+        use std::os::unix::process::ExitStatusExt;
+
+        for sig in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+        ] {
+            let (scratch, status) = run_signal_helper(sig);
+
+            // The staged credential is gone, and so is the whole temp name —
+            // not merely truncated or left behind for the next process.
+            let staged =
+                std::fs::read_to_string(scratch.path().join("staged-path")).expect("staged path");
+            assert!(
+                !Path::new(&staged).exists(),
+                "sig {sig}: staged credential survived the signal: {staged}"
+            );
+            assert!(
+                std::fs::read_dir(scratch.path().join("staging"))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+                "sig {sig}: staging dir must be empty after signal cleanup"
+            );
+
+            // The guarded auth.json placeholder is ours, so it goes too.
+            assert!(
+                !scratch.path().join("home/.codex/auth.json").exists(),
+                "sig {sig}: auth.json placeholder survived the signal"
+            );
+
+            // The container is stopped through the daemon — the only route that
+            // works when the Docker CLI has a TTY and does not proxy signals.
+            let log =
+                std::fs::read_to_string(scratch.path().join("docker.log")).unwrap_or_default();
+            assert!(
+                log.contains("signal-container"),
+                "sig {sig}: container was not stopped via the daemon; docker log:\n{log}"
+            );
+
+            // Death still looks like the signal to the caller's shell, whether
+            // by re-raise or the 128+n fallback.
+            let died_of_signal = status.signal() == Some(sig);
+            assert!(
+                died_of_signal || status.code() == Some(128 + sig),
+                "sig {sig}: exit status must reflect the signal, got {status:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_signal_fake_docker(dir: &Path) {
+        crate::testutil::write_stub_script(
+            dir,
+            "docker",
             r#"#!/bin/sh
 if [ "$1" = "kill" ] && [ -n "$AIBOX_FAKE_DOCKER_KILL_START_DELAY" ]; then
     sleep "$AIBOX_FAKE_DOCKER_KILL_START_DELAY"
@@ -1224,11 +1399,175 @@ case "$1" in
         ;;
 esac
 "#,
-        )
-        .unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).unwrap();
+        );
+    }
+
+    /// A `docker` stub whose `inspect` can report a *running* container, which
+    /// [`write_signal_fake_docker`] never does (it always says stopped, so
+    /// `stop_container_id` returns before its grace/escalation logic). Reports
+    /// running for the first `AIBOX_FAKE_DOCKER_RUNNING_INSPECTS` inspects, then
+    /// stopped — or forever when that count is `always`.
+    #[cfg(unix)]
+    fn write_running_container_docker(dir: &Path) {
+        crate::testutil::write_stub_script(
+            dir,
+            "docker",
+            r#"#!/bin/sh
+if [ -n "$AIBOX_FAKE_DOCKER_LOG" ]; then
+    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
+fi
+case "$1" in
+    kill)
+        exit 0
+        ;;
+    inspect)
+        want="$AIBOX_FAKE_DOCKER_RUNNING_INSPECTS"
+        if [ "$want" = "always" ]; then
+            printf 'true\n'
+            exit 0
+        fi
+        seen=0
+        if [ -f "$AIBOX_FAKE_DOCKER_INSPECT_COUNT" ]; then
+            seen=$(cat "$AIBOX_FAKE_DOCKER_INSPECT_COUNT")
+        fi
+        seen=$((seen + 1))
+        printf '%s' "$seen" > "$AIBOX_FAKE_DOCKER_INSPECT_COUNT"
+        if [ "$seen" -le "${want:-0}" ]; then
+            printf 'true\n'
+        else
+            printf 'false\n'
+        fi
+        exit 0
+        ;;
+    *)
+        exit 99
+        ;;
+esac
+"#,
+        );
+    }
+
+    /// Restores [`SIGNAL_COUNT`] on drop. The counter is process-global and the
+    /// watcher reads it, so a test that fakes a second signal must put it back.
+    struct SignalCountGuard(usize);
+
+    impl SignalCountGuard {
+        fn set(value: usize) -> Self {
+            let old = SIGNAL_COUNT.swap(value, Ordering::SeqCst);
+            SignalCountGuard(old)
+        }
+    }
+
+    impl Drop for SignalCountGuard {
+        fn drop(&mut self) {
+            SIGNAL_COUNT.store(self.0, Ordering::SeqCst);
+        }
+    }
+
+    /// The graceful half of the escalation: deliver the signal to PID 1, and if
+    /// the container is still running, wait it out rather than SIGKILLing an
+    /// agent that is shutting down cleanly.
+    #[cfg(unix)]
+    #[test]
+    fn stop_container_id_waits_out_a_container_that_stops_on_the_signal() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let scratch = stable_tempdir();
+        let log_path = scratch.path().join("docker.log");
+        let count_path = scratch.path().join("inspects");
+        let fake_docker = stable_tempdir();
+        write_running_container_docker(fake_docker.path());
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.to_str().unwrap());
+        let _count = EnvGuard::set("AIBOX_FAKE_DOCKER_INSPECT_COUNT", count_path.as_os_str());
+        // Running on the first inspect, stopped on the next: the container took
+        // the signal, just not instantly.
+        let _running = EnvGuard::set("AIBOX_FAKE_DOCKER_RUNNING_INSPECTS", "1");
+
+        let started = Instant::now();
+        stop_container_id(signal_hook::consts::SIGTERM, "graceful-container");
+
+        assert!(
+            started.elapsed() < CONTAINER_GRACE,
+            "a container that stops during the grace window must not wait it out"
+        );
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            log.contains("kill --signal TERM graceful-container"),
+            "the graceful signal goes through the daemon: {log}"
+        );
+        assert!(
+            !log.lines().any(|l| l == "kill graceful-container"),
+            "a container that exited on the signal must not also be SIGKILLed:\n{log}"
+        );
+    }
+
+    /// The escalation: the agent is the container's PID 1, and PID 1 ignores
+    /// signals it has no handler for, so a graceful signal alone can never
+    /// land. A second signal must cut the wait short and SIGKILL now.
+    #[cfg(unix)]
+    #[test]
+    fn stop_container_id_escalates_to_sigkill_on_a_second_signal() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let scratch = stable_tempdir();
+        let log_path = scratch.path().join("docker.log");
+        let count_path = scratch.path().join("inspects");
+        let fake_docker = stable_tempdir();
+        write_running_container_docker(fake_docker.path());
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.to_str().unwrap());
+        let _count = EnvGuard::set("AIBOX_FAKE_DOCKER_INSPECT_COUNT", count_path.as_os_str());
+        let _running = EnvGuard::set("AIBOX_FAKE_DOCKER_RUNNING_INSPECTS", "always");
+        // A second delivered signal (Ctrl-C again, or a supervisor re-kill).
+        let _signals = SignalCountGuard::set(2);
+
+        let started = Instant::now();
+        stop_container_id(signal_hook::consts::SIGINT, "stubborn-container");
+
+        assert!(
+            started.elapsed() < CONTAINER_GRACE,
+            "a second signal must skip the rest of the grace wait"
+        );
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            log.contains("kill --signal INT stubborn-container"),
+            "SIGINT maps to the container's INT: {log}"
+        );
+        assert!(
+            log.lines().any(|l| l == "kill stubborn-container"),
+            "a container that ignored the signal must be SIGKILLed:\n{log}"
+        );
+    }
+
+    /// The wrapper's fatal signal has to reach the container as the *same*
+    /// signal; a mismapped name would make the agent miss its shutdown path.
+    #[cfg(unix)]
+    #[test]
+    fn stop_container_id_forwards_each_signal_under_its_own_name() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let fake_docker = stable_tempdir();
+        write_signal_fake_docker(fake_docker.path());
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+
+        for (sig, name) in [
+            (signal_hook::consts::SIGINT, "INT"),
+            (signal_hook::consts::SIGHUP, "HUP"),
+            (signal_hook::consts::SIGTERM, "TERM"),
+        ] {
+            let scratch = stable_tempdir();
+            let log_path = scratch.path().join("docker.log");
+            let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.to_str().unwrap());
+
+            stop_container_id(sig, "named-container");
+
+            let log = std::fs::read_to_string(&log_path).unwrap();
+            assert!(
+                log.contains(&format!("kill --signal {name} named-container")),
+                "sig {sig} must reach the container as {name}:\n{log}"
+            );
+        }
     }
 
     #[test]
@@ -1285,6 +1624,21 @@ esac
             let _guard = EnvGuard::set("TMPDIR", "relative-tmp");
             assert_eq!(staging_temp_dir(), PathBuf::from("/tmp"));
         }
+    }
+
+    #[test]
+    fn staged_file_uses_absolute_tmpdir_and_cleans_up() {
+        let _pending_lock = PENDING_CLEANUP_TEST_LOCK.lock().unwrap();
+        let _env_lock = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let _tmpdir = EnvGuard::set("TMPDIR", dir.path().to_str().unwrap());
+
+        let staged = StagedFile::create("aibox-test-tmpdir.", "secret\n").unwrap();
+        let path = staged.path().to_path_buf();
+
+        assert_eq!(path.parent(), Some(dir.path()));
+        drop(staged);
+        assert!(!path.exists(), "staged credentials must be removed on drop");
     }
 
     #[test]
@@ -1400,6 +1754,58 @@ esac
             !placeholder_matches(&fifo, "{}\n"),
             "special files must be rejected without a blocking read"
         );
+    }
+
+    #[test]
+    fn placeholder_matcher_requires_exact_contents() {
+        // Ownership of the fixed auth.json path is decided *only* by an exact
+        // content match. Anything else is the user's real login file, so every
+        // near miss below must read as "not ours" and be left alone.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+
+        std::fs::write(&path, "{}\n").unwrap();
+        assert!(placeholder_matches(&path, "{}\n"), "our own placeholder");
+
+        // Same length, different bytes: the size check passes and the content
+        // comparison is what has to reject it.
+        std::fs::write(&path, "{ }\n").unwrap();
+        assert!(
+            !placeholder_matches(&path, "{}\n"),
+            "same-length content must still be compared byte for byte"
+        );
+
+        // A real login file (longer) and a truncated one (shorter) are both
+        // rejected on size, without reading further.
+        std::fs::write(&path, "{\"OPENAI_API_KEY\":\"sk-real\"}\n").unwrap();
+        assert!(!placeholder_matches(&path, "{}\n"));
+        std::fs::write(&path, "{").unwrap();
+        assert!(!placeholder_matches(&path, "{}\n"));
+
+        // A path that does not exist is not a placeholder either.
+        std::fs::remove_file(&path).unwrap();
+        assert!(!placeholder_matches(&path, "{}\n"));
+    }
+
+    #[test]
+    fn guarded_path_requires_an_existing_mount_target_parent() {
+        // Docker cannot create a bind-mount target nested in another mount, so
+        // the parent must already exist. Saying so beats a later opaque Docker
+        // error naming a path the user never typed.
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("never-created").join("auth.json");
+
+        let err = GuardedPath::ensure(auth.clone(), auth_lock_path(&auth), "{}\n")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("mount target parent does not exist"), "{err}");
+        assert!(!auth.exists());
+
+        // The stale-cleanup path treats the same absent parent as "nothing to
+        // clean" rather than an error: there cannot be a leftover under it.
+        remove_stale_placeholder(&auth, &auth_lock_path(&auth), "{}\n").unwrap();
     }
 
     #[cfg(unix)]

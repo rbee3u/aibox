@@ -297,23 +297,37 @@ impl Profile {
     /// Nudge (without touching the file) when `base` or the relay predates the
     /// current template, so stale docs can be refreshed with `refresh`.
     pub fn nudge_if_stale(&self, relay_path: &Path) {
+        for hint in self.stale_template_hints(relay_path) {
+            eprintln!(">> {hint}");
+        }
+    }
+
+    /// The staleness hints [`Self::nudge_if_stale`] prints, as strings. Split out
+    /// so the decisions — which files are stale, and which `refresh` argument
+    /// actually resolves back to each one — are testable without capturing
+    /// stderr. A file that is missing, unreadable, or already current yields no
+    /// hint; a wrong `refresh` argument here would send users to edit the wrong
+    /// file.
+    fn stale_template_hints(&self, relay_path: &Path) -> Vec<String> {
         let targets = [
             (self.base_file.as_path(), "base".to_string()),
             (relay_path, self.refresh_arg_for(relay_path)),
         ];
+        let mut hints = Vec::new();
         for (f, arg) in targets {
             let Ok(contents) = fs::read_to_string(f) else {
                 continue;
             };
             let fv = template::file_template_version(&contents);
             if fv < TEMPLATE_VERSION {
-                eprintln!(
-                    ">> {} is template v{fv} (current v{TEMPLATE_VERSION}) — refresh docs with: aibox {} refresh {arg}",
+                hints.push(format!(
+                    "{} is template v{fv} (current v{TEMPLATE_VERSION}) — refresh docs with: aibox {} refresh {arg}",
                     f.display(),
                     self.agent.tag()
-                );
+                ));
             }
         }
+        hints
     }
 
     /// The `refresh` argument that resolves back to `path`: the bare file name
@@ -502,38 +516,10 @@ pub fn set_600(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
+    use crate::testutil::EnvGuard;
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
-    }
-
-    struct EnvGuard {
-        name: &'static str,
-        old: Option<OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(name: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(name);
-            std::env::set_var(name, value);
-            EnvGuard { name, old }
-        }
-
-        fn remove(name: &'static str) -> Self {
-            let old = std::env::var_os(name);
-            std::env::remove_var(name);
-            EnvGuard { name, old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.old {
-                Some(value) => std::env::set_var(self.name, value),
-                None => std::env::remove_var(self.name),
-            }
-        }
     }
 
     #[test]
@@ -573,6 +559,17 @@ mod tests {
             config_root(AgentKind::Codex).unwrap(),
             home.path().join(".aibox").join("codex")
         );
+    }
+
+    #[test]
+    fn config_root_requires_home_without_an_override() {
+        let _env_lock = crate::test_env_lock();
+        let _config = EnvGuard::remove("AIBOX_CONFIG_ROOT");
+        let _home = EnvGuard::remove("HOME");
+
+        let err = config_root(AgentKind::Codex).unwrap_err().to_string();
+
+        assert!(err.contains("$HOME is not set"), "{err}");
     }
 
     #[cfg(unix)]
@@ -879,6 +876,59 @@ mod tests {
     }
 
     #[test]
+    fn stale_template_hints_only_flag_outdated_files_and_name_the_right_target() {
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        p.resolve_relay_for_run("r").unwrap(); // scaffolds both at the current version
+        let relay = p.envs_dir.join("r");
+
+        assert!(
+            p.stale_template_hints(&relay).is_empty(),
+            "freshly scaffolded files are current, so nothing should be nudged"
+        );
+
+        // An unstamped (pre-versioning) base is stale; the relay is still current.
+        fs::write(&p.base_file, "CODEX_MODEL=m\n").unwrap();
+        let hints = p.stale_template_hints(&relay);
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(
+            hints[0].contains(&p.base_file.display().to_string()),
+            "{hints:?}"
+        );
+        assert!(
+            hints[0].contains("template v0") && hints[0].contains("refresh base"),
+            "base must be hinted by the reserved `refresh base` argument: {hints:?}"
+        );
+
+        // A named relay is hinted by its bare name — the same value `-e` takes.
+        fs::write(&relay, "# aibox-template: v1\nCODEX_MODEL=m\n").unwrap();
+        let hints = p.stale_template_hints(&relay);
+        assert_eq!(hints.len(), 2, "{hints:?}");
+        assert!(
+            hints[1].contains("template v1") && hints[1].contains("refresh r"),
+            "{hints:?}"
+        );
+
+        // A relay outside envs/ must be hinted by path: its bare name would not
+        // resolve back to this file.
+        let outside = root.path().join("external.env");
+        fs::write(&outside, "CODEX_MODEL=m\n").unwrap();
+        let hints = p.stale_template_hints(&outside);
+        assert!(
+            hints[1].contains(&format!("refresh {}", outside.display())),
+            "{hints:?}"
+        );
+
+        // A missing relay is not a staleness problem; only base is reported.
+        let hints = p.stale_template_hints(&p.envs_dir.join("absent"));
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(
+            hints[0].contains(&p.base_file.display().to_string()),
+            "{hints:?}"
+        );
+    }
+
+    #[test]
     fn refresh_arg_round_trips_named_relay_and_falls_back_to_path() {
         let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").unwrap();
         // A named relay under envs/ hints its bare name.
@@ -1062,6 +1112,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn write_600_rejects_dangling_symlinks_without_creating_their_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tmp();
+        let link = root.path().join("relay.env");
+        let missing = root.path().join("missing.env");
+        symlink(&missing, &link).unwrap();
+
+        let err = write_600(&link, "new\n").unwrap_err().to_string();
+
+        assert!(err.contains("resolve config symlink"), "{err}");
+        assert!(
+            !missing.exists(),
+            "refresh writes must not create a dangling symlink target"
+        );
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn scaffolded_files_are_0600() {
         use std::os::unix::fs::PermissionsExt;
         let root = tmp();
@@ -1069,5 +1142,136 @@ mod tests {
         p.resolve_relay_for_run("r").unwrap();
         let mode = fs::metadata(&p.base_file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // --- IO errors are reported, not read as "absent" ----------------------
+    //
+    // Every path below distinguishes a *broken* profile from an empty one. The
+    // distinction matters because "absent" is a legitimate first-use state that
+    // silently scaffolds or skips: swallowing a real `PermissionDenied` as
+    // "nothing here" would scaffold over an existing profile, or run with a
+    // relay's config quietly missing. A missing path can't reach these arms, so
+    // the tests make a parent unreadable to provoke a genuine errno.
+
+    #[cfg(unix)]
+    #[test]
+    fn real_dir_exists_reports_an_unreadable_parent_instead_of_absence() {
+        let root = tmp();
+        let parent = root.path().join("locked");
+        let nested = parent.join("home");
+        fs::create_dir_all(&nested).unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&parent);
+
+        let err = real_dir_exists(&nested, "profile home")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("inspect profile home"),
+            "an unreadable parent must not be reported as a missing directory: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_real_dir_reports_a_create_failure_under_an_unreadable_parent() {
+        let root = tmp();
+        let parent = root.path().join("locked");
+        fs::create_dir(&parent).unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&parent);
+
+        let err = ensure_real_dir(&parent.join("home"), "profile home")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile home"),
+            "a failed mkdir must surface as an error, not a silent success: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_config_file_reports_an_unreadable_parent() {
+        let root = tmp();
+        let parent = root.path().join("locked");
+        fs::create_dir(&parent).unwrap();
+        let relay = parent.join("relay");
+        fs::write(&relay, "CODEX_MODEL=m\n").unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&parent);
+
+        // Scaffolding must not treat an unreadable path as "no file here" and
+        // then try to create one over the top of the user's real config.
+        let err = write_600_new(&relay, "template\n").unwrap_err().to_string();
+
+        assert!(err.contains("relay"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_600_reports_an_unreadable_parent_instead_of_creating_a_file() {
+        let root = tmp();
+        let parent = root.path().join("locked");
+        fs::create_dir(&parent).unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&parent);
+
+        let err = write_600(&parent.join("base"), "secret\n")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("base"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_sources_reports_an_unreadable_base_instead_of_skipping_it() {
+        // `base` is optional, so a NotFound is skipped. A permission error is
+        // not the same thing: skipping it would run the agent with the profile's
+        // shared config (model tiers, defaults) silently absent.
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "locked-profile").unwrap();
+        fs::create_dir_all(&p.envs_dir).unwrap();
+        let relay = p.envs_dir.join("r");
+        fs::write(&relay, "CODEX_BASE_URL=https://relay.example/v1\n").unwrap();
+        fs::write(&p.base_file, "CODEX_MODEL=base-model\n").unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&p.dir);
+
+        let err = p.merge_sources(&relay).unwrap_err().to_string();
+
+        assert!(
+            err.contains("base config") || err.contains("base"),
+            "an unreadable base must be reported, not silently skipped: {err}"
+        );
+    }
+
+    #[test]
+    fn write_600_new_keeps_a_file_that_appears_during_creation() {
+        // The noclobber-persist race: another process (or a container-side
+        // write) creates the real config between our existence check and the
+        // rename. The user's credentials must win over our template.
+        let root = tmp();
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        fs::create_dir_all(&p.envs_dir).unwrap();
+        let relay = p.envs_dir.join("r");
+        let real = "CODEX_API_KEY=sk-real\n";
+
+        // `scaffold_with_hooks` writes the file after the existence check but
+        // before the persist, which is exactly the racing window.
+        p.scaffold_with_hooks(
+            "r",
+            &relay,
+            || Ok(()),
+            || {
+                fs::write(&relay, real).unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&relay).unwrap(),
+            real,
+            "a config that appears mid-scaffold must not be clobbered"
+        );
     }
 }

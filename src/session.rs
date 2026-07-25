@@ -9,7 +9,6 @@
 //! listing, and delete confirmation — is shared.
 
 use crate::agent::AgentKind;
-use crate::print_line;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -421,17 +420,26 @@ fn list_with_printer(
 /// Print your typed prompts from one session, numbered + timestamped, full text
 /// (for copy-paste).
 fn get(backend: &dyn SessionBackend, home: &Path, id: &str) -> Result<i32> {
+    get_with_printer(backend, home, id, crate::print_line)
+}
+
+fn get_with_printer(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    id: &str,
+    mut print: impl FnMut(&str) -> Result<bool>,
+) -> Result<i32> {
     let path = resolve(backend, home, id)?;
     let sid = backend.id_of(&path);
     eprintln!(">> session {sid}");
     let prompts = backend.prompts(&path)?;
     if prompts.is_empty() {
-        print_line("(no typed prompts in this session)")?;
+        print("(no typed prompts in this session)")?;
         return Ok(0);
     }
     for (i, p) in prompts.iter().enumerate() {
         let d = fmt_ts(&p.timestamp);
-        if !print_line(&format!("\n[{}] {d}\n{}", i + 1, p.text))? {
+        if !print(&format!("\n[{}] {d}\n{}", i + 1, p.text))? {
             break; // reader hung up; nothing left to show
         }
     }
@@ -671,42 +679,66 @@ mod tests {
     }
 
     #[test]
-    fn transcript_read_errors_are_not_reported_as_empty_sessions() {
+    fn list_shortens_multibyte_session_ids_by_chars() {
         let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("sessions").join("missing.jsonl");
+        let id = "é".repeat(10);
+        let path = dir.path().join(format!("{id}.jsonl"));
+        std::fs::write(&path, "{\"typed\":\"bonjour\"}\n").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path]);
+        let mut lines = Vec::new();
 
-        let err = TestBackend
-            .prompts(&missing)
-            .err()
-            .expect("missing transcript should fail")
-            .to_string();
-
-        assert!(err.contains("open session transcript"));
-        assert!(err.contains("missing.jsonl"));
-    }
-
-    #[test]
-    fn prompts_stream_typed_turns_in_order_after_bad_lines() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        std::fs::write(
-            &path,
-            "\
-not json
-{\"timestamp\":\"2026-07-14T02:16:00Z\",\"typed\":\"first prompt\"}
-{\"timestamp\":\"2026-07-14T02:17:00Z\"}
-{\"timestamp\":\"2026-07-14T02:18:00Z\",\"typed\":\"second prompt\"}
-",
-        )
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
         .unwrap();
 
-        let prompts = TestBackend.prompts(&path).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(lines.len(), 1);
+        let mut expected_prefix = "é".repeat(8);
+        expected_prefix.push_str("  ");
+        assert!(
+            lines[0].starts_with(&expected_prefix),
+            "short ids must be truncated on char boundaries, not byte boundaries: {lines:?}"
+        );
+    }
 
-        assert_eq!(prompts.len(), 2);
-        assert_eq!(prompts[0].timestamp, "2026-07-14T02:16:00Z");
-        assert_eq!(prompts[0].text, "first prompt");
-        assert_eq!(prompts[1].timestamp, "2026-07-14T02:18:00Z");
-        assert_eq!(prompts[1].text, "second prompt");
+    /// A transcript that is not valid UTF-8 (a truncated multi-byte write, an
+    /// interrupted flush, on-disk corruption) makes `BufRead::read_line` fail
+    /// with `InvalidData` — a distinct arm from the missing-file open error and
+    /// from a merely unparseable-but-UTF-8 line, which is silently skipped. The
+    /// contract: `get`/`prompts` fail fast rather than pretend the session is
+    /// empty, and `list` reports it and returns non-zero instead of showing a
+    /// blank row.
+    #[test]
+    fn non_utf8_transcript_fails_instead_of_reading_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("33333333.jsonl");
+        std::fs::write(&path, b"{\"typed\":\"ok\"}\n\xff\xfe").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path.clone()]);
+
+        // `get` (via `prompts`) fails fast with the read-error context.
+        let err = backend
+            .prompts(&path)
+            .err()
+            .expect("invalid UTF-8 must not read as an empty prompt list")
+            .to_string();
+        assert!(err.contains("read session transcript"), "{err}");
+        assert!(err.contains("33333333.jsonl"), "{err}");
+
+        // `list` surfaces the failure and returns non-zero rather than a blank
+        // row for a session it could not actually read.
+        let mut lines = Vec::new();
+        let code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(code, 1, "an unreadable transcript makes list non-zero");
+        assert!(
+            lines.is_empty(),
+            "no row for a transcript that failed to read"
+        );
     }
 
     #[test]
@@ -728,6 +760,124 @@ not json
         assert_eq!(lines.len(), 1, "the readable session still lists");
         assert!(lines[0].contains("good"));
         assert!(lines[0].contains("hello"));
+    }
+
+    #[test]
+    fn get_prints_numbered_timestamped_prompts_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("11111111.jsonl");
+        std::fs::write(
+            &path,
+            "\
+{\"timestamp\":\"2026-07-14T02:16:33.123Z\",\"typed\":\"first ask\"}
+{\"timestamp\":\"2026-07-14T02:18:00Z\",\"typed\":\"second ask\"}
+",
+        )
+        .unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path]);
+        let mut printed = Vec::new();
+
+        let code = get_with_printer(&backend, dir.path(), "1111", |line| {
+            printed.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            printed,
+            vec![
+                "\n[1] 2026-07-14 02:16\nfirst ask".to_string(),
+                "\n[2] 2026-07-14 02:18\nsecond ask".to_string(),
+            ],
+            "get numbers prompts from 1 and shows each turn's minute-precision timestamp"
+        );
+    }
+
+    #[test]
+    fn get_reports_a_session_with_no_typed_prompts() {
+        // A tool/injected-only shell resolves and exits 0 — it must say so
+        // rather than printing nothing at all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("22222222.jsonl");
+        std::fs::write(&path, "{\"ts\":\"2026-07-14T02:16:00Z\"}\n").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path]);
+        let mut printed = Vec::new();
+
+        let code = get_with_printer(&backend, dir.path(), "2222", |line| {
+            printed.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(printed, vec!["(no typed prompts in this session)"]);
+    }
+
+    /// A transcript that opens but fails mid-read — invalid UTF-8 from an
+    /// interrupted write or on-disk corruption — must be reported, not silently
+    /// shown as an empty session. `BufRead::read_line` returns `InvalidData` on
+    /// bad UTF-8, hitting the read-error arm of `for_each_json_line` (distinct
+    /// from the open-error arm every missing-file test already covers). `list`
+    /// keeps going but returns non-zero; `get` fails fast.
+    #[test]
+    fn list_reports_and_get_fails_on_an_unreadable_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("44444444.jsonl");
+        // Valid line, then a lone continuation byte: read_line errors on it.
+        std::fs::write(&path, b"{\"typed\":\"x\"}\n\xff\xfe").unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path]);
+
+        let mut lines = Vec::new();
+        let list_code = list_with_printer(&backend, dir.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(
+            list_code, 1,
+            "a transcript that fails to read must make list non-zero, not vanish"
+        );
+        assert!(
+            lines.is_empty(),
+            "a read failure is not an empty session shown as a blank row"
+        );
+
+        let err = get_with_printer(&backend, dir.path(), "4444", |_| Ok(true))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("read session transcript"),
+            "get must surface the read failure: {err}"
+        );
+    }
+
+    #[test]
+    fn get_stops_cleanly_when_printer_hangs_up() {
+        // `session get | head` closes the pipe; the Rust runtime ignores
+        // SIGPIPE, so this must stop writing instead of panicking.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("33333333.jsonl");
+        std::fs::write(
+            &path,
+            "{\"typed\":\"first\"}\n{\"typed\":\"second\"}\n{\"typed\":\"third\"}\n",
+        )
+        .unwrap();
+        let backend = ExplicitFilesBackend::new(vec![path]);
+        let mut printed = Vec::new();
+
+        let code = get_with_printer(&backend, dir.path(), "3333", |line| {
+            printed.push(line.to_string());
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            printed.len(),
+            1,
+            "get stops after a broken-pipe-style false"
+        );
     }
 
     #[test]
@@ -888,17 +1038,21 @@ not json
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().unwrap();
-        let outside = dir.path().join("outside.jsonl");
-        std::fs::write(&outside, "{}\n").unwrap();
+        let outside_file = dir.path().join("outside.jsonl");
+        std::fs::write(&outside_file, "{}\n").unwrap();
+        let outside_dir = dir.path().join("outside-dir");
+        std::fs::create_dir(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("nested.jsonl"), "{}\n").unwrap();
         let sessions = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        symlink(&outside, sessions.join("linked.jsonl")).unwrap();
+        symlink(&outside_file, sessions.join("linked.jsonl")).unwrap();
+        symlink(&outside_dir, sessions.join("linked-dir")).unwrap();
 
         let files = TestBackend.files(dir.path()).unwrap();
 
         assert!(
             files.is_empty(),
-            "host-side browsing must not follow symlinks"
+            "host-side browsing must not follow transcript or directory symlinks"
         );
     }
 
@@ -924,6 +1078,82 @@ not json
             discovery.errors.is_empty(),
             "skipped transcript symlinks should not be reported as walk failures"
         );
+    }
+
+    #[test]
+    fn session_discovery_rejects_a_non_directory_session_path() {
+        // A file where the transcript tree should be is a broken profile, not an
+        // empty one: reporting "no sessions" would hide it.
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::write(&sessions, "not a directory\n").unwrap();
+
+        let err = walk_jsonl(&sessions, |_| true).unwrap_err().to_string();
+        assert!(err.contains("session path is not a directory"), "{err}");
+
+        let err = walk_jsonl_tolerant(&sessions, |_| true)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("session path is not a directory"), "{err}");
+    }
+
+    #[test]
+    fn session_discovery_reports_no_files_for_a_missing_tree() {
+        // A profile that has never run an agent has no transcript dir at all;
+        // that is empty, not an error.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("never-used");
+
+        assert!(walk_jsonl(&missing, |_| true).unwrap().is_empty());
+        let discovery = walk_jsonl_tolerant(&missing, |_| true).unwrap();
+        assert!(discovery.files.is_empty());
+        assert!(discovery.errors.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tolerant_walk_reports_unreadable_subdirectories_without_hiding_readable_ones() {
+        // `list`'s walk is tolerant on purpose: one unreadable child dir must be
+        // reported while every readable transcript still lists.
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        let readable = sessions.join("readable");
+        let locked = sessions.join("locked");
+        std::fs::create_dir_all(&readable).unwrap();
+        std::fs::create_dir_all(&locked).unwrap();
+        let good = readable.join("11111111.jsonl");
+        std::fs::write(&good, "{\"typed\":\"hello\"}\n").unwrap();
+        std::fs::write(locked.join("22222222.jsonl"), "{}\n").unwrap();
+        let lock = crate::testutil::UnreadableDir::new(&locked);
+
+        let discovery = walk_jsonl_tolerant(&sessions, |_| true).unwrap();
+        lock.restore();
+
+        assert_eq!(
+            discovery.files,
+            vec![good],
+            "the readable transcript must still be discovered"
+        );
+        assert_eq!(
+            discovery.errors.len(),
+            1,
+            "the unreadable subdirectory is reported: {:?}",
+            discovery.errors
+        );
+        assert!(
+            discovery.errors[0].contains("walk session directory"),
+            "{:?}",
+            discovery.errors
+        );
+
+        // The strict walk `get`/`delete` use instead fails fast: a destructive
+        // or single-target action must not act on a partial view of the tree.
+        let lock = crate::testutil::UnreadableDir::new(&locked);
+        let strict = walk_jsonl(&sessions, |_| true);
+        lock.restore();
+        let err = strict.unwrap_err().to_string();
+        assert!(err.contains("walk session directory"), "{err}");
     }
 
     #[cfg(unix)]
@@ -972,6 +1202,26 @@ not json
             transcript.exists(),
             "outside transcript must remain untouched"
         );
+    }
+
+    #[test]
+    fn list_and_delete_report_an_empty_profile_without_failing() {
+        // A profile with no transcripts is a normal state (nothing run yet), so
+        // both read and destructive paths exit 0.
+        let dir = tempfile::tempdir().unwrap();
+        let mut printed = Vec::new();
+
+        let code = list_with_printer(&TestBackend, dir.path(), |line| {
+            printed.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0, "an empty profile is not a list failure");
+        assert!(printed.is_empty(), "no rows to print: {printed:?}");
+
+        let code = delete(&TestBackend, dir.path(), &[], true).unwrap();
+        assert_eq!(code, 0, "deleting nothing is not a failure");
     }
 
     #[test]

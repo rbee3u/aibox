@@ -347,6 +347,7 @@ pub fn assemble_run_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{contains_pair, pair_pos};
 
     #[test]
     fn resolve_work_dir_absolute_dir_passes() {
@@ -512,6 +513,34 @@ mod tests {
     }
 
     #[test]
+    fn extra_mount_validation_rejects_unusable_resolved_specs() {
+        // `validate_extra_mount_targets` runs on already-resolved specs, so a
+        // spec it cannot read a target out of is a bug upstream, not a user
+        // typo. It must still fail loudly rather than validate nothing and let
+        // the mount reach Docker unchecked.
+        for bad in ["no-colon-at-all", "/host:", "/host::ro"] {
+            let err = validate_extra_mount_targets(AgentKind::Claude, &[bad.to_string()])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("invalid resolved mount"),
+                "unusable resolved mount {bad:?} should fail clearly: {err}"
+            );
+        }
+
+        // A relative container target can't be normalized against the managed
+        // mounts, so it can't be proven safe.
+        let err =
+            validate_extra_mount_targets(AgentKind::Claude, &["/host:relative:ro".to_string()])
+                .unwrap_err()
+                .to_string();
+        assert!(
+            err.contains("container mount target must be absolute"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn extra_mounts_allow_prefix_siblings_of_managed_targets() {
         validate_extra_mount_targets(
             AgentKind::Codex,
@@ -522,14 +551,6 @@ mod tests {
             ],
         )
         .unwrap();
-    }
-
-    fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
-        args.windows(2).any(|w| w[0] == a && w[1] == b)
-    }
-
-    fn pair_pos(args: &[String], a: &str, b: &str) -> Option<usize> {
-        args.windows(2).position(|w| w[0] == a && w[1] == b)
     }
 
     #[test]
@@ -651,6 +672,28 @@ mod tests {
                 "seeding {agent:?} must not write through its state-directory link"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_reports_a_write_failure_instead_of_silently_skipping_the_file() {
+        // Seeding tolerates an already-present file (that is how customizations
+        // survive), but it must not tolerate being *unable* to write. A
+        // read-only state directory would otherwise leave Claude with no status
+        // line and no complaint.
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude");
+        fs::create_dir(&claude).unwrap();
+        let _lock = crate::testutil::UnreadableDir::new(&claude);
+
+        let err = seed_home(AgentKind::Claude, home.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("prepare seed file") && err.contains("statusline.sh"),
+            "the error must name what could not be seeded: {err}"
+        );
     }
 
     #[cfg(unix)]

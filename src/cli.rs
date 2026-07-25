@@ -220,6 +220,23 @@ mod tests {
     }
 
     #[test]
+    fn passthrough_words_do_not_become_management_actions() {
+        let (l, r) = split_passthrough(v(&[
+            "aibox", "codex", "-e", "relay", "--", "session", "get", "3f2a",
+        ]));
+
+        let cli = Cli::try_parse_from(l).unwrap();
+
+        let args = cli.command.agent_args().unwrap();
+        assert!(
+            args.action.is_none(),
+            "words after -- must remain agent args, not aibox subcommands"
+        );
+        assert_eq!(args.run.env.as_deref(), Some("relay"));
+        assert_eq!(r, v(&["session", "get", "3f2a"]));
+    }
+
+    #[test]
     fn parses_claude_run() {
         let (l, _) = split_passthrough(v(&["aibox", "claude", "-e", "openrouter"]));
         let cli = Cli::try_parse_from(l).unwrap();

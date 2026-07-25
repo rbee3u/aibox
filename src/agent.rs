@@ -457,6 +457,7 @@ fn resolve_instructions_path(value: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{contains_pair, EnvGuard};
 
     #[test]
     fn only_codex_supports_exec() {
@@ -490,17 +491,48 @@ mod tests {
         }
     }
 
+    /// The contract is *how* each agent CLI is installed, not which release is
+    /// current: an exact version pin (never a range or `latest`, so an image
+    /// rebuild is reproducible), the install line consuming that ARG, and a
+    /// smoke check that fails the build if the binary is unusable. Asserting the
+    /// literal version instead would break on every routine bump while proving
+    /// none of that.
     #[test]
-    fn agent_dockerfiles_pin_cli_versions_and_smoke_check() {
-        let codex = AgentKind::Codex.dockerfile();
-        assert!(codex.contains("ARG CODEX_VERSION=0.145.0"));
-        assert!(codex.contains("@openai/codex@${CODEX_VERSION}"));
-        assert!(codex.contains("codex --version"));
-
-        let claude = AgentKind::Claude.dockerfile();
-        assert!(claude.contains("ARG CLAUDE_CODE_VERSION=2.1.217"));
-        assert!(claude.contains("@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"));
-        assert!(claude.contains("claude --version"));
+    fn agent_dockerfiles_pin_an_exact_cli_version_and_smoke_check_it() {
+        for (agent, arg, package, binary) in [
+            (
+                AgentKind::Claude,
+                "CLAUDE_CODE_VERSION",
+                "@anthropic-ai/claude-code",
+                "claude",
+            ),
+            (AgentKind::Codex, "CODEX_VERSION", "@openai/codex", "codex"),
+        ] {
+            let dockerfile = agent.dockerfile();
+            let prefix = format!("ARG {arg}=");
+            let pin = dockerfile
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
+                .unwrap_or_else(|| panic!("{} Dockerfile must pin {arg}", agent.tag()));
+            assert!(
+                !pin.is_empty()
+                    && pin
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+                    && pin.chars().next().is_some_and(|c| c.is_ascii_digit()),
+                "{arg} must pin one exact version, not {pin:?}"
+            );
+            assert!(
+                dockerfile.contains(&format!("{package}@${{{arg}}}")),
+                "{} install must consume the {arg} pin",
+                agent.tag()
+            );
+            assert!(
+                dockerfile.contains(&format!("{binary} --version")),
+                "{} build must smoke-check the installed CLI",
+                agent.tag()
+            );
+        }
     }
 
     #[test]
@@ -519,6 +551,17 @@ mod tests {
             resolve_instructions_path("/abs/x.md").unwrap(),
             PathBuf::from("/abs/x.md")
         );
+    }
+
+    #[test]
+    fn instructions_path_tilde_requires_home() {
+        let _env_lock = crate::test_env_lock();
+        let _home = EnvGuard::remove("HOME");
+
+        for value in ["~", "~/instructions.md"] {
+            let err = resolve_instructions_path(value).unwrap_err().to_string();
+            assert!(err.contains("$HOME is not set"), "{value:?}: {err}");
+        }
     }
 
     #[test]
@@ -581,10 +624,6 @@ mod tests {
             .collect()
     }
 
-    fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
-        args.windows(2).any(|w| w[0] == a && w[1] == b)
-    }
-
     fn contains_c_string(overrides: &[&str], key: &str, value: &str) -> bool {
         let expected = format!("{key}={}", codex_config_string(value));
         overrides.iter().any(|got| *got == expected)
@@ -642,11 +681,14 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         let env = env_of("");
-        assert_eq!(
-            build_err(AgentKind::Codex, &opts(&env, home.path())),
-            "relay is missing required keys: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MODEL"
-        );
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+        assert!(err.starts_with("relay is missing required keys:"), "{err}");
+        for key in ["CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL"] {
+            assert!(err.contains(key), "all missing keys must be listed: {err}");
+        }
 
+        // The single-key case stays exact: it proves the keys already present
+        // (CODEX_BASE_URL, CODEX_MODEL) are excluded, not just that API_KEY appears.
         let env = env_of("CODEX_BASE_URL=https://x\nCODEX_MODEL=m\n");
         assert_eq!(
             build_err(AgentKind::Codex, &opts(&env, home.path())),
@@ -692,6 +734,38 @@ mod tests {
         // The two auth wirings conflict in Codex's provider validation; env_key
         // mode must not also set requires_openai_auth.
         assert!(!c.iter().any(|v| v.contains("requires_openai_auth")));
+    }
+
+    /// CLAUDE.md's central Codex invariant: the endpoint is injected only via
+    /// runtime `-c` overrides, never written into the mounted `config.toml`
+    /// (which holds the user's `codex login`, trust levels, MCP servers). Assert
+    /// the negative in both auth modes: no `config.toml` is created under the
+    /// Codex home, and no bind mount targets one. A future "just persist the
+    /// provider" change would trip this instead of silently clobbering the file.
+    #[test]
+    fn codex_never_writes_or_mounts_config_toml() {
+        for extra in ["", "CODEX_REQUIRES_OPENAI_AUTH=1\n"] {
+            let env = env_of(&format!("{CODEX_MIN}{extra}"));
+            let home = tempfile::tempdir().unwrap();
+            let config = home.path().join(".codex").join("config.toml");
+            // auth.json mode pre-creates its mount target, so the parent must
+            // exist; create it for both modes to keep the loop uniform.
+            std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+
+            let inv = AgentKind::Codex
+                .build_invocation(&opts(&env, home.path()))
+                .unwrap();
+
+            assert!(
+                !config.exists(),
+                "config.toml must stay the user's — never written (mode {extra:?})"
+            );
+            assert!(
+                !inv.extra_run_args.iter().any(|a| a.contains("config.toml")),
+                "no bind mount may target config.toml (mode {extra:?}): {:?}",
+                inv.extra_run_args
+            );
+        }
     }
 
     #[test]
@@ -1037,6 +1111,20 @@ mod tests {
             "plan mode defaults to CODEX_REASONING unless explicitly overridden"
         );
 
+        // CODEX_PLAN_REASONING is independent of CODEX_REASONING: setting it
+        // alone must emit the plan-mode effort without inventing a base
+        // model_reasoning_effort the relay never asked for.
+        let env = env_of(&format!("{CODEX_MIN}CODEX_PLAN_REASONING=xhigh\n"));
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+        assert!(contains_c_string(&c, "plan_mode_reasoning_effort", "xhigh"));
+        assert!(
+            !c.iter().any(|v| v.starts_with("model_reasoning_effort=")),
+            "plan reasoning set alone must not backfill the base reasoning effort"
+        );
+
         let env = env_of(&format!(
             "{CODEX_MIN}CODEX_REASONING=high\nCODEX_PLAN_REASONING=xhigh\n\
              CODEX_QUERY_PARAMS= api-version=2025-04-01-preview, foo=bar,compound=a=b, ,\n"
@@ -1215,6 +1303,17 @@ mod tests {
         ));
         let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
         assert!(err.contains("CODEX_INSTRUCTIONS_FILE not found"));
+
+        let directory = tempfile::tempdir().unwrap();
+        let env = env_of(&format!(
+            "{CODEX_MIN}CODEX_INSTRUCTIONS_FILE={}\n",
+            directory.path().display()
+        ));
+        let err = build_err(AgentKind::Codex, &opts(&env, home.path()));
+        assert!(
+            err.contains("CODEX_INSTRUCTIONS_FILE not found"),
+            "instruction directories must not be bind-mounted as files: {err}"
+        );
     }
 
     #[test]
@@ -1223,5 +1322,69 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("contains ':'"), "{err}");
+    }
+
+    /// A relay with no ANTHROPIC_BASE_URL is legitimate (a subscription login
+    /// keeps its credentials in the profile home), so the run must proceed — but
+    /// silently is wrong: a scaffolded-but-unedited relay would look active while
+    /// Claude actually talked to its default endpoint.
+    #[test]
+    fn claude_without_a_base_url_still_builds_a_runnable_invocation() {
+        let home = tempfile::tempdir().unwrap();
+
+        for relay in [
+            "",
+            "ANTHROPIC_BASE_URL=\n",
+            "ANTHROPIC_AUTH_TOKEN=sk-only\n",
+        ] {
+            let env = env_of(relay);
+            let inv = AgentKind::Claude
+                .build_invocation(&opts(&env, home.path()))
+                .unwrap();
+
+            assert_eq!(
+                inv.extra_run_args[0], "--env-file",
+                "{relay:?} must still deliver the merged env"
+            );
+            assert_eq!(inv.staged.len(), 1, "{relay:?}");
+            assert!(
+                inv.agent_cmd
+                    .contains(&"--dangerously-skip-permissions".to_string()),
+                "{relay:?}: a missing base URL is a note, not a permission change"
+            );
+        }
+    }
+
+    /// `validate_auth_path` must not read the fixed auth path to classify it, and
+    /// an inspect failure has to surface rather than pass as "absent, fine to
+    /// create" — the parent lives in a container-writable profile home.
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_path_inspect_failure_is_reported_not_treated_as_absent() {
+        let home = tempfile::tempdir().unwrap();
+        let codex = home.path().join(".codex");
+        std::fs::create_dir(&codex).unwrap();
+        let auth = codex.join("auth.json");
+        let _locked = crate::testutil::UnreadableDir::new(&codex);
+
+        let err = validate_auth_path(&auth).unwrap_err().to_string();
+
+        assert!(err.contains("inspect"), "{err}");
+        assert!(
+            err.contains("auth.json"),
+            "the error must name the path it could not classify: {err}"
+        );
+    }
+
+    /// A plain regular file at the auth path is the `codex login` case: accepted
+    /// as-is by both auth modes, and never adopted as our placeholder.
+    #[test]
+    fn codex_auth_path_accepts_a_real_file_and_a_missing_one() {
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join("auth.json");
+
+        validate_auth_path(&auth).expect("an absent auth path is fine to create");
+        std::fs::write(&auth, "{\"OPENAI_API_KEY\":\"sk-real\"}\n").unwrap();
+        validate_auth_path(&auth).expect("a real login file is accepted");
     }
 }

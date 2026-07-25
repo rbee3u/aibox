@@ -8,7 +8,7 @@
 FROM aibox-base:latest
 
 # --- Claude Code -------------------------------------------------------------
-ARG CLAUDE_CODE_VERSION=2.1.217
+ARG CLAUDE_CODE_VERSION=2.1.220
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && claude --version \
     && npm cache clean --force

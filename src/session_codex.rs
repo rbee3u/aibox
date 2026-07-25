@@ -139,17 +139,7 @@ fn user_turn_text(v: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn write_jsonl(dir: &Path, rel: &str, lines: &[&str]) -> PathBuf {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut f = std::fs::File::create(&path).unwrap();
-        for l in lines {
-            writeln!(f, "{l}").unwrap();
-        }
-        path
-    }
+    use crate::testutil::write_jsonl;
 
     #[test]
     fn files_keep_only_rollout_jsonl_transcripts() {
@@ -176,12 +166,58 @@ mod tests {
         assert_eq!(files, vec![rollout]);
     }
 
+    /// `list` walks the same tree through the tolerant path, so it must apply
+    /// the same `rollout-` filter — otherwise `list` would show rows that
+    /// `get`/`delete` (which use `files`) then refuse to resolve.
+    #[test]
+    fn list_files_apply_the_same_rollout_filter_as_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
+            &[r#"{"type":"session_meta"}"#],
+        );
+        write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/session-x-ignored.jsonl",
+            &[r#"{"type":"session_meta"}"#],
+        );
+
+        let discovery = Codex.list_files(dir.path()).unwrap();
+
+        assert_eq!(discovery.files, vec![rollout]);
+        assert!(discovery.errors.is_empty());
+    }
+
+    #[test]
+    fn list_files_and_files_are_empty_before_the_first_codex_run() {
+        // No `.codex/sessions` yet: an unused profile lists as empty rather
+        // than failing.
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(Codex.files(dir.path()).unwrap().is_empty());
+        let discovery = Codex.list_files(dir.path()).unwrap();
+        assert!(discovery.files.is_empty());
+        assert!(discovery.errors.is_empty());
+    }
+
     #[test]
     fn id_is_trailing_uuid() {
         let p = Path::new(
             "/h/.codex/sessions/2026/07/14/rollout-2026-07-14T02-16-00-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
         );
         assert_eq!(Codex.id_of(p), "3f2a1b6c-1111-2222-3333-444455556666");
+    }
+
+    /// A stem shorter than a uuid has no trailing-36-char id to slice; the
+    /// whole stem is the id. Slicing unconditionally would panic instead.
+    #[test]
+    fn id_of_short_stem_falls_back_to_the_whole_stem() {
+        assert_eq!(
+            Codex.id_of(Path::new("/h/.codex/sessions/rollout-short.jsonl")),
+            "rollout-short"
+        );
+        assert_eq!(Codex.id_of(Path::new("/h/.codex/sessions/x.jsonl")), "x");
     }
 
     #[test]

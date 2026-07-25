@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn bare_keys_and_explicit_values_override_each_other() {
         let _env_lock = crate::test_env_lock();
-        std::env::set_var("AIBOX_TEST_BARE_OVERRIDE", "host-value");
+        let _host = crate::testutil::EnvGuard::set("AIBOX_TEST_BARE_OVERRIDE", "host-value");
 
         let m = MergedEnv::merge(&[
             s("AIBOX_TEST_BARE_OVERRIDE=base-value\n"),
@@ -201,8 +201,6 @@ mod tests {
             "a later explicit value should override an earlier bare passthrough"
         );
         assert_eq!(m.to_env_file(), "AIBOX_TEST_BARE_OVERRIDE=relay-value\n");
-
-        std::env::remove_var("AIBOX_TEST_BARE_OVERRIDE");
     }
 
     #[test]
@@ -211,12 +209,15 @@ mod tests {
         // A bare `KEY` line passes the host value through (docker --env-file
         // semantics); `get` must agree with what the container will see.
         let m = MergedEnv::merge(&[s("AIBOX_TEST_BARE_PASSTHROUGH\n")]);
-        std::env::set_var("AIBOX_TEST_BARE_PASSTHROUGH", "host-value");
-        assert_eq!(
-            m.get("AIBOX_TEST_BARE_PASSTHROUGH").as_deref(),
-            Some("host-value")
-        );
-        std::env::remove_var("AIBOX_TEST_BARE_PASSTHROUGH");
+        {
+            let _host = crate::testutil::EnvGuard::set("AIBOX_TEST_BARE_PASSTHROUGH", "host-value");
+            assert_eq!(
+                m.get("AIBOX_TEST_BARE_PASSTHROUGH").as_deref(),
+                Some("host-value")
+            );
+        }
+        // Unset on the host: the bare line still crosses, resolving to empty.
+        let _unset = crate::testutil::EnvGuard::remove("AIBOX_TEST_BARE_PASSTHROUGH");
         assert_eq!(m.get("AIBOX_TEST_BARE_PASSTHROUGH").as_deref(), Some(""));
         // A key that appears nowhere is still None.
         assert_eq!(m.get("AIBOX_TEST_NOT_THERE"), None);

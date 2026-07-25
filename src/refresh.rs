@@ -367,6 +367,56 @@ mod tests {
         );
     }
 
+    /// The test above covers a *non-directory* envs path, which the boundary
+    /// check rejects before the sweep starts. A real directory that cannot be
+    /// listed passes that check and fails later, inside `read_dir` — the arm
+    /// that must report the problem and exit non-zero rather than treat an
+    /// unlistable relay directory as a profile with no relays.
+    #[cfg(unix)]
+    #[test]
+    fn run_refresh_sweep_reports_an_unlistable_relay_directory_as_a_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let lock = crate::testutil::UnreadableDir::new(&prof.envs_dir);
+
+        let code = run_refresh(&prof, None, false);
+        lock.restore();
+
+        assert_eq!(
+            code.unwrap(),
+            1,
+            "an unlistable relay directory must not look like a clean sweep"
+        );
+        // base sits outside envs/, so it is still refreshed: the sweep reports
+        // the directory failure without abandoning the work it could do.
+        let base = std::fs::read_to_string(&prof.base_file).unwrap();
+        assert!(base.starts_with("# aibox-template:"), "{base}");
+    }
+
+    /// `refresh_file_state` distinguishes three answers: a usable file, a
+    /// genuinely missing one (skipped by the sweep), and an inspect failure.
+    /// The third must surface as an error — a file that exists but cannot be
+    /// stat'd is not the same as one that is absent, and silently treating it as
+    /// missing would skip a config the user asked to refresh.
+    #[cfg(unix)]
+    #[test]
+    fn refresh_file_state_reports_an_inspect_failure_separately_from_absence() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("locked");
+        std::fs::create_dir(&parent).unwrap();
+        let target = parent.join("base");
+        std::fs::write(&target, "ANTHROPIC_BASE_URL=https://x\n").unwrap();
+        let lock = crate::testutil::UnreadableDir::new(&parent);
+
+        let state = refresh_file_state(&target);
+        lock.restore();
+
+        let err = state.map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("inspect"), "{err}");
+        assert!(err.contains(&target.display().to_string()), "{err}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn run_refresh_sweep_rejects_symlinked_envs_without_touching_target() {
@@ -548,6 +598,25 @@ mod tests {
         assert!(
             prof.base_file.is_dir(),
             "explicit refresh must not replace a non-file base path"
+        );
+    }
+
+    #[test]
+    fn run_refresh_explicit_non_file_relay_errors_without_replacing_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
+        std::fs::create_dir_all(&prof.envs_dir).unwrap();
+        let relay_dir = prof.envs_dir.join("not-a-relay");
+        std::fs::create_dir(&relay_dir).unwrap();
+
+        let err = run_refresh(&prof, Some("not-a-relay"), false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("config path is not a regular file"), "{err}");
+        assert!(
+            relay_dir.is_dir(),
+            "an explicit refresh must not replace a relay directory"
         );
     }
 
@@ -752,6 +821,17 @@ mod tests {
         assert_eq!(example_key("#2FOO=x"), None);
         // Space after '#' then text — not KEY=.
         assert_eq!(example_key("# FOO=bar"), None);
+        // A non-key character before the '=' ends the scan: these are prose or
+        // commented-out command lines, not `#KEY=` examples. Treating one as an
+        // example would make refresh graft the user's real value under a doc
+        // comment.
+        assert_eq!(example_key("#FOO BAR=x"), None);
+        assert_eq!(example_key("#FOO-BAR=x"), None);
+        assert_eq!(example_key("#FOO.BAR=x"), None);
+        assert_eq!(example_key("#aibox claude -e r=x"), None);
+        // A key-shaped run that never reaches an '=' is not an example either.
+        assert_eq!(example_key("#FOO_BAR"), None);
+        assert_eq!(example_key("#"), None);
     }
 
     #[test]
@@ -773,6 +853,51 @@ mod tests {
     }
 
     #[test]
+    fn multiple_orphans_keep_first_seen_order() {
+        let template = "#FOO=example\n";
+        let old = "FOO=1\nZED=last\nABE=first\n";
+        let got = merge(old, template);
+        let block = got.split(ORPHAN_HEADER).nth(1).expect("orphan block");
+        let zed = block.find("ZED=last").expect("ZED present");
+        let abe = block.find("ABE=first").expect("ABE present");
+        assert!(
+            zed < abe,
+            "orphans must preserve first-seen order (ZED before ABE): {got}"
+        );
+    }
+
+    #[test]
+    fn refresh_with_orphans_is_idempotent() {
+        // The shipped-template idempotency test deliberately has no orphans
+        // (every key matches an example). This covers the real user file that
+        // carries keys the current template no longer documents: a second
+        // refresh must not accumulate a duplicate orphan header or re-list the
+        // kept settings. The header/blank line are comments, so they're dropped
+        // on the next pass and re-emitted identically — but only if nothing
+        // regresses the orphan block's shape.
+        let template = "#FOO=example\n";
+        let old = "FOO=1\nORPHAN_A=a\nORPHAN_B=b\n";
+
+        let once = merge(old, template);
+        let twice = merge(&once, template);
+
+        assert_eq!(
+            once, twice,
+            "refreshing an already-refreshed file is a no-op"
+        );
+        assert_eq!(
+            once.matches(ORPHAN_HEADER).count(),
+            1,
+            "a second refresh must not duplicate the kept-settings header: {once}"
+        );
+        assert_eq!(
+            once.matches("ORPHAN_A=a").count(),
+            1,
+            "kept orphan settings must not be duplicated on re-refresh: {once}"
+        );
+    }
+
+    #[test]
     fn bare_key_line_is_kept() {
         // docker --env-file passes bare `KEY` lines through from the host env;
         // refresh must not drop them.
@@ -781,6 +906,24 @@ mod tests {
         let got = merge(old, template);
         assert!(got.contains(ORPHAN_HEADER));
         assert!(got.trim_end().ends_with("MY_HOST_VAR"));
+    }
+
+    #[test]
+    fn bare_key_matching_an_example_lands_under_it_not_in_the_orphan_block() {
+        // A bare host-passthrough key that a template example documents keys on
+        // the same name as `#KEY=…`, so it must be re-inserted directly under
+        // that example — not exiled to the trailing orphan block or dropped.
+        let template = "#FOO=example\n#MY_HOST_VAR=example\n";
+        let old = "FOO=1\nMY_HOST_VAR\n";
+        let got = merge(old, template);
+        assert!(
+            got.contains("#MY_HOST_VAR=example\nMY_HOST_VAR"),
+            "bare key must sit under its matching example: {got}"
+        );
+        assert!(
+            !got.contains(ORPHAN_HEADER),
+            "a bare key with a matching example is not an orphan: {got}"
+        );
     }
 
     #[test]
