@@ -461,7 +461,7 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let spec = format!("{}:/etc/aibox/config:ro", file.path().display());
 
-        let got = resolve_mounts(&[spec.clone()]).unwrap();
+        let got = resolve_mounts(std::slice::from_ref(&spec)).unwrap();
 
         assert_eq!(got, vec![spec]);
     }
@@ -591,6 +591,13 @@ mod tests {
             platform::is_linux(),
             "--user is Linux-only"
         );
+        if platform::is_linux() {
+            let (uid, gid) = platform::uid_gid();
+            assert!(
+                contains_pair(&args, "--user", &format!("{uid}:{gid}")),
+                "Linux runs must use the invoking host uid/gid so /work ownership stays correct"
+            );
+        }
         assert_eq!(
             contains_pair(&args, "--add-host", "host.docker.internal:host-gateway"),
             platform::is_linux(),
@@ -645,6 +652,40 @@ mod tests {
         seed_home(AgentKind::Claude, home.path()).unwrap();
         assert_eq!(fs::read_to_string(&status).unwrap(), "my custom status");
         assert_eq!(fs::read_to_string(&settings).unwrap(), "{\"mine\":true}\n");
+    }
+
+    /// The seeded `settings.json` is consumed by Claude *inside* the container,
+    /// so it has to be valid JSON and its `statusLine.command` has to name the
+    /// script at the path the home mount actually puts it at. Both are spelled
+    /// out by hand in two separate constants here, against a container home that
+    /// lives in `AgentKind` — so nothing but this check ties them together, and
+    /// either drifting leaves Claude with a status line that silently never runs.
+    #[test]
+    fn seeded_claude_settings_point_at_the_seeded_script_inside_the_container_home() {
+        let home = tempfile::tempdir().unwrap();
+        seed_home(AgentKind::Claude, home.path()).unwrap();
+
+        let settings: serde_json::Value = serde_json::from_str(CLAUDE_SETTINGS)
+            .expect("seeded settings.json must be valid JSON for Claude to read");
+        let command = settings["statusLine"]["command"]
+            .as_str()
+            .expect("settings must wire a statusLine command");
+
+        // The host path the script was seeded to, re-expressed as the container
+        // path the home mount exposes it at.
+        let seeded = home.path().join(".claude").join("statusline.sh");
+        let in_container = format!(
+            "{}{}",
+            AgentKind::Claude.container_home(),
+            seeded
+                .strip_prefix(home.path())
+                .map(|rest| format!("/{}", rest.display()))
+                .unwrap()
+        );
+        assert!(
+            command.contains(&in_container),
+            "statusLine command {command:?} must reference the seeded script at {in_container}"
+        );
     }
 
     #[test]

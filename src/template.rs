@@ -186,6 +186,54 @@ mod tests {
         );
     }
 
+    /// Templates are written to disk by scaffolding and then read back by the
+    /// run path's validator (`envfile::check_keys`) on the very next run. A
+    /// template line that validator rejects would make a freshly scaffolded
+    /// profile fail before the user had edited anything — and the error would
+    /// point at a file aibox wrote itself. Also pins the flat rule that nothing
+    /// in a template is active: a stray real line would silently configure
+    /// every new profile.
+    #[test]
+    fn shipped_templates_are_accepted_by_the_run_paths_env_validator() {
+        for agent in [AgentKind::Claude, AgentKind::Codex] {
+            for (label, body) in [
+                ("base", base_template(agent, crate::agent::TEMPLATE_VERSION)),
+                (
+                    "relay",
+                    relay_template(agent, "r", crate::agent::TEMPLATE_VERSION),
+                ),
+            ] {
+                let path = std::path::Path::new("/p").join(label);
+                crate::envfile::check_keys(&path, &body).unwrap_or_else(|e| {
+                    panic!(
+                        "{} {label} template is not a valid env file: {e}",
+                        agent.tag()
+                    )
+                });
+
+                // Every example key must also survive as a *real* line, since
+                // that is exactly what a user creates by uncommenting one.
+                let mut activated = String::new();
+                for line in body.lines() {
+                    if let Some(key) = crate::refresh::example_key(line) {
+                        activated.push_str(&format!("{key}=value\n"));
+                    }
+                }
+                assert!(
+                    !activated.is_empty(),
+                    "{} {label} template documents no keys",
+                    agent.tag()
+                );
+                crate::envfile::check_keys(&path, &activated).unwrap_or_else(|e| {
+                    panic!(
+                        "{} {label}: uncommenting a documented example yields an invalid line: {e}",
+                        agent.tag()
+                    )
+                });
+            }
+        }
+    }
+
     #[test]
     fn version_roundtrip() {
         let t = relay_template(AgentKind::Claude, "r", 3);
@@ -201,5 +249,37 @@ mod tests {
     #[test]
     fn stamp_with_trailing_text() {
         assert_eq!(file_template_version("# aibox-template: v12 (old)\n"), 12);
+    }
+
+    #[test]
+    fn truncated_stamp_reads_as_unversioned() {
+        // A stamp whose `v` is present but carries no digits (a half-written or
+        // corrupted file) must fall back to 0 rather than panic — that keeps the
+        // digit parse's `unwrap_or(0)` load-bearing, so it flags the file stale
+        // and rewrites it instead of trusting a partial vintage.
+        assert_eq!(file_template_version("# aibox-template: v\n"), 0);
+        // A leading comment that isn't the stamp is not mistaken for a version.
+        assert_eq!(file_template_version("# something else\n"), 0);
+    }
+
+    #[test]
+    fn shipped_templates_read_back_the_current_version() {
+        // The stamp format lives in two producers (`base_template` and
+        // `relay_template`); staleness detection only works if both spell it the
+        // way `file_template_version` parses. Pin the full round-trip at the real
+        // TEMPLATE_VERSION for every agent so a format drift in either producer
+        // can't silently defeat the vN stamp.
+        for agent in [AgentKind::Claude, AgentKind::Codex] {
+            assert_eq!(
+                file_template_version(&base_template(agent, crate::agent::TEMPLATE_VERSION)),
+                crate::agent::TEMPLATE_VERSION,
+                "base template stamp must read back the current version"
+            );
+            assert_eq!(
+                file_template_version(&relay_template(agent, "r", crate::agent::TEMPLATE_VERSION)),
+                crate::agent::TEMPLATE_VERSION,
+                "relay template stamp must read back the current version"
+            );
+        }
     }
 }

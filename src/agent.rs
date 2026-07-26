@@ -903,6 +903,37 @@ mod tests {
     }
 
     #[test]
+    fn codex_auth_json_mode_preserves_existing_login_file() {
+        let home = tempfile::tempdir().unwrap();
+        let auth = home.path().join(".codex").join("auth.json");
+        let real_login = "{\"refresh_token\":\"real-login\"}\n";
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        std::fs::write(&auth, real_login).unwrap();
+        let env = env_of(&format!("{CODEX_MIN}CODEX_REQUIRES_OPENAI_AUTH=1\n"));
+
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&auth).unwrap(),
+            real_login,
+            "auth.json mode may mount a staged credential over the path, but must not overwrite the user's login file"
+        );
+        assert_eq!(
+            inv.guarded.len(),
+            1,
+            "the fixed auth.json target is still guarded while Docker establishes the nested mount"
+        );
+        drop(inv);
+        assert_eq!(
+            std::fs::read_to_string(&auth).unwrap(),
+            real_login,
+            "dropping the invocation must not delete a pre-existing login file"
+        );
+    }
+
+    #[test]
     fn codex_requires_openai_auth_rejects_unrecognized_values() {
         // A typo must not silently pick an auth mode: it would surface much
         // later as an opaque Codex-side auth failure.
@@ -1244,6 +1275,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_query_params_trim_whitespace_around_the_inner_equals() {
+        // A natural spelling like `k = v` (spaces hugging the inner `=`) must
+        // yield a clean key `k` and value `v`. Without the post-`split_once`
+        // trims, the key segment would be quoted as `"k "` and the value would
+        // carry a leading space — a silently malformed `-c` override.
+        let home = tempfile::tempdir().unwrap();
+        let env = env_of(&format!("{CODEX_MIN}CODEX_QUERY_PARAMS=api-version = 2\n"));
+
+        let inv = AgentKind::Codex
+            .build_invocation(&opts(&env, home.path()))
+            .unwrap();
+        let c = c_overrides(&inv.agent_cmd);
+
+        assert!(contains_c_string(
+            &c,
+            "model_providers.aibox.query_params.api-version",
+            "2"
+        ));
+        assert!(
+            !c.iter().any(|v| v.contains("query_params.\"api-version ")),
+            "trailing space must be trimmed off the key rather than quoted into it: {c:?}"
+        );
+    }
+
+    #[test]
     fn codex_query_params_reject_empty_key() {
         let home = tempfile::tempdir().unwrap();
         let env = env_of(&format!(
@@ -1374,6 +1430,90 @@ mod tests {
             err.contains("auth.json"),
             "the error must name the path it could not classify: {err}"
         );
+    }
+
+    /// The templates are the only place a relay key is documented, so a key
+    /// shown there that `build_codex` does not read is a silent no-op: the user
+    /// sets it, nothing happens, and the run gives no hint why. Every documented
+    /// key must therefore either be one of the required three (proven wired by
+    /// the missing-keys test) or visibly change the invocation. A newly
+    /// documented key with no probe value here fails loudly rather than being
+    /// assumed wired.
+    #[test]
+    fn every_documented_codex_key_is_read_by_the_invocation_builder() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+        let instructions = tempfile::NamedTempFile::new().unwrap();
+
+        let baseline_env = env_of(CODEX_MIN);
+        let baseline = AgentKind::Codex
+            .build_invocation(&opts(&baseline_env, home.path()))
+            .unwrap();
+        let baseline_cmd = baseline.agent_cmd.clone();
+        // `extra_run_args` carries staged temp paths (random per run), so compare
+        // its shape — the flags and mount targets — not the paths themselves.
+        let baseline_shape = invocation_shape(&baseline.extra_run_args);
+        drop(baseline);
+
+        let mut documented = Vec::new();
+        for template in [
+            crate::template::base_template(AgentKind::Codex, TEMPLATE_VERSION),
+            crate::template::relay_template(AgentKind::Codex, "r", TEMPLATE_VERSION),
+        ] {
+            for key in template.lines().filter_map(crate::refresh::example_key) {
+                if !documented.contains(&key) {
+                    documented.push(key);
+                }
+            }
+        }
+        assert!(
+            !documented.is_empty(),
+            "the Codex templates must document some keys"
+        );
+
+        for key in documented {
+            // Required keys are absent-checked, not additive: build_codex refuses
+            // to run without them, which is what proves they are read.
+            if ["CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL"].contains(&key.as_str()) {
+                continue;
+            }
+            let value = match key.as_str() {
+                "CODEX_REASONING" | "CODEX_PLAN_REASONING" => "probe-effort".to_string(),
+                "CODEX_REQUIRES_OPENAI_AUTH" => "1".to_string(),
+                "CODEX_QUERY_PARAMS" => "probe-param=probe-value".to_string(),
+                "CODEX_INSTRUCTIONS_FILE" => instructions.path().display().to_string(),
+                other => panic!(
+                    "{other} is documented in a Codex template but this test has no probe value \
+                     for it — wire it into build_codex (and add a case here), or stop documenting it"
+                ),
+            };
+
+            let env = env_of(&format!("{CODEX_MIN}{key}={value}\n"));
+            let inv = AgentKind::Codex
+                .build_invocation(&opts(&env, home.path()))
+                .unwrap();
+
+            assert!(
+                inv.agent_cmd != baseline_cmd
+                    || invocation_shape(&inv.extra_run_args) != baseline_shape,
+                "{key} is documented but setting it changed nothing about the run: \
+                 build_codex ignores it"
+            );
+        }
+    }
+
+    /// `extra_run_args` with staged temp paths reduced to their stable parts, so
+    /// two runs can be compared without their random file names.
+    fn invocation_shape(extra_run_args: &[String]) -> Vec<String> {
+        extra_run_args
+            .iter()
+            .map(|arg| match arg.split_once(':') {
+                // A bind spec: keep the container target and mode.
+                Some((_, rest)) if arg.starts_with('/') => format!("<staged>:{rest}"),
+                _ if arg.starts_with('/') => "<staged>".to_string(),
+                _ => arg.clone(),
+            })
+            .collect()
     }
 
     /// A plain regular file at the auth path is the `codex login` case: accepted

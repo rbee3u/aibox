@@ -85,7 +85,7 @@ pub fn merge(old: &str, template: &str) -> String {
 /// If `line` is an example line of the form `#KEY=…` (a `#` immediately followed
 /// by a key that starts with a letter/underscore, then `=`), return the key.
 /// The key must match `#[A-Za-z_][A-Za-z0-9_]*=`.
-fn example_key(line: &str) -> Option<String> {
+pub(crate) fn example_key(line: &str) -> Option<String> {
     let rest = line.strip_prefix('#')?;
     let mut chars = rest.char_indices();
     let (_, first) = chars.next()?;
@@ -294,6 +294,34 @@ mod tests {
         run_refresh(&prof, None, false).unwrap();
 
         assert_eq!(std::fs::read(&ds).unwrap(), junk, "dotfile left untouched");
+    }
+
+    #[test]
+    fn run_refresh_explicit_hidden_path_still_refreshes_that_file() {
+        let root = tempfile::tempdir().unwrap();
+        let prof = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
+        prof.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
+        let hidden = prof.envs_dir.join(".hidden.env");
+        let original = "ANTHROPIC_BASE_URL=https://hidden.example\n";
+        std::fs::write(&hidden, original).unwrap();
+
+        let sweep_code = run_refresh(&prof, None, false).unwrap();
+
+        assert_eq!(sweep_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(&hidden).unwrap(),
+            original,
+            "sweep mode skips hidden files so OS/editor junk cannot fail a refresh"
+        );
+
+        run_refresh(&prof, Some(hidden.to_str().unwrap()), false).unwrap();
+
+        let refreshed = std::fs::read_to_string(&hidden).unwrap();
+        assert!(refreshed.starts_with("# aibox-template:"), "{refreshed}");
+        assert!(
+            refreshed.contains("ANTHROPIC_BASE_URL=https://hidden.example"),
+            "an explicit path target must still be reachable even when hidden files are skipped by sweep"
+        );
     }
 
     #[test]

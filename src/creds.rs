@@ -1694,6 +1694,83 @@ esac
         );
     }
 
+    /// The orphan-on-detach guarantee: an attached `docker run` CLI can exit
+    /// (Docker's detach key sequence, or a client/daemon disconnect) while its
+    /// container keeps running. `finish_child` must notice the live container
+    /// and kill it rather than leave it running unsupervised after the wrapper
+    /// exits — the exact failure the "kill lingering containers" fix targets.
+    #[cfg(unix)]
+    #[test]
+    fn finish_child_kills_a_container_that_outlived_its_detached_client() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let _guard = CidfileGuard;
+        let scratch = stable_tempdir();
+        let cid_path = scratch.path().join("cid");
+        let log_path = scratch.path().join("docker.log");
+        let fake_docker = stable_tempdir();
+        write_running_container_docker(fake_docker.path());
+        std::fs::write(&cid_path, "detached-container\n").unwrap();
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.to_str().unwrap());
+        // Report running forever: the client detached but the container lives on.
+        let _running = EnvGuard::set("AIBOX_FAKE_DOCKER_RUNNING_INSPECTS", "always");
+        // Arm the run exactly as `docker::run` does before spawning the client.
+        set_cidfile(&cid_path).unwrap();
+
+        let stopped = finish_child();
+
+        assert!(
+            stopped,
+            "a still-running container after a detached client must be reported killed"
+        );
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            log.lines().any(|l| l == "kill detached-container"),
+            "the lingering container must be SIGKILLed by id:\n{log}"
+        );
+    }
+
+    /// The common case must stay cheap and side-effect-free: after an ordinary
+    /// `--rm` exit the container id no longer resolves, so `finish_child` must
+    /// return without a `docker kill` and without entering any grace wait. A
+    /// regression here would stall or kill on every clean run.
+    #[cfg(unix)]
+    #[test]
+    fn finish_child_leaves_a_cleanly_exited_run_alone() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let _guard = CidfileGuard;
+        let scratch = stable_tempdir();
+        let cid_path = scratch.path().join("cid");
+        let log_path = scratch.path().join("docker.log");
+        let fake_docker = stable_tempdir();
+        // This stub's `inspect` always reports stopped, mimicking a `--rm`
+        // container whose id no longer resolves.
+        write_signal_fake_docker(fake_docker.path());
+        std::fs::write(&cid_path, "gone-container\n").unwrap();
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.to_str().unwrap());
+        set_cidfile(&cid_path).unwrap();
+
+        let started = Instant::now();
+        let stopped = finish_child();
+
+        assert!(
+            !stopped,
+            "a container that already exited must not be reported killed"
+        );
+        assert!(
+            started.elapsed() < CONTAINER_GRACE,
+            "a clean exit must not enter the grace wait"
+        );
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            !log.lines().any(|l| l.starts_with("kill")),
+            "a cleanly exited run must trigger no docker kill:\n{log}"
+        );
+    }
+
     #[test]
     fn container_state_parser_distinguishes_running_stopped_unknown() {
         assert_eq!(
@@ -1806,6 +1883,30 @@ esac
         // The stale-cleanup path treats the same absent parent as "nothing to
         // clean" rather than an error: there cannot be a leftover under it.
         remove_stale_placeholder(&auth, &auth_lock_path(&auth), "{}\n").unwrap();
+    }
+
+    #[test]
+    fn remove_stale_placeholder_leaves_a_real_login_file_untouched() {
+        // The stale-cleanup path (env_key mode inheriting a dead auth.json-mode
+        // run's leftover) must delete *only* a file that is byte-for-byte our
+        // placeholder. A real `codex login` under the same fixed path is the
+        // user's credentials — wiping it would silently log them out.
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.path().join("auth.json");
+        let real = "{\"OPENAI_API_KEY\":\"sk-real-login\"}\n";
+        std::fs::write(&auth, real).unwrap();
+
+        remove_stale_placeholder(&auth, &auth_lock_path(&auth), "{}\n").unwrap();
+
+        assert!(
+            auth.exists(),
+            "a real login file must survive stale cleanup"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&auth).unwrap(),
+            real,
+            "stale cleanup must not modify a non-placeholder file"
+        );
     }
 
     #[cfg(unix)]
@@ -2172,6 +2273,24 @@ esac
         assert!(pending_contains(&fresh));
         drop(g);
         assert!(!fresh.exists(), "created placeholder is removed on drop");
+
+        // Docker only needs this lock until it has established the nested bind
+        // mount. Releasing it must let another run on the same profile adopt the
+        // placeholder while the first guard is still alive; both guards must
+        // continue to agree that the placeholder is wrapper-owned and clean it
+        // up once the runs finish.
+        let concurrent = dir.path().join("concurrent.json");
+        let concurrent_lock = auth_lock_path(&concurrent);
+        let mut first =
+            GuardedPath::ensure(concurrent.clone(), concurrent_lock.clone(), "{}\n").unwrap();
+        first.release_spawn_lock();
+        let second = GuardedPath::ensure(concurrent.clone(), concurrent_lock, "{}\n").unwrap();
+        drop(second);
+        drop(first);
+        assert!(
+            !concurrent.exists(),
+            "released spawn locks must not give up final placeholder ownership"
+        );
 
         // GuardedPath also registers before it writes placeholder contents, so a
         // failure after registration doesn't leave an untracked cleanup entry.

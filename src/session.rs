@@ -703,21 +703,25 @@ mod tests {
         );
     }
 
-    /// A transcript that is not valid UTF-8 (a truncated multi-byte write, an
-    /// interrupted flush, on-disk corruption) makes `BufRead::read_line` fail
-    /// with `InvalidData` — a distinct arm from the missing-file open error and
-    /// from a merely unparseable-but-UTF-8 line, which is silently skipped. The
-    /// contract: `get`/`prompts` fail fast rather than pretend the session is
-    /// empty, and `list` reports it and returns non-zero instead of showing a
-    /// blank row.
+    /// A transcript that opens but fails mid-read — invalid UTF-8 from a
+    /// truncated multi-byte write, an interrupted flush, or on-disk corruption —
+    /// makes `BufRead::read_line` fail with `InvalidData`. That is a distinct arm
+    /// from the missing-file open error and from a merely unparseable-but-UTF-8
+    /// line, which is silently skipped. The contract: `list` reports it and
+    /// returns non-zero instead of a blank row, and the read paths fail fast
+    /// rather than pretend the session is empty — checked through the public
+    /// `get` entry point and through `prompts` underneath it (which names the
+    /// file it could not read).
     #[test]
-    fn non_utf8_transcript_fails_instead_of_reading_as_empty() {
+    fn non_utf8_transcript_is_reported_by_list_and_fails_the_read_paths() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("33333333.jsonl");
+        // Valid line, then a lone continuation byte: read_line errors on it.
         std::fs::write(&path, b"{\"typed\":\"ok\"}\n\xff\xfe").unwrap();
         let backend = ExplicitFilesBackend::new(vec![path.clone()]);
 
-        // `get` (via `prompts`) fails fast with the read-error context.
+        // `prompts` fails fast with the read-error context, naming the file,
+        // rather than reading the transcript as an empty prompt list.
         let err = backend
             .prompts(&path)
             .err()
@@ -725,6 +729,15 @@ mod tests {
             .to_string();
         assert!(err.contains("read session transcript"), "{err}");
         assert!(err.contains("33333333.jsonl"), "{err}");
+
+        // `get` surfaces that same failure through its own public entry point.
+        let err = get_with_printer(&backend, dir.path(), "3333", |_| Ok(true))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("read session transcript"),
+            "get must surface the read failure: {err}"
+        );
 
         // `list` surfaces the failure and returns non-zero rather than a blank
         // row for a session it could not actually read.
@@ -812,44 +825,6 @@ mod tests {
 
         assert_eq!(code, 0);
         assert_eq!(printed, vec!["(no typed prompts in this session)"]);
-    }
-
-    /// A transcript that opens but fails mid-read — invalid UTF-8 from an
-    /// interrupted write or on-disk corruption — must be reported, not silently
-    /// shown as an empty session. `BufRead::read_line` returns `InvalidData` on
-    /// bad UTF-8, hitting the read-error arm of `for_each_json_line` (distinct
-    /// from the open-error arm every missing-file test already covers). `list`
-    /// keeps going but returns non-zero; `get` fails fast.
-    #[test]
-    fn list_reports_and_get_fails_on_an_unreadable_transcript() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("44444444.jsonl");
-        // Valid line, then a lone continuation byte: read_line errors on it.
-        std::fs::write(&path, b"{\"typed\":\"x\"}\n\xff\xfe").unwrap();
-        let backend = ExplicitFilesBackend::new(vec![path]);
-
-        let mut lines = Vec::new();
-        let list_code = list_with_printer(&backend, dir.path(), |line| {
-            lines.push(line.to_string());
-            Ok(true)
-        })
-        .unwrap();
-        assert_eq!(
-            list_code, 1,
-            "a transcript that fails to read must make list non-zero, not vanish"
-        );
-        assert!(
-            lines.is_empty(),
-            "a read failure is not an empty session shown as a blank row"
-        );
-
-        let err = get_with_printer(&backend, dir.path(), "4444", |_| Ok(true))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("read session transcript"),
-            "get must surface the read failure: {err}"
-        );
     }
 
     #[test]

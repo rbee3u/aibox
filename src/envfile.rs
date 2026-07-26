@@ -120,42 +120,33 @@ mod tests {
         x.to_string()
     }
 
+    /// The whole base+relay contract in one merge: the relay's value wins, a
+    /// base-only key survives, a relay-only key is added, an explicitly empty
+    /// relay value blanks a base default, and an overridden key keeps its
+    /// first-seen position. Order matters because the rendered body is what
+    /// Docker reads, so it is asserted on `to_env_file` rather than on the
+    /// private line iterator.
     #[test]
-    fn later_source_overrides_earlier() {
-        let base = s("A=1\nB=2\n");
-        let relay = s("B=3\nC=4\n");
-        let m = MergedEnv::merge(&[base, relay]);
-        assert_eq!(m.get("A").as_deref(), Some("1"));
-        assert_eq!(m.get("B").as_deref(), Some("3")); // relay wins
-        assert_eq!(m.get("C").as_deref(), Some("4"));
-    }
+    fn relay_overrides_base_in_place_and_renders_the_docker_env_body() {
+        let base = s("A=1\nBLANKED=default\nB=2\n");
+        let relay = s("B=3\nBLANKED=\nC=4\n");
 
-    #[test]
-    fn preserves_first_seen_order() {
-        let base = s("A=1\nB=2\n");
-        let relay = s("B=3\nC=4\n");
-        let m = MergedEnv::merge(&[base, relay]);
-        let lines: Vec<&str> = m.lines().collect();
-        // A, B, C — B keeps its original position even though relay sets it again.
-        assert_eq!(lines, vec!["A=1", "B=3", "C=4"]);
-    }
-
-    #[test]
-    fn to_env_file_renders_the_merged_docker_env_body() {
-        let base = s("A=1\nB=2\n");
-        let relay = s("B=3\nHOST_ONLY\n");
         let m = MergedEnv::merge(&[base, relay]);
 
-        assert_eq!(m.to_env_file(), "A=1\nB=3\nHOST_ONLY\n");
+        assert_eq!(m.get("A").as_deref(), Some("1"), "base-only key survives");
+        assert_eq!(m.get("B").as_deref(), Some("3"), "relay wins");
+        assert_eq!(m.get("C").as_deref(), Some("4"), "relay-only key is added");
+        assert_eq!(
+            m.get("BLANKED").as_deref(),
+            Some(""),
+            "an empty relay value blanks a base default"
+        );
+        assert_eq!(
+            m.to_env_file(),
+            "A=1\nBLANKED=\nB=3\nC=4\n",
+            "overridden keys keep their first-seen position"
+        );
         assert_eq!(MergedEnv::merge(&[]).to_env_file(), "");
-    }
-
-    #[test]
-    fn empty_value_blanks_a_base_default() {
-        let base = s("A=default\n");
-        let relay = s("A=\n");
-        let m = MergedEnv::merge(&[base, relay]);
-        assert_eq!(m.get("A").as_deref(), Some("")); // blanked
     }
 
     #[test]
@@ -224,18 +215,15 @@ mod tests {
     }
 
     #[test]
-    fn comments_and_blanks_dropped() {
-        let src = s("# c\n\n  \nA=1\n  B=2\n");
-        let m = MergedEnv::merge(&[src]);
-        let lines: Vec<&str> = m.lines().collect();
-        assert_eq!(lines, vec!["A=1", "B=2"]);
-    }
+    fn comments_blanks_and_leading_whitespace_are_stripped() {
+        let m = MergedEnv::merge(&[s("# c\n\n  \nA=1\n  B=2\n")]);
 
-    #[test]
-    fn leading_whitespace_trimmed() {
-        let src = s("   KEY=val\n");
-        let m = MergedEnv::merge(&[src]);
-        assert_eq!(m.get("KEY").as_deref(), Some("val"));
+        assert_eq!(m.get("B").as_deref(), Some("2"), "indentation is trimmed");
+        assert_eq!(
+            m.to_env_file(),
+            "A=1\nB=2\n",
+            "comments and blank lines never reach the staged env-file"
+        );
     }
 
     #[test]

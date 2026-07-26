@@ -190,33 +190,38 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
+    /// Every argv shape the split has to get right, in one table: no `--` at
+    /// all, a normal split, a trailing `--` with nothing after it, and a second
+    /// `--` that belongs to the agent. These differed only in argv and
+    /// expectations, so four copies of the same two assertions earned nothing.
     #[test]
-    fn split_no_dashdash() {
-        let (l, r) = split_passthrough(v(&["aibox", "claude", "-e", "r"]));
-        assert_eq!(l, v(&["aibox", "claude", "-e", "r"]));
-        assert!(r.is_empty());
-    }
-
-    #[test]
-    fn split_at_dashdash() {
-        let (l, r) = split_passthrough(v(&["aibox", "claude", "-e", "r", "--", "--model", "opus"]));
-        assert_eq!(l, v(&["aibox", "claude", "-e", "r"]));
-        assert_eq!(r, v(&["--model", "opus"]));
-    }
-
-    #[test]
-    fn split_empty_passthrough() {
-        let (l, r) = split_passthrough(v(&["aibox", "codex", "--"]));
-        assert_eq!(l, v(&["aibox", "codex"]));
-        assert!(r.is_empty());
-    }
-
-    #[test]
-    fn split_keeps_later_dashdash_in_passthrough() {
-        // Only the first `--` splits; a second is part of the agent args.
-        let (l, r) = split_passthrough(v(&["aibox", "codex", "--", "a", "--", "b"]));
-        assert_eq!(l, v(&["aibox", "codex"]));
-        assert_eq!(r, v(&["a", "--", "b"]));
+    fn split_cuts_argv_at_the_first_dashdash_only() {
+        for (argv, want_left, want_right) in [
+            (
+                ["aibox", "claude", "-e", "r"].as_slice(),
+                ["aibox", "claude", "-e", "r"].as_slice(),
+                [].as_slice(),
+            ),
+            (
+                ["aibox", "claude", "-e", "r", "--", "--model", "opus"].as_slice(),
+                ["aibox", "claude", "-e", "r"].as_slice(),
+                ["--model", "opus"].as_slice(),
+            ),
+            (
+                ["aibox", "codex", "--"].as_slice(),
+                ["aibox", "codex"].as_slice(),
+                [].as_slice(),
+            ),
+            (
+                ["aibox", "codex", "--", "a", "--", "b"].as_slice(),
+                ["aibox", "codex"].as_slice(),
+                ["a", "--", "b"].as_slice(),
+            ),
+        ] {
+            let (l, r) = split_passthrough(v(argv));
+            assert_eq!(l, v(want_left), "{argv:?}");
+            assert_eq!(r, v(want_right), "{argv:?}");
+        }
     }
 
     #[test]
@@ -236,23 +241,37 @@ mod tests {
         assert_eq!(r, v(&["session", "get", "3f2a"]));
     }
 
+    /// The subcommand is what selects the agent, and `build` selects neither —
+    /// every later per-agent decision (image, config root, container home) hangs
+    /// off this mapping.
     #[test]
-    fn parses_claude_run() {
-        let (l, _) = split_passthrough(v(&["aibox", "claude", "-e", "openrouter"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        assert_eq!(cli.command.agent_kind(), Some(AgentKind::Claude));
-        assert_eq!(
-            cli.command.agent_args().unwrap().run.env.as_deref(),
-            Some("openrouter")
-        );
-    }
+    fn subcommand_selects_the_agent() {
+        for (argv, want) in [
+            (
+                ["aibox", "claude", "-e", "openrouter"].as_slice(),
+                Some(AgentKind::Claude),
+            ),
+            (
+                ["aibox", "codex", "-e", "r", "--exec"].as_slice(),
+                Some(AgentKind::Codex),
+            ),
+            (["aibox", "build"].as_slice(), None),
+        ] {
+            let (l, _) = split_passthrough(v(argv));
+            let cli = Cli::try_parse_from(l).unwrap();
+            assert_eq!(cli.command.agent_kind(), want, "{argv:?}");
+            assert_eq!(
+                cli.command.agent_args().is_some(),
+                want.is_some(),
+                "{argv:?}: run args exist exactly for the agent subcommands"
+            );
+        }
 
-    #[test]
-    fn parses_codex_exec() {
         let (l, _) = split_passthrough(v(&["aibox", "codex", "-e", "r", "--exec"]));
         let cli = Cli::try_parse_from(l).unwrap();
-        assert_eq!(cli.command.agent_kind(), Some(AgentKind::Codex));
-        assert!(cli.command.agent_args().unwrap().run.exec);
+        let run = &cli.command.agent_args().unwrap().run;
+        assert_eq!(run.env.as_deref(), Some("r"));
+        assert!(run.exec);
     }
 
     #[test]
@@ -286,55 +305,61 @@ mod tests {
         assert!(!args.run.exec);
     }
 
+    /// Every accepted `aibox build` spelling, including both `--force` forms.
+    /// One table instead of three copies of the same match block: the axes that
+    /// actually vary are the target and the cache flag.
     #[test]
-    fn parses_build_defaults_to_all_cached() {
-        let (l, _) = split_passthrough(v(&["aibox", "build"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { target, force }) => {
-                assert_eq!(target, None);
-                assert!(!force);
+    fn parses_build_targets_and_force_spellings() {
+        for (argv, want_target, want_force) in [
+            (["aibox", "build"].as_slice(), None, false),
+            (
+                ["aibox", "build", "claude"].as_slice(),
+                Some(BuildTarget::Claude),
+                false,
+            ),
+            (
+                ["aibox", "build", "codex"].as_slice(),
+                Some(BuildTarget::Codex),
+                false,
+            ),
+            (
+                ["aibox", "build", "codex", "--force"].as_slice(),
+                Some(BuildTarget::Codex),
+                true,
+            ),
+            (["aibox", "build", "-f"].as_slice(), None, true),
+        ] {
+            let (l, _) = split_passthrough(v(argv));
+            let cli = Cli::try_parse_from(l).unwrap();
+            match cli.command {
+                Command::Build(BuildArgs { target, force }) => {
+                    assert_eq!(target, want_target, "{argv:?}");
+                    assert_eq!(force, want_force, "{argv:?}");
+                }
+                _ => panic!("expected build command for {argv:?}"),
             }
-            _ => panic!("expected build command"),
         }
     }
 
+    /// Spellings the surface deliberately does *not* accept. Each would
+    /// otherwise look like it worked: `build all` is not a target (omitting the
+    /// target already builds both), `--build` on a run would suggest runs build
+    /// implicitly, and a bare positional must not be forwarded to the agent
+    /// (that is what `--` is for) or clap could never flag a typo.
     #[test]
-    fn parses_build_codex_force() {
-        let (l, _) = split_passthrough(v(&["aibox", "build", "codex", "--force"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { target, force }) => {
-                assert_eq!(target, Some(BuildTarget::Codex));
-                assert!(force);
-            }
-            _ => panic!("expected build command"),
+    fn unsupported_spellings_are_rejected_by_the_parser() {
+        for argv in [
+            ["aibox", "build", "all"].as_slice(),
+            ["aibox", "codex", "--build"].as_slice(),
+            ["aibox", "claude", "--model", "opus"].as_slice(),
+            ["aibox"].as_slice(),
+        ] {
+            let (l, _) = split_passthrough(v(argv));
+            assert!(
+                Cli::try_parse_from(l).is_err(),
+                "{argv:?} must be rejected, not silently accepted"
+            );
         }
-    }
-
-    #[test]
-    fn parses_build_short_force() {
-        let (l, _) = split_passthrough(v(&["aibox", "build", "-f"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { target, force }) => {
-                assert_eq!(target, None);
-                assert!(force);
-            }
-            _ => panic!("expected build command"),
-        }
-    }
-
-    #[test]
-    fn build_all_is_not_exposed() {
-        let (l, _) = split_passthrough(v(&["aibox", "build", "all"]));
-        assert!(Cli::try_parse_from(l).is_err());
-    }
-
-    #[test]
-    fn agent_build_flag_is_rejected() {
-        let (l, _) = split_passthrough(v(&["aibox", "codex", "--build"]));
-        assert!(Cli::try_parse_from(l).is_err());
     }
 
     #[test]
@@ -350,79 +375,76 @@ mod tests {
         }
     }
 
+    /// An omitted refresh target is the sweep-everything mode, distinct from
+    /// `refresh base` — the two take different paths in `run_refresh`.
     #[test]
-    fn parses_session_get() {
-        let (l, _) = split_passthrough(v(&["aibox", "codex", "session", "get", "3f2a"]));
+    fn parses_refresh_without_target_sweeps_everything() {
+        let (l, _) = split_passthrough(v(&["aibox", "claude", "refresh"]));
         let cli = Cli::try_parse_from(l).unwrap();
         match &cli.command.agent_args().unwrap().action {
-            Some(Action::Session { action, ids, yes }) => {
-                assert_eq!(action, "get");
-                assert_eq!(ids, &v(&["3f2a"]));
-                assert!(!yes);
+            Some(Action::Refresh { target, dry_run }) => {
+                assert_eq!(target.as_deref(), None);
+                assert!(!dry_run);
             }
-            _ => panic!("expected session action"),
+            _ => panic!("expected refresh action"),
         }
     }
 
+    /// Every `session` spelling in one table: the default action, an explicit
+    /// `get`, multi-id `delete` with `-y`, a no-id `delete`, and `-p` appearing
+    /// before the sub-subcommand. These differed only in argv and expectations,
+    /// so five copies of the same match block earned nothing.
     #[test]
-    fn parses_session_default_list() {
-        let (l, _) = split_passthrough(v(&["aibox", "codex", "session"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.command.agent_args().unwrap().action {
-            Some(Action::Session { action, ids, yes }) => {
-                assert_eq!(action, "list");
-                assert!(ids.is_empty());
-                assert!(!yes);
+    fn parses_session_actions_ids_and_yes() {
+        for (argv, want_action, want_ids, want_yes, want_profile) in [
+            (
+                ["aibox", "codex", "session"].as_slice(),
+                "list",
+                vec![],
+                false,
+                "default",
+            ),
+            (
+                ["aibox", "codex", "session", "get", "3f2a"].as_slice(),
+                "get",
+                vec!["3f2a"],
+                false,
+                "default",
+            ),
+            (
+                ["aibox", "codex", "session", "delete", "-y", "3f2a", "9d0e"].as_slice(),
+                "delete",
+                vec!["3f2a", "9d0e"],
+                true,
+                "default",
+            ),
+            (
+                ["aibox", "codex", "session", "delete"].as_slice(),
+                "delete",
+                vec![],
+                false,
+                "default",
+            ),
+            (
+                ["aibox", "codex", "-p", "risky", "session", "get", "3f2a"].as_slice(),
+                "get",
+                vec!["3f2a"],
+                false,
+                "risky",
+            ),
+        ] {
+            let (l, _) = split_passthrough(v(argv));
+            let cli = Cli::try_parse_from(l).unwrap();
+            let args = cli.command.agent_args().unwrap();
+            assert_eq!(args.run.profile, want_profile, "{argv:?}");
+            match &args.action {
+                Some(Action::Session { action, ids, yes }) => {
+                    assert_eq!(action, want_action, "{argv:?}");
+                    assert_eq!(ids, &v(&want_ids), "{argv:?}");
+                    assert_eq!(*yes, want_yes, "{argv:?}");
+                }
+                _ => panic!("expected session action for {argv:?}"),
             }
-            _ => panic!("expected session action"),
-        }
-    }
-
-    #[test]
-    fn parses_session_delete_many_yes() {
-        let (l, _) = split_passthrough(v(&[
-            "aibox", "codex", "session", "delete", "-y", "3f2a", "9d0e",
-        ]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.command.agent_args().unwrap().action {
-            Some(Action::Session { action, ids, yes }) => {
-                assert_eq!(action, "delete");
-                assert_eq!(ids, &v(&["3f2a", "9d0e"]));
-                assert!(*yes);
-            }
-            _ => panic!("expected session action"),
-        }
-    }
-
-    #[test]
-    fn parses_session_delete_without_ids() {
-        let (l, _) = split_passthrough(v(&["aibox", "codex", "session", "delete"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.command.agent_args().unwrap().action {
-            Some(Action::Session { action, ids, yes }) => {
-                assert_eq!(action, "delete");
-                assert!(ids.is_empty());
-                assert!(!yes);
-            }
-            _ => panic!("expected session action"),
-        }
-    }
-
-    #[test]
-    fn parses_session_profile_before_action() {
-        let (l, _) = split_passthrough(v(&[
-            "aibox", "codex", "-p", "risky", "session", "get", "3f2a",
-        ]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        let args = cli.command.agent_args().unwrap();
-        assert_eq!(args.run.profile, "risky");
-        match &args.action {
-            Some(Action::Session { action, ids, yes }) => {
-                assert_eq!(action, "get");
-                assert_eq!(ids, &v(&["3f2a"]));
-                assert!(!yes);
-            }
-            _ => panic!("expected session action"),
         }
     }
 }
