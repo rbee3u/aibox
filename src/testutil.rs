@@ -12,9 +12,8 @@
 //! stay in their own modules, since each encodes what that test needs Docker to
 //! do, but the mechanics live here once.
 //!
-//! [`contains_pair`] / [`pair_pos`]: the argv assertions. Both `agent` and
-//! `runspec` build flag/value pairs (`-c k=v`, `-v src:dst`, `--env-file path`),
-//! and both had their own copy of the same two-token window search.
+//! [`contains_pair`] / [`pair_pos`]: argv assertions for flag/value pairs such
+//! as `-v src:dst`. Multiple modules need the same two-token window search.
 //!
 //! [`write_jsonl`]: the two session backends' tests each write a transcript
 //! fixture from a list of JSON lines; the mkdir-then-writeln mechanics are the

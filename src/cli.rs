@@ -1,43 +1,17 @@
-//! Command-line surface (clap derive) plus the argv pre-split that keeps
-//! pass-through agent args away from the parser.
-//!
-//! Invocation shape — one binary with agent subcommands:
-//!
-//! ```text
-//!   aibox build [claude|codex] [--force]
-//!   aibox <claude|codex> [options] [-- <args passed straight to the agent>]
-//!   aibox <claude|codex> refresh [base|<relay>] [--dry-run]
-//!   aibox <claude|codex> [-p <profile>] session [list|get <id>|delete [-y] [id...]]
-//! ```
-//!
-//! ## Why we split argv ourselves
-//!
-//! The first `--` means "everything after this goes to the agent verbatim".
-//! clap's trailing-var-arg has sharp edges when it has to coexist with
-//! subcommands (`refresh`/`session`), so we sidestep the whole problem:
-//! [`split_passthrough`] cuts argv at the first `--` before clap ever sees it.
-//! clap parses only the left side; the right side is handed to the agent as-is.
-//!
-//! Bare positional args (no `--`) are not collected as pass-through: real usage
-//! always separates agent args with `--` (`aibox claude -e r -- --model opus`),
-//! and requiring it lets clap reject genuine typos instead of forwarding them
-//! silently.
+//! Command-line surface plus the argv pre-split that keeps pass-through agent
+//! args away from clap.
 
 use crate::agent::AgentKind;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-/// Top-level parser. Only the left half of argv (before the first `--`) reaches
-/// this; see [`split_passthrough`].
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
     about = "Run coding agents inside a Docker container that is the sandbox boundary",
     long_about = "Run coding agents (Claude Code, OpenAI Codex) inside a Docker container \
-                  that is the sandbox boundary — so the agent can skip every permission \
-                  prompt and work unrestricted, while the blast radius stays inside the \
-                  container.\n\n\
+                  that is the sandbox boundary.\n\n\
                   Pass args straight to the underlying agent after `--`:\n    \
-                  aibox claude -e myrelay -- --model opus",
+                  aibox codex -- \"fix the build\"",
     version
 )]
 pub struct Cli {
@@ -45,8 +19,6 @@ pub struct Cli {
     pub command: Command,
 }
 
-/// Top-level commands. Agent commands run or manage one agent profile; `build`
-/// owns image construction so normal runs never build implicitly.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Build aibox Docker image(s).
@@ -69,13 +41,11 @@ impl Command {
     pub fn agent_args(&self) -> Option<&AgentArgs> {
         match self {
             Command::Build(_) => None,
-            Command::Claude(a) | Command::Codex(a) => Some(a),
+            Command::Claude(args) | Command::Codex(args) => Some(args),
         }
     }
 }
 
-/// Image build options. A cached build is the default; `--force` refreshes the
-/// shared base image and rebuilds the requested agent image(s) without cache.
 #[derive(Debug, Args)]
 pub struct BuildArgs {
     /// Which agent image to build. Omit to build both.
@@ -87,17 +57,12 @@ pub struct BuildArgs {
     pub force: bool,
 }
 
-/// Build target for `aibox build`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BuildTarget {
-    /// Build only the Claude image.
     Claude,
-    /// Build only the Codex image.
     Codex,
 }
 
-/// Everything under an agent subcommand. The `refresh` / `session`
-/// sub-subcommands are optional; with neither present this is a normal run.
 #[derive(Debug, Args)]
 pub struct AgentArgs {
     #[command(subcommand)]
@@ -107,18 +72,12 @@ pub struct AgentArgs {
     pub run: RunArgs,
 }
 
-/// The management sub-subcommands that short-circuit a run (`refresh`,
-/// `session`). A plain run has no [`Action`].
 #[derive(Debug, Subcommand)]
 pub enum Action {
-    /// Refresh a config file's doc/example comments to the current template,
-    /// keeping every real line you added.
-    Refresh {
-        /// `base`, a relay name, or omitted for base + every relay.
-        target: Option<String>,
-        /// Print the result instead of writing it.
-        #[arg(long)]
-        dry_run: bool,
+    /// Manage provider configuration overlays.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     /// Browse this profile's saved chat transcripts (host-side; no container).
     Session {
@@ -134,19 +93,42 @@ pub enum Action {
     },
 }
 
-/// Flags shared by a normal run. `--exec` is Codex-only and rejected for Claude
-/// in [`crate::run`] rather than in the type, so the two subcommands can share
-/// one struct.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    List,
+    Get {
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    Create {
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    Apply {
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    Edit {
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+        /// Edit the auth file. Codex only.
+        #[arg(long)]
+        auth: bool,
+    },
+    Delete {
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+        /// Skip delete confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Config profile name.
-    #[arg(short, long, default_value = "default")]
+    /// Config profile name. Use `host` only with config/session commands.
+    #[arg(short, long, default_value = "default", value_parser = parse_profile)]
     pub profile: String,
-
-    /// Relay endpoint (required for a run): a name under `<profile>/envs/`, or a
-    /// path. Merged onto `base`.
-    #[arg(short, long)]
-    pub env: Option<String>,
 
     /// Project dir mounted at /work (default: current dir).
     #[arg(short, long)]
@@ -165,17 +147,26 @@ pub struct RunArgs {
     pub exec: bool,
 }
 
+fn parse_profile(value: &str) -> Result<String, String> {
+    crate::profile::validate_name("profile", value)
+        .map(|()| value.to_string())
+        .map_err(|error| error.to_string())
+}
+
+fn parse_provider(value: &str) -> Result<String, String> {
+    crate::profile::validate_name("provider", value)
+        .map(|()| value.to_string())
+        .map_err(|error| error.to_string())
+}
+
 /// Split argv at the first `--`: everything before is parsed by clap, everything
-/// after is pass-through for the agent. The `--` itself is dropped. Returns
-/// `(left, passthrough)`.
-///
-/// `argv` should include `argv[0]` (the program name) as clap expects.
+/// after is pass-through for the agent. The `--` itself is dropped.
 pub fn split_passthrough(argv: Vec<String>) -> (Vec<String>, Vec<String>) {
     match argv.iter().position(|a| a == "--") {
         Some(i) => {
             let mut left = argv;
-            let right = left.split_off(i + 1); // after the `--`
-            left.pop(); // drop the `--` itself
+            let right = left.split_off(i + 1);
+            left.pop();
             (left, right)
         }
         None => (argv, Vec::new()),
@@ -185,266 +176,72 @@ pub fn split_passthrough(argv: Vec<String>) -> (Vec<String>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Every argv shape the split has to get right, in one table: no `--` at
-    /// all, a normal split, a trailing `--` with nothing after it, and a second
-    /// `--` that belongs to the agent. These differed only in argv and
-    /// expectations, so four copies of the same two assertions earned nothing.
     #[test]
     fn split_cuts_argv_at_the_first_dashdash_only() {
-        for (argv, want_left, want_right) in [
-            (
-                ["aibox", "claude", "-e", "r"].as_slice(),
-                ["aibox", "claude", "-e", "r"].as_slice(),
-                [].as_slice(),
-            ),
-            (
-                ["aibox", "claude", "-e", "r", "--", "--model", "opus"].as_slice(),
-                ["aibox", "claude", "-e", "r"].as_slice(),
-                ["--model", "opus"].as_slice(),
-            ),
-            (
-                ["aibox", "codex", "--"].as_slice(),
-                ["aibox", "codex"].as_slice(),
-                [].as_slice(),
-            ),
-            (
-                ["aibox", "codex", "--", "a", "--", "b"].as_slice(),
-                ["aibox", "codex"].as_slice(),
-                ["a", "--", "b"].as_slice(),
-            ),
-        ] {
-            let (l, r) = split_passthrough(v(argv));
-            assert_eq!(l, v(want_left), "{argv:?}");
-            assert_eq!(r, v(want_right), "{argv:?}");
-        }
+        let (left, right) =
+            split_passthrough(v(&["aibox", "codex", "--exec", "--", "fix", "--", "tests"]));
+        assert_eq!(left, v(&["aibox", "codex", "--exec"]));
+        assert_eq!(right, v(&["fix", "--", "tests"]));
     }
 
     #[test]
-    fn passthrough_words_do_not_become_management_actions() {
-        let (l, r) = split_passthrough(v(&[
-            "aibox", "codex", "-e", "relay", "--", "session", "get", "3f2a",
-        ]));
-
-        let cli = Cli::try_parse_from(l).unwrap();
-
+    fn parses_config_commands() {
+        let cli =
+            Cli::try_parse_from(["aibox", "codex", "-p", "host", "config", "apply", "openai"])
+                .unwrap();
         let args = cli.command.agent_args().unwrap();
-        assert!(
-            args.action.is_none(),
-            "words after -- must remain agent args, not aibox subcommands"
-        );
-        assert_eq!(args.run.env.as_deref(), Some("relay"));
-        assert_eq!(r, v(&["session", "get", "3f2a"]));
-    }
-
-    /// The subcommand is what selects the agent, and `build` selects neither —
-    /// every later per-agent decision (image, config root, container home) hangs
-    /// off this mapping.
-    #[test]
-    fn subcommand_selects_the_agent() {
-        for (argv, want) in [
-            (
-                ["aibox", "claude", "-e", "openrouter"].as_slice(),
-                Some(AgentKind::Claude),
-            ),
-            (
-                ["aibox", "codex", "-e", "r", "--exec"].as_slice(),
-                Some(AgentKind::Codex),
-            ),
-            (["aibox", "build"].as_slice(), None),
-        ] {
-            let (l, _) = split_passthrough(v(argv));
-            let cli = Cli::try_parse_from(l).unwrap();
-            assert_eq!(cli.command.agent_kind(), want, "{argv:?}");
-            assert_eq!(
-                cli.command.agent_args().is_some(),
-                want.is_some(),
-                "{argv:?}: run args exist exactly for the agent subcommands"
-            );
+        assert_eq!(args.run.profile, "host");
+        match args.action.as_ref().unwrap() {
+            Action::Config {
+                command: ConfigCommand::Apply { provider },
+            } => assert_eq!(provider, "openai"),
+            _ => panic!("expected config apply"),
         }
 
-        let (l, _) = split_passthrough(v(&["aibox", "codex", "-e", "r", "--exec"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        let run = &cli.command.agent_args().unwrap().run;
-        assert_eq!(run.env.as_deref(), Some("r"));
-        assert!(run.exec);
-    }
-
-    #[test]
-    fn parses_run_bind_options_without_dropping_repeats() {
-        let (l, _) = split_passthrough(v(&[
-            "aibox",
-            "claude",
-            "-p",
-            "team",
-            "-e",
-            "relay",
-            "-w",
-            "src",
-            "-m",
-            "Cargo.toml:/repo/Cargo.toml:ro",
-            "--mount",
-            "src:/src",
-            "--safe",
-        ]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        let args = cli.command.agent_args().unwrap();
-
-        assert_eq!(args.run.profile, "team");
-        assert_eq!(args.run.env.as_deref(), Some("relay"));
-        assert_eq!(args.run.work.as_deref(), Some("src"));
-        assert_eq!(
-            args.run.mount,
-            v(&["Cargo.toml:/repo/Cargo.toml:ro", "src:/src"])
-        );
-        assert!(args.run.safe);
-        assert!(!args.run.exec);
-    }
-
-    /// Every accepted `aibox build` spelling, including both `--force` forms.
-    /// One table instead of three copies of the same match block: the axes that
-    /// actually vary are the target and the cache flag.
-    #[test]
-    fn parses_build_targets_and_force_spellings() {
-        for (argv, want_target, want_force) in [
-            (["aibox", "build"].as_slice(), None, false),
-            (
-                ["aibox", "build", "claude"].as_slice(),
-                Some(BuildTarget::Claude),
-                false,
-            ),
-            (
-                ["aibox", "build", "codex"].as_slice(),
-                Some(BuildTarget::Codex),
-                false,
-            ),
-            (
-                ["aibox", "build", "codex", "--force"].as_slice(),
-                Some(BuildTarget::Codex),
-                true,
-            ),
-            (["aibox", "build", "-f"].as_slice(), None, true),
-        ] {
-            let (l, _) = split_passthrough(v(argv));
-            let cli = Cli::try_parse_from(l).unwrap();
-            match cli.command {
-                Command::Build(BuildArgs { target, force }) => {
-                    assert_eq!(target, want_target, "{argv:?}");
-                    assert_eq!(force, want_force, "{argv:?}");
-                }
-                _ => panic!("expected build command for {argv:?}"),
+        let cli =
+            Cli::try_parse_from(["aibox", "codex", "config", "edit", "openai", "--auth"]).unwrap();
+        match cli.command.agent_args().unwrap().action.as_ref().unwrap() {
+            Action::Config {
+                command: ConfigCommand::Edit { provider, auth },
+            } => {
+                assert_eq!(provider, "openai");
+                assert!(*auth);
             }
-        }
-    }
-
-    /// Spellings the surface deliberately does *not* accept. Each would
-    /// otherwise look like it worked: `build all` is not a target (omitting the
-    /// target already builds both), `--build` on a run would suggest runs build
-    /// implicitly, and a bare positional must not be forwarded to the agent
-    /// (that is what `--` is for) or clap could never flag a typo.
-    #[test]
-    fn unsupported_spellings_are_rejected_by_the_parser() {
-        for argv in [
-            ["aibox", "build", "all"].as_slice(),
-            ["aibox", "codex", "--build"].as_slice(),
-            ["aibox", "claude", "--model", "opus"].as_slice(),
-            ["aibox"].as_slice(),
-        ] {
-            let (l, _) = split_passthrough(v(argv));
-            assert!(
-                Cli::try_parse_from(l).is_err(),
-                "{argv:?} must be rejected, not silently accepted"
-            );
+            _ => panic!("expected config edit"),
         }
     }
 
     #[test]
-    fn parses_refresh_dry_run() {
-        let (l, _) = split_passthrough(v(&["aibox", "claude", "refresh", "base", "--dry-run"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.command.agent_args().unwrap().action {
-            Some(Action::Refresh { target, dry_run }) => {
-                assert_eq!(target.as_deref(), Some("base"));
-                assert!(dry_run);
+    fn parses_session_delete() {
+        let cli = Cli::try_parse_from([
+            "aibox", "claude", "-p", "host", "session", "delete", "-y", "abc",
+        ])
+        .unwrap();
+        match cli.command.agent_args().unwrap().action.as_ref().unwrap() {
+            Action::Session { action, ids, yes } => {
+                assert_eq!(action, "delete");
+                assert_eq!(ids, &["abc".to_string()]);
+                assert!(*yes);
             }
-            _ => panic!("expected refresh action"),
+            _ => panic!("expected session"),
         }
     }
 
-    /// An omitted refresh target is the sweep-everything mode, distinct from
-    /// `refresh base` — the two take different paths in `run_refresh`.
     #[test]
-    fn parses_refresh_without_target_sweeps_everything() {
-        let (l, _) = split_passthrough(v(&["aibox", "claude", "refresh"]));
-        let cli = Cli::try_parse_from(l).unwrap();
-        match &cli.command.agent_args().unwrap().action {
-            Some(Action::Refresh { target, dry_run }) => {
-                assert_eq!(target.as_deref(), None);
-                assert!(!dry_run);
-            }
-            _ => panic!("expected refresh action"),
-        }
+    fn old_env_and_refresh_surface_are_gone() {
+        assert!(Cli::try_parse_from(["aibox", "codex", "-e", "relay"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "codex", "refresh"]).is_err());
     }
 
-    /// Every `session` spelling in one table: the default action, an explicit
-    /// `get`, multi-id `delete` with `-y`, a no-id `delete`, and `-p` appearing
-    /// before the sub-subcommand. These differed only in argv and expectations,
-    /// so five copies of the same match block earned nothing.
     #[test]
-    fn parses_session_actions_ids_and_yes() {
-        for (argv, want_action, want_ids, want_yes, want_profile) in [
-            (
-                ["aibox", "codex", "session"].as_slice(),
-                "list",
-                vec![],
-                false,
-                "default",
-            ),
-            (
-                ["aibox", "codex", "session", "get", "3f2a"].as_slice(),
-                "get",
-                vec!["3f2a"],
-                false,
-                "default",
-            ),
-            (
-                ["aibox", "codex", "session", "delete", "-y", "3f2a", "9d0e"].as_slice(),
-                "delete",
-                vec!["3f2a", "9d0e"],
-                true,
-                "default",
-            ),
-            (
-                ["aibox", "codex", "session", "delete"].as_slice(),
-                "delete",
-                vec![],
-                false,
-                "default",
-            ),
-            (
-                ["aibox", "codex", "-p", "risky", "session", "get", "3f2a"].as_slice(),
-                "get",
-                vec!["3f2a"],
-                false,
-                "risky",
-            ),
-        ] {
-            let (l, _) = split_passthrough(v(argv));
-            let cli = Cli::try_parse_from(l).unwrap();
-            let args = cli.command.agent_args().unwrap();
-            assert_eq!(args.run.profile, want_profile, "{argv:?}");
-            match &args.action {
-                Some(Action::Session { action, ids, yes }) => {
-                    assert_eq!(action, want_action, "{argv:?}");
-                    assert_eq!(ids, &v(&want_ids), "{argv:?}");
-                    assert_eq!(*yes, want_yes, "{argv:?}");
-                }
-                _ => panic!("expected session action for {argv:?}"),
-            }
-        }
+    fn invalid_names_are_rejected_by_parser() {
+        assert!(Cli::try_parse_from(["aibox", "codex", "-p", "bad.name"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "codex", "config", "get", "bad.name"]).is_err());
     }
 }

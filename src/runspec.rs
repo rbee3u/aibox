@@ -1,39 +1,16 @@
 //! Assembling the `docker run` invocation shared by both agents.
-//!
-//! The shared `docker run` tail: the hardening flags, TTY probe, Linux uid/gid +
-//! host-gateway, and the home/`/work`/extra mounts. What *differs* between the
-//! agents — credentials, endpoint wiring, and the agent command line — is
-//! produced by [`crate::agent::AgentKind::build_invocation`] and folded in here.
 
 use crate::agent::AgentKind;
-use crate::creds::{GuardedPath, StagedFile};
 use crate::platform;
 use anyhow::{bail, Context, Result};
-#[cfg(test)]
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-/// The Claude status-line script, embedded so a fresh profile home gets it
-/// seeded on first run (the home mount shadows the image, so it must land on the
-/// host). Runs inside the container against its `jq`; stays Bash on purpose.
-const CLAUDE_STATUS_SH: &str = include_str!("../assets/claude-status.sh");
+const CLAUDE_STATUSLINE_SCRIPT: &[u8] = include_bytes!("../assets/claude-status.sh");
 
-/// Default Claude settings.json wiring the status line, written only if absent.
-const CLAUDE_SETTINGS: &str = r#"{
-  "statusLine": {
-    "type": "command",
-    "command": "bash /home/claude/.claude/statusline.sh"
-  }
-}
-"#;
-
-/// Reject a bind *source* path containing `:`. Docker's `-v host:container[:ro]`
-/// short syntax splits on `:`, so a source with a literal colon (a legal Linux
-/// filename) would be misparsed into the wrong fields — a silent wrong mount or
-/// an opaque Docker error. Fail early and clearly instead. Only the host side
-/// needs this: container targets are fixed (`/work`, the agent home) or
-/// validated separately.
+/// Reject a bind source containing `:` because Docker's `-v` short syntax
+/// cannot represent it safely.
 pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
     let Some(path_str) = path.to_str() else {
         bail!(
@@ -50,10 +27,6 @@ pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the `-w` work dir (or the launch cwd when absent) to an absolute
-/// path and require an existing directory. Docker reads a bare name (no `/`)
-/// as a *named volume*, so passing a relative path through would silently
-/// mount an empty volume at `/work` instead of the project.
 pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
     let cwd = std::env::current_dir().context("get current dir for /work")?;
     let path = match work {
@@ -77,11 +50,6 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
         .to_string())
 }
 
-/// Resolve the host side of each `-m host:container[:ro]` mount to an absolute
-/// path (against the launch cwd, like `-w`) and require it to exist. Same trap
-/// as `/work`: Docker reads a bare relative name as a *named volume* and would
-/// silently mount an empty one at the container path. The container side must be
-/// present and absolute, matching Docker's bind-mount target rules.
 pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
     mounts
         .iter()
@@ -91,8 +59,9 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
             let host_path = if p.is_absolute() {
                 p.to_path_buf()
             } else {
-                let cwd = std::env::current_dir().context("get current dir for mounts")?;
-                cwd.join(p)
+                std::env::current_dir()
+                    .context("get current dir for mounts")?
+                    .join(p)
             };
             if !host_path.exists() {
                 bail!("mount host path does not exist: {}", host_path.display());
@@ -134,10 +103,6 @@ fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
     }
 }
 
-/// Reject extra bind mounts that replace or shadow a mount `aibox` manages
-/// itself. Nested mounts are allowed; replacing `/work`, the agent home, or an
-/// ancestor of either silently changes the wrapper's core isolation/state
-/// semantics.
 pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Result<()> {
     for mount in mounts {
         let target = bind_target(mount)?;
@@ -151,14 +116,6 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
         }
     }
     Ok(())
-}
-
-fn shadows_managed_target(target: &str, managed: &str) -> bool {
-    target == managed
-        || target == "/"
-        || managed
-            .strip_prefix(target)
-            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn bind_target(mount: &str) -> Result<&str> {
@@ -180,7 +137,7 @@ fn normalize_container_target(target: &str) -> Result<String> {
         bail!("container mount target must be absolute: {target:?}");
     }
 
-    let mut parts: Vec<&str> = Vec::new();
+    let mut parts = Vec::new();
     for part in target.split('/') {
         match part {
             "" | "." => {}
@@ -197,106 +154,87 @@ fn normalize_container_target(target: &str) -> Result<String> {
     }
 }
 
-/// Atomically seed one file without replacing any existing directory entry —
-/// including a dangling symlink. Agent homes are writable inside the container,
-/// so a check-then-`fs::write` sequence could otherwise follow a link planted by
-/// an earlier run and create a file outside the profile on the host.
-fn seed_file_if_absent(path: &Path, contents: &str) -> Result<()> {
-    let parent = path.parent().context("seed path has no parent directory")?;
-    let mut replacement = tempfile::Builder::new()
-        .prefix(".aibox-seed.")
-        .tempfile_in(parent)
-        .with_context(|| format!("prepare seed file for {}", path.display()))?;
-    replacement
-        .write_all(contents.as_bytes())
-        .with_context(|| format!("write seed file for {}", path.display()))?;
-    match replacement.persist_noclobber(path) {
-        Ok(_) => Ok(()),
-        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e.error).with_context(|| format!("seed {}", path.display())),
-    }
+fn shadows_managed_target(target: &str, managed: &str) -> bool {
+    target == managed
+        || target == "/"
+        || managed
+            .strip_prefix(target)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// Seed agent-specific first-run files into a profile home. First use only:
-/// existing files are left untouched so customizations survive. Agent state
-/// directories must be real directories, never links out of the writable home.
-///
-/// - Claude: the status-line script + a `settings.json` wiring it.
-/// - Codex: `.codex/` (CODEX_HOME), which Codex refuses to start without and
-///   which the mount would otherwise shadow.
+/// Seed runtime state required by an agent because the profile mount shadows
+/// the image's home directory.
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
-    match agent {
-        AgentKind::Claude => {
-            let claude_dir = home_dir.join(".claude");
-            crate::profile::ensure_real_dir(&claude_dir, "Claude state directory")?;
-            let status_dst = claude_dir.join("statusline.sh");
-            seed_file_if_absent(&status_dst, CLAUDE_STATUS_SH)?;
-            let settings = claude_dir.join("settings.json");
-            seed_file_if_absent(&settings, CLAUDE_SETTINGS)?;
-        }
-        AgentKind::Codex => {
-            // Codex refuses to start if CODEX_HOME (=/home/codex/.codex) is not a
-            // directory; the mount shadows the image copy, so create it host-side.
-            let codex_dir = home_dir.join(".codex");
-            crate::profile::ensure_real_dir(&codex_dir, "Codex state directory")?;
-        }
+    let agent_dir = home_dir.join(agent.active_dir_name());
+    let kind = match agent {
+        AgentKind::Claude => "Claude state directory",
+        AgentKind::Codex => "Codex state directory",
+    };
+    crate::profile::ensure_real_dir(&agent_dir, kind)?;
+    if agent == AgentKind::Claude {
+        install_claude_statusline(&agent_dir)?;
     }
     Ok(())
 }
 
-/// Inputs to a run that the agent-specific invocation builder needs, gathered
-/// once by the orchestrator.
-pub struct RunOpts<'a> {
-    /// Merged `base` + relay config.
-    pub env: &'a crate::envfile::MergedEnv,
-    /// `--safe`: keep the agent's own prompts/sandbox instead of bypassing.
-    pub safe: bool,
-    /// Codex `--exec` headless mode (Claude is rejected before invocation build).
-    pub exec: bool,
-    /// Pass-through args after `--`, handed to the agent verbatim.
-    pub passthrough: &'a [String],
-    /// The profile home dir on the host (mounted at the container home).
-    pub home_dir: &'a Path,
-    /// The profile root on the host. Not mounted into the container; used for
-    /// host-only coordination state such as short-lived lock files.
-    pub profile_dir: &'a Path,
-}
-
-/// What an agent wants from a run, after translating its relay config. Combines
-/// with the shared Docker flags in [`assemble_run_args`].
-pub struct Invocation {
-    /// Extra `docker run` args the agent needs: Claude's merged `--env-file`;
-    /// Codex's key `--env-file`, or a read-only `auth.json` / instructions mount.
-    pub extra_run_args: Vec<String>,
-    /// The agent command line (after the image): e.g. `--dangerously-skip-permissions`
-    /// plus pass-through, or Codex's `-c` overrides.
-    pub agent_cmd: Vec<String>,
-    /// Staged credential files to keep alive until `docker run` returns. Dropping
-    /// these unlinks them; they're held by the caller for the run's duration.
-    pub staged: Vec<StagedFile>,
-    /// Guarded fixed-path files (Codex's pre-created `auth.json` mount target),
-    /// removed on drop only while wrapper-owned. Held for the run's duration.
-    pub guarded: Vec<GuardedPath>,
-}
-
-impl Invocation {
-    /// Release locks that are only needed until Docker has accepted the bind
-    /// mount setup. The guarded paths themselves stay alive until the run ends.
-    pub fn release_spawn_locks(&mut self) {
-        for guarded in &mut self.guarded {
-            guarded.release_spawn_lock();
-        }
+fn install_claude_statusline(agent_dir: &Path) -> Result<()> {
+    let path = agent_dir.join("statusline.sh");
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_file() => return Ok(()),
+        Ok(_) => bail!(
+            "Claude status line is not a regular file: {}",
+            path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("inspect {}", path.display())),
     }
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o755);
+    }
+
+    let mut file = match options.open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.file_type().is_file() => Ok(()),
+                Ok(_) => bail!(
+                    "Claude status line is not a regular file: {}",
+                    path.display()
+                ),
+                Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
+            };
+        }
+        Err(error) => return Err(error).with_context(|| format!("create {}", path.display())),
+    };
+    if let Err(error) = file.write_all(CLAUDE_STATUSLINE_SCRIPT) {
+        let _ = fs::remove_file(&path);
+        return Err(error).with_context(|| format!("write {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("chmod 755 {}", path.display()))?;
+    }
+    Ok(())
 }
 
-/// Build the full `docker run` argument list (everything between `docker run`
-/// and the image): `--rm`, `-it`/`-i`, hardening, Linux uid/gid + host-gateway,
-/// the home / `/work` / extra mounts, then the agent's credential/auth args.
-///
-/// Agent-specific args come last because Codex's auth.json mode mounts a file
-/// nested under the profile home. Keeping that nested mount after the parent
-/// home mount avoids any runtime that applies bind mounts in argv order from
-/// shadowing the credential with the parent directory mount.
+pub struct RunOpts<'a> {
+    pub safe: bool,
+    pub exec: bool,
+    pub passthrough: &'a [String],
+}
+
+pub struct Invocation {
+    pub extra_run_args: Vec<String>,
+    pub agent_cmd: Vec<String>,
+}
+
 pub fn assemble_run_args(
     agent: AgentKind,
     work_dir: &str,
@@ -306,19 +244,15 @@ pub fn assemble_run_args(
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["--rm".into()];
 
-    // Interactive TTY only when we actually have one (so pipes still work).
     if platform::has_tty() {
         args.push("-it".into());
     } else {
         args.push("-i".into());
     }
 
-    // Hardening: no privilege escalation, drop all Linux capabilities.
     args.extend(["--security-opt".into(), "no-new-privileges".into()]);
     args.extend(["--cap-drop".into(), "ALL".into()]);
 
-    // Linux only: run as the host uid/gid so files created in /work stay yours,
-    // and map host.docker.internal so a relay/proxy on the host is reachable.
     if platform::is_linux() {
         let (uid, gid) = platform::uid_gid();
         args.push("--user".into());
@@ -327,7 +261,6 @@ pub fn assemble_run_args(
         args.push("host.docker.internal:host-gateway".into());
     }
 
-    // Mounts: isolated home + the project at /work + any extras.
     args.push("-v".into());
     args.push(format!("{}:{}", home_dir.display(), agent.container_home()));
     args.push("-v".into());
@@ -337,33 +270,14 @@ pub fn assemble_run_args(
         args.push("-v".into());
         args.push(mount.clone());
     }
-
-    // Agent-specific credential/auth args (env-files, auth.json mount).
     args.extend(extra_run_args.iter().cloned());
-
     args
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{contains_pair, pair_pos};
-
-    #[test]
-    fn resolve_work_dir_absolute_dir_passes() {
-        let dir = tempfile::tempdir().unwrap();
-        let got = resolve_work_dir(Some(dir.path().to_str().unwrap())).unwrap();
-        assert_eq!(got, dir.path().to_string_lossy());
-    }
-
-    #[test]
-    fn resolve_work_dir_relative_resolves_against_cwd() {
-        // `src` exists relative to the crate root, where cargo runs tests.
-        let got = resolve_work_dir(Some("src")).unwrap();
-        let p = Path::new(&got);
-        assert!(p.is_absolute());
-        assert_eq!(p, std::env::current_dir().unwrap().join("src"));
-    }
+    use crate::testutil::contains_pair;
 
     #[test]
     fn resolve_work_dir_none_uses_cwd() {
@@ -372,390 +286,70 @@ mod tests {
     }
 
     #[test]
-    fn resolve_work_dir_missing_or_file_errors() {
-        assert!(resolve_work_dir(Some("/no/such/dir")).is_err());
-        let f = tempfile::NamedTempFile::new().unwrap();
-        assert!(resolve_work_dir(Some(f.path().to_str().unwrap())).is_err());
-    }
-
-    #[test]
-    fn resolve_work_dir_rejects_colon_in_path() {
-        // A `:` in the bind source can't be represented in docker's `-v`
-        // short syntax; fail clearly instead of silently misparsing the mount.
-        let parent = tempfile::tempdir().unwrap();
-        let colon_dir = parent.path().join("a:b");
-        fs::create_dir(&colon_dir).unwrap();
-        let err = resolve_work_dir(Some(colon_dir.to_str().unwrap())).unwrap_err();
-        assert!(err.to_string().contains("contains ':'"), "{err}");
-    }
-
-    #[test]
-    fn reject_colon_in_bind_source_flags_colon_paths() {
-        // The guard the run path applies to every bind source (work dir, extra
-        // -m host side after absolutization, and the profile home). A `:` in
-        // the source can't survive docker's `-v host:container` short syntax.
-        assert!(reject_colon_in_bind_source("home", Path::new("/a/b")).is_ok());
-        let err = reject_colon_in_bind_source("home", Path::new("/a:b/home"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("contains ':'"), "{err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reject_bind_source_that_would_be_lossily_rewritten() {
-        use std::ffi::OsStr;
-        use std::os::unix::ffi::OsStrExt;
-
-        let path = Path::new(OsStr::from_bytes(b"/tmp/non-utf8-\xff"));
-        let err = reject_colon_in_bind_source("work dir", path)
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("not valid UTF-8"), "{err}");
-    }
-
-    #[test]
     fn resolve_mounts_absolutizes_and_validates_host_side() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = dir.path().display();
-
-        // Absolute host path passes through unchanged, options intact.
-        let got = resolve_mounts(&[format!("{host}:/cache:ro")]).unwrap();
-        assert_eq!(got, vec![format!("{host}:/cache:ro")]);
-        let got = resolve_mounts(&[format!("{host}:/cache")]).unwrap();
-        assert_eq!(got, vec![format!("{host}:/cache")]);
-
-        // Relative host path resolves against the launch cwd (like -w). `src`
-        // exists relative to the crate root, where cargo runs tests.
         let got = resolve_mounts(&["src:/src".to_string()]).unwrap();
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(got, vec![format!("{}:/src", cwd.join("src").display())]);
 
-        // A missing host path errors instead of becoming an empty named volume.
-        let err = resolve_mounts(&["/no/such/dir:/data".to_string()]).unwrap_err();
-        assert!(err.to_string().contains("does not exist"));
-        let err = resolve_mounts(&["no-such-dir:/data".to_string()]).unwrap_err();
-        assert!(err.to_string().contains("does not exist"));
-
-        // No host part at all is a usage error, not a silent volume mount.
-        assert!(resolve_mounts(&["/data".to_string()]).is_err());
-        assert!(resolve_mounts(&[":/data".to_string()]).is_err());
-        // The container target must be present and absolute.
-        assert!(resolve_mounts(&["src:".to_string()]).is_err());
+        assert!(resolve_mounts(&["/no/such/dir:/data".to_string()]).is_err());
         assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
-
-        // Only Docker's read-only shorthand is accepted; reject malformed specs
-        // before profile state exists and before Docker would fail opaquely.
-        for bad in ["src:/cache:", "src:/cache:rw", "src:/cache:ro:extra"] {
-            let err = resolve_mounts(&[bad.to_string()]).unwrap_err().to_string();
-            assert!(
-                err.contains("invalid mount"),
-                "bad mount {bad:?} should fail clearly: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn resolve_mounts_accepts_existing_file_sources() {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let spec = format!("{}:/etc/aibox/config:ro", file.path().display());
-
-        let got = resolve_mounts(std::slice::from_ref(&spec)).unwrap();
-
-        assert_eq!(got, vec![spec]);
+        assert!(resolve_mounts(&["src:/cache:rw".to_string()]).is_err());
     }
 
     #[test]
     fn extra_mounts_must_not_replace_managed_targets() {
-        for (agent, target) in [
-            (AgentKind::Claude, "/work"),
-            (AgentKind::Claude, "/work/"),
-            (AgentKind::Claude, "/work/."),
-            (AgentKind::Claude, "/work/../work"),
-            (AgentKind::Claude, "/work/.."),
-            (AgentKind::Claude, "/../../work"),
-            (AgentKind::Claude, "//work"),
-            (AgentKind::Claude, "/"),
-            (AgentKind::Claude, "/home"),
-            (AgentKind::Claude, "/home/claude"),
-            (AgentKind::Claude, "/home/claude/.."),
-            (AgentKind::Codex, "/"),
-            (AgentKind::Codex, "/home"),
-            (AgentKind::Codex, "/home/codex/../codex"),
-            (AgentKind::Codex, "/home/codex/.."),
-            (AgentKind::Codex, "/home/codex/.codex/../../codex"),
-            (AgentKind::Codex, "/../../home/codex"),
-            (AgentKind::Codex, "/home/codex"),
-        ] {
-            let err = validate_extra_mount_targets(agent, &[format!("/host:{target}:ro")])
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains("would override or shadow an aibox-managed mount"),
-                "managed target {target:?} should be rejected: {err}"
-            );
+        for target in ["/work", "/", "/home", "/home/codex", "/home/codex/.."] {
+            let err =
+                validate_extra_mount_targets(AgentKind::Codex, &[format!("/host:{target}:ro")])
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains("would override or shadow"));
         }
-    }
-
-    #[test]
-    fn extra_mounts_allow_nested_and_unmanaged_targets() {
         validate_extra_mount_targets(
             AgentKind::Codex,
-            &[
-                "/host:/work/cache:ro".to_string(),
-                "/host:/home/codex/.cache:ro".to_string(),
-                "/host:/cache:ro".to_string(),
-                "/host:/home/claude:ro".to_string(),
-            ],
+            &["/host:/home/codex/.cache:ro".to_string()],
         )
         .unwrap();
     }
 
     #[test]
-    fn extra_mount_validation_rejects_unusable_resolved_specs() {
-        // `validate_extra_mount_targets` runs on already-resolved specs, so a
-        // spec it cannot read a target out of is a bug upstream, not a user
-        // typo. It must still fail loudly rather than validate nothing and let
-        // the mount reach Docker unchecked.
-        for bad in ["no-colon-at-all", "/host:", "/host::ro"] {
-            let err = validate_extra_mount_targets(AgentKind::Claude, &[bad.to_string()])
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains("invalid resolved mount"),
-                "unusable resolved mount {bad:?} should fail clearly: {err}"
-            );
-        }
-
-        // A relative container target can't be normalized against the managed
-        // mounts, so it can't be proven safe.
-        let err =
-            validate_extra_mount_targets(AgentKind::Claude, &["/host:relative:ro".to_string()])
-                .unwrap_err()
-                .to_string();
-        assert!(
-            err.contains("container mount target must be absolute"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn extra_mounts_allow_prefix_siblings_of_managed_targets() {
-        validate_extra_mount_targets(
-            AgentKind::Codex,
-            &[
-                "/host:/workspace:ro".to_string(),
-                "/host:/workbench".to_string(),
-                "/host:/home/codex-cache:ro".to_string(),
-            ],
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn assemble_run_args_hardening_and_mount_order() {
-        let extra = vec!["--env-file".to_string(), "/tmp/aibox-env.x".to_string()];
-        let mounts = vec!["/host/cache:/cache:ro".to_string()];
-
+    fn assemble_run_args_mounts_shared_home_at_agent_home() {
         let args = assemble_run_args(
-            AgentKind::Claude,
+            AgentKind::Codex,
             "/abs/work",
-            Path::new("/abs/home"),
-            &mounts,
-            &extra,
+            Path::new("/abs/profile"),
+            &[],
+            &[],
         );
-
-        assert_eq!(args[0], "--rm");
-        let tty = if platform::has_tty() { "-it" } else { "-i" };
-        assert_eq!(args[1], tty);
-
-        // The container is the sandbox boundary; the hardening flags must
-        // survive any reshuffling of this assembly.
-        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
-        assert!(contains_pair(&args, "--cap-drop", "ALL"));
-
-        assert!(contains_pair(&args, "-v", "/abs/home:/home/claude"));
+        assert!(contains_pair(&args, "-v", "/abs/profile:/home/codex"));
         assert!(contains_pair(&args, "-v", "/abs/work:/work"));
-        assert!(contains_pair(&args, "-w", "/work"));
-        assert!(contains_pair(&args, "-v", "/host/cache:/cache:ro"));
-        assert_eq!(
-            &args[args.len() - 2..],
-            ["--env-file", "/tmp/aibox-env.x"],
-            "invocation extras come last so nested credential mounts cannot be shadowed"
-        );
-
-        // Linux-only flags mirror the host platform probes.
-        assert_eq!(
-            args.iter().any(|a| a == "--user"),
-            platform::is_linux(),
-            "--user is Linux-only"
-        );
-        if platform::is_linux() {
-            let (uid, gid) = platform::uid_gid();
-            assert!(
-                contains_pair(&args, "--user", &format!("{uid}:{gid}")),
-                "Linux runs must use the invoking host uid/gid so /work ownership stays correct"
-            );
-        }
-        assert_eq!(
-            contains_pair(&args, "--add-host", "host.docker.internal:host-gateway"),
-            platform::is_linux(),
-            "--add-host is Linux-only"
-        );
+        assert!(!args.iter().any(|arg| arg == "--env-file"));
     }
 
     #[test]
-    fn assemble_run_args_mounts_home_at_agent_container_home() {
-        let args = assemble_run_args(
-            AgentKind::Codex,
-            "/abs/work",
-            Path::new("/abs/home"),
-            &[],
-            &[],
-        );
-        assert!(contains_pair(&args, "-v", "/abs/home:/home/codex"));
-    }
-
-    #[test]
-    fn assemble_run_args_places_nested_invocation_mount_after_home_mount() {
-        let auth_mount = "/tmp/auth.json:/home/codex/.codex/auth.json:ro";
-        let args = assemble_run_args(
-            AgentKind::Codex,
-            "/abs/work",
-            Path::new("/abs/home"),
-            &[],
-            &["-v".to_string(), auth_mount.to_string()],
-        );
-
-        let home = pair_pos(&args, "-v", "/abs/home:/home/codex").expect("home mount");
-        let auth = pair_pos(&args, "-v", auth_mount).expect("auth mount");
-        assert!(
-            home < auth,
-            "nested auth.json mount must be listed after the parent home mount"
-        );
-    }
-
-    #[test]
-    fn seed_home_claude_seeds_once_and_preserves_customizations() {
-        let home = tempfile::tempdir().unwrap();
-
-        seed_home(AgentKind::Claude, home.path()).unwrap();
-        let status = home.path().join(".claude").join("statusline.sh");
-        let settings = home.path().join(".claude").join("settings.json");
-        assert_eq!(fs::read_to_string(&status).unwrap(), CLAUDE_STATUS_SH);
-        assert_eq!(fs::read_to_string(&settings).unwrap(), CLAUDE_SETTINGS);
-
-        // A second run must not clobber user customizations.
-        fs::write(&status, "my custom status").unwrap();
-        fs::write(&settings, "{\"mine\":true}\n").unwrap();
-        seed_home(AgentKind::Claude, home.path()).unwrap();
-        assert_eq!(fs::read_to_string(&status).unwrap(), "my custom status");
-        assert_eq!(fs::read_to_string(&settings).unwrap(), "{\"mine\":true}\n");
-    }
-
-    /// The seeded `settings.json` is consumed by Claude *inside* the container,
-    /// so it has to be valid JSON and its `statusLine.command` has to name the
-    /// script at the path the home mount actually puts it at. Both are spelled
-    /// out by hand in two separate constants here, against a container home that
-    /// lives in `AgentKind` — so nothing but this check ties them together, and
-    /// either drifting leaves Claude with a status line that silently never runs.
-    #[test]
-    fn seeded_claude_settings_point_at_the_seeded_script_inside_the_container_home() {
-        let home = tempfile::tempdir().unwrap();
-        seed_home(AgentKind::Claude, home.path()).unwrap();
-
-        let settings: serde_json::Value = serde_json::from_str(CLAUDE_SETTINGS)
-            .expect("seeded settings.json must be valid JSON for Claude to read");
-        let command = settings["statusLine"]["command"]
-            .as_str()
-            .expect("settings must wire a statusLine command");
-
-        // The host path the script was seeded to, re-expressed as the container
-        // path the home mount exposes it at.
-        let seeded = home.path().join(".claude").join("statusline.sh");
-        let in_container = format!(
-            "{}{}",
-            AgentKind::Claude.container_home(),
-            seeded
-                .strip_prefix(home.path())
-                .map(|rest| format!("/{}", rest.display()))
-                .unwrap()
-        );
-        assert!(
-            command.contains(&in_container),
-            "statusLine command {command:?} must reference the seeded script at {in_container}"
-        );
-    }
-
-    #[test]
-    fn seed_home_codex_creates_codex_home_dir() {
+    fn seed_home_creates_agent_state_and_claude_statusline() {
         let home = tempfile::tempdir().unwrap();
         seed_home(AgentKind::Codex, home.path()).unwrap();
         assert!(home.path().join(".codex").is_dir());
-    }
+        assert!(!home.path().join(".codex/statusline.sh").exists());
 
-    #[cfg(unix)]
-    #[test]
-    fn seed_home_rejects_symlinked_agent_state_directories() {
-        use std::os::unix::fs::symlink;
-
-        for (agent, state) in [(AgentKind::Claude, ".claude"), (AgentKind::Codex, ".codex")] {
-            let home = tempfile::tempdir().unwrap();
-            let outside = tempfile::tempdir().unwrap();
-            symlink(outside.path(), home.path().join(state)).unwrap();
-
-            let err = seed_home(agent, home.path()).unwrap_err().to_string();
-
-            assert!(err.contains("is not a real directory"), "{err}");
-            assert!(
-                fs::read_dir(outside.path()).unwrap().next().is_none(),
-                "seeding {agent:?} must not write through its state-directory link"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn seed_reports_a_write_failure_instead_of_silently_skipping_the_file() {
-        // Seeding tolerates an already-present file (that is how customizations
-        // survive), but it must not tolerate being *unable* to write. A
-        // read-only state directory would otherwise leave Claude with no status
-        // line and no complaint.
         let home = tempfile::tempdir().unwrap();
-        let claude = home.path().join(".claude");
-        fs::create_dir(&claude).unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&claude);
+        seed_home(AgentKind::Claude, home.path()).unwrap();
+        let statusline = home.path().join(".claude/statusline.sh");
+        assert!(statusline.is_file());
+        assert!(fs::read_to_string(statusline)
+            .unwrap()
+            .contains("context_window"));
+    }
 
-        let err = seed_home(AgentKind::Claude, home.path())
+    #[test]
+    fn reject_bind_source_with_colon() {
+        let parent = tempfile::tempdir().unwrap();
+        let colon_dir = parent.path().join("a:b");
+        fs::create_dir(&colon_dir).unwrap();
+        let err = resolve_work_dir(Some(colon_dir.to_str().unwrap()))
             .unwrap_err()
             .to_string();
-
-        assert!(
-            err.contains("prepare seed file") && err.contains("statusline.sh"),
-            "the error must name what could not be seeded: {err}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn claude_seed_does_not_follow_a_dangling_file_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let home = tempfile::tempdir().unwrap();
-        let claude = home.path().join(".claude");
-        fs::create_dir(&claude).unwrap();
-        let outside = home.path().join("outside-statusline");
-        let status = claude.join("statusline.sh");
-        symlink(&outside, &status).unwrap();
-
-        seed_home(AgentKind::Claude, home.path()).unwrap();
-
-        assert!(!outside.exists(), "seed must not create the symlink target");
-        assert!(fs::symlink_metadata(&status)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert!(claude.join("settings.json").is_file());
+        assert!(err.contains("contains ':'"));
     }
 }

@@ -1,98 +1,120 @@
-//! Per-profile path layout, directory creation, config root resolution, and
-//! relay resolution / scaffolding.
-//!
-//! Everything is per-profile on the host, under `$AIBOX_CONFIG_ROOT` (default
-//! `$HOME/.aibox/<agent>`):
-//!
-//! ```text
-//!   <root>/<profile>/
-//!     ├── base        # shared config inherited by every relay
-//!     ├── envs/       # relay endpoints, pick one per run with -e <name>
-//!     └── home/       # mounted as the agent's home
-//! ```
+//! Profile and config-management path layout.
 
-use crate::agent::{AgentKind, TEMPLATE_VERSION};
-use crate::template;
+use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-/// Resolved per-profile paths. Built from the agent, the config root, and the
-/// profile name.
+pub const HOST_PROFILE: &str = "host";
+
+#[derive(Debug, Clone)]
 pub struct Profile {
     pub agent: AgentKind,
-    pub dir: PathBuf,
+    pub name: String,
     pub home_dir: PathBuf,
-    pub envs_dir: PathBuf,
-    pub base_file: PathBuf,
+    pub active_agent_dir: PathBuf,
+    management_dir: PathBuf,
+    is_host: bool,
 }
 
-/// Whether `path` exists as an actual directory entry rather than a symlink to
-/// one. The profile home is writable from inside the container, so host-side
-/// code must not follow directory links planted there into unrelated host
-/// paths.
-pub(crate) fn real_dir_exists(path: &Path, kind: &str) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_dir() => Ok(true),
-        Ok(_) => bail!("{kind} is not a real directory: {}", path.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e).with_context(|| format!("inspect {kind} {}", path.display())),
+impl Profile {
+    pub fn resolve(agent: AgentKind, root: &Path, profile: &str) -> Result<Self> {
+        validate_name("profile", profile)?;
+        let is_host = profile == HOST_PROFILE;
+        let home_dir = if is_host {
+            host_home()?
+        } else {
+            root.join(profile)
+        };
+        let active_agent_dir = home_dir.join(agent.active_dir_name());
+        let management_dir = root.join(".config").join(profile).join(agent.tag());
+        Ok(Self {
+            agent,
+            name: profile.to_string(),
+            home_dir,
+            active_agent_dir,
+            management_dir,
+            is_host,
+        })
     }
-}
 
-/// Create `path` when absent, then require its final directory entry to be a
-/// real directory. In particular, never accept a symlink as a Docker bind
-/// source or as an agent state directory that later host-side writes enter.
-pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
-    if real_dir_exists(path, kind)? {
-        return Ok(());
+    pub fn is_host(&self) -> bool {
+        self.is_host
     }
-    fs::create_dir_all(path).with_context(|| format!("create {kind} {}", path.display()))?;
-    if real_dir_exists(path, kind)? {
-        Ok(())
-    } else {
-        // `create_dir_all` returned successfully, so absence here means the
-        // path changed concurrently. Do not continue to a host bind/write.
-        bail!("{kind} disappeared while being created: {}", path.display())
-    }
-}
 
-/// How a relay endpoint was resolved. A bare name lives under `envs/` and may be
-/// scaffolded on first use; a path (contains `/` or ends `.env`) is taken as-is
-/// and never scaffolded.
-#[derive(Debug, PartialEq, Eq)]
-pub enum RelayRef {
-    /// A name under `<profile>/envs/`; may be scaffolded.
-    Named { name: String, path: PathBuf },
-    /// An explicit path; must already exist.
-    Path(PathBuf),
-}
-
-impl RelayRef {
-    pub fn path(&self) -> &Path {
-        match self {
-            RelayRef::Named { path, .. } => path,
-            RelayRef::Path(p) => p,
+    pub fn ensure_runnable_profile(&self) -> Result<()> {
+        if self.is_host {
+            bail!("profile 'host' is only valid for config/session commands, not Docker runs");
         }
+        ensure_real_dir(&self.home_dir, "profile home")
+    }
+
+    pub fn ensure_active_agent_dir(&self) -> Result<()> {
+        if self.is_host {
+            if !real_dir_exists(&self.home_dir, "host home")? {
+                bail!("host home does not exist: {}", self.home_dir.display());
+            }
+        } else {
+            ensure_real_dir(&self.home_dir, "profile home")?;
+        }
+        ensure_real_dir(&self.active_agent_dir, "agent config directory")
+    }
+
+    pub fn validate_session_home(&self) -> Result<()> {
+        if self.is_host {
+            if !real_dir_exists(&self.home_dir, "host home")? {
+                bail!("host home does not exist: {}", self.home_dir.display());
+            }
+            return Ok(());
+        }
+        real_dir_exists(&self.home_dir, "profile home")?;
+        Ok(())
+    }
+
+    pub fn active_file(&self, file_name: &str) -> PathBuf {
+        self.active_agent_dir.join(file_name)
+    }
+
+    pub fn provider_root_dir(&self) -> PathBuf {
+        self.management_dir.clone()
+    }
+
+    pub fn provider_dir(&self, provider: &str) -> PathBuf {
+        self.provider_root_dir().join(provider)
+    }
+
+    pub fn provider_file(&self, provider: &str, file_name: &str) -> PathBuf {
+        self.provider_dir(provider).join(file_name)
+    }
+
+    pub fn backups_dir(&self) -> PathBuf {
+        self.management_dir.join(".backup")
+    }
+
+    pub fn state_path(&self) -> PathBuf {
+        self.management_dir.join(".state.json")
+    }
+
+    pub fn ensure_management_dir(&self) -> Result<()> {
+        ensure_real_dir(&self.management_dir, "config management directory")
     }
 }
 
-/// The config root: `$AIBOX_CONFIG_ROOT` if set, else `$HOME/.aibox/<agent>`.
-pub fn config_root(agent: AgentKind) -> Result<PathBuf> {
+pub fn config_root() -> Result<PathBuf> {
     let root = if let Some(root) = crate::env_override("AIBOX_CONFIG_ROOT")? {
         PathBuf::from(root)
     } else {
-        let home = crate::env_override("HOME")?.context("$HOME is not set")?;
-        agent.config_root_default(&home)
+        host_home()?.join(".aibox")
     };
     absolutize(root)
 }
 
-/// Docker bind sources must be absolute: a relative source is interpreted as a
-/// named volume (or rejected as an invalid volume name). Keep a relative custom
-/// config root useful by resolving it against the launch directory, just like
-/// `-w` and the host side of `-m`.
+fn host_home() -> Result<PathBuf> {
+    crate::env_override("HOME")?
+        .map(PathBuf::from)
+        .context("$HOME is not set")
+}
+
 fn absolutize(path: PathBuf) -> Result<PathBuf> {
     if path.is_absolute() {
         Ok(path)
@@ -103,397 +125,46 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-/// Validate user-facing names that become one path segment under the config
-/// root. Explicit relay paths are handled separately; profile names and named
-/// relays must not be able to escape their container directory.
-fn validate_path_name(kind: &str, name: &str) -> Result<()> {
-    let mut components = Path::new(name).components();
-    let safe = matches!(components.next(), Some(Component::Normal(part)) if part.to_str() == Some(name))
-        && components.next().is_none()
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.chars().any(char::is_control);
-    if safe {
+pub fn validate_name(kind: &str, value: &str) -> Result<()> {
+    if is_safe_name(value) {
+        Ok(())
+    } else {
+        bail!("invalid {kind} name '{value}': use only letters, numbers, '_' and '-'")
+    }
+}
+
+pub fn is_safe_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Whether `path` exists as an actual directory entry rather than a symlink to
+/// one.
+pub(crate) fn real_dir_exists(path: &Path, kind: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(true),
+        Ok(_) => bail!("{kind} is not a real directory: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+}
+
+/// Create `path` when absent, then require its final directory entry to be a
+/// real directory.
+pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
+    if real_dir_exists(path, kind)? {
         return Ok(());
     }
-    bail!("{kind} name must be a single path segment, not {name:?}");
-}
-
-fn validate_relay_name(name: &str) -> Result<()> {
-    validate_path_name("relay", name)?;
-    if name.starts_with('.') {
-        bail!(
-            "relay name must not start with '.', use an explicit path for hidden files: {name:?}"
-        );
-    }
-    Ok(())
-}
-
-impl Profile {
-    /// Resolve the paths for `agent`/`profile` under `root`. Pure — creates
-    /// nothing.
-    pub fn resolve(agent: AgentKind, root: &Path, profile: &str) -> Result<Self> {
-        validate_path_name("profile", profile)?;
-        let dir = root.join(profile);
-        Ok(Profile {
-            agent,
-            home_dir: dir.join("home"),
-            envs_dir: dir.join("envs"),
-            base_file: dir.join("base"),
-            dir,
-        })
-    }
-
-    /// Resolve an `-e <name|path>` argument to a [`RelayRef`], without touching
-    /// disk. A value containing `/` or ending in `.env` is a path; otherwise a
-    /// name under `envs/`.
-    pub fn relay_ref(&self, env: &str) -> Result<RelayRef> {
-        if env.contains('/') || env.ends_with(".env") {
-            Ok(RelayRef::Path(PathBuf::from(env)))
-        } else {
-            validate_relay_name(env)?;
-            Ok(RelayRef::Named {
-                name: env.to_string(),
-                path: self.envs_dir.join(env),
-            })
-        }
-    }
-
-    /// Ensure the profile home exists (created before `docker run` so the mount
-    /// doesn't shadow an image path with a root-owned empty dir).
-    pub fn ensure_home(&self) -> Result<()> {
-        self.ensure_profile_dir()?;
-        ensure_real_dir(&self.home_dir, "profile home")
-    }
-
-    /// Validate existing managed profile directories without creating anything.
-    /// Missing directories are fine for first use, but existing entries must be
-    /// real directories rather than symlinks into unrelated host paths.
-    pub fn validate_existing_layout_boundary(&self) -> Result<()> {
-        if !real_dir_exists(&self.dir, "profile directory")? {
-            return Ok(());
-        }
-        real_dir_exists(&self.home_dir, "profile home")?;
-        real_dir_exists(&self.envs_dir, "relay directory")?;
+    fs::create_dir_all(path).with_context(|| format!("create {kind} {}", path.display()))?;
+    if real_dir_exists(path, kind)? {
         Ok(())
-    }
-
-    fn ensure_profile_dir(&self) -> Result<()> {
-        ensure_real_dir(&self.dir, "profile directory")
-    }
-
-    fn ensure_envs_dir(&self) -> Result<()> {
-        self.ensure_profile_dir()?;
-        ensure_real_dir(&self.envs_dir, "relay directory")
-    }
-
-    /// Resolve the relay for a run, scaffolding a named relay (and `base`) on
-    /// first use. Returns:
-    /// - `Ok(Some(relay))` — the relay file exists and is ready to use;
-    /// - `Ok(None)` — we just scaffolded a stub and the caller should stop so the
-    ///   user can fill in credentials;
-    /// - `Err` — an explicit path that doesn't exist.
-    pub fn resolve_relay_for_run(&self, env: &str) -> Result<Option<RelayRef>> {
-        let relay = self.relay_ref(env)?;
-        match relay {
-            RelayRef::Path(p) => {
-                if p.is_file() {
-                    Ok(Some(RelayRef::Path(p)))
-                } else {
-                    bail!("env file not found: {}", p.display());
-                }
-            }
-            RelayRef::Named { name, path } => {
-                self.ensure_envs_dir()?;
-                if path.is_file() {
-                    Ok(Some(RelayRef::Named { name, path }))
-                } else {
-                    self.scaffold(&name, &path)?;
-                    Ok(None)
-                }
-            }
-        }
-    }
-
-    /// Write a `base` (once) plus a relay stub, then leave it to the caller to
-    /// stop. Files are 0600.
-    fn scaffold(&self, name: &str, relay_path: &Path) -> Result<()> {
-        self.scaffold_with_hooks(name, relay_path, || Ok(()), || Ok(()))
-    }
-
-    fn scaffold_with_hooks<F, G>(
-        &self,
-        name: &str,
-        relay_path: &Path,
-        before_base_write: F,
-        before_relay_write: G,
-    ) -> Result<()>
-    where
-        F: FnOnce() -> Result<()>,
-        G: FnOnce() -> Result<()>,
-    {
-        self.ensure_envs_dir()?;
-
-        before_base_write()?;
-        write_600_new(
-            &self.base_file,
-            &template::base_template(self.agent, TEMPLATE_VERSION),
-        )?;
-
-        before_relay_write()?;
-        let relay = write_600_new(
-            relay_path,
-            &template::relay_template(self.agent, name, TEMPLATE_VERSION),
-        )?;
-
-        match relay {
-            NewFile::Created => {
-                eprintln!(
-                    ">> scaffolded {} and {}",
-                    self.base_file.display(),
-                    relay_path.display()
-                );
-                eprintln!(
-                    ">> edit the credentials, then re-run: aibox {} -e {}",
-                    self.agent.tag(),
-                    name
-                );
-            }
-            NewFile::AlreadyExists => {
-                eprintln!(
-                    ">> relay appeared while scaffolding: {}",
-                    relay_path.display()
-                );
-                eprintln!(
-                    ">> inspect it, then re-run: aibox {} -e {}",
-                    self.agent.tag(),
-                    name
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// List relay names under `envs/` (for the "no relay selected" hint). Empty
-    /// if the dir is absent. Hidden files (`.DS_Store` and friends) are skipped —
-    /// they're never relays.
-    pub fn relay_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        if let Ok(rd) = fs::read_dir(&self.envs_dir) {
-            for entry in rd.flatten() {
-                if entry.path().is_file() {
-                    if let Some(n) = entry.file_name().to_str() {
-                        if !n.starts_with('.') {
-                            names.push(n.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        names.sort();
-        names
-    }
-
-    /// Nudge (without touching the file) when `base` or the relay predates the
-    /// current template, so stale docs can be refreshed with `refresh`.
-    pub fn nudge_if_stale(&self, relay_path: &Path) {
-        for hint in self.stale_template_hints(relay_path) {
-            eprintln!(">> {hint}");
-        }
-    }
-
-    /// The staleness hints [`Self::nudge_if_stale`] prints, as strings. Split out
-    /// so the decisions — which files are stale, and which `refresh` argument
-    /// actually resolves back to each one — are testable without capturing
-    /// stderr. A file that is missing, unreadable, or already current yields no
-    /// hint; a wrong `refresh` argument here would send users to edit the wrong
-    /// file.
-    fn stale_template_hints(&self, relay_path: &Path) -> Vec<String> {
-        let targets = [
-            (self.base_file.as_path(), "base".to_string()),
-            (relay_path, self.refresh_arg_for(relay_path)),
-        ];
-        let mut hints = Vec::new();
-        for (f, arg) in targets {
-            let Ok(contents) = fs::read_to_string(f) else {
-                continue;
-            };
-            let fv = template::file_template_version(&contents);
-            if fv < TEMPLATE_VERSION {
-                hints.push(format!(
-                    "{} is template v{fv} (current v{TEMPLATE_VERSION}) — refresh docs with: aibox {} refresh {arg}",
-                    f.display(),
-                    self.agent.tag()
-                ));
-            }
-        }
-        hints
-    }
-
-    /// The `refresh` argument that resolves back to `path`: the bare file name
-    /// when that name round-trips through [`Self::relay_ref`] to the same path
-    /// (a named relay under `envs/`), else the full path — so the hinted command
-    /// always targets the file it was printed for. `base` is excluded from the
-    /// round-trip: `refresh base` is reserved for the profile's base file, so a
-    /// relay that happens to be named `base` must be hinted by path.
-    fn refresh_arg_for(&self, path: &Path) -> String {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name != "base"
-                && validate_relay_name(name).is_ok()
-                && self.envs_dir.join(name) == path
-            {
-                return name.to_string();
-            }
-        }
-        path.display().to_string()
-    }
-
-    /// The merge sources for a run: `base` (if present) then the relay. Returned
-    /// as contents so the merge is a pure operation on strings. Keys are
-    /// validated here, where each source still has its file name — a bad line
-    /// reported later (or by docker) couldn't point back at the file to fix.
-    pub fn merge_sources(&self, relay_path: &Path) -> Result<Vec<String>> {
-        let mut out = Vec::new();
-        match fs::metadata(&self.base_file) {
-            Ok(meta) if meta.is_file() => out.push(read_env_source(&self.base_file)?),
-            Ok(_) => bail!(
-                "base config path is not a regular file: {}",
-                self.base_file.display()
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // `metadata` follows symlinks. Distinguish a genuinely absent
-                // optional base from a dangling symlink, which must not be
-                // silently treated as "no base".
-                match fs::symlink_metadata(&self.base_file) {
-                    Ok(_) => bail!(
-                        "base config path is not a regular file: {}",
-                        self.base_file.display()
-                    ),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        return Err(e).with_context(|| {
-                            format!("inspect base config {}", self.base_file.display())
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("inspect base config {}", self.base_file.display()));
-            }
-        }
-        out.push(read_env_source(relay_path)?);
-        Ok(out)
+    } else {
+        bail!("{kind} disappeared while being created: {}", path.display())
     }
 }
 
-/// Read one env-file source and validate its keys against the file it came
-/// from (see [`crate::envfile::check_keys`]).
-fn read_env_source(path: &Path) -> Result<String> {
-    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    crate::envfile::check_keys(path, &contents)?;
-    Ok(contents)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NewFile {
-    Created,
-    AlreadyExists,
-}
-
-fn existing_config_file(path: &Path) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            let target_meta = fs::metadata(path)
-                .with_context(|| format!("resolve config symlink {}", path.display()))?;
-            if target_meta.is_file() {
-                Ok(true)
-            } else {
-                bail!("config path is not a file: {}", path.display());
-            }
-        }
-        Ok(meta) if meta.is_file() => Ok(true),
-        Ok(_) => bail!("config path is not a file: {}", path.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e).with_context(|| format!("inspect {}", path.display())),
-    }
-}
-
-/// Prepare a complete 0600 replacement beside `path`, ready for an atomic
-/// persist. Keeping permission, write, and sync handling together ensures the
-/// create-only and overwrite paths use the same durability guarantees.
-fn prepare_600_replacement(path: &Path, contents: &str) -> Result<tempfile::NamedTempFile> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut replacement = tempfile::Builder::new()
-        .prefix(".aibox-write.")
-        .tempfile_in(parent)
-        .with_context(|| format!("create replacement beside {}", path.display()))?;
-    set_600(replacement.path())?;
-    replacement
-        .write_all(contents.as_bytes())
-        .with_context(|| format!("write replacement for {}", path.display()))?;
-    replacement
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("sync replacement for {}", path.display()))?;
-    Ok(replacement)
-}
-
-/// Create `path` at 0600 without replacing an existing config file. This is for
-/// first-use scaffolding only; refresh intentionally keeps using [`write_600`].
-fn write_600_new(path: &Path, contents: &str) -> Result<NewFile> {
-    if existing_config_file(path)? {
-        return Ok(NewFile::AlreadyExists);
-    }
-
-    let replacement = prepare_600_replacement(path, contents)?;
-    match replacement.persist_noclobber(path) {
-        Ok(_) => Ok(NewFile::Created),
-        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if existing_config_file(path)? {
-                Ok(NewFile::AlreadyExists)
-            } else {
-                Err(e.error).with_context(|| format!("create {}", path.display()))
-            }
-        }
-        Err(e) => Err(e.error).with_context(|| format!("create {}", path.display())),
-    }
-}
-
-/// Write `contents` to `path` with 0600 permissions. The complete replacement
-/// is prepared beside the target and then atomically persisted, so a short
-/// write, disk error, or process interruption cannot leave a credential file
-/// half-truncated. Existing symlinks are resolved first so refreshing a
-/// deliberately shared config updates its target rather than replacing the
-/// link itself.
-pub fn write_600(path: &Path, contents: &str) -> Result<()> {
-    let target = match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path)
-            .with_context(|| format!("resolve config symlink {}", path.display()))?,
-        Ok(meta) if !meta.is_file() => {
-            bail!("config path is not a file: {}", path.display());
-        }
-        Ok(_) => path.to_path_buf(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
-        Err(e) => return Err(e).with_context(|| format!("inspect {}", path.display())),
-    };
-
-    if target.exists() && !target.is_file() {
-        bail!("config path is not a file: {}", target.display());
-    }
-
-    let replacement = prepare_600_replacement(&target, contents)?;
-    replacement
-        .persist(&target)
-        .map_err(|e| e.error)
-        .with_context(|| format!("replace {}", target.display()))?;
-    Ok(())
-}
-
-/// chmod 0600 on Unix; a no-op elsewhere.
 #[cfg(unix)]
 pub fn set_600(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -511,760 +182,87 @@ mod tests {
     use super::*;
     use crate::testutil::EnvGuard;
 
-    fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().unwrap()
+    #[test]
+    fn names_are_restricted_to_simple_ascii_segments() {
+        for good in ["default", "test_1", "a-box", HOST_PROFILE] {
+            validate_name("profile", good).unwrap();
+        }
+        for bad in ["", ".", "..", "a/b", "a.b", "中文", "bad\nname"] {
+            assert!(validate_name("profile", bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
-    fn path_layout() {
-        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").unwrap();
-        assert_eq!(p.dir, Path::new("/root/default"));
-        assert_eq!(p.home_dir, Path::new("/root/default/home"));
-        assert_eq!(p.envs_dir, Path::new("/root/default/envs"));
-        assert_eq!(p.base_file, Path::new("/root/default/base"));
-    }
-
-    #[test]
-    fn config_root_uses_override_or_agent_default_under_home() {
+    fn config_root_uses_aibox_root_without_agent_suffix() {
         let _env_lock = crate::test_env_lock();
         let cwd = std::env::current_dir().unwrap();
 
-        {
-            let _config = EnvGuard::set("AIBOX_CONFIG_ROOT", "relative-config");
-            let _home = EnvGuard::set("HOME", "/unused-home");
-
-            assert_eq!(
-                config_root(AgentKind::Codex).unwrap(),
-                cwd.join("relative-config"),
-                "explicit config roots are absolutized against the launch cwd"
-            );
-        }
-
-        let home = tmp();
-        let _config = EnvGuard::remove("AIBOX_CONFIG_ROOT");
-        let _home = EnvGuard::set("HOME", home.path().to_str().unwrap());
-
-        assert_eq!(
-            config_root(AgentKind::Claude).unwrap(),
-            home.path().join(".aibox").join("claude")
-        );
-        assert_eq!(
-            config_root(AgentKind::Codex).unwrap(),
-            home.path().join(".aibox").join("codex")
-        );
+        let _root = EnvGuard::set("AIBOX_CONFIG_ROOT", "relative-root");
+        assert_eq!(config_root().unwrap(), cwd.join("relative-root"));
     }
 
     #[test]
-    fn config_root_requires_home_without_an_override() {
+    fn config_root_requires_home_without_override() {
         let _env_lock = crate::test_env_lock();
-        let _config = EnvGuard::remove("AIBOX_CONFIG_ROOT");
+        let _root = EnvGuard::remove("AIBOX_CONFIG_ROOT");
         let _home = EnvGuard::remove("HOME");
 
-        let err = config_root(AgentKind::Codex).unwrap_err().to_string();
+        let err = config_root().unwrap_err().to_string();
 
         assert!(err.contains("$HOME is not set"), "{err}");
     }
 
+    #[test]
+    fn ordinary_profile_is_shared_agent_home() {
+        let root = Path::new("/aibox");
+        let codex = Profile::resolve(AgentKind::Codex, root, "default").unwrap();
+        let claude = Profile::resolve(AgentKind::Claude, root, "default").unwrap();
+
+        assert_eq!(codex.home_dir, Path::new("/aibox/default"));
+        assert_eq!(claude.home_dir, Path::new("/aibox/default"));
+        assert_eq!(codex.active_agent_dir, Path::new("/aibox/default/.codex"));
+        assert_eq!(claude.active_agent_dir, Path::new("/aibox/default/.claude"));
+        assert_eq!(
+            codex.provider_dir("openai"),
+            Path::new("/aibox/.config/default/codex/openai")
+        );
+        assert_eq!(
+            codex.backups_dir(),
+            Path::new("/aibox/.config/default/codex/.backup")
+        );
+        assert_eq!(
+            codex.state_path(),
+            Path::new("/aibox/.config/default/codex/.state.json")
+        );
+    }
+
+    #[test]
+    fn host_profile_uses_host_home_but_aibox_management_dir() {
+        let _env_lock = crate::test_env_lock();
+        let _home = EnvGuard::set("HOME", "/host-home");
+        let p = Profile::resolve(AgentKind::Codex, Path::new("/aibox"), HOST_PROFILE).unwrap();
+
+        assert!(p.is_host());
+        assert_eq!(p.home_dir, Path::new("/host-home"));
+        assert_eq!(p.active_agent_dir, Path::new("/host-home/.codex"));
+        assert_eq!(
+            p.provider_dir("openai"),
+            Path::new("/aibox/.config/host/codex/openai")
+        );
+        assert!(p.ensure_runnable_profile().is_err());
+    }
+
     #[cfg(unix)]
     #[test]
-    fn ensure_home_rejects_a_symlink_bind_source() {
+    fn ensure_runnable_profile_rejects_symlinked_home() {
         use std::os::unix::fs::symlink;
 
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        let outside = root.path().join("outside");
-        fs::create_dir_all(&p.dir).unwrap();
-        fs::create_dir(&outside).unwrap();
-        symlink(&outside, &p.home_dir).unwrap();
-
-        let err = p.ensure_home().unwrap_err().to_string();
-
-        assert!(
-            err.contains("profile home is not a real directory"),
-            "{err}"
-        );
-        assert!(fs::read_dir(&outside).unwrap().next().is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_home_rejects_symlinked_profile_dir_without_creating_target_home() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        let outside = root.path().join("outside-profile");
-        fs::create_dir(&outside).unwrap();
-        symlink(&outside, &p.dir).unwrap();
-
-        let err = p.ensure_home().unwrap_err().to_string();
-
-        assert!(
-            err.contains("profile directory is not a real directory"),
-            "{err}"
-        );
-        assert!(
-            !outside.join("home").exists(),
-            "home must not be created through a symlinked profile directory"
-        );
-        assert!(
-            !outside.join("envs").exists(),
-            "envs must not be created through a symlinked profile directory"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn named_relay_rejects_symlinked_envs_without_scaffolding_target() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
         let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        let outside = root.path().join("outside-envs");
-        fs::create_dir(&p.dir).unwrap();
-        fs::create_dir(&outside).unwrap();
-        symlink(&outside, &p.envs_dir).unwrap();
+        symlink(outside.path(), &p.home_dir).unwrap();
 
-        let err = p.resolve_relay_for_run("relay").unwrap_err().to_string();
-
-        assert!(
-            err.contains("relay directory is not a real directory"),
-            "{err}"
-        );
-        assert!(
-            !outside.join("relay").exists(),
-            "named relay scaffold must not write through envs symlink"
-        );
-        assert!(
-            !p.base_file.exists(),
-            "base must not be scaffolded after envs boundary rejection"
-        );
-    }
-
-    #[test]
-    fn relative_config_roots_are_absolutized_for_docker_mounts() {
-        let got = absolutize(PathBuf::from("relative-root")).unwrap();
-        assert_eq!(got, std::env::current_dir().unwrap().join("relative-root"));
-        assert!(absolutize(PathBuf::from("/absolute-root"))
-            .unwrap()
-            .is_absolute());
-    }
-
-    #[test]
-    fn profile_name_must_be_one_safe_path_segment() {
-        assert!(Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").is_ok());
-        assert!(Profile::resolve(AgentKind::Claude, Path::new("/root"), ".hidden").is_ok());
-
-        for bad in ["", ".", "..", "a/b", "a\\b", "bad\nname", "bad\tname"] {
-            let err = Profile::resolve(AgentKind::Claude, Path::new("/root"), bad)
-                .map(|_| ())
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains("profile name must be a single path segment"),
-                "bad profile {bad:?} should be rejected clearly: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn relay_ref_name_vs_path() {
-        let p = Profile::resolve(AgentKind::Codex, Path::new("/root"), "default").unwrap();
-        assert_eq!(
-            p.relay_ref("openrouter").unwrap(),
-            RelayRef::Named {
-                name: "openrouter".into(),
-                path: PathBuf::from("/root/default/envs/openrouter")
-            }
-        );
-        assert_eq!(
-            p.relay_ref("/abs/path").unwrap(),
-            RelayRef::Path(PathBuf::from("/abs/path"))
-        );
-        assert_eq!(
-            p.relay_ref("my.env").unwrap(),
-            RelayRef::Path(PathBuf::from("my.env"))
-        );
-    }
-
-    #[test]
-    fn named_relay_must_be_one_safe_path_segment() {
-        let p = Profile::resolve(AgentKind::Codex, Path::new("/root"), "default").unwrap();
-
-        for bad in ["", ".", "..", "a\\b", "bad\nname", "bad\tname"] {
-            let err = p.relay_ref(bad).unwrap_err().to_string();
-            assert!(
-                err.contains("relay name must be a single path segment"),
-                "bad relay {bad:?} should be rejected clearly: {err}"
-            );
-        }
-        let err = p.relay_ref(".hidden").unwrap_err().to_string();
-        assert!(
-            err.contains("relay name must not start with '.'"),
-            "hidden relay names should be rejected clearly: {err}"
-        );
-
-        assert_eq!(
-            p.relay_ref("nested/relay").unwrap(),
-            RelayRef::Path(PathBuf::from("nested/relay")),
-            "values containing / remain explicit paths, not named relays"
-        );
-        assert_eq!(
-            p.relay_ref("../relay.env").unwrap(),
-            RelayRef::Path(PathBuf::from("../relay.env")),
-            "explicit path relays keep their existing behavior"
-        );
-        assert_eq!(
-            p.relay_ref("./.hidden").unwrap(),
-            RelayRef::Path(PathBuf::from("./.hidden")),
-            "hidden files are still reachable as explicit paths"
-        );
-    }
-
-    #[test]
-    fn scaffold_creates_base_and_relay_then_signals_stop() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        let got = p.resolve_relay_for_run("openrouter").unwrap();
-        assert!(got.is_none(), "first use should scaffold and stop");
-        assert!(p.base_file.is_file());
-        assert!(p.envs_dir.join("openrouter").is_file());
-    }
-
-    #[test]
-    fn scaffold_does_not_clobber_base_that_appears_during_create() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        let relay = p.envs_dir.join("r");
-        let base = "CODEX_MODEL=real-base-model\n";
-
-        p.scaffold_with_hooks(
-            "r",
-            &relay,
-            || {
-                fs::write(&p.base_file, base).unwrap();
-                Ok(())
-            },
-            || Ok(()),
-        )
-        .unwrap();
-
-        assert_eq!(fs::read_to_string(&p.base_file).unwrap(), base);
-        assert!(relay.is_file(), "relay still gets scaffolded");
-    }
-
-    #[test]
-    fn scaffold_does_not_clobber_relay_that_appears_during_create() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        let relay = p.envs_dir.join("r");
-        let real = "CODEX_BASE_URL=https://relay.example/v1\nCODEX_API_KEY=sk-real\n";
-
-        p.scaffold_with_hooks(
-            "r",
-            &relay,
-            || Ok(()),
-            || {
-                fs::write(&relay, real).unwrap();
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(fs::read_to_string(&relay).unwrap(), real);
-        assert!(p.base_file.is_file(), "base still gets scaffolded");
-    }
-
-    #[test]
-    fn write_600_new_preserves_existing_files_and_rejects_non_files() {
-        let root = tmp();
-        let existing = root.path().join("existing");
-        fs::write(&existing, "real\n").unwrap();
-
-        let got = write_600_new(&existing, "template\n").unwrap();
-
-        assert_eq!(got, NewFile::AlreadyExists);
-        assert_eq!(fs::read_to_string(&existing).unwrap(), "real\n");
-
-        let dir = root.path().join("not-a-file");
-        fs::create_dir(&dir).unwrap();
-        let err = write_600_new(&dir, "template\n").unwrap_err().to_string();
-        assert!(err.contains("config path is not a file"), "{err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_new_rejects_dangling_symlinks_without_creating_target() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let link = root.path().join("relay");
-        let missing = root.path().join("missing-target");
-        symlink(&missing, &link).unwrap();
-
-        let err = write_600_new(&link, "template\n").unwrap_err().to_string();
-
-        assert!(err.contains("resolve config symlink"), "{err}");
-        assert!(
-            !missing.exists(),
-            "scaffolding must not create a dangling symlink target"
-        );
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_new_preserves_existing_symlinked_files() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let target = root.path().join("shared.env");
-        let link = root.path().join("relay");
-        fs::write(&target, "real\n").unwrap();
-        symlink(&target, &link).unwrap();
-
-        let got = write_600_new(&link, "template\n").unwrap();
-
-        assert_eq!(got, NewFile::AlreadyExists);
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(fs::read_to_string(&target).unwrap(), "real\n");
-    }
-
-    #[test]
-    fn existing_relay_resolves() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap(); // scaffold
-        let got = p.resolve_relay_for_run("r").unwrap();
-        assert!(got.is_some(), "second use should resolve the existing file");
-    }
-
-    #[test]
-    fn missing_explicit_path_errors() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        assert!(p.resolve_relay_for_run("/no/such/file.env").is_err());
-    }
-
-    #[test]
-    fn existing_explicit_path_resolves_without_scaffolding_profile_state() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        let relay = root.path().join("external.env");
-        fs::write(&relay, "CODEX_BASE_URL=https://relay.example/v1\n").unwrap();
-
-        let got = p.resolve_relay_for_run(relay.to_str().unwrap()).unwrap();
-
-        assert_eq!(got, Some(RelayRef::Path(relay)));
-        assert!(
-            !p.dir.exists(),
-            "explicit env-file paths must not scaffold profile/base/envs state"
-        );
-    }
-
-    #[test]
-    fn stale_template_hints_only_flag_outdated_files_and_name_the_right_target() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap(); // scaffolds both at the current version
-        let relay = p.envs_dir.join("r");
-
-        assert!(
-            p.stale_template_hints(&relay).is_empty(),
-            "freshly scaffolded files are current, so nothing should be nudged"
-        );
-
-        // An unstamped (pre-versioning) base is stale; the relay is still current.
-        fs::write(&p.base_file, "CODEX_MODEL=m\n").unwrap();
-        let hints = p.stale_template_hints(&relay);
-        assert_eq!(hints.len(), 1, "{hints:?}");
-        assert!(
-            hints[0].contains(&p.base_file.display().to_string()),
-            "{hints:?}"
-        );
-        assert!(
-            hints[0].contains("template v0") && hints[0].contains("refresh base"),
-            "base must be hinted by the reserved `refresh base` argument: {hints:?}"
-        );
-
-        // A named relay is hinted by its bare name — the same value `-e` takes.
-        fs::write(&relay, "# aibox-template: v1\nCODEX_MODEL=m\n").unwrap();
-        let hints = p.stale_template_hints(&relay);
-        assert_eq!(hints.len(), 2, "{hints:?}");
-        assert!(
-            hints[1].contains("template v1") && hints[1].contains("refresh r"),
-            "{hints:?}"
-        );
-
-        // A relay outside envs/ must be hinted by path: its bare name would not
-        // resolve back to this file.
-        let outside = root.path().join("external.env");
-        fs::write(&outside, "CODEX_MODEL=m\n").unwrap();
-        let hints = p.stale_template_hints(&outside);
-        assert!(
-            hints[1].contains(&format!("refresh {}", outside.display())),
-            "{hints:?}"
-        );
-
-        // A missing relay is not a staleness problem; only base is reported.
-        let hints = p.stale_template_hints(&p.envs_dir.join("absent"));
-        assert_eq!(hints.len(), 1, "{hints:?}");
-        assert!(
-            hints[0].contains(&p.base_file.display().to_string()),
-            "{hints:?}"
-        );
-    }
-
-    #[test]
-    fn refresh_arg_round_trips_named_relay_and_falls_back_to_path() {
-        let p = Profile::resolve(AgentKind::Claude, Path::new("/root"), "default").unwrap();
-        // A named relay under envs/ hints its bare name.
-        assert_eq!(
-            p.refresh_arg_for(Path::new("/root/default/envs/openrouter")),
-            "openrouter"
-        );
-        // A path-style relay hints the full path (its bare name wouldn't
-        // resolve back to the same file).
-        assert_eq!(p.refresh_arg_for(Path::new("/tmp/x.env")), "/tmp/x.env");
-        // A relay literally named `base` also hints the full path: the bare
-        // name would make `refresh base` hit the profile's base file instead.
-        assert_eq!(
-            p.refresh_arg_for(Path::new("/root/default/envs/base")),
-            "/root/default/envs/base"
-        );
-    }
-
-    #[test]
-    fn relay_names_skips_hidden_files() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap(); // scaffold
-        fs::write(p.envs_dir.join(".DS_Store"), b"junk").unwrap();
-        assert_eq!(p.relay_names(), vec!["r".to_string()]);
-    }
-
-    #[test]
-    fn relay_names_lists_visible_files_sorted_without_directories() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        fs::create_dir_all(&p.envs_dir).unwrap();
-        fs::write(p.envs_dir.join("zeta"), "CODEX_BASE_URL=https://z\n").unwrap();
-        fs::write(p.envs_dir.join("alpha"), "CODEX_BASE_URL=https://a\n").unwrap();
-        fs::create_dir(p.envs_dir.join("not-a-relay")).unwrap();
-
-        assert_eq!(
-            p.relay_names(),
-            vec!["alpha".to_string(), "zeta".to_string()]
-        );
-    }
-
-    #[test]
-    fn merge_sources_rejects_malformed_key_naming_the_file() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap(); // scaffold base + relay
-        let relay = p.envs_dir.join("r");
-        fs::write(&relay, "CODEX_API_KEY = sk-x\n").unwrap();
-
-        let err = p.merge_sources(&relay).unwrap_err().to_string();
-
-        assert!(err.contains(&relay.display().to_string()), "{err}");
-        assert!(err.contains("CODEX_API_KEY = sk-x"), "{err}");
-    }
-
-    #[test]
-    fn merge_sources_reads_profile_base_before_explicit_relay_path() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        fs::create_dir_all(&p.dir).unwrap();
-        fs::write(
-            &p.base_file,
-            "CODEX_MODEL=base-model\nCODEX_REASONING=high\n",
-        )
-        .unwrap();
-        let relay = root.path().join("external.env");
-        fs::write(
-            &relay,
-            "CODEX_BASE_URL=https://relay.example/v1\nCODEX_REASONING=low\n",
-        )
-        .unwrap();
-
-        let sources = p.merge_sources(&relay).unwrap();
-
-        assert_eq!(
-            sources,
-            vec![
-                "CODEX_MODEL=base-model\nCODEX_REASONING=high\n".to_string(),
-                "CODEX_BASE_URL=https://relay.example/v1\nCODEX_REASONING=low\n".to_string(),
-            ],
-            "explicit relay paths still inherit profile/base, with relay read last"
-        );
-    }
-
-    #[test]
-    fn merge_sources_rejects_non_file_base_instead_of_ignoring_it() {
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap();
-        fs::remove_file(&p.base_file).unwrap();
-        fs::create_dir(&p.base_file).unwrap();
-
-        let err = p
-            .merge_sources(&p.envs_dir.join("r"))
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("base config path is not a regular file"));
-        assert!(err.contains(&p.base_file.display().to_string()));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn merge_sources_rejects_dangling_base_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Claude, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap();
-        fs::remove_file(&p.base_file).unwrap();
-        symlink(root.path().join("missing-base"), &p.base_file).unwrap();
-
-        let err = p
-            .merge_sources(&p.envs_dir.join("r"))
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("base config path is not a regular file"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_creates_and_restricts_existing_files() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = tmp();
-        let fresh = root.path().join("fresh");
-        write_600(&fresh, "secret\n").unwrap();
-        assert_eq!(fs::read_to_string(&fresh).unwrap(), "secret\n");
-        let mode = fs::metadata(&fresh).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-
-        let existing = root.path().join("existing");
-        fs::write(&existing, "old\n").unwrap();
-        fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
-        write_600(&existing, "new-secret\n").unwrap();
-        assert_eq!(fs::read_to_string(&existing).unwrap(), "new-secret\n");
-        let mode = fs::metadata(&existing).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_rejects_directories_without_changing_their_mode() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = tmp();
-        let dir = root.path().join("not-a-config-file");
-        fs::create_dir(&dir).unwrap();
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let err = write_600(&dir, "secret\n").unwrap_err().to_string();
-
-        assert!(err.contains("config path is not a file"));
-        assert_eq!(
-            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
-            0o755
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_refreshes_a_symlink_target_without_replacing_the_link() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let target = root.path().join("shared.env");
-        let link = root.path().join("relay.env");
-        fs::write(&target, "old\n").unwrap();
-        symlink(&target, &link).unwrap();
-
-        write_600(&link, "new\n").unwrap();
-
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(fs::read_to_string(&target).unwrap(), "new\n");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_rejects_dangling_symlinks_without_creating_their_target() {
-        use std::os::unix::fs::symlink;
-
-        let root = tmp();
-        let link = root.path().join("relay.env");
-        let missing = root.path().join("missing.env");
-        symlink(&missing, &link).unwrap();
-
-        let err = write_600(&link, "new\n").unwrap_err().to_string();
-
-        assert!(err.contains("resolve config symlink"), "{err}");
-        assert!(
-            !missing.exists(),
-            "refresh writes must not create a dangling symlink target"
-        );
-        assert!(fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scaffolded_files_are_0600() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        p.resolve_relay_for_run("r").unwrap();
-        let mode = fs::metadata(&p.base_file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
-
-    // --- IO errors are reported, not read as "absent" ----------------------
-    //
-    // Every path below distinguishes a *broken* profile from an empty one. The
-    // distinction matters because "absent" is a legitimate first-use state that
-    // silently scaffolds or skips: swallowing a real `PermissionDenied` as
-    // "nothing here" would scaffold over an existing profile, or run with a
-    // relay's config quietly missing. A missing path can't reach these arms, so
-    // the tests make a parent unreadable to provoke a genuine errno.
-
-    #[cfg(unix)]
-    #[test]
-    fn real_dir_exists_reports_an_unreadable_parent_instead_of_absence() {
-        let root = tmp();
-        let parent = root.path().join("locked");
-        let nested = parent.join("home");
-        fs::create_dir_all(&nested).unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&parent);
-
-        let err = real_dir_exists(&nested, "profile home")
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            err.contains("inspect profile home"),
-            "an unreadable parent must not be reported as a missing directory: {err}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_real_dir_reports_a_create_failure_under_an_unreadable_parent() {
-        let root = tmp();
-        let parent = root.path().join("locked");
-        fs::create_dir(&parent).unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&parent);
-
-        let err = ensure_real_dir(&parent.join("home"), "profile home")
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            err.contains("profile home"),
-            "a failed mkdir must surface as an error, not a silent success: {err}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn existing_config_file_reports_an_unreadable_parent() {
-        let root = tmp();
-        let parent = root.path().join("locked");
-        fs::create_dir(&parent).unwrap();
-        let relay = parent.join("relay");
-        fs::write(&relay, "CODEX_MODEL=m\n").unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&parent);
-
-        // Scaffolding must not treat an unreadable path as "no file here" and
-        // then try to create one over the top of the user's real config.
-        let err = write_600_new(&relay, "template\n").unwrap_err().to_string();
-
-        assert!(err.contains("relay"), "{err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_600_reports_an_unreadable_parent_instead_of_creating_a_file() {
-        let root = tmp();
-        let parent = root.path().join("locked");
-        fs::create_dir(&parent).unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&parent);
-
-        let err = write_600(&parent.join("base"), "secret\n")
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("base"), "{err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn merge_sources_reports_an_unreadable_base_instead_of_skipping_it() {
-        // `base` is optional, so a NotFound is skipped. A permission error is
-        // not the same thing: skipping it would run the agent with the profile's
-        // shared config (model tiers, defaults) silently absent.
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "locked-profile").unwrap();
-        fs::create_dir_all(&p.envs_dir).unwrap();
-        let relay = p.envs_dir.join("r");
-        fs::write(&relay, "CODEX_BASE_URL=https://relay.example/v1\n").unwrap();
-        fs::write(&p.base_file, "CODEX_MODEL=base-model\n").unwrap();
-        let _lock = crate::testutil::UnreadableDir::new(&p.dir);
-
-        let err = p.merge_sources(&relay).unwrap_err().to_string();
-
-        assert!(
-            err.contains("base config") || err.contains("base"),
-            "an unreadable base must be reported, not silently skipped: {err}"
-        );
-    }
-
-    #[test]
-    fn write_600_new_keeps_a_file_that_appears_during_creation() {
-        // The noclobber-persist race: another process (or a container-side
-        // write) creates the real config between our existence check and the
-        // rename. The user's credentials must win over our template.
-        let root = tmp();
-        let p = Profile::resolve(AgentKind::Codex, root.path(), "default").unwrap();
-        fs::create_dir_all(&p.envs_dir).unwrap();
-        let relay = p.envs_dir.join("r");
-        let real = "CODEX_API_KEY=sk-real\n";
-
-        // `scaffold_with_hooks` writes the file after the existence check but
-        // before the persist, which is exactly the racing window.
-        p.scaffold_with_hooks(
-            "r",
-            &relay,
-            || Ok(()),
-            || {
-                fs::write(&relay, real).unwrap();
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            fs::read_to_string(&relay).unwrap(),
-            real,
-            "a config that appears mid-scaffold must not be clobbered"
-        );
+        let err = p.ensure_runnable_profile().unwrap_err().to_string();
+        assert!(err.contains("profile home is not a real directory"));
     }
 }

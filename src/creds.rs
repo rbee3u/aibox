@@ -1,8 +1,10 @@
-//! Ephemeral credential staging with cleanup on normal exits and handled signals.
+//! Signal-aware cleanup for Docker runs and temporary files.
 //!
-//! Secrets are staged in 0600 temp files: Claude's merged env file, Codex's
-//! key-only env file, or Codex's throwaway `auth.json`. They must never outlive
-//! the agent run.
+//! The current run path no longer stages provider credentials: config is applied
+//! persistently before launch. This module still owns the Docker child/cidfile
+//! registry used to stop containers on wrapper-only signals, plus the older
+//! temp-file and fixed-placeholder guards used by tests and available for future
+//! ephemeral resources.
 //!
 //! ## The signal gap
 //!
@@ -19,8 +21,8 @@
 //! "ignore" and turn a survivable hangup back into a death. Between `Drop` and
 //! the watcher, a staged credential is removed when the run finishes, errors,
 //! or receives a handled fatal signal. Uncatchable termination (for example
-//! SIGKILL) cannot run process cleanup, so secrets must never be written into
-//! profile homes.
+//! SIGKILL) cannot run process cleanup, so anything registered here is still
+//! best-effort rather than durable state.
 //!
 //! ## Stopping the container
 //!
