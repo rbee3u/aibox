@@ -7,7 +7,7 @@
 # because the container is the boundary. See `agent.rs::build_codex` for flags.
 #
 # Build:
-#   aibox build codex
+#   aibox --agent codex build
 
 FROM aibox-base:latest
 
@@ -41,5 +41,5 @@ RUN printf "%s\n" \
 WORKDIR /work
 USER codex
 
-# Image is immutable; upgrade by rebuilding (`aibox build codex`), not in place.
+# Image is immutable; upgrade by rebuilding (`aibox --agent codex build`), not in place.
 ENTRYPOINT ["codex"]

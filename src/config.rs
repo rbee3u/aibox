@@ -777,6 +777,10 @@ mod tests {
             fs::read_to_string(provider.join("auth.json")).unwrap(),
             "{}\n"
         );
+        assert!(root.path().join("default/.codex").is_dir());
+        assert!(root.path().join("default/.claude/statusline.sh").is_file());
+        assert!(root.path().join("default/.gitconfig").is_file());
+        assert!(root.path().join(".config/default/claude").is_dir());
         profile::ensure_real_dir(&p.backups_dir(), "backup directory").unwrap();
         fs::write(p.state_path(), "{}\n").unwrap();
         assert_eq!(
@@ -814,6 +818,10 @@ mod tests {
         assert!(get_provider(&p, "anthropic")
             .unwrap()
             .contains(r#""ANTHROPIC_BASE_URL": "https://example.ai""#));
+        assert!(root.path().join("default/.codex").is_dir());
+        assert!(root.path().join("default/.claude/statusline.sh").is_file());
+        assert!(root.path().join("default/.gitconfig").is_file());
+        assert!(root.path().join(".config/default/codex").is_dir());
     }
 
     #[test]
@@ -1070,6 +1078,8 @@ base_url = "old"
             fs::read_to_string(host_home.path().join(".codex/config.toml")).unwrap(),
             "model = \"new\"\n"
         );
+        assert!(!host_home.path().join(".gitconfig").exists());
+        assert!(!host_home.path().join(".claude").exists());
         let backup = fs::read_dir(root.path().join(".config/host/codex/.backup"))
             .unwrap()
             .next()

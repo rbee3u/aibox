@@ -2,9 +2,10 @@
 
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
 container that **is** the sandbox boundary:
-`aibox claude|codex [options] [-- <args passed straight to the agent>]`.
-Subcommands also carry `config` for provider overlays and `session` for
-host-side transcript browsing. User docs live in `README.md`.
+`aibox [--agent codex|claude] [options] [-- <args passed straight to the agent>]`.
+Top-level subcommands carry `config` for provider overlays and `session` for
+host-side transcript browsing. Agent-scoped commands accept `--agent`;
+`profile` is shared and must not. User docs live in `README.md`.
 
 ## Layout
 

@@ -24,7 +24,7 @@ pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 
 use agent::AgentKind;
 use anyhow::{Context, Result};
-use cli::{Action, BuildArgs, BuildTarget, Cli, Command, RunArgs};
+use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
 use profile::Profile;
 use runspec::RunOpts;
@@ -143,44 +143,95 @@ fn write_line(out: &mut impl std::io::Write, line: &str) -> Result<bool> {
 }
 
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
-    match cli.command {
-        Command::Build(args) => {
+    let Cli {
+        agent: root_agent,
+        run: run_args,
+        command,
+    } = cli;
+
+    match command {
+        None => run_agent(
+            root_agent.unwrap_or(AgentKind::Codex),
+            &run_args,
+            &passthrough,
+        ),
+        Some(Command::Build(args)) => {
             if !passthrough.is_empty() {
                 anyhow::bail!(
                     "`-- <args>` applies only to a run; build takes no pass-through args"
                 );
             }
-            run_build(&args)
+            reject_command_run_options("build", &run_args)?;
+            let agent = resolve_agent(root_agent, args.agent)?;
+            run_build(agent, &args)
         }
-        Command::Claude(args) => run_agent_command(AgentKind::Claude, &args, &passthrough),
-        Command::Codex(args) => run_agent_command(AgentKind::Codex, &args, &passthrough),
+        Some(Command::Profile(args)) => {
+            if !passthrough.is_empty() {
+                anyhow::bail!(
+                    "`-- <args>` applies only to a run; profile takes no pass-through args"
+                );
+            }
+            if root_agent.is_some() {
+                anyhow::bail!("profile is shared across agents and does not accept --agent");
+            }
+            reject_command_run_options("profile", &run_args)?;
+            profile::dispatch(&args.command)
+        }
+        Some(Command::Config(args)) => {
+            let agent = resolve_agent(root_agent, args.agent)?.unwrap_or(AgentKind::Codex);
+            run_config_command(agent, &run_args, &args.command, &passthrough)
+        }
+        Some(Command::Session(args)) => {
+            let agent = resolve_agent(root_agent, args.agent)?.unwrap_or(AgentKind::Codex);
+            run_session_command(agent, &run_args, &args, &passthrough)
+        }
     }
 }
 
-fn run_agent_command(
+fn resolve_agent(
+    root_agent: Option<AgentKind>,
+    command_agent: Option<AgentKind>,
+) -> Result<Option<AgentKind>> {
+    match (root_agent, command_agent) {
+        (Some(_), Some(_)) => anyhow::bail!("--agent must be provided only once"),
+        (Some(agent), None) | (None, Some(agent)) => Ok(Some(agent)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn run_config_command(
     agent: AgentKind,
-    args: &cli::AgentArgs,
+    run: &RunArgs,
+    command: &cli::ConfigCommand,
     passthrough: &[String],
 ) -> Result<i32> {
-    if let Some(action) = &args.action {
-        if !passthrough.is_empty() {
-            anyhow::bail!(
-                "`-- <args>` applies only to a run; config/session take no pass-through args"
-            );
-        }
-        reject_run_only_options(&args.run)?;
-        let root = profile::config_root()?;
-        let prof = Profile::resolve(agent, &root, &args.run.profile)?;
-        return match action {
-            Action::Config { command } => config::dispatch(agent, &prof, command),
-            Action::Session { action, ids, yes } => {
-                prof.validate_session_home()?;
-                session::dispatch(agent, &prof.home_dir, action, ids, *yes)
-            }
-        };
+    if !passthrough.is_empty() {
+        anyhow::bail!(
+            "`-- <args>` applies only to a run; config/session take no pass-through args"
+        );
     }
+    reject_run_only_options(run)?;
+    let root = profile::config_root()?;
+    let prof = Profile::resolve(agent, &root, run.profile_name())?;
+    config::dispatch(agent, &prof, command)
+}
 
-    run_agent(agent, &args.run, passthrough)
+fn run_session_command(
+    agent: AgentKind,
+    run: &RunArgs,
+    args: &SessionArgs,
+    passthrough: &[String],
+) -> Result<i32> {
+    if !passthrough.is_empty() {
+        anyhow::bail!(
+            "`-- <args>` applies only to a run; config/session take no pass-through args"
+        );
+    }
+    reject_run_only_options(run)?;
+    let root = profile::config_root()?;
+    let prof = Profile::resolve(agent, &root, run.profile_name())?;
+    prof.validate_session_home()?;
+    session::dispatch(agent, &prof.home_dir, &args.action, &args.ids, args.yes)
 }
 
 fn reject_run_only_options(run: &RunArgs) -> Result<()> {
@@ -206,9 +257,32 @@ fn reject_run_only_options(run: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_build(args: &BuildArgs) -> Result<i32> {
+fn reject_command_run_options(command: &str, run: &RunArgs) -> Result<()> {
+    let mut used = Vec::new();
+    if run.profile.is_some() {
+        used.push("--profile");
+    }
+    if run.work.is_some() {
+        used.push("--work");
+    }
+    if !run.mount.is_empty() {
+        used.push("--mount");
+    }
+    if run.safe {
+        used.push("--safe");
+    }
+    if run.exec {
+        used.push("--exec");
+    }
+    if !used.is_empty() {
+        anyhow::bail!("{command} does not accept run options: {}", used.join(", "));
+    }
+    Ok(())
+}
+
+fn run_build(agent: Option<AgentKind>, args: &BuildArgs) -> Result<i32> {
     let image_override = env_override("AIBOX_IMAGE")?;
-    let targets = build_targets(args, image_override.as_deref())?;
+    let targets = build_targets(agent, image_override.as_deref())?;
 
     let base_cache = if args.force {
         BuildCache::NoCachePull
@@ -245,19 +319,18 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
 }
 
 fn build_targets(
-    args: &BuildArgs,
+    agent: Option<AgentKind>,
     image_override: Option<&str>,
 ) -> Result<Vec<(AgentKind, String)>> {
-    if args.target.is_none() && image_override.is_some() {
+    if agent.is_none() && image_override.is_some() {
         anyhow::bail!(
-            "AIBOX_IMAGE is ambiguous with `aibox build`; choose `aibox build claude` or `aibox build codex`"
+            "AIBOX_IMAGE is ambiguous with `aibox build`; choose `aibox build --agent claude` or `aibox build --agent codex`"
         );
     }
 
-    let agents = match args.target {
+    let agents = match agent {
         None => vec![AgentKind::Claude, AgentKind::Codex],
-        Some(BuildTarget::Claude) => vec![AgentKind::Claude],
-        Some(BuildTarget::Codex) => vec![AgentKind::Codex],
+        Some(agent) => vec![agent],
     };
 
     agents
@@ -281,7 +354,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     }
 
     let root = profile::config_root()?;
-    let prof = Profile::resolve(agent, &root, &run.profile)?;
+    let prof = Profile::resolve(agent, &root, run.profile_name())?;
     if prof.is_host() {
         anyhow::bail!("profile 'host' is only valid for config/session commands, not Docker runs");
     }
@@ -294,13 +367,12 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 
     if !docker::image_exists(&image)? {
         anyhow::bail!(
-            "{image} is not present locally; build it first with `aibox build {}`",
+            "{image} is not present locally; build it first with `aibox build --agent {}`",
             agent.tag()
         );
     }
 
-    profile::ensure_real_dir(&prof.home_dir, "profile home")?;
-    runspec::seed_home(agent, &prof.home_dir)?;
+    prof.ensure_ordinary_initialized()?;
 
     let opts = RunOpts {
         safe: run.safe,
@@ -426,9 +498,9 @@ exit 99
 
     #[cfg(unix)]
     #[test]
-    fn run_uses_shared_profile_home_without_provider_injection() {
+    fn default_run_uses_codex_shared_profile_home_without_provider_injection() {
         let fx = RunFixture::new();
-        let code = fx.run(&["aibox", "codex"], Vec::new()).unwrap();
+        let code = fx.run(&["aibox"], Vec::new()).unwrap();
         assert_eq!(code, 0);
 
         let log = fx.log();
@@ -437,6 +509,14 @@ exit 99
             fx.root.path().join("default").display()
         )));
         assert!(fx.root.path().join("default/.codex").is_dir());
+        assert!(fx
+            .root
+            .path()
+            .join("default/.claude/statusline.sh")
+            .is_file());
+        assert!(fx.root.path().join("default/.gitconfig").is_file());
+        assert!(fx.root.path().join(".config/default/codex").is_dir());
+        assert!(fx.root.path().join(".config/default/claude").is_dir());
         assert!(!log.contains("<--env-file>"), "{log}");
         assert!(!log.contains("<-c>"), "{log}");
     }
@@ -445,13 +525,22 @@ exit 99
     #[test]
     fn claude_run_seeds_statusline_but_not_settings() {
         let fx = RunFixture::new();
-        fx.run(&["aibox", "claude"], Vec::new()).unwrap();
+        fx.run(&["aibox", "--agent", "claude"], Vec::new()).unwrap();
 
+        let log = fx.log();
+        assert!(log.contains(&format!(
+            "<{}:/home/claude>",
+            fx.root.path().join("default").display()
+        )));
         assert!(fx
             .root
             .path()
             .join("default/.claude/statusline.sh")
             .exists());
+        assert!(fx.root.path().join("default/.codex").is_dir());
+        assert!(fx.root.path().join("default/.gitconfig").is_file());
+        assert!(fx.root.path().join(".config/default/codex").is_dir());
+        assert!(fx.root.path().join(".config/default/claude").is_dir());
         assert!(!fx
             .root
             .path()
@@ -464,13 +553,13 @@ exit 99
     fn host_profile_is_rejected_for_run_but_allowed_for_session() {
         let fx = RunFixture::new();
         let err = fx
-            .run(&["aibox", "codex", "-p", "host"], Vec::new())
+            .run(&["aibox", "-p", "host"], Vec::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains("profile 'host' is only valid"));
 
         let code = fx
-            .run(&["aibox", "codex", "-p", "host", "session"], Vec::new())
+            .run(&["aibox", "-p", "host", "session"], Vec::new())
             .unwrap();
         assert_eq!(code, 0);
     }
@@ -480,16 +569,13 @@ exit 99
     fn config_and_session_reject_passthrough_and_run_only_options() {
         let fx = RunFixture::new();
         let err = fx
-            .run(
-                &["aibox", "codex", "config", "list"],
-                vec!["ignored".to_string()],
-            )
+            .run(&["aibox", "config", "list"], vec!["ignored".to_string()])
             .unwrap_err()
             .to_string();
         assert!(err.contains("applies only to a run"));
 
         let err = fx
-            .run(&["aibox", "codex", "--safe", "config", "list"], Vec::new())
+            .run(&["aibox", "--safe", "config", "list"], Vec::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains("config/session do not accept run-only options"));
@@ -500,12 +586,41 @@ exit 99
     fn invalid_run_mount_does_not_create_profile_home() {
         let fx = RunFixture::new();
         let err = fx
-            .run(&["aibox", "codex", "-m", "/no/such/dir:/cache"], Vec::new())
+            .run(&["aibox", "-m", "/no/such/dir:/cache"], Vec::new())
             .unwrap_err()
             .to_string();
 
         assert!(err.contains("mount host path does not exist"), "{err}");
         assert!(!fx.root.path().join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_exec_and_profile_agent_flag_are_rejected() {
+        let fx = RunFixture::new();
+        let err = fx
+            .run(&["aibox", "--agent", "claude", "--exec"], Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--exec is codex-only"));
+
+        let err = fx
+            .run(
+                &["aibox", "--agent", "claude", "profile", "list"],
+                Vec::new(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("profile is shared across agents"));
+
+        let err = fx
+            .run(
+                &["aibox", "--agent", "claude", "build", "--agent", "codex"],
+                Vec::new(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--agent must be provided only once"));
     }
 
     #[test]

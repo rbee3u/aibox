@@ -3,9 +3,8 @@
 use crate::runspec::{Invocation, RunOpts};
 use anyhow::Result;
 
-/// Which agent a command targets. Selected by the `aibox claude` /
-/// `aibox codex` subcommand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which agent a command targets. Selected by `--agent` on agent-scoped commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum AgentKind {
     Claude,
     Codex,

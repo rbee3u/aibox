@@ -3,7 +3,7 @@
 # inside a container that is the sandbox boundary.
 #
 # Build:
-#   aibox build claude
+#   aibox --agent claude build
 
 FROM aibox-base:latest
 

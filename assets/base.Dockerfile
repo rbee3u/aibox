@@ -4,8 +4,8 @@
 #
 # Build:
 #   aibox build
-#   aibox build codex
-#   aibox build claude
+#   aibox --agent codex build
+#   aibox --agent claude build
 
 FROM debian:bookworm-slim
 

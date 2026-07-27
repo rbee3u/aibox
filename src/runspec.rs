@@ -3,11 +3,7 @@
 use crate::agent::AgentKind;
 use crate::platform;
 use anyhow::{bail, Context, Result};
-use std::fs;
-use std::io::Write;
 use std::path::Path;
-
-const CLAUDE_STATUSLINE_SCRIPT: &[u8] = include_bytes!("../assets/claude-status.sh");
 
 /// Reject a bind source containing `:` because Docker's `-v` short syntax
 /// cannot represent it safely.
@@ -165,63 +161,7 @@ fn shadows_managed_target(target: &str, managed: &str) -> bool {
 /// Seed runtime state required by an agent because the profile mount shadows
 /// the image's home directory.
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
-    let agent_dir = home_dir.join(agent.active_dir_name());
-    let kind = match agent {
-        AgentKind::Claude => "Claude state directory",
-        AgentKind::Codex => "Codex state directory",
-    };
-    crate::profile::ensure_real_dir(&agent_dir, kind)?;
-    if agent == AgentKind::Claude {
-        install_claude_statusline(&agent_dir)?;
-    }
-    Ok(())
-}
-
-fn install_claude_statusline(agent_dir: &Path) -> Result<()> {
-    let path = agent_dir.join("statusline.sh");
-    match fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_file() => return Ok(()),
-        Ok(_) => bail!(
-            "Claude status line is not a regular file: {}",
-            path.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("inspect {}", path.display())),
-    }
-
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o755);
-    }
-
-    let mut file = match options.open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return match fs::symlink_metadata(&path) {
-                Ok(meta) if meta.file_type().is_file() => Ok(()),
-                Ok(_) => bail!(
-                    "Claude status line is not a regular file: {}",
-                    path.display()
-                ),
-                Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
-            };
-        }
-        Err(error) => return Err(error).with_context(|| format!("create {}", path.display())),
-    };
-    if let Err(error) = file.write_all(CLAUDE_STATUSLINE_SCRIPT) {
-        let _ = fs::remove_file(&path);
-        return Err(error).with_context(|| format!("write {}", path.display()));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("chmod 755 {}", path.display()))?;
-    }
-    Ok(())
+    crate::profile::ensure_agent_state(agent, home_dir)
 }
 
 pub struct RunOpts<'a> {
@@ -278,6 +218,7 @@ pub fn assemble_run_args(
 mod tests {
     use super::*;
     use crate::testutil::contains_pair;
+    use std::fs;
 
     #[test]
     fn resolve_work_dir_none_uses_cwd() {

@@ -8,22 +8,21 @@ selected profile home.
 ## Commands
 
 ```sh
-aibox build [claude|codex] [--force]
-aibox codex [options] [-- <args passed to codex>]
-aibox claude [options] [-- <args passed to claude>]
-aibox codex config <list|get|create|apply|edit|delete> ...
-aibox claude config <list|get|create|apply|edit|delete> ...
-aibox codex session [list|get|delete|rm] ...
-aibox claude session [list|get|delete|rm] ...
+aibox [--agent codex|claude] [options] [-- <args passed to agent>]
+aibox [--agent codex|claude] config <list|get|create|apply|edit|delete> ...
+aibox [--agent codex|claude] session [list|get|delete|rm] ...
+aibox build [--agent codex|claude] [--force]
+aibox profile <list|create|delete> ...
 ```
 
 Normal runs never build images automatically:
 
 ```sh
-aibox build codex
+aibox --agent codex build
 cd ~/code/some-project
-aibox codex
-aibox codex --exec -- "run the tests and fix failures"
+aibox
+aibox --exec -- "run the tests and fix failures"
+aibox --agent claude -- "fix the build"
 ```
 
 ## Profile Layout
@@ -35,7 +34,9 @@ relative value resolves from the launch directory.
 $AIBOX_ROOT/
 ├── default/                         # shared profile home mounted into Docker
 │   ├── .codex/
-│   └── .claude/
+│   ├── .claude/
+│   │   └── statusline.sh
+│   └── .gitconfig
 └── .config/
     └── default/
         ├── codex/
@@ -48,9 +49,9 @@ $AIBOX_ROOT/
             └── .state.json
 ```
 
-`aibox codex -p work` and `aibox claude -p work` both mount
-`$AIBOX_ROOT/work` as the agent home. Codex state lives under `.codex`; Claude
-state lives under `.claude`.
+`aibox -p work` and `aibox --agent claude -p work` both mount `$AIBOX_ROOT/work`
+as the agent home. Codex state lives under `.codex`; Claude state lives under
+`.claude`.
 
 `-p host` is special and only valid for `config` and `session`. It manages the
 real host `$HOME/.codex` or `$HOME/.claude`, while provider snapshots and
@@ -59,22 +60,36 @@ backups still live under `$AIBOX_ROOT/.config/host/<agent>/`. Docker runs reject
 
 Profile and provider names must contain only letters, numbers, `_`, and `-`.
 
+Manage profile homes explicitly when you want to pre-create or remove them:
+
+```sh
+aibox profile create work
+aibox profile list
+aibox profile delete work --yes
+```
+
+Profile creation is still implicit for normal runs and provider setup. Creating
+a profile initializes both `.codex` and `.claude`, installs Claude's
+`statusline.sh` helper if missing, writes a default `.gitconfig` for GitHub SSH
+URL rewriting if missing, and creates both agents' provider-management
+directories. Existing regular files are left untouched.
+
 ## Config Providers
 
 Provider snapshots are edited and applied explicitly:
 
 ```sh
-aibox codex config create openai
-aibox codex config edit openai
-aibox codex config edit openai --auth
-aibox codex config apply openai
-aibox codex config list
-aibox codex config get openai
-aibox codex config delete openai --yes
+aibox config create openai
+aibox config edit openai
+aibox config edit openai --auth
+aibox config apply openai
+aibox config list
+aibox config get openai
+aibox config delete openai --yes
 
-aibox claude -p work config create anthropic
-aibox claude -p work config edit anthropic
-aibox claude -p work config apply anthropic
+aibox --agent claude -p work config create anthropic
+aibox --agent claude -p work config edit anthropic
+aibox --agent claude -p work config apply anthropic
 ```
 
 Codex providers contain:
@@ -150,11 +165,11 @@ and auth backups are written with private permissions on Unix.
 Sessions are browsed host-side; no container or provider is needed:
 
 ```sh
-aibox codex session
-aibox codex session get 3f2a
-aibox codex session delete 3f2a
-aibox codex session delete -y
-aibox codex -p host session list
+aibox session
+aibox session get 3f2a
+aibox session delete 3f2a
+aibox session delete -y
+aibox -p host session list
 ```
 
 `list` prints short id, date, and title. `get <id>` prints your typed prompts.
@@ -163,6 +178,7 @@ aibox codex -p host session list
 ## Run Options
 
 ```text
+--agent <codex|claude>      agent selector for run/config/session, default: codex
 -p, --profile <name>        profile home, default: default
 -w, --work <dir>            directory mounted at /work, default: current dir
 -m, --mount <spec>          extra bind mount host:container[:ro], repeatable
@@ -178,10 +194,11 @@ agent's own approval and workspace sandbox as an additional layer.
 
 ```sh
 aibox build
-aibox build codex
-aibox build claude --force
+aibox --agent codex build
+aibox --agent claude build --force
 ```
 
 `aibox build` first builds the shared local base image, then the requested agent
 image(s). The embedded Dockerfiles are `COPY`-free and pin the installed agent
-CLI versions. Use `--force` to ignore Docker cache and pull a fresh Debian base.
+CLI versions. `aibox build --agent <agent>` builds one agent image. Use
+`--force` to ignore Docker cache and pull a fresh Debian base.
