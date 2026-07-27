@@ -48,6 +48,19 @@ impl SessionDiscovery {
     }
 }
 
+/// Whether a walked entry is a transcript file we want: a regular `.jsonl` file
+/// whose name passes `keep`. Do not follow a transcript-shaped symlink created
+/// inside the mounted profile home — host-side session browsing must stay inside
+/// the container's transcript tree rather than becoming a path out of the sandbox
+/// boundary. Shared by the strict and tolerant walks so they can't drift on which
+/// files count.
+fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {
+    let p = entry.path();
+    entry.file_type().is_file()
+        && p.extension().is_some_and(|e| e == "jsonl")
+        && p.file_name().and_then(|n| n.to_str()).is_some_and(keep)
+}
+
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
 /// those whose file name passes `keep`. Empty if `base` isn't a directory. Shared
 /// by both backends' `files()`; they differ only in the base dir and the filter
@@ -64,16 +77,8 @@ pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(base) {
         let entry = entry.with_context(|| format!("walk session directory {}", base.display()))?;
-        let p = entry.path();
-        // Do not follow a transcript-shaped symlink created inside the mounted
-        // profile home. Host-side session browsing must stay inside the
-        // container's transcript tree rather than becoming a path out of the
-        // sandbox boundary.
-        if entry.file_type().is_file()
-            && p.extension().is_some_and(|e| e == "jsonl")
-            && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
-        {
-            out.push(p.to_path_buf());
+        if is_wanted_transcript(&entry, &keep) {
+            out.push(entry.path().to_path_buf());
         }
     }
     Ok(out)
@@ -103,32 +108,26 @@ pub(crate) fn walk_jsonl_tolerant(
                 continue;
             }
         };
-        let p = entry.path();
-        if entry.file_type().is_file()
-            && p.extension().is_some_and(|e| e == "jsonl")
-            && p.file_name().and_then(|n| n.to_str()).is_some_and(&keep)
-        {
-            out.files.push(p.to_path_buf());
+        if is_wanted_transcript(&entry, &keep) {
+            out.files.push(entry.path().to_path_buf());
         }
     }
     Ok(out)
 }
 
-/// Read a transcript line by line, parsing each as JSON and feeding it to `f`
-/// along with its index among the *parsed* lines (unparseable lines are
-/// skipped, matching the old collect-then-filter behavior). Open and read
-/// failures are returned to the caller instead of being misreported as an empty
-/// session.
+/// Read a transcript line by line, parsing each as JSON and feeding each parsed
+/// line to `f` (unparseable lines are skipped, matching the old
+/// collect-then-filter behavior). Open and read failures are returned to the
+/// caller instead of being misreported as an empty session.
 ///
 /// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
 /// held in memory at once.
-pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(usize, &Value)) -> Result<()> {
+pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(&Value)) -> Result<()> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("open session transcript {}", path.display()))?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
-    let mut idx = 0usize;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -140,8 +139,7 @@ pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(usize, &Value)) 
             Ok(_) => {}
         }
         if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            f(idx, &v);
-            idx += 1;
+            f(&v);
         }
     }
 }
@@ -179,20 +177,42 @@ pub struct Prompt {
 }
 
 /// The per-agent on-disk transcript format. The two impls
-/// (`session_claude::Claude`, `session_codex::Codex`) diverge only in the four
-/// required methods below — *where*
-/// each field lives on a line and which lines count as a real prompt. The two
-/// summary/get loops that consume those answers ([`summarize`](Self::summarize) /
-/// [`prompts`](Self::prompts)) are written once here as provided methods, so the
-/// two backends can't drift out of sync.
+/// (`session_claude::Claude`, `session_codex::Codex`) diverge only in the
+/// required methods below — *where* the transcript tree lives, which file
+/// names count, *where* each field lives on a line, and which lines count as
+/// a real prompt. The discovery walks and the summary/get loops that consume
+/// those answers ([`files`](Self::files) / [`list_files`](Self::list_files) /
+/// [`summarize`](Self::summarize) / [`prompts`](Self::prompts)) are written
+/// once here as provided methods, so the two backends can't drift out of sync.
 pub trait SessionBackend {
-    /// All transcript files under this profile home (empty if none yet).
-    fn files(&self, home: &Path) -> Result<Vec<PathBuf>>;
+    /// Path components of the transcript tree beneath the profile home
+    /// (e.g. `[".claude", "projects"]`), resolved only through real directory
+    /// entries — see [`checked_session_dir`].
+    fn session_dir_components(&self) -> &'static [&'static str];
 
-    /// Transcript files for `session list`. Backends can override this with a
-    /// tolerant walk so one bad child path does not hide every readable session.
+    /// Whether a `.jsonl` file name is a transcript. Claude keeps all; Codex
+    /// keeps only `rollout-` names. Shared by [`files`](Self::files) and
+    /// [`list_files`](Self::list_files), so `list` can never show a row that
+    /// `get`/`delete` then refuse to resolve.
+    fn keep_transcript_name(&self, name: &str) -> bool;
+
+    /// All transcript files under this profile home (empty if none yet). The
+    /// strict walk: `get`/`delete` use it, and a destructive or single-target
+    /// action must not act on a partial view of the tree.
+    fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
+        let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
+            return Ok(Vec::new());
+        };
+        walk_jsonl(&base, |name| self.keep_transcript_name(name))
+    }
+
+    /// Transcript files for `session list`: the tolerant walk, so one bad
+    /// child path does not hide every readable session.
     fn list_files(&self, home: &Path) -> Result<SessionDiscovery> {
-        self.files(home).map(SessionDiscovery::from_files)
+        let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
+            return Ok(SessionDiscovery::from_files(Vec::new()));
+        };
+        walk_jsonl_tolerant(&base, |name| self.keep_transcript_name(name))
     }
 
     /// The session id for a transcript path.
@@ -204,15 +224,14 @@ pub trait SessionBackend {
     /// Codex off a wrapper-filtered `response_item` user message.
     fn typed_text(&self, v: &Value) -> Option<String>;
 
-    /// The session start timestamp from one parsed line (fed in order with its
-    /// index); the first `Some` wins and stops the lookup. Claude answers for
-    /// any line bearing a top-level `timestamp`; Codex answers for the first
-    /// `session_meta` timestamp.
-    fn start_ts_of(&self, idx: usize, v: &Value) -> Option<String>;
+    /// The session start timestamp from one parsed line; the first `Some` wins
+    /// and stops the lookup. Claude answers for any line bearing a top-level
+    /// `timestamp`; Codex answers for the first `session_meta` timestamp.
+    fn start_ts_of(&self, v: &Value) -> Option<String>;
 
     /// Lower-confidence timestamp candidate used only when
     /// [`start_ts_of`](Self::start_ts_of) never finds one.
-    fn fallback_start_ts_of(&self, _idx: usize, _v: &Value) -> Option<String> {
+    fn fallback_start_ts_of(&self, _v: &Value) -> Option<String> {
         None
     }
 
@@ -234,12 +253,12 @@ pub trait SessionBackend {
         let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
-        for_each_json_line(path, |idx, v| {
+        for_each_json_line(path, |v| {
             if start_ts.is_none() {
-                start_ts = self.start_ts_of(idx, v);
+                start_ts = self.start_ts_of(v);
             }
             if fallback_start_ts.is_none() {
-                fallback_start_ts = self.fallback_start_ts_of(idx, v);
+                fallback_start_ts = self.fallback_start_ts_of(v);
             }
             if first_typed.is_none() {
                 first_typed = self.typed_text(v);
@@ -262,7 +281,7 @@ pub trait SessionBackend {
     /// [`typed_text`](Self::typed_text).
     fn prompts(&self, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
-        for_each_json_line(path, |_idx, v| {
+        for_each_json_line(path, |v| {
             if let Some(text) = self.typed_text(v) {
                 out.push(Prompt {
                     timestamp: ts_of(v),
@@ -496,8 +515,7 @@ fn delete_targets_with_input(
         let sid = backend.id_of(&path);
         let delete = yes || confirm_delete(&sid, input);
         if delete {
-            std::fs::remove_file(&path)
-                .map_err(|e| anyhow::anyhow!("delete {}: {e}", path.display()))?;
+            std::fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
             eprintln!(">> deleted {sid}");
         } else {
             eprintln!(">> kept {sid}");
@@ -559,11 +577,12 @@ mod tests {
     struct TestBackend;
 
     impl SessionBackend for TestBackend {
-        fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
-            let Some(base) = checked_session_dir(home, &["sessions"])? else {
-                return Ok(Vec::new());
-            };
-            walk_jsonl(&base, |_| true)
+        fn session_dir_components(&self) -> &'static [&'static str] {
+            &["sessions"]
+        }
+
+        fn keep_transcript_name(&self, _name: &str) -> bool {
+            true
         }
 
         fn id_of(&self, path: &Path) -> String {
@@ -577,7 +596,7 @@ mod tests {
             v.get("typed").and_then(Value::as_str).map(str::to_string)
         }
 
-        fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+        fn start_ts_of(&self, v: &Value) -> Option<String> {
             v.get("ts").and_then(Value::as_str).map(str::to_string)
         }
     }
@@ -622,6 +641,17 @@ mod tests {
     }
 
     impl SessionBackend for ExplicitFilesBackend {
+        // Never reached: this backend overrides both discovery walks with its
+        // explicit lists, which is the point — the shared list/get/delete
+        // logic under test takes whatever discovery hands it.
+        fn session_dir_components(&self) -> &'static [&'static str] {
+            &[]
+        }
+
+        fn keep_transcript_name(&self, _name: &str) -> bool {
+            true
+        }
+
         fn files(&self, _home: &Path) -> Result<Vec<PathBuf>> {
             if let Some(message) = &self.files_error {
                 bail!("{message}");
@@ -647,7 +677,7 @@ mod tests {
             v.get("typed").and_then(Value::as_str).map(str::to_string)
         }
 
-        fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+        fn start_ts_of(&self, v: &Value) -> Option<String> {
             v.get("ts").and_then(Value::as_str).map(str::to_string)
         }
     }

@@ -35,18 +35,13 @@ const ORPHAN_HEADER: &str =
 pub fn merge(old: &str, template: &str) -> String {
     // 1. Collect real lines from the old file (last wins, keep order). A line
     //    with no '=' is a bare key (docker --env-file passes the host value
-    //    through) — kept too, matching the run path in `envfile`.
+    //    through) — kept too, via the same line classification as the run
+    //    path in `envfile`.
     let mut vals: IndexMap<String, String> = IndexMap::new();
     for raw in old.lines() {
-        let s = raw.trim_start();
-        if s.is_empty() || s.starts_with('#') {
-            continue;
+        if let Some((key, line)) = crate::envfile::real_line_key(raw) {
+            vals.insert(key.to_string(), line.to_string());
         }
-        let key = match s.find('=') {
-            Some(eq) => &s[..eq],
-            None => s,
-        };
-        vals.insert(key.to_string(), s.to_string());
     }
 
     // 2. Walk the template; after each `#KEY=` example, emit the matching real
@@ -124,75 +119,10 @@ fn run_refresh_with_printer(
 ) -> Result<i32> {
     prof.validate_existing_layout_boundary()?;
     match target {
-        None => {
-            // Sweep mode: one bad file (unreadable, not UTF-8) must not abort
-            // the sweep half-done, with earlier files refreshed and later ones
-            // silently skipped — report it, keep going, exit non-zero at the
-            // end. Explicitly named targets below still fail fast.
-            let mut failed = false;
-            match refresh_one(prof, &prof.base_file, None, dry_run, false, &mut print) {
-                Ok(true) => {}
-                Ok(false) => return Ok(if failed { 1 } else { 0 }),
-                Err(e) => {
-                    eprintln!("!! {e:#}");
-                    failed = true;
-                }
-            }
-            match fs::read_dir(&prof.envs_dir) {
-                Ok(rd) => {
-                    let mut entries = Vec::new();
-                    for entry in rd {
-                        match entry {
-                            Ok(entry) => entries.push(entry.path()),
-                            Err(e) => {
-                                eprintln!("!! read entry under {}: {e}", prof.envs_dir.display());
-                                failed = true;
-                            }
-                        }
-                    }
-                    entries.sort();
-                    for path in entries {
-                        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                            eprintln!(
-                                "!! relay filename is not valid UTF-8, skipping: {}",
-                                path.display()
-                            );
-                            failed = true;
-                            continue;
-                        };
-                        // Hidden files (`.DS_Store` and friends) are never named
-                        // relays; skipping them keeps a stray binary file from
-                        // aborting the sweep. Explicit path targets still reach
-                        // them.
-                        if name.starts_with('.') {
-                            continue;
-                        }
-                        // Visible entries are intended relay configs. Let
-                        // refresh_one classify them so directories, dangling
-                        // symlinks, and other non-files are reported instead of
-                        // making the sweep look clean.
-                        match refresh_one(prof, &path, Some(name), dry_run, false, &mut print) {
-                            Ok(true) => {}
-                            Ok(false) => return Ok(if failed { 1 } else { 0 }),
-                            Err(e) => {
-                                eprintln!("!! {e:#}");
-                                failed = true;
-                            }
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    eprintln!("!! read relay directory {}: {e}", prof.envs_dir.display());
-                    failed = true;
-                }
-            }
-            if failed {
-                return Ok(1);
-            }
-        }
+        None => refresh_sweep(prof, dry_run, print),
         Some("base") => {
             refresh_one(prof, &prof.base_file, None, dry_run, true, &mut print)?;
+            Ok(0)
         }
         Some(relay) => {
             // Resolve exactly like `-e` does (name under envs/ vs explicit
@@ -206,9 +136,81 @@ fn run_refresh_with_printer(
                 .unwrap_or(relay)
                 .to_string();
             refresh_one(prof, rref.path(), Some(&name), dry_run, true, &mut print)?;
+            Ok(0)
         }
     }
-    Ok(0)
+}
+
+/// Sweep mode (no target): `base` plus every visible relay under `envs/`. One
+/// bad file (unreadable, not UTF-8) must not abort the sweep half-done, with
+/// earlier files refreshed and later ones silently skipped — report it, keep
+/// going, exit non-zero at the end. Explicitly named targets fail fast instead.
+/// A hung-up stdout reader (`Ok(false)` from the printer) stops the sweep but
+/// still reports any failure seen before it.
+fn refresh_sweep(
+    prof: &Profile,
+    dry_run: bool,
+    mut print: impl FnMut(&str) -> Result<bool>,
+) -> Result<i32> {
+    let mut failed = false;
+    match refresh_one(prof, &prof.base_file, None, dry_run, false, &mut print) {
+        Ok(true) => {}
+        Ok(false) => return Ok(i32::from(failed)),
+        Err(e) => {
+            eprintln!("!! {e:#}");
+            failed = true;
+        }
+    }
+    match fs::read_dir(&prof.envs_dir) {
+        Ok(rd) => {
+            let mut entries = Vec::new();
+            for entry in rd {
+                match entry {
+                    Ok(entry) => entries.push(entry.path()),
+                    Err(e) => {
+                        eprintln!("!! read entry under {}: {e}", prof.envs_dir.display());
+                        failed = true;
+                    }
+                }
+            }
+            entries.sort();
+            for path in entries {
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    eprintln!(
+                        "!! relay filename is not valid UTF-8, skipping: {}",
+                        path.display()
+                    );
+                    failed = true;
+                    continue;
+                };
+                // Hidden files (`.DS_Store` and friends) are never named
+                // relays; skipping them keeps a stray binary file from
+                // aborting the sweep. Explicit path targets still reach
+                // them.
+                if name.starts_with('.') {
+                    continue;
+                }
+                // Visible entries are intended relay configs. Let
+                // refresh_one classify them so directories, dangling
+                // symlinks, and other non-files are reported instead of
+                // making the sweep look clean.
+                match refresh_one(prof, &path, Some(name), dry_run, false, &mut print) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(i32::from(failed)),
+                    Err(e) => {
+                        eprintln!("!! {e:#}");
+                        failed = true;
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("!! read relay directory {}: {e}", prof.envs_dir.display());
+            failed = true;
+        }
+    }
+    Ok(i32::from(failed))
 }
 
 /// Refresh one file in place (or to stdout under `dry_run`). `relay_name` is

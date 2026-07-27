@@ -623,13 +623,13 @@ exit 97
     /// keeps the guards alive for exactly the fixture's lifetime.
     #[cfg(unix)]
     struct RunFixture {
-        _root: tempfile::TempDir,
-        _docker_dir: tempfile::TempDir,
+        root: tempfile::TempDir,
+        docker_dir: tempfile::TempDir,
         config_root: std::path::PathBuf,
         docker_log: std::path::PathBuf,
         _env_lock: std::sync::MutexGuard<'static, ()>,
         _run_lock: std::sync::MutexGuard<'static, ()>,
-        _guards: Vec<EnvGuard>,
+        guards: Vec<EnvGuard>,
     }
 
     #[cfg(unix)]
@@ -663,13 +663,13 @@ exit 97
             ];
 
             RunFixture {
-                _root: root,
-                _docker_dir: docker_dir,
+                root,
+                docker_dir,
                 config_root,
                 docker_log,
                 _env_lock: env_lock,
                 _run_lock: run_lock,
-                _guards: guards,
+                guards,
             }
         }
 
@@ -680,14 +680,14 @@ exit 97
         }
 
         fn env(&mut self, name: &'static str, value: &str) -> &mut Self {
-            self._guards.push(EnvGuard::set(name, value));
+            self.guards.push(EnvGuard::set(name, value));
             self
         }
 
         /// Set an env var from an `OsStr` (a path, typically), for the guards
         /// whose value is not a plain `&str`.
         fn env_os(&mut self, name: &'static str, value: &std::ffi::OsStr) -> &mut Self {
-            self._guards.push(EnvGuard::set(name, value));
+            self.guards.push(EnvGuard::set(name, value));
             self
         }
 
@@ -697,7 +697,7 @@ exit 97
         /// `env_os`, which takes `&mut self`, so a borrow of the fixture could
         /// not still be alive at the call.
         fn docker_dir(&self) -> std::path::PathBuf {
-            self._docker_dir.path().to_path_buf()
+            self.docker_dir.path().to_path_buf()
         }
 
         fn profile(&self) -> std::path::PathBuf {
@@ -707,7 +707,7 @@ exit 97
         /// A path beside the config root, for fixtures that need a file outside
         /// the profile tree (an explicit `-e <path>` relay, for instance).
         fn scratch(&self, name: &str) -> std::path::PathBuf {
-            self._root.path().join(name)
+            self.root.path().join(name)
         }
 
         fn base(&self, contents: &str) -> &Self {

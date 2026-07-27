@@ -419,16 +419,13 @@ fn existing_config_file(path: &Path) -> Result<bool> {
     }
 }
 
-/// Create `path` at 0600 without replacing an existing config file. This is for
-/// first-use scaffolding only; refresh intentionally keeps using [`write_600`].
-fn write_600_new(path: &Path, contents: &str) -> Result<NewFile> {
-    if existing_config_file(path)? {
-        return Ok(NewFile::AlreadyExists);
-    }
-
+/// Prepare a complete 0600 replacement beside `path`, ready for an atomic
+/// persist. Keeping permission, write, and sync handling together ensures the
+/// create-only and overwrite paths use the same durability guarantees.
+fn prepare_600_replacement(path: &Path, contents: &str) -> Result<tempfile::NamedTempFile> {
     let parent = path
         .parent()
-        .filter(|p| !p.as_os_str().is_empty())
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let mut replacement = tempfile::Builder::new()
         .prefix(".aibox-write.")
@@ -442,6 +439,17 @@ fn write_600_new(path: &Path, contents: &str) -> Result<NewFile> {
         .as_file()
         .sync_all()
         .with_context(|| format!("sync replacement for {}", path.display()))?;
+    Ok(replacement)
+}
+
+/// Create `path` at 0600 without replacing an existing config file. This is for
+/// first-use scaffolding only; refresh intentionally keeps using [`write_600`].
+fn write_600_new(path: &Path, contents: &str) -> Result<NewFile> {
+    if existing_config_file(path)? {
+        return Ok(NewFile::AlreadyExists);
+    }
+
+    let replacement = prepare_600_replacement(path, contents)?;
     match replacement.persist_noclobber(path) {
         Ok(_) => Ok(NewFile::Created),
         Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -477,22 +485,7 @@ pub fn write_600(path: &Path, contents: &str) -> Result<()> {
         bail!("config path is not a file: {}", target.display());
     }
 
-    let parent = target
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut replacement = tempfile::Builder::new()
-        .prefix(".aibox-write.")
-        .tempfile_in(parent)
-        .with_context(|| format!("create replacement beside {}", target.display()))?;
-    set_600(replacement.path())?;
-    replacement
-        .write_all(contents.as_bytes())
-        .with_context(|| format!("write replacement for {}", target.display()))?;
-    replacement
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("sync replacement for {}", target.display()))?;
+    let replacement = prepare_600_replacement(&target, contents)?;
     replacement
         .persist(&target)
         .map_err(|e| e.error)

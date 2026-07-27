@@ -86,17 +86,18 @@ RUN set -eux; \
 # home and avoids permission surprises.
 ARG NODE_VERSION=v24.4.0
 RUN set -eux; \
-    v="${NODE_VERSION}"; \
-    [ -n "$v" ]; \
+    version="${NODE_VERSION}"; \
+    [ -n "$version" ]; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-        amd64) a=x64 ;; \
-        arm64) a=arm64 ;; \
+        amd64) arch=x64 ;; \
+        arm64) arch=arm64 ;; \
         *) echo "unsupported arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://nodejs.org/dist/${v}/node-${v}-linux-${a}.tar.xz" -o /tmp/node.tar.xz; \
+    curl -fsSL "https://nodejs.org/dist/${version}/node-${version}-linux-${arch}.tar.xz" -o /tmp/node.tar.xz; \
     tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz; \
     rm /tmp/node.tar.xz; \
-    node --version; npm --version
+    node --version; \
+    npm --version
 
 # --- Rust -------------------------------------------------------------------
 # Pinned by default so cached builds stay stable. Change RUST_VERSION here when
@@ -104,13 +105,13 @@ RUN set -eux; \
 ARG RUST_VERSION=1.88.0
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 RUN set -eux; \
-    v="${RUST_VERSION}"; \
-    [ -n "$v" ]; \
+    version="${RUST_VERSION}"; \
+    [ -n "$version" ]; \
     curl -fsSL https://sh.rustup.rs | sh -s -- \
         -y \
         --no-modify-path \
         --profile default \
-        --default-toolchain "$v"; \
+        --default-toolchain "$version"; \
     chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"; \
     "$CARGO_HOME/bin/rustc" --version; \
     "$CARGO_HOME/bin/cargo" --version; \
@@ -121,14 +122,14 @@ RUN set -eux; \
 # you intentionally want to upgrade Go.
 ARG GO_VERSION=1.26.5
 RUN set -eux; \
-    v="${GO_VERSION}"; \
-    [ -n "$v" ]; \
+    version="${GO_VERSION}"; \
+    [ -n "$version" ]; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-        amd64) a=amd64 ;; \
-        arm64) a=arm64 ;; \
+        amd64) arch=amd64 ;; \
+        arm64) arch=arm64 ;; \
         *) echo "unsupported arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://go.dev/dl/go${v}.linux-${a}.tar.gz" -o /tmp/go.tgz; \
+    curl -fsSL "https://go.dev/dl/go${version}.linux-${arch}.tar.gz" -o /tmp/go.tgz; \
     tar -C /usr/local -xzf /tmp/go.tgz; \
     rm /tmp/go.tgz; \
     /usr/local/go/bin/go version

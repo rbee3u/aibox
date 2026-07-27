@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 /// Container path the Codex model-instructions file is mounted at (read-only).
 const CODEX_INSTRUCTIONS_CTR: &str = "/aibox-instructions.md";
 
+/// Container path the throwaway Codex auth.json is mounted at (read-only). The
+/// `/home/codex` prefix must match [`AgentKind::Codex`]'s container home.
+const CODEX_AUTH_JSON_CTR: &str = "/home/codex/.codex/auth.json";
+
 /// The placeholder written to the pre-created auth.json mount target. Also the
 /// ownership marker: a file holding exactly this is ours (a leftover from a
 /// SIGKILL'd run), anything else is the user's real login file.
@@ -126,7 +130,7 @@ fn build_claude(opts: &RunOpts) -> Result<Invocation> {
 
     // Stage the merged env as a 0600 file Docker reads with --env-file. Held in
     // `staged` so it's unlinked once the run returns (or on signal; see creds).
-    let env_file = crate::creds::StagedFile::create("aibox-env.", &opts.env.to_env_file())?;
+    let env_file = StagedFile::create("aibox-env.", &opts.env.to_env_file())?;
     let extra_run_args = vec![
         "--env-file".to_string(),
         env_file.path().display().to_string(),
@@ -193,14 +197,7 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     // CODEX_HOME/auth.json. Anything outside the two recognized sets is
     // rejected here: a typo (`ture`) silently landing in env_key mode would
     // only surface later as an opaque Codex-side auth failure.
-    let use_auth_json = match requires_openai_auth.to_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => true,
-        "" | "0" | "false" | "no" | "off" => false,
-        _ => bail!(
-            "CODEX_REQUIRES_OPENAI_AUTH={requires_openai_auth} is not recognized \
-             (1/true/yes/on for auth.json mode; 0/false/no/off or unset for env_key mode)"
-        ),
-    };
+    let use_auth_json = parse_codex_auth_mode(&requires_openai_auth)?;
 
     let auth_mount = opts.home_dir.join(".codex").join("auth.json");
     let auth_lock = codex_auth_lock_path(opts.profile_dir);
@@ -208,19 +205,16 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
     if use_auth_json {
         // Pre-create the mount target so Docker over-mounts an existing file
         // (virtiofs can't create a target nested in the /home/codex mount). Only
-        // a placeholder we create is removed later; a real login auth.json stays.
+        // a wrapper-owned placeholder is removed later; a real login auth.json stays.
         guarded.push(GuardedPath::ensure(
-            auth_mount.clone(),
-            auth_lock.clone(),
+            auth_mount,
+            auth_lock,
             AUTH_PLACEHOLDER,
         )?);
 
         let auth_json = StagedFile::create("aibox-codex-auth.", &codex_auth_json(&api_key))?;
         extra_run_args.push("-v".to_string());
-        extra_run_args.push(read_only_bind(
-            auth_json.path(),
-            "/home/codex/.codex/auth.json",
-        )?);
+        extra_run_args.push(read_only_bind(auth_json.path(), CODEX_AUTH_JSON_CTR)?);
         staged.push(auth_json);
     } else {
         // A `{}` placeholder left by a SIGKILL'd auth.json-mode run would sit
@@ -293,55 +287,8 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         push_c_string(&mut cmd, "model_instructions_file", CODEX_INSTRUCTIONS_CTR);
     }
 
-    // query_params is a TOML inline table: split k=v[,k=v…] into per-key
-    // overrides. Empty segments (a trailing comma, `a=b,,c=d`) are skipped; an
-    // empty key is rejected here instead of producing a keyless override that
-    // Codex rejects later with an opaque parse error.
-    if !query_params.is_empty() {
-        for pair in query_params
-            .split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-        {
-            let Some((pk, pv)) = pair.split_once('=') else {
-                bail!(
-                    "CODEX_QUERY_PARAMS segment {pair:?} must be k=v (use {pair}= for an empty value)"
-                );
-            };
-            let pk = pk.trim();
-            let pv = pv.trim();
-            if pk.is_empty() {
-                bail!("CODEX_QUERY_PARAMS contains an empty key in segment {pair:?}");
-            }
-            let pk = toml_key_segment(pk);
-            push_c_string(
-                &mut cmd,
-                &format!("model_providers.aibox.query_params.{pk}"),
-                pv,
-            );
-        }
-    }
-
-    // Wide-open by default: bypass BOTH Codex's approval prompts and its OS
-    // sandbox. --safe puts the normal approvals + workspace-write sandbox back.
-    // Prepended so an explicit flag in pass-through (e.g. -a/-s) still wins.
-    if opts.safe {
-        // The `exec` subcommand rejects a bare `-a` (approval flags are
-        // root-command only in Codex's CLI); the `-c approval_policy=…`
-        // override is the exec-safe spelling of the same setting.
-        if opts.exec {
-            push_c_string(&mut cmd, "approval_policy", "on-request");
-        } else {
-            cmd.push("-a".into());
-            cmd.push("on-request".into());
-        }
-        cmd.push("-s".into());
-        cmd.push("workspace-write".into());
-        eprintln!(">> permissions: prompting + workspace-write sandbox (--safe)");
-    } else {
-        cmd.push("--dangerously-bypass-approvals-and-sandbox".into());
-        eprintln!(">> permissions: BYPASSED (agent runs unrestricted; use --safe to prompt)");
-    }
+    push_codex_query_params(&mut cmd, &query_params)?;
+    push_codex_permissions(&mut cmd, opts.safe, opts.exec);
 
     cmd.extend(opts.passthrough.iter().cloned());
 
@@ -351,6 +298,65 @@ fn build_codex(opts: &RunOpts) -> Result<Invocation> {
         staged,
         guarded,
     })
+}
+
+fn parse_codex_auth_mode(value: &str) -> Result<bool> {
+    match value.to_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        _ => bail!(
+            "CODEX_REQUIRES_OPENAI_AUTH={value} is not recognized \
+             (1/true/yes/on for auth.json mode; 0/false/no/off or unset for env_key mode)"
+        ),
+    }
+}
+
+/// Add a `CODEX_QUERY_PARAMS` inline table as individual Codex overrides.
+/// Empty comma-separated segments are ignored, while malformed or empty-key
+/// segments are rejected before they can become opaque Codex parse errors.
+fn push_codex_query_params(cmd: &mut Vec<String>, query_params: &str) -> Result<()> {
+    for pair in query_params
+        .split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+    {
+        let Some((key, value)) = pair.split_once('=') else {
+            bail!(
+                "CODEX_QUERY_PARAMS segment {pair:?} must be k=v (use {pair}= for an empty value)"
+            );
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            bail!("CODEX_QUERY_PARAMS contains an empty key in segment {pair:?}");
+        }
+        let key = toml_key_segment(key);
+        push_c_string(
+            cmd,
+            &format!("model_providers.aibox.query_params.{key}"),
+            value.trim(),
+        );
+    }
+    Ok(())
+}
+
+/// Add the Codex approval and sandbox flags. These precede pass-through args so
+/// an explicit user-provided approval or sandbox option still wins.
+fn push_codex_permissions(cmd: &mut Vec<String>, safe: bool, exec: bool) {
+    if safe {
+        // The `exec` subcommand rejects a bare `-a` (approval flags are
+        // root-command only in Codex's CLI); the config override is the
+        // exec-safe spelling of the same setting.
+        if exec {
+            push_c_string(cmd, "approval_policy", "on-request");
+        } else {
+            cmd.extend(["-a".into(), "on-request".into()]);
+        }
+        cmd.extend(["-s".into(), "workspace-write".into()]);
+        eprintln!(">> permissions: prompting + workspace-write sandbox (--safe)");
+    } else {
+        cmd.push("--dangerously-bypass-approvals-and-sandbox".into());
+        eprintln!(">> permissions: BYPASSED (agent runs unrestricted; use --safe to prompt)");
+    }
 }
 
 /// Push a Codex `-c key=value` override as the two argv tokens it takes. Folds
@@ -871,7 +877,7 @@ mod tests {
                 .map(|w| w[1].clone())
                 .expect("auth.json bind mount present");
             assert!(mount.contains("aibox-codex-auth."));
-            assert!(mount.ends_with(":/home/codex/.codex/auth.json:ro"));
+            assert!(mount.ends_with(&format!(":{CODEX_AUTH_JSON_CTR}:ro")));
             assert_eq!(inv.guarded.len(), 1, "mount target is guarded");
             assert!(
                 !inv.extra_run_args.contains(&"--env-file".to_string()),

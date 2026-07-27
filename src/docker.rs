@@ -174,39 +174,24 @@ pub fn run(
             return Err(e);
         }
     };
-    let (status, stopped_lingering_container) = match create {
+    let waited: Result<ExitStatus> = match create {
         ContainerCreate::Created => {
             if let Some(callback) = after_container_created.take() {
                 callback();
             }
-            let waited = child.wait();
-            let stopped_lingering_container = crate::creds::finish_child();
-            (
-                waited.context("wait for docker run")?,
-                stopped_lingering_container,
-            )
+            child.wait().map_err(anyhow::Error::from)
         }
-        ContainerCreate::ChildExited(status) => {
-            let stopped_lingering_container = crate::creds::finish_child();
-            (status, stopped_lingering_container)
-        }
+        ContainerCreate::ChildExited(status) => Ok(status),
         ContainerCreate::TimedOut => {
             // If Docker is unusually slow to materialize the cidfile, keep any
             // pre-spawn mount-target locks until the daemon does record the
             // container id. If it never does, keep the conservative old behavior:
             // the locks stay held until the child exits.
-            let waited = wait_with_delayed_container_create(
-                &mut child,
-                &cid_path,
-                &mut after_container_created,
-            );
-            let stopped_lingering_container = crate::creds::finish_child();
-            (
-                waited.context("wait for docker run")?,
-                stopped_lingering_container,
-            )
+            wait_with_delayed_container_create(&mut child, &cid_path, &mut after_container_created)
         }
     };
+    let stopped_lingering_container = crate::creds::finish_child();
+    let status = waited.context("wait for docker run")?;
 
     let code = exit_code(status);
     Ok(if stopped_lingering_container && code == 0 {
@@ -271,7 +256,7 @@ fn wait_with_delayed_container_create<F: FnOnce()>(
 /// Map an exit status to a code: the child's own code when it exited, the
 /// shell convention `128 + signal` when it was killed by a signal (so scripts
 /// can tell "agent failed" from "interrupted"), else 1.
-fn exit_code(status: std::process::ExitStatus) -> i32 {
+fn exit_code(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }

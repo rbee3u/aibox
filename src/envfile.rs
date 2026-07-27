@@ -17,13 +17,22 @@ pub struct MergedEnv {
     entries: IndexMap<String, String>,
 }
 
-/// The key part of a real (non-comment) line: everything before the first `=`,
-/// or the whole line for a bare `KEY` pass-through.
-fn key_of(line: &str) -> &str {
-    match line.find('=') {
-        Some(eq) => &line[..eq],
-        None => line,
+/// Split one raw env-file line into `(key, line)` — the key and the trimmed
+/// full line — if it is a real config line; `None` for comments and blanks.
+/// The key is everything before the first `=`, or the whole line for a bare
+/// `KEY` pass-through. The one definition of "a real line", shared by the
+/// merge, [`check_keys`], and `refresh`'s re-insert step, so the run path and
+/// refresh cannot drift on which lines count.
+pub(crate) fn real_line_key(raw: &str) -> Option<(&str, &str)> {
+    let s = raw.trim_start();
+    if s.is_empty() || s.starts_with('#') {
+        return None;
     }
+    let key = match s.find('=') {
+        Some(eq) => &s[..eq],
+        None => s,
+    };
+    Some((key, s))
 }
 
 /// True for a key docker `--env-file` accepts: `[A-Za-z_][A-Za-z0-9_]*`.
@@ -43,11 +52,10 @@ fn valid_key(key: &str) -> bool {
 /// deleted by the time anyone could look at it.
 pub fn check_keys(source: &Path, src: &str) -> Result<()> {
     for (i, raw) in src.lines().enumerate() {
-        let s = raw.trim_start();
-        if s.is_empty() || s.starts_with('#') {
+        let Some((key, _)) = real_line_key(raw) else {
             continue;
-        }
-        if !valid_key(key_of(s)) {
+        };
+        if !valid_key(key) {
             bail!(
                 "{} line {}: {:?} is not a valid KEY=VALUE line \
                  (keys match [A-Za-z_][A-Za-z0-9_]*; no spaces around '=', no `export`)",
@@ -68,12 +76,10 @@ impl MergedEnv {
         let mut entries: IndexMap<String, String> = IndexMap::new();
         for src in sources {
             for raw in src.lines() {
-                let s = raw.trim_start();
-                if s.is_empty() || s.starts_with('#') {
-                    continue;
-                }
                 // A line with no '=' is treated as a bare key, stored as-is.
-                entries.insert(key_of(s).to_string(), s.to_string());
+                if let Some((key, line)) = real_line_key(raw) {
+                    entries.insert(key.to_string(), line.to_string());
+                }
             }
         }
         MergedEnv { entries }

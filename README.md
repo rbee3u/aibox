@@ -1,4 +1,4 @@
-# Put the AI in a box
+# Put AI in a box
 
 Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that
 **is** the sandbox boundary — so the agent can skip every permission prompt and

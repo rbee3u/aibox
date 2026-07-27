@@ -11,29 +11,20 @@
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
-use crate::session::{self, SessionBackend};
-use anyhow::Result;
+use crate::session::SessionBackend;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct Claude;
 
 impl SessionBackend for Claude {
-    fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
-        let Some(base) = session::checked_session_dir(home, &[".claude", "projects"])? else {
-            return Ok(Vec::new());
-        };
-        session::walk_jsonl(&base, |_| true)
+    fn session_dir_components(&self) -> &'static [&'static str] {
+        &[".claude", "projects"]
     }
 
-    fn list_files(&self, home: &Path) -> Result<session::SessionDiscovery> {
-        let Some(base) = session::checked_session_dir(home, &[".claude", "projects"])? else {
-            return Ok(session::SessionDiscovery {
-                files: Vec::new(),
-                errors: Vec::new(),
-            });
-        };
-        session::walk_jsonl_tolerant(&base, |_| true)
+    /// Every `.jsonl` under `projects/` is a transcript.
+    fn keep_transcript_name(&self, _name: &str) -> bool {
+        true
     }
 
     fn id_of(&self, path: &Path) -> String {
@@ -55,7 +46,7 @@ impl SessionBackend for Claude {
 
     /// Any line bearing a top-level `timestamp` is a candidate; the shared
     /// streaming loop keeps the first, which is the session start.
-    fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+    fn start_ts_of(&self, v: &Value) -> Option<String> {
         v.get("timestamp")
             .and_then(Value::as_str)
             .map(str::to_string)

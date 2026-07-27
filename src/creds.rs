@@ -85,17 +85,16 @@ enum PendingCleanup {
 impl PendingCleanup {
     fn path(&self) -> &Path {
         match self {
-            PendingCleanup::File(path) => path,
-            PendingCleanup::Placeholder { path, .. } => path,
+            Self::File(path) | Self::Placeholder { path, .. } => path,
         }
     }
 
     fn cleanup(&self) {
         match self {
-            PendingCleanup::File(path) => {
+            Self::File(path) => {
                 let _ = std::fs::remove_file(path);
             }
-            PendingCleanup::Placeholder {
+            Self::Placeholder {
                 path,
                 contents,
                 lock_path,
@@ -111,10 +110,8 @@ impl PendingCleanup {
                         _ => return,
                     }
                 };
-                {
-                    if placeholder_matches(path, contents) {
-                        let _ = std::fs::remove_file(path);
-                    }
+                if placeholder_matches(path, contents) {
+                    let _ = std::fs::remove_file(path);
                 }
             }
         }
@@ -911,7 +908,7 @@ impl Drop for StagedFile {
 }
 
 /// A file at a *fixed* path that we may need to pre-create as a bind-mount
-/// target, removed on cleanup only if we were the ones who created it.
+/// target, removed on cleanup only while it contains our placeholder.
 ///
 /// This is Codex's `auth.json` case: Docker Desktop's virtiofs can't create a
 /// bind-mount target nested inside another bind mount (`/home/codex`), so we
@@ -926,7 +923,7 @@ impl Drop for StagedFile {
 /// before Docker has established its nested bind mount.
 pub struct GuardedPath {
     path: PathBuf,
-    created: bool,
+    owns_placeholder: bool,
     placeholder: String,
     lock_path: PathBuf,
     spawn_lock: Option<FileLock>,
@@ -949,16 +946,17 @@ impl GuardedPath {
         placeholder: &str,
         after_register: impl FnOnce(&Path) -> Result<()>,
     ) -> Result<Self> {
-        install_signal_handler()?;
-        require_real_mount_target_parent(&path)?;
-        require_real_lock_parent(&lock_path)?;
-        let spawn_lock = FileLock::acquire(&lock_path)?;
         #[derive(Clone, Copy)]
         enum MountTarget {
             Missing,
             Placeholder,
             RealFile,
         }
+
+        install_signal_handler()?;
+        require_real_mount_target_parent(&path)?;
+        require_real_lock_parent(&lock_path)?;
+        let spawn_lock = FileLock::acquire(&lock_path)?;
 
         let target = match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_file() => {
@@ -975,7 +973,7 @@ impl GuardedPath {
             }
         };
 
-        let created = match target {
+        let owns_placeholder = match target {
             MountTarget::RealFile => false,
             MountTarget::Placeholder | MountTarget::Missing => {
                 let needs_create = matches!(target, MountTarget::Missing);
@@ -1007,7 +1005,7 @@ impl GuardedPath {
         };
         Ok(GuardedPath {
             path,
-            created,
+            owns_placeholder,
             placeholder: placeholder.to_string(),
             lock_path,
             spawn_lock: Some(spawn_lock),
@@ -1023,20 +1021,19 @@ impl GuardedPath {
 
 impl Drop for GuardedPath {
     fn drop(&mut self) {
-        if self.created {
+        if self.owns_placeholder {
             if !real_mount_target_parent_exists(&self.path).unwrap_or(false) {
                 unregister(&self.path);
                 return;
             }
-            let _lock = match self.spawn_lock.take() {
-                Some(lock) => Some(lock),
-                None => match FileLock::acquire_for_drop(&self.lock_path) {
-                    Ok(lock) => Some(lock),
-                    Err(_) => {
-                        unregister(&self.path);
-                        return;
-                    }
-                },
+            let _lock = if let Some(lock) = self.spawn_lock.take() {
+                lock
+            } else {
+                let Ok(lock) = FileLock::acquire_for_drop(&self.lock_path) else {
+                    unregister(&self.path);
+                    return;
+                };
+                lock
             };
             remove_placeholder_and_unregister(&self.path, &self.placeholder);
         }
@@ -2268,7 +2265,7 @@ esac
         let dir = tempfile::tempdir().unwrap();
         let fresh = dir.path().join("fresh.json");
         let g = GuardedPath::ensure(fresh.clone(), auth_lock_path(&fresh), "{}\n").unwrap();
-        assert!(g.created, "absent path means we own the file");
+        assert!(g.owns_placeholder, "absent path means we own the file");
         assert!(fresh.is_file());
         assert!(pending_contains(&fresh));
         drop(g);
@@ -2364,7 +2361,7 @@ esac
         let real = dir.path().join("auth.json");
         std::fs::write(&real, "{\"OPENAI_API_KEY\":\"k\"}\n").unwrap();
         let g = GuardedPath::ensure(real.clone(), auth_lock_path(&real), "{}\n").unwrap();
-        assert!(!g.created);
+        assert!(!g.owns_placeholder);
         drop(g);
         assert!(real.exists(), "real auth.json must survive");
 
@@ -2373,7 +2370,10 @@ esac
         let leftover = dir.path().join("leftover.json");
         std::fs::write(&leftover, "{}\n").unwrap();
         let g = GuardedPath::ensure(leftover.clone(), auth_lock_path(&leftover), "{}\n").unwrap();
-        assert!(g.created, "placeholder contents mean we own the file");
+        assert!(
+            g.owns_placeholder,
+            "placeholder contents mean we own the file"
+        );
         drop(g);
         assert!(!leftover.exists(), "re-adopted placeholder is removed");
     }

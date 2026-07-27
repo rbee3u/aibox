@@ -6,7 +6,7 @@
 //! produced by [`crate::agent::AgentKind::build_invocation`] and folded in here.
 
 use crate::agent::AgentKind;
-use crate::creds::StagedFile;
+use crate::creds::{GuardedPath, StagedFile};
 use crate::platform;
 use anyhow::{bail, Context, Result};
 #[cfg(test)]
@@ -275,8 +275,8 @@ pub struct Invocation {
     /// these unlinks them; they're held by the caller for the run's duration.
     pub staged: Vec<StagedFile>,
     /// Guarded fixed-path files (Codex's pre-created `auth.json` mount target),
-    /// removed on drop only if we created them. Held for the run's duration.
-    pub guarded: Vec<crate::creds::GuardedPath>,
+    /// removed on drop only while wrapper-owned. Held for the run's duration.
+    pub guarded: Vec<GuardedPath>,
 }
 
 impl Invocation {
@@ -302,46 +302,46 @@ pub fn assemble_run_args(
     work_dir: &str,
     home_dir: &Path,
     extra_mounts: &[String],
-    invocation_extra: &[String],
+    extra_run_args: &[String],
 ) -> Vec<String> {
-    let mut a: Vec<String> = vec!["--rm".into()];
+    let mut args: Vec<String> = vec!["--rm".into()];
 
     // Interactive TTY only when we actually have one (so pipes still work).
     if platform::has_tty() {
-        a.push("-it".into());
+        args.push("-it".into());
     } else {
-        a.push("-i".into());
+        args.push("-i".into());
     }
 
     // Hardening: no privilege escalation, drop all Linux capabilities.
-    a.extend(["--security-opt".into(), "no-new-privileges".into()]);
-    a.extend(["--cap-drop".into(), "ALL".into()]);
+    args.extend(["--security-opt".into(), "no-new-privileges".into()]);
+    args.extend(["--cap-drop".into(), "ALL".into()]);
 
     // Linux only: run as the host uid/gid so files created in /work stay yours,
     // and map host.docker.internal so a relay/proxy on the host is reachable.
     if platform::is_linux() {
         let (uid, gid) = platform::uid_gid();
-        a.push("--user".into());
-        a.push(format!("{uid}:{gid}"));
-        a.push("--add-host".into());
-        a.push("host.docker.internal:host-gateway".into());
+        args.push("--user".into());
+        args.push(format!("{uid}:{gid}"));
+        args.push("--add-host".into());
+        args.push("host.docker.internal:host-gateway".into());
     }
 
     // Mounts: isolated home + the project at /work + any extras.
-    a.push("-v".into());
-    a.push(format!("{}:{}", home_dir.display(), agent.container_home()));
-    a.push("-v".into());
-    a.push(format!("{work_dir}:/work"));
-    a.extend(["-w".into(), "/work".into()]);
-    for m in extra_mounts {
-        a.push("-v".into());
-        a.push(m.clone());
+    args.push("-v".into());
+    args.push(format!("{}:{}", home_dir.display(), agent.container_home()));
+    args.push("-v".into());
+    args.push(format!("{work_dir}:/work"));
+    args.extend(["-w".into(), "/work".into()]);
+    for mount in extra_mounts {
+        args.push("-v".into());
+        args.push(mount.clone());
     }
 
     // Agent-specific credential/auth args (env-files, auth.json mount).
-    a.extend(invocation_extra.iter().cloned());
+    args.extend(extra_run_args.iter().cloned());
 
-    a
+    args
 }
 
 #[cfg(test)]

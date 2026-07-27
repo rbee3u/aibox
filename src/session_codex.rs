@@ -17,9 +17,8 @@
 //! stem after `rollout-<date>-`).
 
 use crate::session::{self, SessionBackend};
-use anyhow::Result;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// True if `t` is an injected wrapper item Codex records as a user turn but
 /// that the user never typed.
@@ -56,21 +55,14 @@ fn is_wrapper_text(t: &str) -> bool {
 pub struct Codex;
 
 impl SessionBackend for Codex {
-    fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
-        let Some(base) = session::checked_session_dir(home, &[".codex", "sessions"])? else {
-            return Ok(Vec::new());
-        };
-        session::walk_jsonl(&base, |name| name.starts_with("rollout-"))
+    fn session_dir_components(&self) -> &'static [&'static str] {
+        &[".codex", "sessions"]
     }
 
-    fn list_files(&self, home: &Path) -> Result<session::SessionDiscovery> {
-        let Some(base) = session::checked_session_dir(home, &[".codex", "sessions"])? else {
-            return Ok(session::SessionDiscovery {
-                files: Vec::new(),
-                errors: Vec::new(),
-            });
-        };
-        session::walk_jsonl_tolerant(&base, |name| name.starts_with("rollout-"))
+    /// Only `rollout-*.jsonl` files are transcripts; Codex writes other
+    /// `.jsonl` state under the same tree.
+    fn keep_transcript_name(&self, name: &str) -> bool {
+        name.starts_with("rollout-")
     }
 
     fn id_of(&self, path: &Path) -> String {
@@ -91,15 +83,15 @@ impl SessionBackend for Codex {
     }
 
     /// The `session_meta` carries the session start timestamp. Look for it by
-    /// type instead of parsed-line index, so a corrupt or skipped first line
+    /// type rather than line position, so a corrupt or skipped first line
     /// cannot make a later event timestamp look like the session start.
-    fn start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+    fn start_ts_of(&self, v: &Value) -> Option<String> {
         (v.get("type").and_then(Value::as_str) == Some("session_meta"))
             .then(|| session::ts_of(v))
             .filter(|ts| !ts.is_empty())
     }
 
-    fn fallback_start_ts_of(&self, _idx: usize, v: &Value) -> Option<String> {
+    fn fallback_start_ts_of(&self, v: &Value) -> Option<String> {
         let ts = session::ts_of(v);
         (!ts.is_empty()).then_some(ts)
     }
