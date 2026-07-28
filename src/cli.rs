@@ -191,10 +191,6 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub mount: Vec<String>,
 
-    /// Keep the agent's normal permission prompts / sandbox instead of bypassing.
-    #[arg(long)]
-    pub safe: bool,
-
     /// Codex only: run headless `codex exec`. Pass the prompt after `--`.
     #[arg(long)]
     pub exec: bool,
@@ -264,12 +260,10 @@ mod tests {
 
     #[test]
     fn parses_claude_run_and_passthrough() {
-        let (left, right) =
-            split_passthrough(v(&["aibox", "--agent", "claude", "--safe", "--", "fix"]));
+        let (left, right) = split_passthrough(v(&["aibox", "--agent", "claude", "--", "fix"]));
         let cli = Cli::try_parse_from(left).unwrap();
         assert_eq!(cli.agent, Some(AgentKind::Claude));
         assert!(cli.command.is_none());
-        assert!(cli.run.safe);
         assert_eq!(right, v(&["fix"]));
     }
 
@@ -716,6 +710,7 @@ mod tests {
         assert!(Cli::try_parse_from(["aibox", "claude"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "build", "codex"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "-e", "relay"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "--safe"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "refresh"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "--agent", "openai"]).is_err());
     }

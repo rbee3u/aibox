@@ -11,21 +11,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const BACKUP_RETENTION: usize = 20;
-const DEFAULT_CODEX_CONFIG_TEMPLATE: &[u8] = br#"model_provider = "custom"
-model = "gpt-5.5"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
+const DEFAULT_CODEX_CONFIG_TEMPLATE: &[u8] = br#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
-# model_instructions_file = "/path/to/gpt-5.5-base-instructions.md"
+model = "gpt-5.5"
+# model_instructions_file = "~/prompts/gpt-5.5-base-instructions.md"
+model_provider = "custom"
 
-[model_providers]
 [model_providers.custom]
 name = "example"
 wire_api = "responses"
@@ -33,8 +32,13 @@ requires_openai_auth = true
 base_url = "https://example.ai/v1"
 
 # To remove fields from the active config when applying this provider:
-# [aibox.apply]
+# [aibox.config.apply]
 # remove = ["model_provider", "model_providers.custom"]
+"#;
+
+const DEFAULT_CODEX_AUTH_TEMPLATE: &[u8] = br#"{
+  "OPENAI_API_KEY": "sk-example"
+}
 "#;
 
 const DEFAULT_CLAUDE_SETTINGS_TEMPLATE: &[u8] = br#"{
@@ -49,6 +53,10 @@ const DEFAULT_CLAUDE_SETTINGS_TEMPLATE: &[u8] = br#"{
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/statusline.sh"
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "skipDangerousModePermissionPrompt": true
   }
 }
 "#;
@@ -70,11 +78,13 @@ pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) ->
         ConfigCommand::List { .. } => {
             for provider in list_providers(profile)? {
                 let marker = if provider.last_applied { "*" } else { " " };
-                println!("{marker} {}", provider.name);
+                if !crate::print_line(&format!("{marker} {}", provider.name))? {
+                    break;
+                }
             }
         }
         ConfigCommand::Get { provider, .. } => {
-            print!("{}", get_provider(profile, provider)?);
+            crate::print_text(&get_provider(profile, provider)?)?;
         }
         ConfigCommand::Create { provider, .. } => {
             create_provider(profile, provider)?;
@@ -101,23 +111,49 @@ pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) ->
 }
 
 pub fn create_provider(profile: &Profile, provider: &str) -> Result<()> {
+    create_provider_with_templates(profile, provider, write_provider_templates)
+}
+
+fn create_provider_with_templates(
+    profile: &Profile,
+    provider: &str,
+    write_templates: impl FnOnce(AgentKind, &Path) -> Result<()>,
+) -> Result<()> {
     profile::validate_name("provider", provider)?;
     let provider_dir = profile.provider_dir(provider);
-    if fs::symlink_metadata(&provider_dir).is_ok() {
-        bail!("provider '{provider}' already exists");
+    if profile.management_dir_exists()? {
+        match fs::symlink_metadata(&provider_dir) {
+            Ok(_) => bail!("provider '{provider}' already exists"),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspect {}", provider_dir.display()));
+            }
+        }
     }
     profile.ensure_management_dir()?;
     fs::create_dir(&provider_dir)
         .with_context(|| format!("create provider directory {}", provider_dir.display()))?;
 
-    match profile.agent {
+    if let Err(error) = write_templates(profile.agent, &provider_dir) {
+        let _ = fs::remove_dir_all(&provider_dir);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn write_provider_templates(agent: AgentKind, provider_dir: &Path) -> Result<()> {
+    match agent {
         AgentKind::Codex => {
             atomic_write(
                 &provider_dir.join("config.toml"),
                 DEFAULT_CODEX_CONFIG_TEMPLATE,
                 false,
             )?;
-            atomic_write(&provider_dir.join("auth.json"), b"{}\n", true)?;
+            atomic_write(
+                &provider_dir.join("auth.json"),
+                DEFAULT_CODEX_AUTH_TEMPLATE,
+                true,
+            )?;
         }
         AgentKind::Claude => {
             atomic_write(
@@ -131,20 +167,23 @@ pub fn create_provider(profile: &Profile, provider: &str) -> Result<()> {
 }
 
 pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
+    let state = read_state(profile)?;
+    let providers = list_provider_names(profile)?
+        .into_iter()
+        .map(|name| ProviderListEntry {
+            last_applied: state.last_applied.as_deref() == Some(&name),
+            name,
+        })
+        .collect();
+    Ok(providers)
+}
+
+fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
     let provider_root = profile.provider_root_dir();
-    match fs::symlink_metadata(&provider_root) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => bail!(
-            "provider root is not a real directory: {}",
-            provider_root.display()
-        ),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("inspect {}", provider_root.display()))
-        }
+    if !profile.management_dir_exists()? {
+        return Ok(Vec::new());
     }
 
-    let state = read_state(profile)?;
     let mut providers = Vec::new();
     for entry in fs::read_dir(&provider_root)
         .with_context(|| format!("read provider root {}", provider_root.display()))?
@@ -158,13 +197,10 @@ pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
             if profile::validate_name("provider", name).is_err() {
                 continue;
             }
-            providers.push(ProviderListEntry {
-                last_applied: state.last_applied.as_deref() == Some(name),
-                name: name.to_string(),
-            });
+            providers.push(name.to_string());
         }
     }
-    providers.sort_by(|left, right| left.name.cmp(&right.name));
+    providers.sort();
     Ok(providers)
 }
 
@@ -193,8 +229,7 @@ pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
 pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
-    profile.ensure_active_agent_dir()?;
-    crate::runspec::seed_home(profile.agent, &profile.home_dir)?;
+    profile.validate_existing_active_agent_dir()?;
 
     let mut writes = Vec::new();
     match profile.agent {
@@ -221,8 +256,10 @@ pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
             });
         }
         AgentKind::Claude => {
-            let provider_settings =
-                read_required_string(&profile.provider_file(provider, "settings.json"))?;
+            let settings_path = profile.provider_file(provider, "settings.json");
+            let provider_settings = read_required_string(&settings_path)?;
+            validate_claude_settings(&provider_settings)
+                .with_context(|| format!("validate {}", settings_path.display()))?;
             let active_settings =
                 read_optional_regular_string(&profile.active_file("settings.json"))?;
             let merged_settings =
@@ -242,6 +279,7 @@ pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     };
     writes.push(planned_state_write(profile, &state)?);
 
+    profile.ensure_active_agent_dir()?;
     let prepared_writes = prepare_writes(&writes)?;
     if let Err(error) = create_backup(profile) {
         cleanup_prepared_writes(&prepared_writes);
@@ -307,6 +345,7 @@ pub fn delete_providers(
         eprintln!(">> no providers in this profile");
         return Ok(());
     }
+    let deleting_every_provider = list_provider_names(profile)?.len() == targets.len();
 
     if !yes {
         for provider in &targets {
@@ -316,10 +355,13 @@ pub fn delete_providers(
         }
     }
 
-    let state = read_state(profile)?;
-    let clear_state = targets
-        .iter()
-        .any(|provider| state.last_applied.as_deref() == Some(provider.as_str()));
+    let state = read_state_for_delete(profile)?;
+    let last_applied = state
+        .as_ref()
+        .and_then(|state| state.last_applied.as_deref());
+    let clear_state = state.is_none()
+        || deleting_every_provider
+        || last_applied.is_some_and(|last| targets.iter().any(|provider| provider == last));
     for provider in &targets {
         let provider_dir = profile.provider_dir(provider);
         fs::remove_dir_all(&provider_dir)
@@ -341,17 +383,14 @@ fn delete_provider_targets(
     }
 
     if all || providers.is_empty() {
-        return Ok(list_providers(profile)?
-            .into_iter()
-            .map(|provider| provider.name)
-            .collect());
+        return list_provider_names(profile);
     }
 
     let mut targets = Vec::new();
     for provider in providers {
         profile::validate_name("provider", provider)?;
         ensure_provider_exists(profile, provider)?;
-        if !targets.iter().any(|target| target == provider) {
+        if !targets.contains(provider) {
             targets.push(provider.to_string());
         }
     }
@@ -371,6 +410,9 @@ struct PreparedWrite {
 }
 
 fn ensure_provider_exists(profile: &Profile, provider: &str) -> Result<()> {
+    if !profile.management_dir_exists()? {
+        bail!("provider '{provider}' does not exist");
+    }
     let provider_dir = profile.provider_dir(provider);
     match fs::symlink_metadata(&provider_dir) {
         Ok(meta) if meta.file_type().is_dir() => Ok(()),
@@ -383,19 +425,24 @@ fn ensure_provider_exists(profile: &Profile, provider: &str) -> Result<()> {
 }
 
 fn read_required_string(path: &Path) -> Result<String> {
-    ensure_regular_file(path)?;
-    fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+    read_existing_regular_string(path)
 }
 
 fn read_optional_regular_string(path: &Path) -> Result<String> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => {
-            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
-        }
+        Ok(meta) if meta.file_type().is_file() => read_existing_regular_string(path),
         Ok(_) => bail!("{} is not a regular file", path.display()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
     }
+}
+
+fn read_existing_regular_string(path: &Path) -> Result<String> {
+    let mut file = profile::open_real_file(path, "config file")?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .with_context(|| format!("read {}", path.display()))?;
+    Ok(content)
 }
 
 fn ensure_regular_file(path: &Path) -> Result<()> {
@@ -426,9 +473,41 @@ fn ensure_json_object(value: &JsonValue, label: &str) -> Result<()> {
 fn validate_codex_auth(content: &str) -> Result<()> {
     let value: JsonValue = serde_json::from_str(content)?;
     match value {
-        JsonValue::Object(map) if !map.is_empty() => Ok(()),
+        JsonValue::Object(map) if !map.is_empty() => {
+            reject_placeholder_credentials(map.values(), "codex auth.json")?;
+            Ok(())
+        }
         JsonValue::Object(_) => bail!("codex auth.json must not be an empty object"),
         _ => bail!("codex auth.json must be a JSON object"),
+    }
+}
+
+fn validate_claude_settings(content: &str) -> Result<()> {
+    let value = parse_json_or_empty_object(content)?;
+    ensure_json_object(&value, "provider settings")?;
+    let values = value
+        .as_object()
+        .expect("provider settings object checked above")
+        .values();
+    reject_placeholder_credentials(values, "claude settings.json")
+}
+
+fn reject_placeholder_credentials<'a>(
+    values: impl IntoIterator<Item = &'a JsonValue>,
+    label: &str,
+) -> Result<()> {
+    if values.into_iter().any(contains_placeholder_secret) {
+        bail!("{label} still contains placeholder credentials; edit it before applying")
+    }
+    Ok(())
+}
+
+fn contains_placeholder_secret(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::String(value) => value.trim() == "sk-example",
+        JsonValue::Array(values) => values.iter().any(contains_placeholder_secret),
+        JsonValue::Object(values) => values.values().any(contains_placeholder_secret),
+        _ => false,
     }
 }
 
@@ -463,15 +542,11 @@ fn copy_active_files_to_backup(profile: &Profile, backup_dir: &Path) -> Result<u
             }
         }
         let destination = backup_dir.join(file_name);
-        if Some(*file_name) == profile.agent.auth_file() {
-            copy_private_file(&source, &destination).with_context(|| {
-                format!("backup {} to {}", source.display(), destination.display())
-            })?;
+        let private = Some(*file_name) == profile.agent.auth_file();
+        copy_regular_file(&source, &destination, private)
+            .with_context(|| format!("backup {} to {}", source.display(), destination.display()))?;
+        if private {
             profile::set_600(&destination)?;
-        } else {
-            fs::copy(&source, &destination).with_context(|| {
-                format!("backup {} to {}", source.display(), destination.display())
-            })?;
         }
         copied += 1;
     }
@@ -529,7 +604,21 @@ fn is_managed_backup_dir_name(name: &OsStr) -> bool {
 fn read_state(profile: &Profile) -> Result<State> {
     let path = profile.state_path();
     match read_optional_regular_string(&path) {
-        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
+        Ok(content) if content.trim().is_empty() => Ok(State::default()),
+        Ok(content) => serde_json::from_str(&content)
+            .with_context(|| format!("parse state file {}", path.display())),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_state_for_delete(profile: &Profile) -> Result<Option<State>> {
+    let path = profile.state_path();
+    match read_optional_regular_string(&path) {
+        Ok(content) if content.trim().is_empty() => Ok(Some(State::default())),
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(state) => Ok(Some(state)),
+            Err(_) => Ok(None),
+        },
         Err(error) => Err(error),
     }
 }
@@ -669,9 +758,26 @@ fn create_new_file(path: &Path, private: bool) -> Result<fs::File> {
     Ok(file)
 }
 
-fn copy_private_file(source: &Path, destination: &Path) -> Result<()> {
-    let mut source_file = fs::File::open(source)?;
-    let mut destination_file = create_new_file(destination, true)?;
+fn copy_regular_file(source: &Path, destination: &Path, private: bool) -> Result<()> {
+    let mut source_file = profile::open_real_file(source, "active config file")?;
+    let permissions = if private {
+        None
+    } else {
+        Some(
+            source_file
+                .metadata()
+                .with_context(|| format!("inspect {}", source.display()))?
+                .permissions(),
+        )
+    };
+    let mut destination_file = create_new_file(destination, private)?;
+    if let Some(permissions) = permissions {
+        if let Err(error) = destination_file.set_permissions(permissions) {
+            let _ = fs::remove_file(destination);
+            return Err(error)
+                .with_context(|| format!("set permissions on {}", destination.display()));
+        }
+    }
     if let Err(error) = io::copy(&mut source_file, &mut destination_file) {
         let _ = fs::remove_file(destination);
         return Err(error.into());
@@ -818,12 +924,20 @@ mod tests {
         create_provider(&p, "openai").unwrap();
         let provider = p.provider_dir("openai");
 
-        assert!(fs::read_to_string(provider.join("config.toml"))
-            .unwrap()
-            .contains("requires_openai_auth = true"));
+        let codex_config = fs::read_to_string(provider.join("config.toml")).unwrap();
+        assert!(codex_config.starts_with(
+            r#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "xhigh"
+model = "gpt-5.5"
+"#
+        ));
+        assert!(codex_config.contains("requires_openai_auth = true"));
+        assert!(!codex_config.contains("[model_providers]\n"));
         assert_eq!(
             fs::read_to_string(provider.join("auth.json")).unwrap(),
-            "{}\n"
+            "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"
         );
         assert!(root.path().join("default/.codex").is_dir());
         assert!(root.path().join("default/.claude/statusline.sh").is_file());
@@ -840,7 +954,19 @@ mod tests {
         );
         let details = get_provider(&p, "openai").unwrap();
         assert!(details.contains("# config.toml\n"));
-        assert!(details.contains("# auth.json\n{}\n"));
+        assert!(details.contains("# auth.json\n{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"));
+    }
+
+    #[test]
+    fn get_provider_requires_every_managed_file() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::remove_file(p.provider_file("openai", "auth.json")).unwrap();
+
+        let err = get_provider(&p, "openai").unwrap_err().to_string();
+
+        assert!(err.contains("auth.json"), "{err}");
     }
 
     #[test]
@@ -863,6 +989,11 @@ mod tests {
             settings["statusLine"]["command"],
             "bash ~/.claude/statusline.sh"
         );
+        assert_eq!(settings["permissions"]["defaultMode"], "bypassPermissions");
+        assert_eq!(
+            settings["permissions"]["skipDangerousModePermissionPrompt"],
+            true
+        );
         assert!(get_provider(&p, "anthropic")
             .unwrap()
             .contains(r#""ANTHROPIC_BASE_URL": "https://example.ai""#));
@@ -870,6 +1001,238 @@ mod tests {
         assert!(root.path().join("default/.claude/statusline.sh").is_file());
         assert!(root.path().join("default/.gitconfig").is_file());
         assert!(root.path().join(".config/default/codex").is_dir());
+    }
+
+    #[test]
+    fn create_provider_removes_partial_directory_when_template_write_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+
+        let err = create_provider_with_templates(&p, "broken", |_, provider_dir| {
+            fs::write(provider_dir.join("config.toml"), "partial\n").unwrap();
+            anyhow::bail!("template failed")
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("template failed"), "{err}");
+        assert!(
+            !p.provider_dir("broken").exists(),
+            "a failed create must not leave a half-created provider"
+        );
+
+        create_provider(&p, "broken").unwrap();
+        assert!(p.provider_file("broken", "config.toml").is_file());
+        assert!(p.provider_file("broken", "auth.json").is_file());
+    }
+
+    #[test]
+    fn corrupt_state_file_is_reported_instead_of_ignored() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(p.state_path(), "{not json").unwrap();
+
+        let err = list_providers(&p).unwrap_err().to_string();
+
+        assert!(err.contains("parse state file"), "{err}");
+        assert!(err.contains(".state.json"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_commands_reject_symlinked_management_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join(".config")).unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+
+        let err = create_provider(&p, "openai").unwrap_err().to_string();
+        assert!(
+            err.contains("profile management root is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            !outside.path().join("default").exists(),
+            "provider create must not write through a symlinked .config"
+        );
+
+        fs::create_dir_all(outside.path().join("default/codex/openai")).unwrap();
+        fs::write(
+            outside.path().join("default/codex/openai/config.toml"),
+            "model = \"outside\"\n",
+        )
+        .unwrap();
+        fs::write(
+            outside.path().join("default/codex/openai/auth.json"),
+            "{\"token\":\"outside\"}\n",
+        )
+        .unwrap();
+
+        let err = list_providers(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("profile management root is not a real directory"),
+            "{err}"
+        );
+        let err = get_provider(&p, "openai").unwrap_err().to_string();
+        assert!(
+            err.contains("profile management root is not a real directory"),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_config_file_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside.path(), "model = \"outside\"\n").unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::remove_file(p.provider_file("openai", "config.toml")).unwrap();
+        symlink(outside.path(), p.provider_file("openai", "config.toml")).unwrap();
+
+        let err = get_provider(&p, "openai").unwrap_err().to_string();
+
+        assert!(err.contains("config file is not a regular file"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_provider_rejects_symlinked_config_without_launching_editor() {
+        use std::os::unix::fs::symlink;
+
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside.path(), "model = \"outside\"\n").unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::remove_file(p.provider_file("openai", "config.toml")).unwrap();
+        symlink(outside.path(), p.provider_file("openai", "config.toml")).unwrap();
+
+        let editor_dir = tempfile::tempdir().unwrap();
+        let editor_log = editor_dir.path().join("editor.log");
+        let editor = crate::testutil::write_stub_script(
+            editor_dir.path(),
+            "editor",
+            r#"#!/bin/sh
+printf 'called\n' > "$AIBOX_FAKE_EDITOR_LOG"
+printf 'model = "edited"\n' > "$1"
+"#,
+        );
+        let _visual = crate::testutil::EnvGuard::set("VISUAL", editor.as_os_str());
+        let _editor = crate::testutil::EnvGuard::remove("EDITOR");
+        let _log = crate::testutil::EnvGuard::set("AIBOX_FAKE_EDITOR_LOG", editor_log.as_os_str());
+
+        let err = edit_provider(&p, "openai", false).unwrap_err().to_string();
+
+        assert!(err.contains("config.toml is not a regular file"), "{err}");
+        assert!(
+            !editor_log.exists(),
+            "a symlinked provider file must be rejected before launching the editor"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.path()).unwrap(),
+            "model = \"outside\"\n"
+        );
+        assert!(
+            fs::symlink_metadata(p.provider_file("openai", "config.toml"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_apply_rejects_symlinked_provider_auth_without_touching_active_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside.path(), r#"{"token":"outside"}"#).unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::remove_file(p.provider_file("openai", "auth.json")).unwrap();
+        symlink(outside.path(), p.provider_file("openai", "auth.json")).unwrap();
+        profile::ensure_real_dir(&p.active_agent_dir, "active").unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(p.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+
+        let err = apply_provider(&p, "openai").unwrap_err().to_string();
+
+        assert!(err.contains("config file is not a regular file"), "{err}");
+        assert!(err.contains("auth.json"), "{err}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(p.active_file("auth.json")).unwrap(),
+            r#"{"token":"old"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(outside.path()).unwrap(),
+            r#"{"token":"outside"}"#
+        );
+        assert!(
+            !p.state_path().exists(),
+            "failed apply must not mark a symlinked provider auth as applied"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_apply_rejects_symlinked_provider_config_without_touching_active_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside_config = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside_config.path(), "model = \"outside\"\n").unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::remove_file(p.provider_file("openai", "config.toml")).unwrap();
+        symlink(
+            outside_config.path(),
+            p.provider_file("openai", "config.toml"),
+        )
+        .unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), r#"{"token":"new"}"#).unwrap();
+        profile::ensure_real_dir(&p.active_agent_dir, "active").unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(p.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "openai").unwrap_err());
+
+        assert!(err.contains("config file is not a regular file"), "{err}");
+        assert!(err.contains("config.toml"), "{err}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(p.active_file("auth.json")).unwrap(),
+            r#"{"token":"old"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(outside_config.path()).unwrap(),
+            "model = \"outside\"\n"
+        );
+        assert!(!p.state_path().exists());
+        assert!(
+            !p.backups_dir().exists(),
+            "failed provider reads must not create a misleading backup"
+        );
     }
 
     #[test]
@@ -892,6 +1255,198 @@ mod tests {
         assert!(!p.provider_dir("openai").exists());
         assert!(!p.provider_dir("anthropic").exists());
         assert!(p.provider_dir("local").exists());
+        assert!(!p.state_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_provider_rejects_symlinked_provider_dir_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::remove_dir_all(p.provider_dir("openai")).unwrap();
+        fs::write(outside.path().join("config.toml"), "model = \"outside\"\n").unwrap();
+        symlink(outside.path(), p.provider_dir("openai")).unwrap();
+
+        let err = delete_provider(&p, "openai", true).unwrap_err().to_string();
+
+        assert!(
+            err.contains("provider 'openai' is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            p.provider_dir("openai")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "failed delete must not remove the provider symlink itself"
+        );
+        assert!(
+            outside.path().join("config.toml").exists(),
+            "failed delete must not follow the provider symlink"
+        );
+    }
+
+    #[test]
+    fn list_providers_marks_last_applied_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"openai"}"#).unwrap();
+
+        assert_eq!(
+            list_providers(&p).unwrap(),
+            vec![
+                ProviderListEntry {
+                    name: "anthropic".to_string(),
+                    last_applied: false
+                },
+                ProviderListEntry {
+                    name: "openai".to_string(),
+                    last_applied: true
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn list_providers_ignores_management_metadata_and_invalid_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "beta").unwrap();
+        create_provider(&p, "alpha").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"alpha"}"#).unwrap();
+        fs::create_dir(p.backups_dir()).unwrap();
+        fs::create_dir(p.provider_root_dir().join("bad.name")).unwrap();
+        fs::write(p.provider_root_dir().join("plain-file"), "not a provider\n").unwrap();
+
+        assert_eq!(
+            list_providers(&p).unwrap(),
+            vec![
+                ProviderListEntry {
+                    name: "alpha".to_string(),
+                    last_applied: true
+                },
+                ProviderListEntry {
+                    name: "beta".to_string(),
+                    last_applied: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_providers_keeps_state_when_last_applied_provider_remains() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"anthropic"}"#).unwrap();
+
+        delete_providers(&p, &["openai".to_string()], false, true).unwrap();
+
+        assert!(!p.provider_dir("openai").exists());
+        assert!(p.provider_dir("anthropic").exists());
+        assert_eq!(
+            fs::read_to_string(p.state_path()).unwrap(),
+            r#"{"last_applied":"anthropic"}"#
+        );
+    }
+
+    #[test]
+    fn delete_providers_dedupes_repeated_names() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+
+        delete_providers(
+            &p,
+            &["openai".to_string(), "openai".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!p.provider_dir("openai").exists());
+    }
+
+    #[test]
+    fn delete_provider_refuses_noninteractive_delete_without_yes() {
+        if io::stdin().is_terminal() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+
+        let err = delete_provider(&p, "openai", false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("without --yes in a non-interactive shell"),
+            "{err}"
+        );
+        assert!(p.provider_dir("openai").exists());
+    }
+
+    #[test]
+    fn delete_providers_clears_state_when_every_provider_is_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"stale"}"#).unwrap();
+
+        delete_providers(
+            &p,
+            &["openai".to_string(), "anthropic".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(list_providers(&p).unwrap().is_empty());
+        assert!(
+            !p.state_path().exists(),
+            "deleting the final provider must not leave a stale last-applied marker"
+        );
+    }
+
+    #[test]
+    fn delete_providers_recovers_from_corrupt_state_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        fs::write(p.state_path(), "{not json").unwrap();
+
+        delete_providers(&p, &["openai".to_string()], false, true).unwrap();
+
+        assert!(!p.provider_dir("openai").exists());
+        assert!(p.provider_dir("anthropic").exists());
+        assert!(
+            !p.state_path().exists(),
+            "delete should clear corrupt last-applied metadata instead of blocking cleanup"
+        );
+    }
+
+    #[test]
+    fn delete_all_providers_does_not_require_valid_state_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        fs::write(p.state_path(), "{not json").unwrap();
+
+        delete_providers(&p, &[], true, true).unwrap();
+
+        assert!(list_providers(&p).unwrap().is_empty());
         assert!(!p.state_path().exists());
     }
 
@@ -1024,7 +1579,7 @@ legacy = true
             r#"
 model = "gpt-5"
 
-[aibox.apply]
+[aibox.config.apply]
 remove = ["model_provider", "model_providers.custom"]
 "#,
         )
@@ -1108,7 +1663,7 @@ base_url = "old"
         create_provider(&p, "anthropic").unwrap();
         fs::write(
             p.provider_file("anthropic", "settings.json"),
-            r#"{"model":"provider","aibox":{"apply":{"remove":["old","nested.drop"]}}}"#,
+            r#"{"model":"provider","aibox":{"config":{"apply":{"remove":["old","nested.drop"]}}}}"#,
         )
         .unwrap();
 
@@ -1135,7 +1690,238 @@ base_url = "old"
     fn empty_codex_auth_is_invalid() {
         assert!(validate_codex_auth("{}").is_err());
         assert!(validate_codex_auth("[]").is_err());
+        assert!(validate_codex_auth(r#"{"OPENAI_API_KEY":"sk-example"}"#).is_err());
+        assert!(validate_codex_auth(r#"{"nested":{"token":"sk-example"}}"#).is_err());
         assert!(validate_codex_auth(r#"{"token":"x"}"#).is_ok());
+    }
+
+    #[test]
+    fn codex_apply_rejects_unedited_auth_template_without_touching_active_files() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        profile::ensure_real_dir(&p.active_agent_dir, "active").unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(p.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "openai").unwrap_err());
+
+        assert!(err.contains("placeholder credentials"), "{err}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(p.active_file("auth.json")).unwrap(),
+            r#"{"token":"old"}"#
+        );
+        assert!(
+            !p.state_path().exists(),
+            "failed apply must not mark the provider as applied"
+        );
+        assert!(
+            !p.backups_dir().exists(),
+            "failed apply must not create a misleading backup"
+        );
+    }
+
+    #[test]
+    fn failed_ordinary_apply_does_not_create_profile_home_from_manual_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        fs::create_dir_all(p.provider_dir("openai")).unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(
+            p.provider_file("openai", "auth.json"),
+            r#"{"OPENAI_API_KEY":"sk-example"}"#,
+        )
+        .unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "openai").unwrap_err());
+
+        assert!(err.contains("placeholder credentials"), "{err}");
+        assert!(
+            !p.home_dir.exists(),
+            "failed validation must not create an ordinary profile home"
+        );
+        assert!(
+            !p.state_path().exists(),
+            "failed apply must not mark the provider as applied"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_apply_rejects_symlinked_active_auth_during_backup_without_committing() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), r#"{"token":"new"}"#).unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        let outside_auth = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside_auth.path(), r#"{"token":"outside"}"#).unwrap();
+        symlink(outside_auth.path(), p.active_file("auth.json")).unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "openai").unwrap_err());
+
+        assert!(err.contains("auth.json is not a regular file"), "{err}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert!(
+            fs::symlink_metadata(p.active_file("auth.json"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "failed backup must not replace a symlinked active auth file"
+        );
+        assert_eq!(
+            fs::read_to_string(outside_auth.path()).unwrap(),
+            r#"{"token":"outside"}"#
+        );
+        assert!(
+            !p.state_path().exists(),
+            "failed backup must not mark the provider as applied"
+        );
+        let backup_entries = if p.backups_dir().exists() {
+            fs::read_dir(p.backups_dir()).unwrap().count()
+        } else {
+            0
+        };
+        assert_eq!(backup_entries, 0, "failed backup must be cleaned up");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_provider_creates_missing_auth_privately_and_invokes_configured_editor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        let auth = p.provider_file("openai", "auth.json");
+        fs::remove_file(&auth).unwrap();
+
+        let editor_dir = tempfile::tempdir().unwrap();
+        let editor_log = editor_dir.path().join("editor.log");
+        let editor = crate::testutil::write_stub_script(
+            editor_dir.path(),
+            "editor",
+            r#"#!/bin/sh
+log="$AIBOX_FAKE_EDITOR_LOG"
+printf 'ARGS:' >> "$log"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$log"
+done
+printf '\n' >> "$log"
+printf '{"token":"edited"}\n' > "$1"
+"#,
+        );
+        let _visual = crate::testutil::EnvGuard::set("VISUAL", editor.as_os_str());
+        let _editor = crate::testutil::EnvGuard::remove("EDITOR");
+        let _log = crate::testutil::EnvGuard::set("AIBOX_FAKE_EDITOR_LOG", editor_log.as_os_str());
+
+        edit_provider(&p, "openai", true).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&auth).unwrap(),
+            "{\"token\":\"edited\"}\n"
+        );
+        let mode = fs::metadata(&auth).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(
+            fs::read_to_string(editor_log).unwrap(),
+            format!("ARGS: <{}>\n", auth.display())
+        );
+    }
+
+    #[test]
+    fn edit_provider_rejects_auth_for_agents_without_auth_file() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Claude);
+        create_provider(&p, "anthropic").unwrap();
+
+        let err = edit_provider(&p, "anthropic", true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("claude does not have an auth file"), "{err}");
+    }
+
+    #[test]
+    fn editor_command_splits_common_shell_words_without_a_shell() {
+        assert_eq!(
+            split_shell_words(r#"code --wait "two words" escaped\ space 'literal "quote"'"#)
+                .unwrap(),
+            vec![
+                "code",
+                "--wait",
+                "two words",
+                "escaped space",
+                "literal \"quote\""
+            ]
+        );
+
+        let err = split_shell_words(r#""unterminated"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unterminated quote"), "{err}");
+    }
+
+    #[test]
+    fn failed_host_apply_does_not_create_active_agent_dir() {
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let host_home = tempfile::tempdir().unwrap();
+        let _home = crate::testutil::EnvGuard::set("HOME", host_home.path().as_os_str());
+        let p = Profile::resolve(AgentKind::Codex, root.path(), "host").unwrap();
+        create_provider(&p, "openai").unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "openai").unwrap_err());
+
+        assert!(err.contains("placeholder credentials"), "{err}");
+        assert!(
+            !host_home.path().join(".codex").exists(),
+            "failed validation must not create host-side active agent state"
+        );
+    }
+
+    #[test]
+    fn claude_apply_rejects_unedited_token_template_without_touching_active_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Claude);
+        create_provider(&p, "anthropic").unwrap();
+        profile::ensure_real_dir(&p.active_agent_dir, "active").unwrap();
+        fs::write(p.active_file("settings.json"), r#"{"model":"old"}"#).unwrap();
+
+        let err = format!("{:#}", apply_provider(&p, "anthropic").unwrap_err());
+
+        assert!(err.contains("placeholder credentials"), "{err}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("settings.json")).unwrap(),
+            r#"{"model":"old"}"#
+        );
+        assert!(
+            !p.state_path().exists(),
+            "failed apply must not mark the provider as applied"
+        );
+        assert!(
+            !p.backups_dir().exists(),
+            "failed apply must not create a misleading backup"
+        );
     }
 
     #[test]
@@ -1165,6 +1951,81 @@ base_url = "old"
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(backups.len(), 20);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_apply_preserves_config_permissions_and_writes_auth_privately() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), r#"{"token":"new"}"#).unwrap();
+
+        profile::ensure_real_dir(&p.active_agent_dir, "active").unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(p.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+        fs::set_permissions(
+            p.active_file("config.toml"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::set_permissions(
+            p.active_file("auth.json"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        apply_provider(&p, "openai").unwrap();
+
+        let active_config_mode = fs::metadata(p.active_file("config.toml"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            active_config_mode & 0o777,
+            0o600,
+            "atomic replacement must preserve an existing config file's mode"
+        );
+        let active_mode = fs::metadata(p.active_file("auth.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            active_mode & 0o777,
+            0o600,
+            "auth.json must be private even when the old active file was wider"
+        );
+        let backup = fs::read_dir(p.backups_dir())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let backup_config_mode = fs::metadata(backup.join("config.toml"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            backup_config_mode & 0o777,
+            0o600,
+            "non-secret backup files should preserve the active file's mode"
+        );
+        let backup_mode = fs::metadata(backup.join("auth.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            backup_mode & 0o777,
+            0o600,
+            "auth backups must be private regardless of the old active mode"
+        );
     }
 
     #[cfg(unix)]

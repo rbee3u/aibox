@@ -20,31 +20,85 @@ use crate::session::{self, SessionBackend};
 use serde_json::Value;
 use std::path::Path;
 
+const WRAPPER_TAGS: &[(&str, &str)] = &[
+    ("<environment_context>", "</environment_context>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<app-context>", "</app-context>"),
+    ("<apps_instructions>", "</apps_instructions>"),
+    ("<INSTRUCTIONS>", "</INSTRUCTIONS>"),
+    ("<skill>", "</skill>"),
+    ("<permissions instructions>", "</permissions instructions>"),
+    ("<plugins_instructions>", "</plugins_instructions>"),
+    ("<skills_instructions>", "</skills_instructions>"),
+    ("<collaboration_mode>", "</collaboration_mode>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+];
+
 /// True if `t` is an injected wrapper item Codex records as a user turn but
 /// that the user never typed.
+#[cfg(test)]
 fn is_wrapper_text(t: &str) -> bool {
-    const TAGS: &[(&str, &str)] = &[
-        ("<environment_context>", "</environment_context>"),
-        ("<user_instructions>", "</user_instructions>"),
-        ("<INSTRUCTIONS>", "</INSTRUCTIONS>"),
-        ("<skill>", "</skill>"),
-        ("<permissions instructions>", "</permissions instructions>"),
-        ("<skills_instructions>", "</skills_instructions>"),
-        ("<collaboration_mode>", "</collaboration_mode>"),
-        ("<recommended_plugins>", "</recommended_plugins>"),
-    ];
-    if TAGS
-        .iter()
-        .any(|(open, close)| t.starts_with(open) && t.contains(close))
-    {
-        return true;
+    real_text_fragment(t).is_none()
+}
+
+fn real_text_fragment(t: &str) -> Option<String> {
+    let mut rest = t.trim_start();
+    let mut stripped_wrapper = false;
+
+    loop {
+        if rest.is_empty() {
+            return None;
+        }
+        if let Some(after) = strip_tagged_wrapper_prefix(rest) {
+            rest = after.trim_start();
+            stripped_wrapper = true;
+            continue;
+        }
+        if let Some(after) = strip_user_shell_prefix(rest) {
+            rest = after.trim_start();
+            stripped_wrapper = true;
+            continue;
+        }
+        if rest.starts_with("## My env\n") || rest == "## My env" {
+            return None;
+        }
+        if first_line_is_instructions_preamble(rest) {
+            if let Some(after) = strip_through(rest, "</INSTRUCTIONS>") {
+                rest = after.trim_start();
+                stripped_wrapper = true;
+                continue;
+            }
+            return None;
+        }
+
+        return if stripped_wrapper {
+            Some(rest.to_string())
+        } else {
+            Some(t.to_string())
+        };
     }
-    if t.starts_with("<user_shell") && (t.contains("</user_shell>") || t.ends_with("/>")) {
-        return true;
+}
+
+fn strip_tagged_wrapper_prefix(t: &str) -> Option<&str> {
+    WRAPPER_TAGS.iter().find_map(|(open, close)| {
+        t.starts_with(open)
+            .then(|| strip_through(t, close))
+            .flatten()
+    })
+}
+
+fn strip_user_shell_prefix(t: &str) -> Option<&str> {
+    if !t.starts_with("<user_shell") {
+        return None;
     }
-    if t.starts_with("## My env\n") || t == "## My env" {
-        return true;
-    }
+    strip_through(t, "</user_shell>").or_else(|| t.find("/>").map(|index| &t[index + 2..]))
+}
+
+fn strip_through<'a>(t: &'a str, marker: &str) -> Option<&'a str> {
+    t.find(marker).map(|index| &t[index + marker.len()..])
+}
+
+fn first_line_is_instructions_preamble(t: &str) -> bool {
     // `^#[^\n]* instructions for `: a `#` at string start, then " instructions
     // for " somewhere on that same first line.
     t.lines()
@@ -68,12 +122,7 @@ impl SessionBackend for Codex {
     fn id_of(&self, path: &Path) -> String {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         // The uuid is the trailing 36 chars of the stem (rollout-<date>-<uuid>).
-        let chars: Vec<char> = stem.chars().collect();
-        if chars.len() >= 36 {
-            chars[chars.len() - 36..].iter().collect()
-        } else {
-            stem.to_string()
-        }
+        trailing_uuid(stem).unwrap_or(stem).to_string()
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
@@ -97,6 +146,23 @@ impl SessionBackend for Codex {
     }
 }
 
+fn trailing_uuid(stem: &str) -> Option<&str> {
+    let suffix = stem.get(stem.len().checked_sub(36)?..)?;
+    is_uuid(suffix).then_some(suffix)
+}
+
+fn is_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
 /// If `v` is a `response_item` user message, join its content items' text with
 /// newlines, dropping injected wrapper items. Returns `None` when `v`
 /// isn't a user turn or nothing real survives filtering.
@@ -111,14 +177,8 @@ fn user_turn_text(v: &Value) -> Option<String> {
     let items = payload.get("content").and_then(Value::as_array)?;
     let mut parts = Vec::new();
     for it in items {
-        if let Some(t) = it.get("text").and_then(Value::as_str) {
-            let keep = matches!(
-                it.get("type").and_then(Value::as_str),
-                Some("input_text" | "text")
-            ) && !is_wrapper_text(t);
-            if keep && !t.is_empty() {
-                parts.push(t.to_string());
-            }
+        if let Some(text) = real_content_item_text(it) {
+            parts.push(text);
         }
     }
     if parts.is_empty() {
@@ -126,6 +186,17 @@ fn user_turn_text(v: &Value) -> Option<String> {
     } else {
         Some(parts.join("\n"))
     }
+}
+
+fn real_content_item_text(item: &Value) -> Option<String> {
+    let is_text = matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("input_text" | "text")
+    );
+    is_text
+        .then(|| item.get("text").and_then(Value::as_str))
+        .flatten()
+        .and_then(real_text_fragment)
 }
 
 #[cfg(test)]
@@ -213,6 +284,16 @@ mod tests {
     }
 
     #[test]
+    fn id_of_long_non_uuid_stem_falls_back_to_the_whole_stem() {
+        let stem = "rollout-this-name-is-longer-than-a-uuid-but-has-no-session-id";
+
+        assert_eq!(
+            Codex.id_of(Path::new(&format!("/h/.codex/sessions/{stem}.jsonl"))),
+            stem
+        );
+    }
+
+    #[test]
     fn summarize_uses_first_real_prompt_and_meta_ts() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
@@ -235,14 +316,22 @@ mod tests {
             "<environment_context>cwd=/work</environment_context>"
         ));
         assert!(is_wrapper_text(
+            "\n  <environment_context>cwd=/work</environment_context>"
+        ));
+        assert!(is_wrapper_text(
             "<user_instructions>be nice</user_instructions>"
         ));
+        assert!(is_wrapper_text("<app-context>x</app-context>"));
+        assert!(is_wrapper_text("<apps_instructions>x</apps_instructions>"));
         assert!(is_wrapper_text("<user_shell name=\"ls\"></user_shell>"));
         assert!(is_wrapper_text("<user_shell name=\"ls\" />"));
         assert!(is_wrapper_text("<INSTRUCTIONS>x</INSTRUCTIONS>"));
         assert!(is_wrapper_text("<skill>x</skill>"));
         assert!(is_wrapper_text(
             "<permissions instructions>x</permissions instructions>"
+        ));
+        assert!(is_wrapper_text(
+            "<plugins_instructions>x</plugins_instructions>"
         ));
         assert!(is_wrapper_text(
             "<skills_instructions>x</skills_instructions>"
@@ -254,13 +343,18 @@ mod tests {
             "<recommended_plugins>x</recommended_plugins>"
         ));
         assert!(is_wrapper_text("## My env\nlinux"));
+        assert!(is_wrapper_text("\n  ## My env\nlinux"));
         // The `#… instructions for ` branch (stays on the first line).
         assert!(is_wrapper_text("# Base instructions for gpt-5.5\nmore"));
+        assert!(is_wrapper_text("  # Base instructions for gpt-5.5\nmore"));
         // A `#` line without the phrase, and the phrase not at string start.
         assert!(!is_wrapper_text("# just a heading"));
         assert!(!is_wrapper_text("preamble\n# instructions for x"));
         // Prefix-only text is not enough to hide a prompt.
         assert!(!is_wrapper_text("<environment_context>literal prompt"));
+        assert!(!is_wrapper_text(
+            "<environment_context>cwd=/work</environment_context>\nreal ask"
+        ));
         assert!(!is_wrapper_text("## My env is literal text"));
         // A real prompt.
         assert!(!is_wrapper_text("the real ask"));
@@ -281,6 +375,46 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].text, "the real ask");
+    }
+
+    #[test]
+    fn wrapper_prefix_in_one_text_item_keeps_trailing_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-bcbcbcbc-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"session_meta","payload":{}}"#,
+                r##"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"<recommended_plugins>x</recommended_plugins>\n# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>ignored</INSTRUCTIONS>\nreal ask"}]}}"##,
+            ],
+        );
+
+        let ps = Codex.prompts(&path).unwrap();
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(summary.title, "real ask");
+    }
+
+    #[test]
+    fn user_shell_prefix_in_one_text_item_keeps_trailing_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-bdbdbdbd-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"session_meta","payload":{}}"#,
+                r##"{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"<user_shell name=\"pwd\" />\nreal ask after shell"}]}}"##,
+            ],
+        );
+
+        let ps = Codex.prompts(&path).unwrap();
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text, "real ask after shell");
+        assert_eq!(summary.title, "real ask after shell");
     }
 
     #[test]

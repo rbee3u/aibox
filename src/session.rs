@@ -11,7 +11,7 @@
 use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 /// Resolve a transcript directory only through real directory entries beneath
@@ -124,8 +124,7 @@ pub(crate) fn walk_jsonl_tolerant(
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
 /// held in memory at once.
 pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(&Value)) -> Result<()> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("open session transcript {}", path.display()))?;
+    let file = crate::profile::open_real_file(path, "session transcript")?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
     loop {
@@ -374,17 +373,17 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
             prefix_matches.push(f.clone());
         }
     }
-    let matches = if exact_matches.is_empty() {
+    let candidates = if exact_matches.is_empty() {
         prefix_matches
     } else {
         exact_matches
     };
-    match matches.len() {
+    match candidates.len() {
         0 => bail!("no session matches: {query}"),
-        1 => Ok(matches.into_iter().next().unwrap()),
+        1 => Ok(candidates.into_iter().next().unwrap()),
         n => {
             let mut msg = format!("ambiguous id '{query}' matches {n} sessions:");
-            for m in &matches {
+            for m in &candidates {
                 msg.push_str(&format!("\n     {}  {}", backend.id_of(m), m.display()));
             }
             bail!(msg)
@@ -407,7 +406,13 @@ fn list_with_printer(
     home: &Path,
     mut print: impl FnMut(&str) -> Result<bool>,
 ) -> Result<i32> {
-    let mut rows: Vec<(String, String, String)> = Vec::new();
+    struct Row {
+        start_ts: String,
+        id: String,
+        title: String,
+    }
+
+    let mut rows = Vec::new();
     let discovery = backend.list_files(home)?;
     let mut failed = !discovery.errors.is_empty();
     for e in discovery.errors {
@@ -417,7 +422,11 @@ fn list_with_printer(
         match backend.summarize(&f) {
             Ok(s) => {
                 let title = list_title(&s.title);
-                rows.push((s.start_ts, s.id, title));
+                rows.push(Row {
+                    start_ts: s.start_ts,
+                    id: s.id,
+                    title,
+                });
             }
             Err(e) => {
                 eprintln!("!! {}: {e:#}", f.display());
@@ -432,13 +441,18 @@ fn list_with_printer(
         return Ok(i32::from(failed));
     }
     // Newest first: ISO-8601 sorts lexically, so a plain string sort works.
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by(|a, b| b.start_ts.cmp(&a.start_ts));
 
-    for (ts, id, title) in rows {
+    for Row {
+        start_ts,
+        id,
+        title,
+    } in rows
+    {
         // By chars, not bytes: ids come from arbitrary transcript file names,
         // and a byte slice could split a multi-byte char and panic.
         let short: String = id.chars().take(8).collect();
-        let disp = fmt_ts(&ts);
+        let disp = fmt_ts(&start_ts);
         if !print(&format!("{short:<8}  {disp:<16}  {title}"))? {
             break; // reader hung up; nothing left to show
         }
@@ -491,6 +505,9 @@ fn delete(
     }
 
     let stdin = io::stdin();
+    if !yes && !stdin.is_terminal() {
+        bail!("refusing to delete sessions without --yes in a non-interactive shell");
+    }
     let mut input = stdin.lock();
     delete_targets_with_input(backend, targets, yes, &mut input)
 }
@@ -520,7 +537,7 @@ fn delete_targets(
     let mut targets = Vec::new();
     for id in ids {
         let path = resolve_in(backend, &files, id)?;
-        if !targets.iter().any(|existing| existing == &path) {
+        if !targets.contains(&path) {
             targets.push(path);
         }
     }
@@ -1085,6 +1102,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn get_rejects_symlinked_transcript_even_from_a_resolved_snapshot() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.jsonl");
+        let link = dir.path().join("11111111.jsonl");
+        std::fs::write(&outside, "{\"typed\":\"outside\"}\n").unwrap();
+        symlink(&outside, &link).unwrap();
+        let backend = ExplicitFilesBackend::new(vec![link]);
+
+        let err = get_with_printer(&backend, dir.path(), "1111", |_| Ok(true))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("session transcript is not a regular file"),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn tolerant_session_discovery_does_not_follow_transcript_symlinks() {
         use std::os::unix::fs::symlink;
 
@@ -1353,6 +1392,31 @@ mod tests {
 
         assert!(keep.exists());
         assert!(!remove.exists());
+    }
+
+    #[test]
+    fn delete_refuses_noninteractive_confirmation_without_yes() {
+        if io::stdin().is_terminal() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = write_session(dir.path(), "11111111");
+
+        let err = delete(
+            &TestBackend,
+            dir.path(),
+            &["1111".to_string()],
+            false,
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("without --yes in a non-interactive shell"),
+            "{err}"
+        );
+        assert!(target.exists());
     }
 
     #[test]

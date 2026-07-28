@@ -68,8 +68,23 @@ pub(crate) fn print_line(line: &str) -> Result<bool> {
     write_line(&mut std::io::stdout().lock(), line)
 }
 
+pub(crate) fn print_text(text: &str) -> Result<bool> {
+    write_text(&mut std::io::stdout().lock(), text)
+}
+
 fn write_line(out: &mut impl std::io::Write, line: &str) -> Result<bool> {
-    match writeln!(out, "{line}") {
+    if !write_text(out, line)? {
+        return Ok(false);
+    }
+    match out.write_all(b"\n") {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(e) => Err(e).context("write to stdout"),
+    }
+}
+
+fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
+    match out.write_all(text.as_bytes()) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
         Err(e) => Err(e).context("write to stdout"),
@@ -114,13 +129,16 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
             profile::dispatch(&args.command)
         }
         Some(Command::Config(args)) => {
-            let agent =
-                resolve_agent3(root_agent, args.agent, config_command_agent(&args.command))?
-                    .unwrap_or(AgentKind::Codex);
+            let agent = resolve_agent_selection(
+                root_agent,
+                args.agent,
+                config_command_agent(&args.command),
+            )?
+            .unwrap_or(AgentKind::Codex);
             run_config_command(agent, &run_args, &args.command, &passthrough)
         }
         Some(Command::Session(args)) => {
-            let agent = resolve_agent3(
+            let agent = resolve_agent_selection(
                 root_agent,
                 args.agent,
                 session_command_agent(args.command.as_ref()),
@@ -145,7 +163,7 @@ fn resolve_agent(
     }
 }
 
-fn resolve_agent3(
+fn resolve_agent_selection(
     root_agent: Option<AgentKind>,
     command_agent: Option<AgentKind>,
     subcommand_agent: Option<AgentKind>,
@@ -225,19 +243,7 @@ fn run_session_command(
 }
 
 fn reject_run_only_options(run: &RunArgs) -> Result<()> {
-    let mut used = Vec::new();
-    if run.work.is_some() {
-        used.push("--work");
-    }
-    if !run.mount.is_empty() {
-        used.push("--mount");
-    }
-    if run.safe {
-        used.push("--safe");
-    }
-    if run.exec {
-        used.push("--exec");
-    }
+    let used = used_run_only_options(run);
     if !used.is_empty() {
         anyhow::bail!(
             "config/session do not accept run-only options: {}",
@@ -248,26 +254,34 @@ fn reject_run_only_options(run: &RunArgs) -> Result<()> {
 }
 
 fn reject_command_run_options(command: &str, run: &RunArgs) -> Result<()> {
+    let used = used_command_run_options(run);
+    if !used.is_empty() {
+        anyhow::bail!("{command} does not accept run options: {}", used.join(", "));
+    }
+    Ok(())
+}
+
+fn used_command_run_options(run: &RunArgs) -> Vec<&'static str> {
     let mut used = Vec::new();
     if run.profile.is_some() {
         used.push("--profile");
     }
+    used.extend(used_run_only_options(run));
+    used
+}
+
+fn used_run_only_options(run: &RunArgs) -> Vec<&'static str> {
+    let mut used = Vec::new();
     if run.work.is_some() {
         used.push("--work");
     }
     if !run.mount.is_empty() {
         used.push("--mount");
     }
-    if run.safe {
-        used.push("--safe");
-    }
     if run.exec {
         used.push("--exec");
     }
-    if !used.is_empty() {
-        anyhow::bail!("{command} does not accept run options: {}", used.join(", "));
-    }
-    Ok(())
+    used
 }
 
 fn run_build(args: &BuildArgs) -> Result<i32> {
@@ -309,6 +323,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     let work_dir = runspec::resolve_work_dir(run.work.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
     runspec::validate_extra_mount_targets(agent, &mounts)?;
+    runspec::validate_no_management_mounts(&work_dir, &mounts, &root.join(".config"))?;
     runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
     if !docker::image_exists(&image)? {
@@ -318,7 +333,6 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     prof.ensure_ordinary_initialized()?;
 
     let opts = RunOpts {
-        safe: run.safe,
         exec: run.exec,
         passthrough,
     };
@@ -355,6 +369,17 @@ done
 printf '\n' >> "$log"
 
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+    if [ "$AIBOX_FAKE_DOCKER_IMAGE_MODE" = "missing" ]; then
+        exit 1
+    fi
+    printf 'sha256:fake-image\n'
+    exit 0
+fi
+
+if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
+    if [ "$AIBOX_FAKE_DOCKER_IMAGE_MODE" = "missing" ]; then
+        exit 0
+    fi
     printf 'sha256:fake-image\n'
     exit 0
 fi
@@ -474,6 +499,32 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
+    fn invalid_image_override_is_rejected_before_docker_lookup() {
+        for (image, expected) in [
+            ("", "AIBOX_IMAGE is set but empty"),
+            ("bad image", "whitespace/control"),
+            ("--bad", "must not start"),
+        ] {
+            let fx = RunFixture::new();
+            let _image = EnvGuard::set("AIBOX_IMAGE", image);
+
+            let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+
+            assert!(err.contains(expected), "{image:?}: {err}");
+            assert_eq!(
+                fx.log(),
+                "",
+                "{image:?}: an invalid image override should fail before docker is consulted"
+            );
+            assert!(
+                !fx.root.path().join("default").exists(),
+                "{image:?}: a bad environment override must not initialize a profile"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn build_uses_single_image_and_aibox_image_override() {
         let _env_lock = test_env_lock();
         let dir = tempfile::tempdir().unwrap();
@@ -506,8 +557,9 @@ printf '\nEND\n' >> "$log"
             "<{}:/home/aibox>",
             fx.root.path().join("default").display()
         )));
+        assert!(log.contains("<aibox:latest> <codex>"), "{log}");
         assert!(
-            log.contains("<aibox:latest> <codex> <--dangerously-bypass-approvals-and-sandbox>"),
+            !log.contains("<--dangerously-bypass-approvals-and-sandbox>"),
             "{log}"
         );
         assert!(fx.root.path().join("default/.codex").is_dir());
@@ -525,6 +577,30 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
+    fn codex_exec_passes_prompt_after_exec_subcommand() {
+        let fx = RunFixture::new();
+
+        let code = fx
+            .run(
+                &["aibox", "--exec"],
+                vec!["fix tests".to_string(), "--json".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(code, 0);
+        let log = fx.log();
+        assert!(
+            log.contains("<aibox:latest> <codex> <exec> <fix tests> <--json>"),
+            "{log}"
+        );
+        assert!(
+            !log.contains("<--dangerously-bypass-approvals-and-sandbox>"),
+            "{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn claude_run_seeds_statusline_but_not_settings() {
         let fx = RunFixture::new();
         fx.run(&["aibox", "--agent", "claude"], Vec::new()).unwrap();
@@ -534,10 +610,8 @@ printf '\nEND\n' >> "$log"
             "<{}:/home/aibox>",
             fx.root.path().join("default").display()
         )));
-        assert!(
-            log.contains("<aibox:latest> <claude> <--dangerously-skip-permissions>"),
-            "{log}"
-        );
+        assert!(log.contains("<aibox:latest> <claude>"), "{log}");
+        assert!(!log.contains("<--dangerously-skip-permissions>"), "{log}");
         assert!(fx
             .root
             .path()
@@ -581,10 +655,109 @@ printf '\nEND\n' >> "$log"
         assert!(err.contains("applies only to a run"));
 
         let err = fx
-            .run(&["aibox", "--safe", "config", "list"], Vec::new())
+            .run(&["aibox", "--exec", "config", "list"], Vec::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains("config/session do not accept run-only options"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_command_agent_selects_the_provider_management_tree() {
+        let fx = RunFixture::new();
+
+        let code = fx
+            .run(
+                &[
+                    "aibox",
+                    "config",
+                    "--agent",
+                    "claude",
+                    "create",
+                    "anthropic",
+                ],
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(fx
+            .root
+            .path()
+            .join(".config/default/claude/anthropic/settings.json")
+            .is_file());
+        assert!(
+            !fx.root
+                .path()
+                .join(".config/default/codex/anthropic")
+                .exists(),
+            "a command-level --agent claude must not create a Codex provider"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_flag_conflicts_are_rejected_across_command_levels() {
+        let fx = RunFixture::new();
+
+        for argv in [
+            &[
+                "aibox", "--agent", "claude", "config", "--agent", "codex", "list",
+            ][..],
+            &[
+                "aibox", "config", "--agent", "claude", "list", "--agent", "codex",
+            ][..],
+            &["aibox", "--agent", "claude", "session", "--agent", "codex"][..],
+            &[
+                "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
+            ][..],
+        ] {
+            let err = fx.run(argv, Vec::new()).unwrap_err().to_string();
+            assert!(
+                err.contains("--agent must be provided only once"),
+                "{argv:?} should reject conflicting agent selectors, got {err:?}"
+            );
+        }
+        assert_eq!(
+            fx.log(),
+            "",
+            "agent-selector errors should be resolved before docker is consulted"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_and_profile_reject_passthrough_and_run_options() {
+        let fx = RunFixture::new();
+
+        let err = fx
+            .run(&["aibox", "build"], vec!["ignored".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("build takes no pass-through args"), "{err}");
+
+        let err = fx
+            .run(&["aibox", "-p", "work", "build"], Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("build does not accept run options"), "{err}");
+
+        let err = fx
+            .run(&["aibox", "profile", "list"], vec!["ignored".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("profile takes no pass-through args"), "{err}");
+
+        let err = fx
+            .run(&["aibox", "-m", "src:/src", "profile", "list"], Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("profile does not accept run options"), "{err}");
+        assert_eq!(
+            fx.log(),
+            "",
+            "command-surface errors should be resolved before docker is consulted"
+        );
     }
 
     #[cfg(unix)]
@@ -598,6 +771,59 @@ printf '\nEND\n' >> "$log"
 
         assert!(err.contains("mount host path does not exist"), "{err}");
         assert!(!fx.root.path().join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_image_does_not_initialize_profile_or_run_container() {
+        let fx = RunFixture::new();
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing");
+
+        let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("not present locally"), "{err}");
+        assert!(
+            !fx.root.path().join("default").exists(),
+            "a missing image must fail before profile initialization"
+        );
+        let log = fx.log();
+        assert!(!log.contains("ARGS: <run>"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_rejects_work_dir_that_would_expose_provider_management_tree() {
+        let fx = RunFixture::new();
+        let work = fx.root.path().to_str().unwrap();
+        let err = fx
+            .run(&["aibox", "-w", work], Vec::new())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("provider management data"), "{err}");
+        assert!(!fx.root.path().join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_rejects_mount_that_would_expose_provider_management_tree() {
+        let fx = RunFixture::new();
+        let management = fx.root.path().join(".config");
+        std::fs::create_dir_all(management.join("default/codex")).unwrap();
+        let mount = format!("{}:/secrets:ro", management.display());
+
+        let err = fx
+            .run(&["aibox", "-m", &mount], Vec::new())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("provider management data"), "{err}");
+        assert!(!fx.root.path().join("default").exists());
+        assert_eq!(
+            fx.log(),
+            "",
+            "management mount validation should fail before docker is consulted"
+        );
     }
 
     #[cfg(unix)]
@@ -660,5 +886,6 @@ printf '\nEND\n' >> "$log"
             }
         }
         assert!(!write_line(&mut Broken, "x").unwrap());
+        assert!(!write_text(&mut Broken, "x").unwrap());
     }
 }

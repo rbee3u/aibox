@@ -44,11 +44,12 @@ impl SessionBackend for Claude {
         content_text(v)
     }
 
-    /// Any line bearing a top-level `timestamp` is a candidate; the shared
-    /// streaming loop keeps the first, which is the session start.
+    /// Any line bearing a non-empty top-level `timestamp` is a candidate; the
+    /// shared streaming loop keeps the first, which is the session start.
     fn start_ts_of(&self, v: &Value) -> Option<String> {
         v.get("timestamp")
             .and_then(Value::as_str)
+            .filter(|ts| !ts.is_empty())
             .map(str::to_string)
     }
 
@@ -77,14 +78,11 @@ fn content_text(v: &Value) -> Option<String> {
     match v.get("message").and_then(|m| m.get("content")) {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
         Some(Value::Array(items)) => {
-            let mut parts = Vec::new();
-            for it in items {
-                if let Some(t) = it.get("text").and_then(Value::as_str) {
-                    if !t.is_empty() {
-                        parts.push(t.to_string());
-                    }
-                }
-            }
+            let parts: Vec<String> = items
+                .iter()
+                .filter_map(content_block_text)
+                .map(str::to_string)
+                .collect();
             if parts.is_empty() {
                 None
             } else {
@@ -93,6 +91,12 @@ fn content_text(v: &Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn content_block_text(item: &Value) -> Option<&str> {
+    item.get("text")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
 }
 
 #[cfg(test)]
@@ -189,6 +193,23 @@ mod tests {
         let s = Claude.summarize(&path).unwrap();
 
         assert_eq!(s.title, "Final Title");
+    }
+
+    #[test]
+    fn summarize_ignores_empty_timestamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000002.jsonl",
+            &[
+                r#"{"timestamp":"","type":"assistant"}"#,
+                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"first prompt"}}"#,
+            ],
+        );
+
+        let s = Claude.summarize(&path).unwrap();
+
+        assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
     }
 
     #[test]

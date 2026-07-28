@@ -1,4 +1,4 @@
-# Put AI in a box
+# Put AI in a Box
 
 Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that
 **is** the sandbox boundary. The agent can run without its own permission
@@ -128,6 +128,10 @@ and a command status line:
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/statusline.sh"
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "skipDangerousModePermissionPrompt": true
   }
 }
 ```
@@ -139,11 +143,11 @@ left untouched.
 Applying a provider deep-merges TOML/JSON config into the active profile:
 objects and TOML tables merge recursively; scalars and arrays are replaced.
 Keys not mentioned by the provider remain in the active config unless the
-provider asks aibox to remove them. The top-level `aibox` key is reserved for
-apply metadata and is stripped before writing the active config:
+provider asks aibox to remove them. The `aibox.config.apply` key is reserved
+for apply metadata and is stripped before writing the active config:
 
 ```toml
-[aibox.apply]
+[aibox.config.apply]
 remove = ["model_provider", "model_providers.custom"]
 ```
 
@@ -152,8 +156,10 @@ For Claude `settings.json`, use the same dotted paths in JSON:
 ```json
 {
   "aibox": {
-    "apply": {
-      "remove": ["some.setting"]
+    "config": {
+      "apply": {
+        "remove": ["some.setting"]
+      }
     }
   }
 }
@@ -191,13 +197,16 @@ omitting ids is the same as passing `--all`.
 -p, --profile <name>        profile home, default: default
 -w, --work <dir>            directory mounted at /work, default: current dir
 -m, --mount <spec>          extra bind mount host:container[:ro], repeatable
---safe                      keep the agent's own prompts/sandbox
 --exec                      Codex only: run `codex exec`
 ```
 
-By default, aibox launches the agent with its permission prompts/sandbox
-bypassed because Docker is the sandbox boundary. Use `--safe` when you want the
-agent's own approval and workspace sandbox as an additional layer.
+New provider templates default the agents to unrestricted permission mode
+because Docker is the sandbox boundary. To restore agent prompts or sandboxing,
+edit the provider or active agent config and apply it again.
+
+`--work` and `--mount` must not overlap `$AIBOX_ROOT/.config`; that management
+tree contains provider snapshots and backups and is intentionally kept out of
+the container.
 
 ## Building Images
 

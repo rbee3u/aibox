@@ -3,7 +3,7 @@
 use crate::agent::AgentKind;
 use crate::platform;
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// Reject a bind source containing `:` because Docker's `-v` short syntax
 /// cannot represent it safely.
@@ -114,6 +114,67 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
     Ok(())
 }
 
+pub fn validate_no_management_mounts(
+    work_dir: &str,
+    extra_mounts: &[String],
+    management_root: &Path,
+) -> Result<()> {
+    let management_root = canonicalize_existing_prefix(management_root).with_context(|| {
+        format!(
+            "resolve provider management directory {}",
+            management_root.display()
+        )
+    })?;
+    let work_source = canonicalize_existing_prefix(Path::new(work_dir))
+        .with_context(|| format!("resolve work dir {work_dir}"))?;
+    reject_management_overlap(
+        "work dir",
+        Path::new(work_dir),
+        &work_source,
+        &management_root,
+    )?;
+
+    for mount in extra_mounts {
+        let source = bind_source(mount)?;
+        let source_path = Path::new(source);
+        let resolved_source = canonicalize_existing_prefix(source_path)
+            .with_context(|| format!("resolve mount host path {source}"))?;
+        reject_management_overlap(
+            "mount host",
+            source_path,
+            &resolved_source,
+            &management_root,
+        )?;
+    }
+    Ok(())
+}
+
+fn reject_management_overlap(
+    kind: &str,
+    display_path: &Path,
+    source: &Path,
+    management_root: &Path,
+) -> Result<()> {
+    if source.starts_with(management_root) || management_root.starts_with(source) {
+        bail!(
+            "{kind} would expose aibox provider management data: {} overlaps {}",
+            display_path.display(),
+            management_root.display()
+        );
+    }
+    Ok(())
+}
+
+fn bind_source(mount: &str) -> Result<&str> {
+    let (source, _) = mount
+        .split_once(':')
+        .with_context(|| format!("invalid resolved mount: {mount}"))?;
+    if source.is_empty() {
+        bail!("invalid resolved mount source: {mount}");
+    }
+    Ok(source)
+}
+
 fn bind_target(mount: &str) -> Result<&str> {
     let (_, rest) = mount
         .split_once(':')
@@ -158,6 +219,50 @@ fn shadows_managed_target(target: &str, managed: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf> {
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(cursor) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(normalize_path_components(&resolved));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor
+                    .file_name()
+                    .with_context(|| format!("path does not exist: {}", path.display()))?;
+                missing.push(name.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .with_context(|| format!("path does not exist: {}", path.display()))?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("resolve {}", path.display()));
+            }
+        }
+    }
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
 /// Seed runtime state required by an agent because the profile mount shadows
 /// the image's home directory.
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
@@ -165,7 +270,6 @@ pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
 }
 
 pub struct RunOpts<'a> {
-    pub safe: bool,
     pub exec: bool,
     pub passthrough: &'a [String],
 }
@@ -227,10 +331,26 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mounts_absolutizes_and_validates_host_side() {
-        let got = resolve_mounts(&["src:/src".to_string()]).unwrap();
+    fn resolve_work_dir_absolutizes_relative_paths() {
         let cwd = std::env::current_dir().unwrap();
-        assert_eq!(got, vec![format!("{}:/src", cwd.join("src").display())]);
+
+        let got = resolve_work_dir(Some("src")).unwrap();
+
+        assert_eq!(got, cwd.join("src").to_string_lossy());
+    }
+
+    #[test]
+    fn resolve_mounts_absolutizes_and_validates_host_side() {
+        let cwd = std::env::current_dir().unwrap();
+        let got =
+            resolve_mounts(&["src:/src".to_string(), "src:/readonly:ro".to_string()]).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                format!("{}:/src", cwd.join("src").display()),
+                format!("{}:/readonly:ro", cwd.join("src").display())
+            ]
+        );
 
         assert!(resolve_mounts(&["/no/such/dir:/data".to_string()]).is_err());
         assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
@@ -238,8 +358,41 @@ mod tests {
     }
 
     #[test]
+    fn resolve_mounts_rejects_malformed_short_syntax() {
+        for (mount, expected) in [
+            ("src", "invalid mount"),
+            (":/cache", "invalid mount"),
+            ("src:", "invalid mount"),
+            ("src:relative", "invalid mount"),
+            ("src:/cache:", "invalid mount mode"),
+            ("src:/cache:rw", "only :ro is supported"),
+            ("src:/cache:ro:extra", "invalid mount"),
+        ] {
+            let err = resolve_mounts(&[mount.to_string()])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(expected),
+                "{mount:?} should fail with {expected:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn extra_mounts_must_not_replace_managed_targets() {
-        for target in ["/work", "/", "/home", "/home/aibox", "/home/aibox/.."] {
+        for target in [
+            "/work",
+            "/work/",
+            "/work/.",
+            "/tmp/../work",
+            "/",
+            "/home",
+            "/home/aibox",
+            "/home/aibox/",
+            "/home/aibox/.",
+            "/home/aibox/..",
+            "/home/aibox/.cache/../..",
+        ] {
             let err =
                 validate_extra_mount_targets(AgentKind::Codex, &[format!("/host:{target}:ro")])
                     .unwrap_err()
@@ -248,7 +401,123 @@ mod tests {
         }
         validate_extra_mount_targets(
             AgentKind::Codex,
-            &["/host:/home/aibox/.cache:ro".to_string()],
+            &[
+                "/host:/workspace:ro".to_string(),
+                "/host:/work-cache:ro".to_string(),
+                "/host:/work/.cache:ro".to_string(),
+                "/host:/home/aibox-cache:ro".to_string(),
+                "/host:/home/aibox2:ro".to_string(),
+                "/host:/home/aibox/.cache:ro".to_string(),
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn host_bind_sources_must_not_expose_provider_management_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let profile_home = root.path().join("default");
+        let management_root = root.path().join(".config");
+        fs::create_dir(&profile_home).unwrap();
+
+        let err =
+            validate_no_management_mounts(root.path().to_str().unwrap(), &[], &management_root)
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("provider management data"), "{err}");
+
+        validate_no_management_mounts(profile_home.to_str().unwrap(), &[], &management_root)
+            .unwrap();
+
+        fs::create_dir_all(management_root.join("default/codex")).unwrap();
+        let err = validate_no_management_mounts(
+            profile_home.to_str().unwrap(),
+            &[format!("{}:/secrets:ro", management_root.display())],
+            &management_root,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("provider management data"), "{err}");
+
+        let err = validate_no_management_mounts(
+            profile_home.to_str().unwrap(),
+            &[format!(
+                "{}:/provider:ro",
+                management_root.join("default/codex").display()
+            )],
+            &management_root,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("provider management data"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn management_mount_check_resolves_symlinked_sources() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let links = tempfile::tempdir().unwrap();
+        let linked_root = links.path().join("aibox-root");
+        symlink(root.path(), &linked_root).unwrap();
+
+        let err = validate_no_management_mounts(
+            linked_root.to_str().unwrap(),
+            &[],
+            &root.path().join(".config"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("provider management data"), "{err}");
+    }
+
+    #[test]
+    fn management_mount_check_normalizes_dotdot_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let profile_home = root.path().join("default");
+        let management_root = root.path().join(".config");
+        fs::create_dir(&profile_home).unwrap();
+        fs::create_dir(&management_root).unwrap();
+
+        let work = profile_home.join("..");
+        let err = validate_no_management_mounts(work.to_str().unwrap(), &[], &management_root)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("provider management data"),
+            "a dotdot work path that resolves to the aibox root would expose .config: {err}"
+        );
+
+        let mount_source = profile_home.join("../.config");
+        let err = validate_no_management_mounts(
+            profile_home.to_str().unwrap(),
+            &[format!("{}:/secrets:ro", mount_source.display())],
+            &management_root,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("provider management data"),
+            "a dotdot mount source that resolves into .config must be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn management_mount_check_allows_sibling_prefix_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let profile_home = root.path().join("default");
+        let management_root = root.path().join(".config");
+        let sibling = root.path().join(".config-backup");
+        fs::create_dir(&profile_home).unwrap();
+        fs::create_dir(&management_root).unwrap();
+        fs::create_dir(&sibling).unwrap();
+
+        validate_no_management_mounts(
+            profile_home.to_str().unwrap(),
+            &[format!("{}:/archive:ro", sibling.display())],
+            &management_root,
         )
         .unwrap();
     }

@@ -2,6 +2,8 @@ use anyhow::{bail, Result};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Item, TableLike};
 
+const APPLY_METADATA_PATH: &str = "aibox.config.apply";
+
 pub fn merge_json(base: &mut JsonValue, overlay: JsonValue) {
     match (base, overlay) {
         (JsonValue::Object(base_map), JsonValue::Object(overlay_map)) => {
@@ -69,24 +71,31 @@ fn extract_toml_remove_paths(doc: &DocumentMut) -> Result<Vec<String>> {
     let Some(aibox_table) = aibox.as_table_like() else {
         bail!("aibox metadata must be a table");
     };
-    let Some(apply) = aibox_table.get("apply") else {
+
+    let Some(config) = aibox_table.get("config") else {
+        return Ok(Vec::new());
+    };
+    let Some(config_table) = config.as_table_like() else {
+        bail!("aibox.config metadata must be a table");
+    };
+    let Some(apply) = config_table.get("apply") else {
         return Ok(Vec::new());
     };
     let Some(apply_table) = apply.as_table_like() else {
-        bail!("aibox.apply metadata must be a table");
+        bail!("{APPLY_METADATA_PATH} metadata must be a table");
     };
     let Some(remove) = apply_table.get("remove") else {
         return Ok(Vec::new());
     };
     let Some(paths) = remove.as_array() else {
-        bail!("aibox.apply.remove must be an array of strings");
+        bail!("{APPLY_METADATA_PATH}.remove must be an array of strings");
     };
 
     paths
         .iter()
         .map(|value| {
             let Some(path) = value.as_str() else {
-                bail!("aibox.apply.remove must be an array of strings");
+                bail!("{APPLY_METADATA_PATH}.remove must be an array of strings");
             };
             validate_remove_path(path)?;
             Ok(path.to_string())
@@ -104,24 +113,31 @@ fn extract_json_remove_paths(value: &JsonValue) -> Result<Vec<String>> {
     let Some(aibox_object) = aibox.as_object() else {
         bail!("aibox metadata must be a JSON object");
     };
-    let Some(apply) = aibox_object.get("apply") else {
+
+    let Some(config) = aibox_object.get("config") else {
+        return Ok(Vec::new());
+    };
+    let Some(config_object) = config.as_object() else {
+        bail!("aibox.config metadata must be a JSON object");
+    };
+    let Some(apply) = config_object.get("apply") else {
         return Ok(Vec::new());
     };
     let Some(apply_object) = apply.as_object() else {
-        bail!("aibox.apply metadata must be a JSON object");
+        bail!("{APPLY_METADATA_PATH} metadata must be a JSON object");
     };
     let Some(remove) = apply_object.get("remove") else {
         return Ok(Vec::new());
     };
     let Some(paths) = remove.as_array() else {
-        bail!("aibox.apply.remove must be an array of strings");
+        bail!("{APPLY_METADATA_PATH}.remove must be an array of strings");
     };
 
     paths
         .iter()
         .map(|value| {
             let Some(path) = value.as_str() else {
-                bail!("aibox.apply.remove must be an array of strings");
+                bail!("{APPLY_METADATA_PATH}.remove must be an array of strings");
             };
             validate_remove_path(path)?;
             Ok(path.to_string())
@@ -136,7 +152,7 @@ fn validate_remove_path(path: &str) -> Result<()> {
 fn path_segments(path: &str) -> Result<Vec<&str>> {
     let segments: Vec<_> = path.split('.').collect();
     if segments.is_empty() || segments.iter().any(|segment| segment.is_empty()) {
-        bail!("aibox.apply.remove path must be a non-empty dotted key path: {path:?}");
+        bail!("{APPLY_METADATA_PATH}.remove path must be a non-empty dotted key path: {path:?}");
     }
     Ok(segments)
 }
@@ -281,7 +297,7 @@ model_provider = "custom"
 [model_providers.custom]
 base_url = "old"
 
-[aibox.apply]
+[aibox.config.apply]
 remove = ["stale"]
 "#;
         let overlay = r#"
@@ -291,7 +307,7 @@ model_provider = "custom"
 [model_providers.custom]
 base_url = "new"
 
-[aibox.apply]
+[aibox.config.apply]
 remove = ["model_provider", "model_providers.custom", "missing.path"]
 "#;
 
@@ -304,15 +320,86 @@ remove = ["model_provider", "model_providers.custom", "missing.path"]
     }
 
     #[test]
-    fn toml_apply_metadata_rejects_bad_remove_paths() {
-        let merged = merge_toml_strings("", r#"[aibox.apply]"#).unwrap();
+    fn base_apply_metadata_is_ignored_and_stripped() {
+        let base = r#"
+model = "active"
+
+[aibox.config.apply]
+remove = ["model"]
+"#;
+        let overlay = r#"
+approval_policy = "never"
+"#;
+
+        let merged = merge_toml_strings(base, overlay).unwrap();
+
+        assert!(
+            merged.contains(r#"model = "active""#),
+            "active config metadata must not delete active keys: {merged}"
+        );
+        assert!(merged.contains(r#"approval_policy = "never""#));
         assert!(!merged.contains("[aibox"));
 
-        let err = merge_toml_strings("", "[aibox.apply]\nremove = [\"\"]").unwrap_err();
+        let mut base = json!({
+            "model": "active",
+            "aibox": {
+                "config": {
+                    "apply": {
+                        "remove": ["model"]
+                    }
+                }
+            }
+        });
+        let overlay = json!({"approval_policy": "never"});
+
+        merge_json_with_apply_metadata(&mut base, overlay).unwrap();
+
+        assert_eq!(
+            base,
+            json!({
+                "model": "active",
+                "approval_policy": "never"
+            })
+        );
+    }
+
+    #[test]
+    fn toml_apply_metadata_rejects_bad_remove_paths() {
+        let merged = merge_toml_strings("", r#"[aibox.config.apply]"#).unwrap();
+        assert!(!merged.contains("[aibox"));
+
+        let err = merge_toml_strings("", "[aibox.config.apply]\nremove = [\"\"]").unwrap_err();
         assert!(err.to_string().contains("non-empty dotted key path"));
 
-        let err = merge_toml_strings("", "[aibox.apply]\nremove = [\"foo..bar\"]").unwrap_err();
+        let err =
+            merge_toml_strings("", "[aibox.config.apply]\nremove = [\"foo..bar\"]").unwrap_err();
         assert!(err.to_string().contains("non-empty dotted key path"));
+    }
+
+    #[test]
+    fn toml_apply_metadata_rejects_bad_shapes() {
+        for (overlay, expected) in [
+            ("aibox = true", "aibox metadata must be a table"),
+            (
+                "[aibox]\nconfig = true",
+                "aibox.config metadata must be a table",
+            ),
+            (
+                "[aibox.config]\napply = true",
+                "aibox.config.apply metadata must be a table",
+            ),
+            (
+                "[aibox.config.apply]\nremove = \"model\"",
+                "aibox.config.apply.remove must be an array of strings",
+            ),
+            (
+                "[aibox.config.apply]\nremove = [1]",
+                "aibox.config.apply.remove must be an array of strings",
+            ),
+        ] {
+            let err = merge_toml_strings("", overlay).unwrap_err().to_string();
+            assert!(err.contains(expected), "{err}");
+        }
     }
 
     #[test]
@@ -324,8 +411,10 @@ remove = ["model_provider", "model_providers.custom", "missing.path"]
                 "drop": true
             },
             "aibox": {
-                "apply": {
-                    "remove": ["stale"]
+                "config": {
+                    "apply": {
+                        "remove": ["stale"]
+                    }
                 }
             }
         });
@@ -336,8 +425,10 @@ remove = ["model_provider", "model_providers.custom", "missing.path"]
                 "add": 1
             },
             "aibox": {
-                "apply": {
-                    "remove": ["nested.drop", "missing.path"]
+                "config": {
+                    "apply": {
+                        "remove": ["nested.drop", "missing.path"]
+                    }
                 }
             }
         });
@@ -354,5 +445,59 @@ remove = ["model_provider", "model_providers.custom", "missing.path"]
                 }
             })
         );
+    }
+
+    #[test]
+    fn json_apply_metadata_rejects_bad_remove_paths() {
+        for path in ["", "foo..bar"] {
+            let mut base = json!({});
+            let overlay = json!({
+                "aibox": {
+                    "config": {
+                        "apply": {
+                            "remove": [path]
+                        }
+                    }
+                }
+            });
+
+            let err = merge_json_with_apply_metadata(&mut base, overlay)
+                .unwrap_err()
+                .to_string();
+
+            assert!(err.contains("non-empty dotted key path"), "{err}");
+        }
+    }
+
+    #[test]
+    fn json_apply_metadata_rejects_bad_shapes() {
+        for (overlay, expected) in [
+            (
+                json!({"aibox": true}),
+                "aibox metadata must be a JSON object",
+            ),
+            (
+                json!({"aibox": {"config": true}}),
+                "aibox.config metadata must be a JSON object",
+            ),
+            (
+                json!({"aibox": {"config": {"apply": true}}}),
+                "aibox.config.apply metadata must be a JSON object",
+            ),
+            (
+                json!({"aibox": {"config": {"apply": {"remove": "model"}}}}),
+                "aibox.config.apply.remove must be an array of strings",
+            ),
+            (
+                json!({"aibox": {"config": {"apply": {"remove": [1]}}}}),
+                "aibox.config.apply.remove must be an array of strings",
+            ),
+        ] {
+            let mut base = json!({});
+            let err = merge_json_with_apply_metadata(&mut base, overlay)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{err}");
+        }
     }
 }

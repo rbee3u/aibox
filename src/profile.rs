@@ -66,6 +66,23 @@ impl Profile {
         }
     }
 
+    pub fn validate_existing_active_agent_dir(&self) -> Result<()> {
+        if self.is_host {
+            if !real_dir_exists(&self.home_dir, "host home")? {
+                bail!("host home does not exist: {}", self.home_dir.display());
+            }
+        } else {
+            real_dir_exists(&self.home_dir, "profile home")?;
+        }
+
+        let kind = match self.agent {
+            AgentKind::Claude => "Claude state directory",
+            AgentKind::Codex => "Codex state directory",
+        };
+        real_dir_exists(&self.active_agent_dir, kind)?;
+        Ok(())
+    }
+
     pub fn ensure_ordinary_initialized(&self) -> Result<()> {
         if self.is_host {
             bail!("profile 'host' is only valid for config/session commands, not profile creation");
@@ -110,10 +127,14 @@ impl Profile {
 
     pub fn ensure_management_dir(&self) -> Result<()> {
         if self.is_host {
-            ensure_real_dir(&self.management_dir, "config management directory")
+            ensure_agent_management_dir(&self.root_dir, &self.name, self.agent)
         } else {
             self.ensure_ordinary_initialized()
         }
+    }
+
+    pub fn management_dir_exists(&self) -> Result<bool> {
+        agent_management_dir_exists(&self.root_dir, &self.name, self.agent)
     }
 }
 
@@ -214,7 +235,7 @@ fn delete_profile_targets(root: &Path, profiles: &[String], all: bool) -> Result
         if !home_exists && !management_exists {
             bail!("profile '{profile}' does not exist");
         }
-        if !targets.iter().any(|target| target == profile) {
+        if !targets.contains(profile) {
             targets.push(profile.to_string());
         }
     }
@@ -259,9 +280,8 @@ fn profile_exists(root: &Path, profile: &str) -> Result<(bool, bool)> {
     validate_ordinary_profile_name(profile)?;
 
     let home_dir = root.join(profile);
-    let management_dir = root.join(".config").join(profile);
     let home_exists = real_dir_exists(&home_dir, "profile home")?;
-    let management_exists = real_dir_exists(&management_dir, "profile management directory")?;
+    let management_exists = profile_management_dir_exists(root, profile)?;
     Ok((home_exists, management_exists))
 }
 
@@ -295,6 +315,8 @@ pub fn validate_ordinary_profile_name(profile: &str) -> Result<()> {
 
 pub fn ensure_ordinary_profile_initialized(root: &Path, profile: &str) -> Result<()> {
     validate_ordinary_profile_name(profile)?;
+    preflight_ordinary_profile_paths(root, profile)?;
+    let management_dir = ensure_profile_management_dir(root, profile)?;
     let home_dir = root.join(profile);
     ensure_real_dir(&home_dir, "profile home")?;
     ensure_agent_state(AgentKind::Codex, &home_dir)?;
@@ -302,11 +324,79 @@ pub fn ensure_ordinary_profile_initialized(root: &Path, profile: &str) -> Result
     install_profile_gitconfig(&home_dir)?;
     for agent in [AgentKind::Codex, AgentKind::Claude] {
         ensure_real_dir(
-            &root.join(".config").join(profile).join(agent.tag()),
+            &management_dir.join(agent.tag()),
             "config management directory",
         )?;
     }
     Ok(())
+}
+
+fn preflight_ordinary_profile_paths(root: &Path, profile: &str) -> Result<()> {
+    real_dir_exists(&management_root_dir(root), "profile management root")?;
+    let management_dir = profile_management_dir(root, profile);
+    if real_dir_exists(&management_dir, "profile management directory")? {
+        for agent in [AgentKind::Codex, AgentKind::Claude] {
+            real_dir_exists(
+                &management_dir.join(agent.tag()),
+                "config management directory",
+            )?;
+        }
+    }
+
+    let home_dir = root.join(profile);
+    if real_dir_exists(&home_dir, "profile home")? {
+        real_dir_exists(&home_dir.join(".codex"), "Codex state directory")?;
+        let claude_dir = home_dir.join(".claude");
+        real_dir_exists(&claude_dir, "Claude state directory")?;
+        real_file_exists(&home_dir.join(".gitconfig"), "profile gitconfig")?;
+        real_file_exists(&claude_dir.join("statusline.sh"), "Claude status line")?;
+    }
+    Ok(())
+}
+
+fn management_root_dir(root: &Path) -> PathBuf {
+    root.join(".config")
+}
+
+fn profile_management_dir(root: &Path, profile: &str) -> PathBuf {
+    management_root_dir(root).join(profile)
+}
+
+fn ensure_profile_management_dir(root: &Path, profile: &str) -> Result<PathBuf> {
+    let management_root = management_root_dir(root);
+    ensure_real_dir(&management_root, "profile management root")?;
+    let management_dir = profile_management_dir(root, profile);
+    ensure_real_dir(&management_dir, "profile management directory")?;
+    Ok(management_dir)
+}
+
+fn ensure_agent_management_dir(root: &Path, profile: &str, agent: AgentKind) -> Result<()> {
+    let management_dir = ensure_profile_management_dir(root, profile)?;
+    ensure_real_dir(
+        &management_dir.join(agent.tag()),
+        "config management directory",
+    )
+}
+
+fn profile_management_dir_exists(root: &Path, profile: &str) -> Result<bool> {
+    let management_root = management_root_dir(root);
+    if !real_dir_exists(&management_root, "profile management root")? {
+        return Ok(false);
+    }
+    real_dir_exists(
+        &profile_management_dir(root, profile),
+        "profile management directory",
+    )
+}
+
+fn agent_management_dir_exists(root: &Path, profile: &str, agent: AgentKind) -> Result<bool> {
+    if !profile_management_dir_exists(root, profile)? {
+        return Ok(false);
+    }
+    real_dir_exists(
+        &profile_management_dir(root, profile).join(agent.tag()),
+        "config management directory",
+    )
 }
 
 pub fn config_root() -> Result<PathBuf> {
@@ -360,6 +450,55 @@ pub(crate) fn real_dir_exists(path: &Path, kind: &str) -> Result<bool> {
     }
 }
 
+fn real_file_exists(path: &Path, kind: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => Ok(true),
+        Ok(_) => bail!("{kind} is not a regular file: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+}
+
+/// Open an existing regular file without following a final symlink. The
+/// symlink check before open gives a clear error for stable bad paths; the
+/// no-follow open closes the race where a container-writable file is swapped
+/// after that check.
+pub(crate) fn open_real_file(path: &Path, kind: &str) -> Result<fs::File> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => bail!("{kind} is not a regular file: {}", path.display()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("open {kind} {}", path.display()));
+        }
+        Err(e) => return Err(e).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+
+    let file = open_no_follow(path).with_context(|| format!("open {kind} {}", path.display()))?;
+    let meta = file
+        .metadata()
+        .with_context(|| format!("inspect opened {kind} {}", path.display()))?;
+    if meta.file_type().is_file() {
+        Ok(file)
+    } else {
+        bail!("{kind} is not a regular file: {}", path.display())
+    }
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
 /// Create `path` when absent, then require its final directory entry to be a
 /// real directory.
 pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
@@ -406,11 +545,8 @@ fn install_claude_statusline(agent_dir: &Path) -> Result<()> {
 }
 
 fn install_missing_file(path: &Path, kind: &str, content: &[u8], mode: u32) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => return Ok(()),
-        Ok(_) => bail!("{kind} is not a regular file: {}", path.display()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("inspect {}", path.display())),
+    if real_file_exists(path, kind)? {
+        return Ok(());
     }
 
     let mut options = fs::OpenOptions::new();
@@ -663,6 +799,23 @@ mod tests {
     }
 
     #[test]
+    fn delete_ordinary_profiles_dedupes_repeated_names() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "default").unwrap();
+
+        delete_ordinary_profiles(
+            root.path(),
+            &["default".to_string(), "default".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!root.path().join("default").exists());
+        assert!(!root.path().join(".config/default").exists());
+    }
+
+    #[test]
     fn delete_ordinary_profiles_empty_or_all_flag_selects_every_deletable_profile() {
         for (target, all) in [(Vec::new(), false), (Vec::new(), true)] {
             let root = tempfile::tempdir().unwrap();
@@ -788,6 +941,51 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn create_ordinary_profile_rejects_bad_home_before_management_writes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("work")).unwrap();
+
+        let err = create_ordinary_profile(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile home is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            !root.path().join(".config/work").exists(),
+            "profile creation must not leave management state after rejecting the home"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_ordinary_profile_rejects_bad_agent_dir_before_management_writes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let home = root.path().join("work");
+        fs::create_dir(&home).unwrap();
+        symlink(outside.path(), home.join(".codex")).unwrap();
+
+        let err = create_ordinary_profile(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Codex state directory is not a real directory"));
+        assert!(
+            !root.path().join(".config/work").exists(),
+            "profile creation must not leave management state after rejecting an agent dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn create_ordinary_profile_rejects_symlinked_statusline() {
         use std::os::unix::fs::symlink;
 
@@ -804,6 +1002,129 @@ mod tests {
         assert!(
             err.contains("Claude status line is not a regular file"),
             "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_ordinary_profile_rejects_symlinked_gitconfig() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let home = root.path().join("work");
+        fs::create_dir(&home).unwrap();
+        symlink(outside.path(), home.join(".gitconfig")).unwrap();
+
+        let err = create_ordinary_profile(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile gitconfig is not a regular file"),
+            "{err}"
+        );
+        assert!(
+            !home.join(".codex").exists(),
+            "profile creation must fail before writing agent state beside a symlinked seed file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_real_file_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        let link = dir.path().join("link");
+        fs::write(&real, "contents\n").unwrap();
+        symlink(&real, &link).unwrap();
+
+        let err = open_real_file(&link, "test file").unwrap_err().to_string();
+
+        assert!(err.contains("test file is not a regular file"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_ordinary_profile_rejects_symlinked_management_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join(".config")).unwrap();
+
+        let err = create_ordinary_profile(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile management root is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            !outside.path().join("work").exists(),
+            "provider management data must not be created through a symlinked .config"
+        );
+        assert!(
+            !root.path().join("work").exists(),
+            "profile home should not be created after rejecting the management root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_ordinary_profile_rejects_symlinked_agent_management_dir_before_home_writes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let management = root.path().join(".config/work");
+        fs::create_dir_all(&management).unwrap();
+        symlink(outside.path(), management.join("codex")).unwrap();
+
+        let err = create_ordinary_profile(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("config management directory is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            !root.path().join("work").exists(),
+            "profile home should not be created after rejecting agent management state"
+        );
+        assert!(
+            !outside.path().join("claude").exists(),
+            "profile creation must not write through a symlinked agent management dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_ordinary_profile_rejects_symlinked_management_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        fs::create_dir_all(outside.path().join("work/codex")).unwrap();
+        symlink(outside.path(), root.path().join(".config")).unwrap();
+
+        let err = delete_ordinary_profile(root.path(), "work", true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile management root is not a real directory"),
+            "{err}"
+        );
+        assert!(root.path().join("work").exists());
+        assert!(
+            outside.path().join("work").exists(),
+            "delete must not follow a symlinked .config and remove outside data"
         );
     }
 }
