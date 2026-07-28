@@ -913,7 +913,7 @@ impl Drop for StagedFile {
 /// target, removed on cleanup only while it contains our placeholder.
 ///
 /// This is Codex's `auth.json` case: Docker Desktop's virtiofs can't create a
-/// bind-mount target nested inside another bind mount (`/home/codex`), so we
+/// bind-mount target nested inside another bind mount (`/home/aibox`), so we
 /// pre-create the file at `<home>/.codex/auth.json` for Docker to over-mount.
 /// If a real `codex login` auth.json already exists there, we leave it alone —
 /// only a placeholder we created is removed. Registered for signal cleanup like

@@ -8,9 +8,7 @@
 //!
 //! The embedded Dockerfiles have no `COPY`; they fetch everything with
 //! apt/curl/npm. So the build context is unused, and we feed the Dockerfile to
-//! `docker build -f - <ctx>` on stdin with an empty context directory. The
-//! agent images build `FROM aibox-base:latest`, which is also built from an
-//! embedded Dockerfile first.
+//! `docker build -f - <ctx>` on stdin with an empty context directory.
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -18,11 +16,11 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-/// Local base image tag that agent Dockerfiles build FROM.
-pub const BASE_IMAGE: &str = "aibox-base:latest";
+/// Local image tag used when no image override is supplied.
+pub const IMAGE: &str = "aibox:latest";
 
-/// Shared development-runtime Dockerfile.
-pub const BASE_DOCKERFILE: &str = include_str!("../assets/base.Dockerfile");
+/// Shared development-runtime Dockerfile with both agent CLIs installed.
+pub const DOCKERFILE: &str = include_str!("../assets/aibox.Dockerfile");
 
 const CONTAINER_CREATE_WAIT: Duration = Duration::from_secs(1);
 const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -449,26 +447,20 @@ printf '\nEND\n' >> "$log"
 
     #[test]
     fn embedded_dockerfiles_do_not_require_build_context() {
-        for (name, dockerfile) in [
-            ("base", BASE_DOCKERFILE),
-            ("claude", crate::agent::AgentKind::Claude.dockerfile()),
-            ("codex", crate::agent::AgentKind::Codex.dockerfile()),
-        ] {
-            for line in dockerfile.lines() {
-                let trimmed = line.trim_start();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                let instruction = trimmed
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or_default()
-                    .to_ascii_uppercase();
-                assert_ne!(
-                    instruction, "COPY",
-                    "{name} Dockerfile must stay build-context-free: {line:?}"
-                );
+        for line in DOCKERFILE.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
             }
+            let instruction = trimmed
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            assert_ne!(
+                instruction, "COPY",
+                "aibox Dockerfile must stay build-context-free: {line:?}"
+            );
         }
     }
 
@@ -644,7 +636,7 @@ printf '\nEND\n' >> "$log"
             "no-new-privileges".to_string(),
         ];
         let cmd = vec!["exec".to_string(), "--flag".to_string()];
-        let code = run(&run_args, "aibox-claude:latest", &cmd, || {}).unwrap();
+        let code = run(&run_args, IMAGE, &cmd, || {}).unwrap();
 
         assert_eq!(code, 0);
         let log = fs::read_to_string(&run_log).unwrap();
@@ -654,7 +646,7 @@ printf '\nEND\n' >> "$log"
         assert!(
             log.contains(
                 "<--cap-drop> <ALL> <--security-opt> <no-new-privileges> \
-                 <aibox-claude:latest> <exec> <--flag>"
+                 <aibox:latest> <exec> <--flag>"
             ),
             "run must forward run_args, then image, then cmd, in order: {log}"
         );

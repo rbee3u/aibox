@@ -128,7 +128,9 @@ pub fn dispatch(command: &ProfileCommand) -> Result<i32> {
             }
         }
         ProfileCommand::Create { profile } => create_ordinary_profile(&root, profile)?,
-        ProfileCommand::Delete { profile, yes } => delete_ordinary_profile(&root, profile, *yes)?,
+        ProfileCommand::Delete { profiles, all, yes } => {
+            delete_ordinary_profiles(&root, profiles, *all, *yes)?;
+        }
     }
     Ok(0)
 }
@@ -167,20 +169,107 @@ pub fn create_ordinary_profile(root: &Path, profile: &str) -> Result<()> {
 }
 
 pub fn delete_ordinary_profile(root: &Path, profile: &str, yes: bool) -> Result<()> {
+    delete_ordinary_profiles(root, &[profile.to_string()], false, yes)
+}
+
+pub fn delete_ordinary_profiles(
+    root: &Path,
+    profiles: &[String],
+    all: bool,
+    yes: bool,
+) -> Result<()> {
+    let targets = delete_profile_targets(root, profiles, all)?;
+    if targets.is_empty() {
+        eprintln!(">> no profiles");
+        return Ok(());
+    }
+
+    if !yes {
+        for profile in &targets {
+            if !confirm_delete(profile)? {
+                bail!("aborted");
+            }
+        }
+    }
+
+    for profile in targets {
+        delete_ordinary_profile_dirs(root, &profile)?;
+    }
+    Ok(())
+}
+
+fn delete_profile_targets(root: &Path, profiles: &[String], all: bool) -> Result<Vec<String>> {
+    if all && !profiles.is_empty() {
+        bail!("--all cannot be combined with profile names");
+    }
+
+    if all || profiles.is_empty() {
+        return list_deletable_profiles(root);
+    }
+
+    let mut targets = Vec::new();
+    for profile in profiles {
+        validate_ordinary_profile_name(profile)?;
+        let (home_exists, management_exists) = profile_exists(root, profile)?;
+        if !home_exists && !management_exists {
+            bail!("profile '{profile}' does not exist");
+        }
+        if !targets.iter().any(|target| target == profile) {
+            targets.push(profile.to_string());
+        }
+    }
+    Ok(targets)
+}
+
+fn list_deletable_profiles(root: &Path) -> Result<Vec<String>> {
+    let mut profiles = list_profiles(root)?;
+    let management_root = root.join(".config");
+    match fs::symlink_metadata(&management_root) {
+        Ok(meta) if meta.file_type().is_dir() => {
+            for entry in fs::read_dir(&management_root)
+                .with_context(|| format!("read {}", management_root.display()))?
+            {
+                let entry = entry?;
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if validate_ordinary_profile_name(name).is_err() || !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                if !profiles.iter().any(|profile| profile == name) {
+                    profiles.push(name.to_string());
+                }
+            }
+        }
+        Ok(_) => bail!(
+            "profile management root is not a real directory: {}",
+            management_root.display()
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {}", management_root.display()));
+        }
+    }
+    profiles.sort();
+    Ok(profiles)
+}
+
+fn profile_exists(root: &Path, profile: &str) -> Result<(bool, bool)> {
     validate_ordinary_profile_name(profile)?;
 
     let home_dir = root.join(profile);
     let management_dir = root.join(".config").join(profile);
     let home_exists = real_dir_exists(&home_dir, "profile home")?;
     let management_exists = real_dir_exists(&management_dir, "profile management directory")?;
-    if !home_exists && !management_exists {
-        bail!("profile '{profile}' does not exist");
-    }
+    Ok((home_exists, management_exists))
+}
 
-    if !yes && !confirm_delete(profile)? {
-        bail!("aborted");
-    }
+fn delete_ordinary_profile_dirs(root: &Path, profile: &str) -> Result<()> {
+    let (home_exists, management_exists) = profile_exists(root, profile)?;
 
+    let home_dir = root.join(profile);
+    let management_dir = root.join(".config").join(profile);
     if home_exists {
         fs::remove_dir_all(&home_dir)
             .with_context(|| format!("delete profile home {}", home_dir.display()))?;
@@ -221,7 +310,7 @@ pub fn ensure_ordinary_profile_initialized(root: &Path, profile: &str) -> Result
 }
 
 pub fn config_root() -> Result<PathBuf> {
-    let root = if let Some(root) = crate::env_override("AIBOX_CONFIG_ROOT")? {
+    let root = if let Some(root) = crate::env_override("AIBOX_ROOT")? {
         PathBuf::from(root)
     } else {
         host_home()?.join(".aibox")
@@ -403,14 +492,14 @@ mod tests {
         let _env_lock = crate::test_env_lock();
         let cwd = std::env::current_dir().unwrap();
 
-        let _root = EnvGuard::set("AIBOX_CONFIG_ROOT", "relative-root");
+        let _root = EnvGuard::set("AIBOX_ROOT", "relative-root");
         assert_eq!(config_root().unwrap(), cwd.join("relative-root"));
     }
 
     #[test]
     fn config_root_requires_home_without_override() {
         let _env_lock = crate::test_env_lock();
-        let _root = EnvGuard::remove("AIBOX_CONFIG_ROOT");
+        let _root = EnvGuard::remove("AIBOX_ROOT");
         let _home = EnvGuard::remove("HOME");
 
         let err = config_root().unwrap_err().to_string();
@@ -548,6 +637,95 @@ mod tests {
 
         assert!(!root.path().join("default").exists());
         assert!(!root.path().join(".config/default").exists());
+    }
+
+    #[test]
+    fn delete_ordinary_profiles_accepts_many() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "default").unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        create_ordinary_profile(root.path(), "keep").unwrap();
+
+        delete_ordinary_profiles(
+            root.path(),
+            &["default".to_string(), "work".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!root.path().join("default").exists());
+        assert!(!root.path().join(".config/default").exists());
+        assert!(!root.path().join("work").exists());
+        assert!(!root.path().join(".config/work").exists());
+        assert!(root.path().join("keep").exists());
+        assert!(root.path().join(".config/keep").exists());
+    }
+
+    #[test]
+    fn delete_ordinary_profiles_empty_or_all_flag_selects_every_deletable_profile() {
+        for (target, all) in [(Vec::new(), false), (Vec::new(), true)] {
+            let root = tempfile::tempdir().unwrap();
+            create_ordinary_profile(root.path(), "default").unwrap();
+            create_ordinary_profile(root.path(), "work").unwrap();
+            fs::create_dir_all(root.path().join(".config/orphan/codex")).unwrap();
+            fs::create_dir_all(root.path().join(".config/host/codex")).unwrap();
+
+            delete_ordinary_profiles(root.path(), &target, all, true).unwrap();
+
+            assert!(!root.path().join("default").exists());
+            assert!(!root.path().join(".config/default").exists());
+            assert!(!root.path().join("work").exists());
+            assert!(!root.path().join(".config/work").exists());
+            assert!(!root.path().join(".config/orphan").exists());
+            assert!(root.path().join(".config/host").exists());
+        }
+    }
+
+    #[test]
+    fn delete_ordinary_profiles_treats_all_as_a_profile_name_without_all_flag() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "all").unwrap();
+        create_ordinary_profile(root.path(), "default").unwrap();
+
+        delete_ordinary_profiles(root.path(), &["all".to_string()], false, true).unwrap();
+
+        assert!(!root.path().join("all").exists());
+        assert!(!root.path().join(".config/all").exists());
+        assert!(root.path().join("default").exists());
+        assert!(root.path().join(".config/default").exists());
+    }
+
+    #[test]
+    fn delete_ordinary_profiles_resolves_every_name_before_deleting() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "default").unwrap();
+
+        let err = delete_ordinary_profiles(
+            root.path(),
+            &["default".to_string(), "missing".to_string()],
+            false,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("profile 'missing' does not exist"), "{err}");
+        assert!(root.path().join("default").exists());
+        assert!(root.path().join(".config/default").exists());
+    }
+
+    #[test]
+    fn delete_ordinary_profiles_rejects_all_flag_mixed_with_names() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "default").unwrap();
+
+        let err = delete_ordinary_profiles(root.path(), &["default".to_string()], true, true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("--all cannot be combined"), "{err}");
+        assert!(root.path().join("default").exists());
     }
 
     #[test]

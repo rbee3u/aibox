@@ -12,12 +12,12 @@ use clap::{Args, Parser, Subcommand};
                   that is the sandbox boundary.\n\n\
                   Pass args straight to the underlying agent after `--`:\n    \
                   aibox -- \"fix the build\"\n\n\
-                  Select Claude instead of the default Codex agent with \
+                  Select Claude for runs/config/session instead of the default Codex agent with \
                   `--agent claude`.",
     version
 )]
 pub struct Cli {
-    /// Agent selector for agent-scoped commands. Run/config/session default to Codex; build defaults to all.
+    /// Agent selector for agent-scoped commands. Run/config/session default to Codex.
     #[arg(long, value_enum)]
     pub agent: Option<AgentKind>,
 
@@ -30,7 +30,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Build aibox Docker image(s).
+    /// Build the aibox Docker image.
     Build(BuildArgs),
     /// Manage shared profile homes.
     Profile(ProfileArgs),
@@ -42,10 +42,6 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Agent image to build. Omit to build all agent images.
-    #[arg(long, value_enum)]
-    pub agent: Option<AgentKind>,
-
     /// Disable the Docker build cache and pull a fresh Debian base image.
     #[arg(short, long)]
     pub force: bool,
@@ -57,15 +53,38 @@ pub struct SessionArgs {
     #[arg(long, value_enum)]
     pub agent: Option<AgentKind>,
 
-    /// `list` (default), `get`, or `delete`.
-    #[arg(default_value = "list")]
-    pub action: String,
-    /// Session short id or unique prefix. `delete` accepts many; none means all.
-    #[arg(value_name = "ID")]
-    pub ids: Vec<String>,
-    /// Skip delete confirmations.
-    #[arg(short = 'y', long)]
-    pub yes: bool,
+    #[command(subcommand)]
+    pub command: Option<SessionCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SessionCommand {
+    List {
+        /// Session backend to browse. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
+    },
+    Get {
+        /// Session short id or unique prefix.
+        id: String,
+        /// Session backend to browse. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
+    },
+    Delete {
+        /// Session short id or unique prefix. Accepts many; none means all.
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+        /// Delete all sessions explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Session backend to browse. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -80,18 +99,31 @@ pub struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    List,
+    List {
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
+    },
     Get {
         #[arg(value_parser = parse_provider)]
         provider: String,
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
     },
     Create {
         #[arg(value_parser = parse_provider)]
         provider: String,
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
     },
     Apply {
         #[arg(value_parser = parse_provider)]
         provider: String,
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
     },
     Edit {
         #[arg(value_parser = parse_provider)]
@@ -99,13 +131,23 @@ pub enum ConfigCommand {
         /// Edit the auth file. Codex only.
         #[arg(long)]
         auth: bool,
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
     },
     Delete {
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-        /// Skip delete confirmation.
+        /// Provider name. Accepts many; none means all.
+        #[arg(value_name = "PROVIDER", value_parser = parse_provider)]
+        providers: Vec<String>,
+        /// Delete all providers explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
+        /// Provider agent to manage. Omit for Codex.
+        #[arg(long, value_enum)]
+        agent: Option<AgentKind>,
     },
 }
 
@@ -123,9 +165,13 @@ pub enum ProfileCommand {
         profile: String,
     },
     Delete {
-        #[arg(value_parser = parse_ordinary_profile)]
-        profile: String,
-        /// Skip delete confirmation.
+        /// Profile name. Accepts many; none means all.
+        #[arg(value_name = "PROFILE", value_parser = parse_ordinary_profile)]
+        profiles: Vec<String>,
+        /// Delete all profiles explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
     },
@@ -238,9 +284,14 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command: ConfigCommand::Apply { provider },
+                command:
+                    ConfigCommand::Apply {
+                        provider,
+                        agent: apply_agent,
+                    },
             }) => {
                 assert_eq!(*agent, None);
+                assert_eq!(*apply_agent, None);
                 assert_eq!(provider, "openai");
             }
             _ => panic!("expected config apply"),
@@ -254,16 +305,52 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command: ConfigCommand::Edit { provider, auth },
+                command:
+                    ConfigCommand::Edit {
+                        provider,
+                        auth,
+                        agent: edit_agent,
+                    },
             }) => {
                 assert_eq!(*agent, Some(AgentKind::Claude));
+                assert_eq!(*edit_agent, None);
                 assert_eq!(provider, "openai");
                 assert!(*auth);
             }
             _ => panic!("expected config edit"),
         }
 
-        assert!(Cli::try_parse_from(["aibox", "config", "list", "--agent", "claude"]).is_err());
+        let cli = Cli::try_parse_from(["aibox", "config", "list", "--agent", "claude"]).unwrap();
+        assert_eq!(cli.agent, None);
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                agent,
+                command: ConfigCommand::List { agent: list_agent },
+            }) => {
+                assert_eq!(*agent, None);
+                assert_eq!(*list_agent, Some(AgentKind::Claude));
+            }
+            _ => panic!("expected config list"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["aibox", "config", "get", "openai", "--agent", "claude"]).unwrap();
+        assert_eq!(cli.agent, None);
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                agent,
+                command:
+                    ConfigCommand::Get {
+                        provider,
+                        agent: get_agent,
+                    },
+            }) => {
+                assert_eq!(*agent, None);
+                assert_eq!(*get_agent, Some(AgentKind::Claude));
+                assert_eq!(provider, "openai");
+            }
+            _ => panic!("expected config get"),
+        }
     }
 
     #[test]
@@ -272,16 +359,79 @@ mod tests {
             "aibox", "--agent", "claude", "-p", "host", "session", "delete", "-y", "abc",
         ])
         .unwrap();
+        assert_eq!(cli.agent, Some(AgentKind::Claude));
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
-                action,
-                ids,
-                yes,
+                command:
+                    Some(SessionCommand::Delete {
+                        ids,
+                        all,
+                        yes,
+                        agent: delete_agent,
+                    }),
             }) => {
                 assert_eq!(*agent, None);
-                assert_eq!(action, "delete");
+                assert_eq!(*delete_agent, None);
                 assert_eq!(ids, &["abc".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected session"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "session", "delete", "abc", "--agent", "claude"])
+            .unwrap();
+        assert_eq!(cli.agent, None);
+        match cli.command.as_ref().unwrap() {
+            Command::Session(SessionArgs {
+                agent,
+                command:
+                    Some(SessionCommand::Delete {
+                        ids,
+                        all,
+                        yes,
+                        agent: delete_agent,
+                    }),
+            }) => {
+                assert_eq!(*agent, None);
+                assert_eq!(*delete_agent, Some(AgentKind::Claude));
+                assert_eq!(ids, &["abc".to_string()]);
+                assert!(!*all);
+                assert!(!*yes);
+            }
+            _ => panic!("expected session"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "session", "delete", "abc", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Session(SessionArgs {
+                agent,
+                command:
+                    Some(SessionCommand::Delete {
+                        ids,
+                        all,
+                        yes,
+                        agent: delete_agent,
+                    }),
+            }) => {
+                assert_eq!(*agent, None);
+                assert_eq!(*delete_agent, None);
+                assert_eq!(ids, &["abc".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected session"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "session", "delete", "--all", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Session(SessionArgs {
+                command: Some(SessionCommand::Delete { ids, all, yes, .. }),
+                ..
+            }) => {
+                assert!(ids.is_empty());
+                assert!(*all);
                 assert!(*yes);
             }
             _ => panic!("expected session"),
@@ -293,23 +443,33 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "session", "delete", "--yes"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
-                action, ids, yes, ..
+                agent,
+                command:
+                    Some(SessionCommand::Delete {
+                        ids,
+                        all,
+                        yes,
+                        agent: delete_agent,
+                    }),
             }) => {
-                assert_eq!(action, "delete");
+                assert_eq!(*agent, None);
+                assert_eq!(*delete_agent, None);
                 assert!(ids.is_empty());
+                assert!(!*all);
                 assert!(*yes);
             }
             _ => panic!("expected session"),
         }
 
-        let cli = Cli::try_parse_from(["aibox", "session", "--yes", "delete", "abc"]).unwrap();
+        assert!(Cli::try_parse_from(["aibox", "session", "--yes", "delete", "abc"]).is_err());
+
+        let cli = Cli::try_parse_from(["aibox", "session"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
-                action, ids, yes, ..
+                agent,
+                command: None,
             }) => {
-                assert_eq!(action, "delete");
-                assert_eq!(ids, &["abc".to_string()]);
-                assert!(*yes);
+                assert_eq!(*agent, None);
             }
             _ => panic!("expected session"),
         }
@@ -317,10 +477,77 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "config", "delete", "--yes", "openai"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
-                command: ConfigCommand::Delete { provider, yes },
+                command:
+                    ConfigCommand::Delete {
+                        providers,
+                        all,
+                        yes,
+                        agent,
+                    },
                 ..
             }) => {
-                assert_eq!(provider, "openai");
+                assert_eq!(*agent, None);
+                assert_eq!(providers, &["openai".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected config delete"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["aibox", "config", "delete", "openai", "anthropic", "--yes"])
+                .unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                command:
+                    ConfigCommand::Delete {
+                        providers,
+                        all,
+                        yes,
+                        ..
+                    },
+                ..
+            }) => {
+                assert_eq!(providers, &["openai".to_string(), "anthropic".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected config delete"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "config", "delete", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                command:
+                    ConfigCommand::Delete {
+                        providers,
+                        all,
+                        yes,
+                        ..
+                    },
+                ..
+            }) => {
+                assert!(providers.is_empty());
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected config delete"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "config", "delete", "--all", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                command:
+                    ConfigCommand::Delete {
+                        providers,
+                        all,
+                        yes,
+                        ..
+                    },
+                ..
+            }) => {
+                assert!(providers.is_empty());
+                assert!(*all);
                 assert!(*yes);
             }
             _ => panic!("expected config delete"),
@@ -329,9 +556,15 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "config", "edit", "--auth", "openai"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
-                command: ConfigCommand::Edit { provider, auth },
+                command:
+                    ConfigCommand::Edit {
+                        provider,
+                        auth,
+                        agent,
+                    },
                 ..
             }) => {
+                assert_eq!(*agent, None);
                 assert_eq!(provider, "openai");
                 assert!(*auth);
             }
@@ -341,9 +574,59 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--yes", "default"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Profile(ProfileArgs {
-                command: ProfileCommand::Delete { profile, yes },
+                command:
+                    ProfileCommand::Delete {
+                        profiles, all, yes, ..
+                    },
             }) => {
-                assert_eq!(profile, "default");
+                assert_eq!(profiles, &["default".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected profile delete"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "default", "work", "--yes"])
+            .unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Profile(ProfileArgs {
+                command:
+                    ProfileCommand::Delete {
+                        profiles, all, yes, ..
+                    },
+            }) => {
+                assert_eq!(profiles, &["default".to_string(), "work".to_string()]);
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected profile delete"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Profile(ProfileArgs {
+                command:
+                    ProfileCommand::Delete {
+                        profiles, all, yes, ..
+                    },
+            }) => {
+                assert!(profiles.is_empty());
+                assert!(!*all);
+                assert!(*yes);
+            }
+            _ => panic!("expected profile delete"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--all", "--yes"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Profile(ProfileArgs {
+                command:
+                    ProfileCommand::Delete {
+                        profiles, all, yes, ..
+                    },
+            }) => {
+                assert!(profiles.is_empty());
+                assert!(*all);
                 assert!(*yes);
             }
             _ => panic!("expected profile delete"),
@@ -380,9 +663,13 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "profile", "delete", "default", "--yes"]).unwrap();
         match cli.command.unwrap() {
             Command::Profile(ProfileArgs {
-                command: ProfileCommand::Delete { profile, yes },
+                command:
+                    ProfileCommand::Delete {
+                        profiles, all, yes, ..
+                    },
             }) => {
-                assert_eq!(profile, "default");
+                assert_eq!(profiles, &["default".to_string()]);
+                assert!(!all);
                 assert!(yes);
             }
             _ => panic!("expected profile delete"),
@@ -394,32 +681,33 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "build"]).unwrap();
         assert_eq!(cli.agent, None);
         match cli.command.unwrap() {
-            Command::Build(BuildArgs { agent, force }) => {
-                assert_eq!(agent, None);
-                assert!(!force);
-            }
+            Command::Build(BuildArgs { force }) => assert!(!force),
             _ => panic!("expected build"),
         }
 
         let cli = Cli::try_parse_from(["aibox", "--agent", "claude", "build"]).unwrap();
         assert_eq!(cli.agent, Some(AgentKind::Claude));
         match cli.command.unwrap() {
-            Command::Build(BuildArgs { agent, force }) => {
-                assert_eq!(agent, None);
-                assert!(!force);
-            }
+            Command::Build(BuildArgs { force }) => assert!(!force),
             _ => panic!("expected build"),
         }
 
-        let cli = Cli::try_parse_from(["aibox", "build", "--agent", "claude", "--force"]).unwrap();
+        let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
         assert_eq!(cli.agent, None);
         match cli.command.unwrap() {
-            Command::Build(BuildArgs { agent, force }) => {
-                assert_eq!(agent, Some(AgentKind::Claude));
-                assert!(force);
-            }
+            Command::Build(BuildArgs { force }) => assert!(force),
             _ => panic!("expected build"),
         }
+
+        let cli = Cli::try_parse_from(["aibox", "build", "-f"]).unwrap();
+        assert_eq!(cli.agent, None);
+        match cli.command.unwrap() {
+            Command::Build(BuildArgs { force }) => assert!(force),
+            _ => panic!("expected build"),
+        }
+
+        assert!(Cli::try_parse_from(["aibox", "build", "--agent", "claude"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "build", "--force", "--agent", "claude"]).is_err());
     }
 
     #[test]

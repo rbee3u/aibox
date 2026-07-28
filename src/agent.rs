@@ -20,8 +20,7 @@ impl AgentKind {
 
     pub fn image_default(self) -> &'static str {
         match self {
-            AgentKind::Claude => "aibox-claude:latest",
-            AgentKind::Codex => "aibox-codex:latest",
+            AgentKind::Claude | AgentKind::Codex => crate::docker::IMAGE,
         }
     }
 
@@ -31,8 +30,7 @@ impl AgentKind {
 
     pub fn container_home(self) -> &'static str {
         match self {
-            AgentKind::Claude => "/home/claude",
-            AgentKind::Codex => "/home/codex",
+            AgentKind::Claude | AgentKind::Codex => "/home/aibox",
         }
     }
 
@@ -64,15 +62,8 @@ impl AgentKind {
         }
     }
 
-    pub fn dockerfile(self) -> &'static str {
-        match self {
-            AgentKind::Claude => include_str!("../assets/claude.Dockerfile"),
-            AgentKind::Codex => include_str!("../assets/codex.Dockerfile"),
-        }
-    }
-
     pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
-        let mut agent_cmd = Vec::new();
+        let mut agent_cmd = vec![self.tag().to_string()];
         match self {
             AgentKind::Claude => {
                 if opts.safe {
@@ -142,10 +133,10 @@ mod tests {
     fn agent_kind_carries_agent_contracts() {
         assert_eq!(AgentKind::Claude.tag(), "claude");
         assert_eq!(AgentKind::Codex.tag(), "codex");
-        assert_eq!(AgentKind::Claude.image_default(), "aibox-claude:latest");
-        assert_eq!(AgentKind::Codex.image_default(), "aibox-codex:latest");
-        assert_eq!(AgentKind::Claude.container_home(), "/home/claude");
-        assert_eq!(AgentKind::Codex.container_home(), "/home/codex");
+        assert_eq!(AgentKind::Claude.image_default(), "aibox:latest");
+        assert_eq!(AgentKind::Codex.image_default(), "aibox:latest");
+        assert_eq!(AgentKind::Claude.container_home(), "/home/aibox");
+        assert_eq!(AgentKind::Codex.container_home(), "/home/aibox");
         assert_eq!(AgentKind::Claude.active_dir_name(), ".claude");
         assert_eq!(AgentKind::Codex.active_dir_name(), ".codex");
         assert_eq!(AgentKind::Claude.main_config_file(), "settings.json");
@@ -160,14 +151,19 @@ mod tests {
         let inv = AgentKind::Claude.build_invocation(&opts(&pass)).unwrap();
         assert_eq!(
             inv.agent_cmd,
-            ["--dangerously-skip-permissions", "--model", "opus"]
+            [
+                "claude",
+                "--dangerously-skip-permissions",
+                "--model",
+                "opus"
+            ]
         );
         assert!(inv.extra_run_args.is_empty());
 
         let inv = AgentKind::Codex.build_invocation(&opts(&[])).unwrap();
         assert_eq!(
             inv.agent_cmd,
-            ["--dangerously-bypass-approvals-and-sandbox"]
+            ["codex", "--dangerously-bypass-approvals-and-sandbox"]
         );
         assert!(inv.extra_run_args.is_empty());
     }
@@ -183,6 +179,7 @@ mod tests {
         assert_eq!(
             inv.agent_cmd,
             [
+                "codex",
                 "exec",
                 "-c",
                 "approval_policy=\"on-request\"",

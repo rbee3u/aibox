@@ -10,15 +10,15 @@ selected profile home.
 ```sh
 aibox [--agent codex|claude] [options] [-- <args passed to agent>]
 aibox [--agent codex|claude] config <list|get|create|apply|edit|delete> ...
-aibox [--agent codex|claude] session [list|get|delete|rm] ...
-aibox build [--agent codex|claude] [--force]
+aibox [--agent codex|claude] session [list|get|delete] ...
+aibox build [--force]
 aibox profile <list|create|delete> ...
 ```
 
 Normal runs never build images automatically:
 
 ```sh
-aibox --agent codex build
+aibox build
 cd ~/code/some-project
 aibox
 aibox --exec -- "run the tests and fix failures"
@@ -27,8 +27,8 @@ aibox --agent claude -- "fix the build"
 
 ## Profile Layout
 
-The default root is `$HOME/.aibox`. Set `AIBOX_CONFIG_ROOT` to override it; a
-relative value resolves from the launch directory.
+The default root is `$HOME/.aibox`. Set `AIBOX_ROOT` to override it; a relative
+value resolves from the launch directory.
 
 ```text
 $AIBOX_ROOT/
@@ -66,6 +66,8 @@ Manage profile homes explicitly when you want to pre-create or remove them:
 aibox profile create work
 aibox profile list
 aibox profile delete work --yes
+aibox profile delete work scratch --yes
+aibox profile delete --all --yes
 ```
 
 Profile creation is still implicit for normal runs and provider setup. Creating
@@ -86,11 +88,16 @@ aibox config apply openai
 aibox config list
 aibox config get openai
 aibox config delete openai --yes
+aibox config delete openai anthropic --yes
+aibox config delete --all --yes
 
 aibox --agent claude -p work config create anthropic
 aibox --agent claude -p work config edit anthropic
 aibox --agent claude -p work config apply anthropic
 ```
+
+For `profile delete` and `config delete`, omitting targets is the same as
+passing `--all`.
 
 Codex providers contain:
 
@@ -168,12 +175,14 @@ Sessions are browsed host-side; no container or provider is needed:
 aibox session
 aibox session get 3f2a
 aibox session delete 3f2a
+aibox session delete --all -y
 aibox session delete -y
 aibox -p host session list
 ```
 
 `list` prints short id, date, and title. `get <id>` prints your typed prompts.
-`delete` asks before removing each transcript unless `-y/--yes` is supplied.
+`delete` asks before removing each transcript unless `-y/--yes` is supplied;
+omitting ids is the same as passing `--all`.
 
 ## Run Options
 
@@ -194,11 +203,10 @@ agent's own approval and workspace sandbox as an additional layer.
 
 ```sh
 aibox build
-aibox --agent codex build
-aibox --agent claude build --force
+aibox build --force
 ```
 
-`aibox build` first builds the shared local base image, then the requested agent
-image(s). The embedded Dockerfiles are `COPY`-free and pin the installed agent
-CLI versions. `aibox build --agent <agent>` builds one agent image. Use
-`--force` to ignore Docker cache and pull a fresh Debian base.
+`aibox build` builds one shared `aibox:latest` image with both Codex and Claude
+Code installed. The embedded Dockerfile is `COPY`-free and pins the installed
+agent CLI versions. Use `--force` to ignore Docker cache and pull a fresh Debian
+base. Set `AIBOX_IMAGE` to build and run a different shared image tag.

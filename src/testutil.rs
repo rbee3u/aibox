@@ -1,7 +1,7 @@
 //! Shared test scaffolding.
 //!
 //! [`EnvGuard`]: nearly every module's tests need to set an env var
-//! (`$AIBOX_CONFIG_ROOT`, `$HOME`, `$TMPDIR`, `$PATH`) for the duration of one
+//! (`$AIBOX_ROOT`, `$HOME`, `$TMPDIR`, `$PATH`) for the duration of one
 //! test and put it back afterwards. Five near-identical copies had drifted apart
 //! in what they supported; one shared version keeps a test from reaching for a
 //! helper its module's copy happens to lack.

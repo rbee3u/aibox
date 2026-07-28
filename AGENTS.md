@@ -4,8 +4,8 @@
 container that **is** the sandbox boundary:
 `aibox [--agent codex|claude] [options] [-- <args passed straight to the agent>]`.
 Top-level subcommands carry `config` for provider overlays and `session` for
-host-side transcript browsing. Agent-scoped commands accept `--agent`;
-`profile` is shared and must not. User docs live in `README.md`.
+host-side transcript browsing. Run/config/session accept `--agent`; `build` and
+`profile` do not. User docs live in `README.md`.
 
 ## Layout
 
@@ -25,22 +25,23 @@ src/
   session.rs           # transcript browsing shared dispatch + backend trait
   session_claude.rs    # Claude transcript backend
   session_codex.rs     # Codex transcript backend
-assets/                # Dockerfiles, embedded via include_str!
+assets/                # single Dockerfile, embedded via include_str!
 ```
 
 ## Hard Constraints
 
 **Agent divergence is centralized in `AgentKind` (`agent.rs`).** Everything
-per-agent: image name, container home, active state dir (`.codex`/`.claude`),
-managed config files, Dockerfile, permissions invocation, and session backend.
-Shared logic takes an `AgentKind`; transcript parsing is the only split backend.
+per-agent: active state dir (`.codex`/`.claude`), managed config files,
+permissions invocation, command binary, and session backend. The Docker image
+and container home are shared. Shared logic takes an `AgentKind`; transcript
+parsing is the only split backend.
 
 **Provider metadata never enters the container.** Normal profiles use
 `$AIBOX_ROOT/{profile}` as the mounted home for both agents. Provider snapshots,
 `.backup`, and `.state.json` live under
 `$AIBOX_ROOT/.config/{profile}/{agent}/`; provider directories are direct
 children of that directory. This management tree must not be mounted as part of
-a normal run. `$AIBOX_ROOT` is `$AIBOX_CONFIG_ROOT` or `$HOME/.aibox`.
+a normal run. `$AIBOX_ROOT` defaults to `$HOME/.aibox`.
 
 **`host` is a management-only profile.** `-p host` is valid for `config` and
 `session` only. It targets the real host `$HOME/.codex` or `$HOME/.claude` while
@@ -54,7 +55,7 @@ own `config.toml` plus `auth.json`; Claude providers own `settings.json`.
 `auth.json` is validated and replaced as a whole file.
 
 **Managed Docker mounts define the boundary.** `runspec.rs` owns `/work`, the
-per-agent container home, and every extra bind mount. Always resolve and
+shared container home, and every extra bind mount. Always resolve and
 validate host bind sources before passing them to Docker: relative sources can
 become named volumes, and `:` breaks `-v` parsing. User `-m` mounts may be
 nested under managed targets, but must not replace `/work` or
@@ -75,8 +76,8 @@ running. Do not bypass `docker::run` for agent runs.
 
 ## Dockerfiles
 
-Embedded Dockerfiles must stay `COPY`-free (fetch via apt/curl/npm): the build
-context is unused, so `docker.rs` pipes each one to `docker build -f -` with an
+The embedded Dockerfile must stay `COPY`-free (fetch via apt/curl/npm): the build
+context is unused, so `docker.rs` pipes it to `docker build -f -` with an
 empty context.
 
 ## Checks

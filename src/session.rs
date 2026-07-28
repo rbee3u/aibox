@@ -308,12 +308,14 @@ pub fn dispatch(
     home: &Path,
     action: &str,
     ids: &[String],
+    all: bool,
     yes: bool,
 ) -> Result<i32> {
     let backend = backend_for(agent);
     match action {
         "list" => {
             reject_yes("list", yes)?;
+            reject_all("list", all)?;
             if !ids.is_empty() {
                 bail!("session list does not accept ids");
             }
@@ -321,13 +323,14 @@ pub fn dispatch(
         }
         "get" => {
             reject_yes("get", yes)?;
+            reject_all("get", all)?;
             match ids {
                 [id] => get(backend.as_ref(), home, id),
                 [] => bail!("need a session id (or unique prefix)"),
                 _ => bail!("session get accepts exactly one id"),
             }
         }
-        "delete" | "rm" => delete(backend.as_ref(), home, ids, yes),
+        "delete" => delete(backend.as_ref(), home, ids, all, yes),
         other => bail!("unknown session action: {other} (use list|get|delete)"),
     }
 }
@@ -335,6 +338,13 @@ pub fn dispatch(
 fn reject_yes(action: &str, yes: bool) -> Result<()> {
     if yes {
         bail!("session {action} does not use -y/--yes");
+    }
+    Ok(())
+}
+
+fn reject_all(action: &str, all: bool) -> Result<()> {
+    if all {
+        bail!("session {action} does not use --all");
     }
     Ok(())
 }
@@ -466,9 +476,15 @@ fn get_with_printer(
 }
 
 /// Delete transcripts, asking once per target unless `yes` is set. Passing no
-/// ids selects every transcript for this profile.
-fn delete(backend: &dyn SessionBackend, home: &Path, ids: &[String], yes: bool) -> Result<i32> {
-    let targets = delete_targets(backend, home, ids)?;
+/// ids or `--all` selects every transcript for this profile.
+fn delete(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    ids: &[String],
+    all: bool,
+    yes: bool,
+) -> Result<i32> {
+    let targets = delete_targets(backend, home, ids, all)?;
     if targets.is_empty() {
         eprintln!(">> no sessions in this profile");
         return Ok(0);
@@ -483,10 +499,16 @@ fn delete_targets(
     backend: &dyn SessionBackend,
     home: &Path,
     ids: &[String],
+    all: bool,
 ) -> Result<Vec<PathBuf>> {
-    if ids.is_empty() {
-        // Every transcript, matching `list` (which now shows them all). No-id
-        // delete clears the whole profile, tool/injected-only shells included.
+    if all && !ids.is_empty() {
+        bail!("--all cannot be combined with session ids");
+    }
+
+    if all || ids.is_empty() {
+        // Every transcript, matching `list` (which now shows them all). An
+        // all-target delete clears the whole profile, tool/injected-only shells
+        // included.
         let mut targets = backend.files(home)?;
         targets.sort_by_key(|p| backend.id_of(p));
         return Ok(targets);
@@ -1031,7 +1053,7 @@ mod tests {
             .to_string();
         assert!(err.contains("discovery failed"), "{err}");
 
-        let err = delete(&backend, dir.path(), &[], true)
+        let err = delete(&backend, dir.path(), &[], false, true)
             .unwrap_err()
             .to_string();
         assert!(err.contains("discovery failed"), "{err}");
@@ -1225,7 +1247,7 @@ mod tests {
         assert_eq!(code, 0, "an empty profile is not a list failure");
         assert!(printed.is_empty(), "no rows to print: {printed:?}");
 
-        let code = delete(&TestBackend, dir.path(), &[], true).unwrap();
+        let code = delete(&TestBackend, dir.path(), &[], false, true).unwrap();
         assert_eq!(code, 0, "deleting nothing is not a failure");
     }
 
@@ -1235,10 +1257,53 @@ mod tests {
         let one = write_session(dir.path(), "11111111");
         let two = write_session(dir.path(), "22222222");
 
-        delete(&TestBackend, dir.path(), &[], true).unwrap();
+        delete(&TestBackend, dir.path(), &[], false, true).unwrap();
 
         assert!(!one.exists());
         assert!(!two.exists());
+    }
+
+    #[test]
+    fn delete_all_flag_selects_all_sessions_with_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = write_session(dir.path(), "11111111");
+        let two = write_session(dir.path(), "22222222");
+
+        delete(&TestBackend, dir.path(), &[], true, true).unwrap();
+
+        assert!(!one.exists());
+        assert!(!two.exists());
+    }
+
+    #[test]
+    fn delete_all_flag_cannot_be_mixed_with_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = write_session(dir.path(), "11111111");
+
+        let err = delete(
+            &TestBackend,
+            dir.path(),
+            &["11111111".to_string()],
+            true,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("--all cannot be combined"), "{err}");
+        assert!(one.exists());
+    }
+
+    #[test]
+    fn delete_treats_all_as_a_session_id_without_all_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let all = write_session(dir.path(), "all");
+        let other = write_session(dir.path(), "11111111");
+
+        delete(&TestBackend, dir.path(), &["all".to_string()], false, true).unwrap();
+
+        assert!(!all.exists());
+        assert!(other.exists());
     }
 
     #[test]
@@ -1251,7 +1316,7 @@ mod tests {
         let shell = dir.path().join("sessions").join("22222222.jsonl");
         std::fs::write(&shell, "{}\n").unwrap();
 
-        let targets = delete_targets(&TestBackend, dir.path(), &[]).unwrap();
+        let targets = delete_targets(&TestBackend, dir.path(), &[], false).unwrap();
 
         assert_eq!(targets, vec![a, shell]);
     }
@@ -1279,6 +1344,7 @@ mod tests {
             &TestBackend,
             dir.path(),
             &["2222".to_string(), "1111".to_string()],
+            false,
         )
         .unwrap();
         let mut input = Cursor::new(b"y\nn\n");
@@ -1311,6 +1377,7 @@ mod tests {
             &TestBackend,
             dir.path(),
             &["1111".to_string(), "11111111".to_string()],
+            false,
         )
         .unwrap();
 
@@ -1326,7 +1393,7 @@ mod tests {
         std::fs::write(&a, "{}\n").unwrap();
         let backend = ExplicitFilesBackend::new(vec![z.clone(), a.clone()]);
 
-        let targets = delete_targets(&backend, dir.path(), &[]).unwrap();
+        let targets = delete_targets(&backend, dir.path(), &[], false).unwrap();
 
         assert_eq!(
             targets,
@@ -1336,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_rm_alias_deletes_session() {
+    fn dispatch_rejects_rm_alias() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir
             .path()
@@ -1345,12 +1412,13 @@ mod tests {
         std::fs::write(&path, r#"{"timestamp":"2026-07-14T02:16:00Z"}"#).unwrap();
         let ids = vec!["1111".to_string()];
 
-        let code = dispatch(AgentKind::Claude, dir.path(), "rm", &ids, true).unwrap();
+        let err = dispatch(AgentKind::Claude, dir.path(), "rm", &ids, false, true)
+            .expect_err("session rm should be rejected");
 
-        assert_eq!(code, 0);
+        assert!(err.to_string().contains("unknown session action: rm"));
         assert!(
-            !path.exists(),
-            "session rm must be the same destructive action as session delete"
+            path.exists(),
+            "rejected session rm must not delete transcripts"
         );
     }
 
@@ -1358,19 +1426,21 @@ mod tests {
     fn dispatch_rejects_bad_usage() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
-        let err = |action: &str, ids: &[&str], yes: bool| -> String {
+        let err = |action: &str, ids: &[&str], all: bool, yes: bool| -> String {
             let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
-            dispatch(AgentKind::Claude, home, action, &ids, yes)
+            dispatch(AgentKind::Claude, home, action, &ids, all, yes)
                 .unwrap_err()
                 .to_string()
         };
 
-        assert!(err("frobnicate", &[], false).contains("unknown session action"));
-        assert!(err("list", &["3f2a"], false).contains("does not accept ids"));
-        assert!(err("list", &[], true).contains("does not use -y"));
-        assert!(err("get", &[], false).contains("need a session id"));
-        assert!(err("get", &["a", "b"], false).contains("accepts exactly one id"));
-        assert!(err("get", &[], true).contains("does not use -y"));
+        assert!(err("frobnicate", &[], false, false).contains("unknown session action"));
+        assert!(err("list", &["3f2a"], false, false).contains("does not accept ids"));
+        assert!(err("list", &[], false, true).contains("does not use -y"));
+        assert!(err("list", &[], true, false).contains("does not use --all"));
+        assert!(err("get", &[], false, false).contains("need a session id"));
+        assert!(err("get", &["a", "b"], false, false).contains("accepts exactly one id"));
+        assert!(err("get", &[], false, true).contains("does not use -y"));
+        assert!(err("get", &["a"], true, false).contains("does not use --all"));
     }
 
     #[test]
@@ -1429,6 +1499,7 @@ mod tests {
             &TestBackend,
             dir.path(),
             &["1111".to_string(), "missing".to_string()],
+            false,
             true,
         )
         .unwrap_err();

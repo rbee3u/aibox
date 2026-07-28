@@ -1,11 +1,9 @@
-# aibox-base.Dockerfile
-# Shared development runtime for aibox agent images. Agent-specific images build
-# FROM this local image and only add the agent CLI plus its user/home setup.
+# aibox.Dockerfile
+# Shared development runtime for aibox. It installs both OpenAI Codex and
+# Claude Code into one image; the Rust wrapper selects which binary to run.
 #
 # Build:
 #   aibox build
-#   aibox --agent codex build
-#   aibox --agent claude build
 
 FROM debian:bookworm-slim
 
@@ -99,6 +97,18 @@ RUN set -eux; \
     node --version; \
     npm --version
 
+# --- Agent CLIs --------------------------------------------------------------
+# Both CLIs live in the same immutable image. Upgrade by changing the pinned
+# versions and rebuilding, not by self-updating inside a profile.
+ARG CODEX_VERSION=0.145.0
+ARG CLAUDE_CODE_VERSION=2.1.220
+RUN npm install -g \
+        @openai/codex@${CODEX_VERSION} \
+        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && codex --version \
+    && claude --version \
+    && npm cache clean --force
+
 # --- Rust -------------------------------------------------------------------
 # Pinned by default so cached builds stay stable. Change RUST_VERSION here when
 # you intentionally want to upgrade Rust.
@@ -134,7 +144,31 @@ RUN set -eux; \
     rm /tmp/go.tgz; \
     /usr/local/go/bin/go version
 
-ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:$PATH
+# Recreate a predictable non-root user at uid/gid 1000 so the mounted home has
+# a stable path.
+RUN groupadd --gid 1000 aibox \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
+
+ENV HOME=/home/aibox
+# Codex keeps all its state (config.toml, auth.json, sessions, history) under
+# CODEX_HOME. Point it inside the mounted home so it persists per profile.
+ENV CODEX_HOME=/home/aibox/.codex
+# GOPATH lives in the mounted home => module cache persists per profile.
+ENV GOPATH=/home/aibox/go
+ENV PATH=/home/aibox/go/bin:/usr/local/cargo/bin:/usr/local/go/bin:$PATH
+# Debian's /etc/profile resets PATH for login shells. Agent command execution
+# can go through a shell, so mirror the image PATH there too.
+RUN printf "%s\n" \
+        "# Keep login shells aligned with Docker's ENV PATH." \
+        "export PATH=$PATH" \
+    > /etc/profile.d/aibox-path.sh
+# Image is immutable; update by rebuilding, not self-updating.
+ENV DISABLE_AUTOUPDATER=1
+
+WORKDIR /work
+USER aibox
+
+# No ENTRYPOINT: the Rust wrapper passes either `codex ...` or `claude ...`.
 
 # --- Extra shared toolchains -------------------------------------------------
 # This is the slot to grow the shared image. Uncomment / add what projects need;

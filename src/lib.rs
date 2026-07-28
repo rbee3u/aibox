@@ -40,13 +40,13 @@ pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
     }
 }
 
-fn image_for(agent: AgentKind, image_override: Option<&str>) -> Result<String> {
-    let image = image_override.unwrap_or_else(|| agent.image_default());
-    validate_image_ref(agent, image)?;
+fn image_for(image_override: Option<&str>) -> Result<String> {
+    let image = image_override.unwrap_or(docker::IMAGE);
+    validate_image_ref(image)?;
     Ok(image.to_string())
 }
 
-fn validate_image_ref(agent: AgentKind, image: &str) -> Result<()> {
+fn validate_image_ref(image: &str) -> Result<()> {
     if image.is_empty() {
         anyhow::bail!("Docker image reference is empty");
     }
@@ -61,73 +61,7 @@ fn validate_image_ref(agent: AgentKind, image: &str) -> Result<()> {
             "Docker image reference must not contain whitespace/control characters: {image:?}"
         );
     }
-    if image_ref_is_default(image, docker::BASE_IMAGE) {
-        anyhow::bail!("Docker image reference must not use aibox's internal base image: {image:?}");
-    }
-    let other_agent = match agent {
-        AgentKind::Claude => AgentKind::Codex,
-        AgentKind::Codex => AgentKind::Claude,
-    };
-    if image_ref_is_default(image, other_agent.image_default()) {
-        anyhow::bail!(
-            "Docker image reference {image:?} is the default {} image, not {}",
-            other_agent.tag(),
-            agent.tag()
-        );
-    }
     Ok(())
-}
-
-fn image_ref_is_default(image: &str, default: &str) -> bool {
-    let Some((image_repo, image_tag, image_has_digest)) = image_ref_parts(image) else {
-        return false;
-    };
-    let Some((default_repo, default_tag, _)) = image_ref_parts(default) else {
-        return image == default;
-    };
-
-    image_repo == default_repo
-        && (image_has_digest || image_tag.unwrap_or("latest") == default_tag.unwrap_or("latest"))
-}
-
-fn image_ref_parts(image: &str) -> Option<(String, Option<&str>, bool)> {
-    let (name_and_tag, has_digest) = match image.split_once('@') {
-        Some((name, _)) => (name, true),
-        None => (image, false),
-    };
-    if name_and_tag.is_empty() {
-        return None;
-    }
-
-    let last_slash = name_and_tag.rfind('/');
-    let (repository, tag) = match name_and_tag.rfind(':') {
-        Some(colon) if last_slash.is_none_or(|slash| colon > slash) => {
-            (&name_and_tag[..colon], Some(&name_and_tag[colon + 1..]))
-        }
-        _ => (name_and_tag, None),
-    };
-    if repository.is_empty() {
-        return None;
-    }
-
-    Some((normalize_docker_repository(repository), tag, has_digest))
-}
-
-fn normalize_docker_repository(repository: &str) -> String {
-    let (domain, remainder) = match repository.split_once('/') {
-        None => return format!("docker.io/library/{repository}"),
-        Some(("docker.io" | "index.docker.io", remainder)) => ("docker.io", remainder),
-        Some((first, _)) if first == "localhost" || first.contains('.') || first.contains(':') => {
-            return repository.to_string();
-        }
-        Some(_) => ("docker.io", repository),
-    };
-
-    if remainder.contains('/') {
-        format!("{domain}/{remainder}")
-    } else {
-        format!("{domain}/library/{remainder}")
-    }
 }
 
 pub(crate) fn print_line(line: &str) -> Result<bool> {
@@ -161,9 +95,11 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
                     "`-- <args>` applies only to a run; build takes no pass-through args"
                 );
             }
+            if root_agent.is_some() {
+                anyhow::bail!("build does not accept --agent");
+            }
             reject_command_run_options("build", &run_args)?;
-            let agent = resolve_agent(root_agent, args.agent)?;
-            run_build(agent, &args)
+            run_build(&args)
         }
         Some(Command::Profile(args)) => {
             if !passthrough.is_empty() {
@@ -178,11 +114,18 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
             profile::dispatch(&args.command)
         }
         Some(Command::Config(args)) => {
-            let agent = resolve_agent(root_agent, args.agent)?.unwrap_or(AgentKind::Codex);
+            let agent =
+                resolve_agent3(root_agent, args.agent, config_command_agent(&args.command))?
+                    .unwrap_or(AgentKind::Codex);
             run_config_command(agent, &run_args, &args.command, &passthrough)
         }
         Some(Command::Session(args)) => {
-            let agent = resolve_agent(root_agent, args.agent)?.unwrap_or(AgentKind::Codex);
+            let agent = resolve_agent3(
+                root_agent,
+                args.agent,
+                session_command_agent(args.command.as_ref()),
+            )?
+            .unwrap_or(AgentKind::Codex);
             run_session_command(agent, &run_args, &args, &passthrough)
         }
     }
@@ -193,9 +136,41 @@ fn resolve_agent(
     command_agent: Option<AgentKind>,
 ) -> Result<Option<AgentKind>> {
     match (root_agent, command_agent) {
-        (Some(_), Some(_)) => anyhow::bail!("--agent must be provided only once"),
+        (Some(root), Some(command)) if root != command => {
+            anyhow::bail!("--agent must be provided only once")
+        }
+        (Some(agent), Some(_)) => Ok(Some(agent)),
         (Some(agent), None) | (None, Some(agent)) => Ok(Some(agent)),
         (None, None) => Ok(None),
+    }
+}
+
+fn resolve_agent3(
+    root_agent: Option<AgentKind>,
+    command_agent: Option<AgentKind>,
+    subcommand_agent: Option<AgentKind>,
+) -> Result<Option<AgentKind>> {
+    let agent = resolve_agent(root_agent, command_agent)?;
+    resolve_agent(agent, subcommand_agent)
+}
+
+fn config_command_agent(command: &cli::ConfigCommand) -> Option<AgentKind> {
+    match command {
+        cli::ConfigCommand::List { agent }
+        | cli::ConfigCommand::Get { agent, .. }
+        | cli::ConfigCommand::Create { agent, .. }
+        | cli::ConfigCommand::Apply { agent, .. }
+        | cli::ConfigCommand::Edit { agent, .. }
+        | cli::ConfigCommand::Delete { agent, .. } => *agent,
+    }
+}
+
+fn session_command_agent(command: Option<&cli::SessionCommand>) -> Option<AgentKind> {
+    match command {
+        None => None,
+        Some(cli::SessionCommand::List { agent })
+        | Some(cli::SessionCommand::Get { agent, .. })
+        | Some(cli::SessionCommand::Delete { agent, .. }) => *agent,
     }
 }
 
@@ -231,7 +206,22 @@ fn run_session_command(
     let root = profile::config_root()?;
     let prof = Profile::resolve(agent, &root, run.profile_name())?;
     prof.validate_session_home()?;
-    session::dispatch(agent, &prof.home_dir, &args.action, &args.ids, args.yes)
+    match args.command.as_ref() {
+        None | Some(cli::SessionCommand::List { .. }) => {
+            session::dispatch(agent, &prof.home_dir, "list", &[], false, false)
+        }
+        Some(cli::SessionCommand::Get { id, .. }) => session::dispatch(
+            agent,
+            &prof.home_dir,
+            "get",
+            std::slice::from_ref(id),
+            false,
+            false,
+        ),
+        Some(cli::SessionCommand::Delete { ids, all, yes, .. }) => {
+            session::dispatch(agent, &prof.home_dir, "delete", ids, *all, *yes)
+        }
+    }
 }
 
 fn reject_run_only_options(run: &RunArgs) -> Result<()> {
@@ -280,66 +270,22 @@ fn reject_command_run_options(command: &str, run: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_build(agent: Option<AgentKind>, args: &BuildArgs) -> Result<i32> {
+fn run_build(args: &BuildArgs) -> Result<i32> {
     let image_override = env_override("AIBOX_IMAGE")?;
-    let targets = build_targets(agent, image_override.as_deref())?;
-
-    let base_cache = if args.force {
+    let image = image_for(image_override.as_deref())?;
+    let cache = if args.force {
         BuildCache::NoCachePull
     } else {
         BuildCache::Cached
     };
     if args.force {
-        eprintln!(
-            ">> building {} (no cache, pulling fresh Debian base) ...",
-            docker::BASE_IMAGE
-        );
+        eprintln!(">> building {image} (no cache, pulling fresh Debian base) ...");
     } else {
-        eprintln!(">> building {} (cache enabled) ...", docker::BASE_IMAGE);
+        eprintln!(">> building {image} (cache enabled) ...");
     }
-    docker::build_image(docker::BASE_DOCKERFILE, docker::BASE_IMAGE, base_cache)
-        .context("build base image")?;
-
-    let agent_cache = if args.force {
-        BuildCache::NoCache
-    } else {
-        BuildCache::Cached
-    };
-    for (agent, image) in targets {
-        if args.force {
-            eprintln!(">> building {image} (no cache) ...");
-        } else {
-            eprintln!(">> building {image} (cache enabled) ...");
-        }
-        docker::build_image(agent.dockerfile(), &image, agent_cache)
-            .with_context(|| format!("build {}", agent.tag()))?;
-    }
+    docker::build_image(docker::DOCKERFILE, &image, cache).context("build aibox image")?;
 
     Ok(0)
-}
-
-fn build_targets(
-    agent: Option<AgentKind>,
-    image_override: Option<&str>,
-) -> Result<Vec<(AgentKind, String)>> {
-    if agent.is_none() && image_override.is_some() {
-        anyhow::bail!(
-            "AIBOX_IMAGE is ambiguous with `aibox build`; choose `aibox build --agent claude` or `aibox build --agent codex`"
-        );
-    }
-
-    let agents = match agent {
-        None => vec![AgentKind::Claude, AgentKind::Codex],
-        Some(agent) => vec![agent],
-    };
-
-    agents
-        .into_iter()
-        .map(|agent| {
-            let image = image_for(agent, image_override)?;
-            Ok((agent, image))
-        })
-        .collect()
 }
 
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
@@ -348,7 +294,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     }
 
     let image_override = env_override("AIBOX_IMAGE")?;
-    let image = image_for(agent, image_override.as_deref())?;
+    let image = image_for(image_override.as_deref())?;
     if image_override.is_some() {
         eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
     }
@@ -366,10 +312,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
     if !docker::image_exists(&image)? {
-        anyhow::bail!(
-            "{image} is not present locally; build it first with `aibox build --agent {}`",
-            agent.tag()
-        );
+        anyhow::bail!("{image} is not present locally; build it first with `aibox build`");
     }
 
     prof.ensure_ordinary_initialized()?;
@@ -442,13 +385,37 @@ exit 99
     }
 
     #[cfg(unix)]
+    fn write_successful_build_docker(dir: &std::path::Path) {
+        crate::testutil::write_stub_script(
+            dir,
+            "docker",
+            r#"#!/bin/sh
+if [ "$1" != "build" ]; then
+    exit 99
+fi
+log="$AIBOX_FAKE_DOCKER_LOG"
+printf 'ARGS:' >> "$log"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$log"
+done
+printf '\nSTDIN:' >> "$log"
+cat >> "$log"
+printf '\nEND\n' >> "$log"
+"#,
+        );
+    }
+
+    #[cfg(unix)]
     struct RunFixture {
-        _env_lock: std::sync::MutexGuard<'static, ()>,
-        _run_lock: std::sync::MutexGuard<'static, ()>,
-        root: tempfile::TempDir,
-        _docker_dir: tempfile::TempDir,
-        docker_log: std::path::PathBuf,
+        // Fields drop in declaration order. Restore env before deleting stub
+        // dirs, and release the env lock last so parallel tests can't observe a
+        // half-restored PATH.
         _guards: Vec<EnvGuard>,
+        _docker_dir: tempfile::TempDir,
+        root: tempfile::TempDir,
+        docker_log: std::path::PathBuf,
+        _run_lock: std::sync::MutexGuard<'static, ()>,
+        _env_lock: std::sync::MutexGuard<'static, ()>,
     }
 
     #[cfg(unix)]
@@ -465,16 +432,16 @@ exit 99
             let guards = vec![
                 EnvGuard::prepend_path(docker_dir.path()),
                 EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str()),
-                EnvGuard::set("AIBOX_CONFIG_ROOT", root.path().as_os_str()),
+                EnvGuard::set("AIBOX_ROOT", root.path().as_os_str()),
                 EnvGuard::set("HOME", host_home.as_os_str()),
             ];
             Self {
-                _env_lock: env_lock,
-                _run_lock: run_lock,
-                root,
-                _docker_dir: docker_dir,
-                docker_log,
                 _guards: guards,
+                _docker_dir: docker_dir,
+                root,
+                docker_log,
+                _run_lock: run_lock,
+                _env_lock: env_lock,
             }
         }
 
@@ -489,11 +456,42 @@ exit 99
     }
 
     #[test]
-    fn image_ref_rejects_other_default_agent_image() {
-        let err = validate_image_ref(AgentKind::Codex, "aibox-claude:latest")
+    fn image_ref_validation_rejects_bad_refs() {
+        validate_image_ref("aibox:latest").unwrap();
+        assert!(validate_image_ref("")
             .unwrap_err()
-            .to_string();
-        assert!(err.contains("default claude image"));
+            .to_string()
+            .contains("empty"));
+        assert!(validate_image_ref("--bad")
+            .unwrap_err()
+            .to_string()
+            .contains("must not start"));
+        assert!(validate_image_ref("bad image")
+            .unwrap_err()
+            .to_string()
+            .contains("whitespace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_uses_single_image_and_aibox_image_override() {
+        let _env_lock = test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("docker-build.log");
+        write_successful_build_docker(dir.path());
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log.as_os_str());
+        let _image = EnvGuard::set("AIBOX_IMAGE", "local/aibox:dev");
+
+        let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
+        let code = run(cli, Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read_to_string(log).unwrap();
+        assert!(log.contains("<--no-cache> <--pull>"), "{log}");
+        assert!(log.contains("<-t> <local/aibox:dev>"), "{log}");
+        assert!(log.contains("STDIN:# aibox.Dockerfile"), "{log}");
+        assert_eq!(log.matches("ARGS: <build>").count(), 1, "{log}");
     }
 
     #[cfg(unix)]
@@ -505,9 +503,13 @@ exit 99
 
         let log = fx.log();
         assert!(log.contains(&format!(
-            "<{}:/home/codex>",
+            "<{}:/home/aibox>",
             fx.root.path().join("default").display()
         )));
+        assert!(
+            log.contains("<aibox:latest> <codex> <--dangerously-bypass-approvals-and-sandbox>"),
+            "{log}"
+        );
         assert!(fx.root.path().join("default/.codex").is_dir());
         assert!(fx
             .root
@@ -529,9 +531,13 @@ exit 99
 
         let log = fx.log();
         assert!(log.contains(&format!(
-            "<{}:/home/claude>",
+            "<{}:/home/aibox>",
             fx.root.path().join("default").display()
         )));
+        assert!(
+            log.contains("<aibox:latest> <claude> <--dangerously-skip-permissions>"),
+            "{log}"
+        );
         assert!(fx
             .root
             .path()
@@ -614,8 +620,27 @@ exit 99
         assert!(err.contains("profile is shared across agents"));
 
         let err = fx
+            .run(&["aibox", "--agent", "claude", "build"], Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("build does not accept --agent"));
+
+        let err = fx
             .run(
-                &["aibox", "--agent", "claude", "build", "--agent", "codex"],
+                &[
+                    "aibox", "--agent", "claude", "config", "list", "--agent", "codex",
+                ],
+                Vec::new(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--agent must be provided only once"));
+
+        let err = fx
+            .run(
+                &[
+                    "aibox", "--agent", "claude", "session", "delete", "abc", "--agent", "codex",
+                ],
                 Vec::new(),
             )
             .unwrap_err()

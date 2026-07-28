@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn extra_mounts_must_not_replace_managed_targets() {
-        for target in ["/work", "/", "/home", "/home/codex", "/home/codex/.."] {
+        for target in ["/work", "/", "/home", "/home/aibox", "/home/aibox/.."] {
             let err =
                 validate_extra_mount_targets(AgentKind::Codex, &[format!("/host:{target}:ro")])
                     .unwrap_err()
@@ -248,7 +248,7 @@ mod tests {
         }
         validate_extra_mount_targets(
             AgentKind::Codex,
-            &["/host:/home/codex/.cache:ro".to_string()],
+            &["/host:/home/aibox/.cache:ro".to_string()],
         )
         .unwrap();
     }
@@ -262,7 +262,7 @@ mod tests {
             &[],
             &[],
         );
-        assert!(contains_pair(&args, "-v", "/abs/profile:/home/codex"));
+        assert!(contains_pair(&args, "-v", "/abs/profile:/home/aibox"));
         assert!(contains_pair(&args, "-v", "/abs/work:/work"));
         assert!(!args.iter().any(|arg| arg == "--env-file"));
     }

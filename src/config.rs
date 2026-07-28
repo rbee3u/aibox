@@ -67,29 +67,34 @@ struct State {
 
 pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) -> Result<i32> {
     match command {
-        ConfigCommand::List => {
+        ConfigCommand::List { .. } => {
             for provider in list_providers(profile)? {
                 let marker = if provider.last_applied { "*" } else { " " };
                 println!("{marker} {}", provider.name);
             }
         }
-        ConfigCommand::Get { provider } => {
+        ConfigCommand::Get { provider, .. } => {
             print!("{}", get_provider(profile, provider)?);
         }
-        ConfigCommand::Create { provider } => {
+        ConfigCommand::Create { provider, .. } => {
             create_provider(profile, provider)?;
         }
-        ConfigCommand::Apply { provider } => {
+        ConfigCommand::Apply { provider, .. } => {
             apply_provider(profile, provider)?;
         }
-        ConfigCommand::Edit { provider, auth } => {
+        ConfigCommand::Edit { provider, auth, .. } => {
             if *auth && agent.auth_file().is_none() {
                 bail!("{} does not have an auth file", agent.tag());
             }
             edit_provider(profile, provider, *auth)?;
         }
-        ConfigCommand::Delete { provider, yes } => {
-            delete_provider(profile, provider, *yes)?;
+        ConfigCommand::Delete {
+            providers,
+            all,
+            yes,
+            ..
+        } => {
+            delete_providers(profile, providers, *all, *yes)?;
         }
     }
     Ok(0)
@@ -288,21 +293,69 @@ pub fn edit_provider(profile: &Profile, provider: &str, edit_auth: bool) -> Resu
 }
 
 pub fn delete_provider(profile: &Profile, provider: &str, yes: bool) -> Result<()> {
-    profile::validate_name("provider", provider)?;
-    ensure_provider_exists(profile, provider)?;
-    let clear_state = state_is_last_applied(profile, provider)?;
+    delete_providers(profile, &[provider.to_string()], false, yes)
+}
 
-    if !yes && !confirm_delete(provider)? {
-        bail!("aborted");
+pub fn delete_providers(
+    profile: &Profile,
+    providers: &[String],
+    all: bool,
+    yes: bool,
+) -> Result<()> {
+    let targets = delete_provider_targets(profile, providers, all)?;
+    if targets.is_empty() {
+        eprintln!(">> no providers in this profile");
+        return Ok(());
     }
 
-    let provider_dir = profile.provider_dir(provider);
-    fs::remove_dir_all(&provider_dir)
-        .with_context(|| format!("delete provider directory {}", provider_dir.display()))?;
+    if !yes {
+        for provider in &targets {
+            if !confirm_delete(provider)? {
+                bail!("aborted");
+            }
+        }
+    }
+
+    let state = read_state(profile)?;
+    let clear_state = targets
+        .iter()
+        .any(|provider| state.last_applied.as_deref() == Some(provider.as_str()));
+    for provider in &targets {
+        let provider_dir = profile.provider_dir(provider);
+        fs::remove_dir_all(&provider_dir)
+            .with_context(|| format!("delete provider directory {}", provider_dir.display()))?;
+    }
     if clear_state {
         remove_state_file(profile)?;
     }
     Ok(())
+}
+
+fn delete_provider_targets(
+    profile: &Profile,
+    providers: &[String],
+    all: bool,
+) -> Result<Vec<String>> {
+    if all && !providers.is_empty() {
+        bail!("--all cannot be combined with provider names");
+    }
+
+    if all || providers.is_empty() {
+        return Ok(list_providers(profile)?
+            .into_iter()
+            .map(|provider| provider.name)
+            .collect());
+    }
+
+    let mut targets = Vec::new();
+    for provider in providers {
+        profile::validate_name("provider", provider)?;
+        ensure_provider_exists(profile, provider)?;
+        if !targets.iter().any(|target| target == provider) {
+            targets.push(provider.to_string());
+        }
+    }
+    Ok(targets)
 }
 
 struct PlannedWrite {
@@ -488,11 +541,6 @@ fn planned_state_write(profile: &Profile, state: &State) -> Result<PlannedWrite>
         content: content.into_bytes(),
         private: false,
     })
-}
-
-fn state_is_last_applied(profile: &Profile, provider: &str) -> Result<bool> {
-    let state = read_state(profile)?;
-    Ok(state.last_applied.as_deref() == Some(provider))
 }
 
 fn remove_state_file(profile: &Profile) -> Result<()> {
@@ -822,6 +870,89 @@ mod tests {
         assert!(root.path().join("default/.claude/statusline.sh").is_file());
         assert!(root.path().join("default/.gitconfig").is_file());
         assert!(root.path().join(".config/default/codex").is_dir());
+    }
+
+    #[test]
+    fn delete_providers_accepts_many_and_clears_last_applied_state() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        create_provider(&p, "anthropic").unwrap();
+        create_provider(&p, "local").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"anthropic"}"#).unwrap();
+
+        delete_providers(
+            &p,
+            &["openai".to_string(), "anthropic".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!p.provider_dir("openai").exists());
+        assert!(!p.provider_dir("anthropic").exists());
+        assert!(p.provider_dir("local").exists());
+        assert!(!p.state_path().exists());
+    }
+
+    #[test]
+    fn delete_providers_empty_or_all_flag_selects_every_provider() {
+        for (target, all) in [(Vec::new(), false), (Vec::new(), true)] {
+            let root = tempfile::tempdir().unwrap();
+            let p = profile(root.path(), AgentKind::Codex);
+            create_provider(&p, "openai").unwrap();
+            create_provider(&p, "anthropic").unwrap();
+
+            delete_providers(&p, &target, all, true).unwrap();
+
+            assert!(list_providers(&p).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn delete_providers_treats_all_as_a_provider_name_without_all_flag() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "all").unwrap();
+        create_provider(&p, "openai").unwrap();
+
+        delete_providers(&p, &["all".to_string()], false, true).unwrap();
+
+        assert!(!p.provider_dir("all").exists());
+        assert!(p.provider_dir("openai").exists());
+    }
+
+    #[test]
+    fn delete_providers_resolves_every_name_before_deleting() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+
+        let err = delete_providers(
+            &p,
+            &["openai".to_string(), "missing".to_string()],
+            false,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("provider 'missing' does not exist"), "{err}");
+        assert!(p.provider_dir("openai").exists());
+    }
+
+    #[test]
+    fn delete_providers_rejects_all_flag_mixed_with_names() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+
+        let err = delete_providers(&p, &["openai".to_string()], true, true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("--all cannot be combined"), "{err}");
+        assert!(p.provider_dir("openai").exists());
     }
 
     #[test]
