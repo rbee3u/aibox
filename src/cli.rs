@@ -2,7 +2,8 @@
 //! args away from clap.
 
 use crate::agent::AgentKind;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use std::ffi::{OsStr, OsString};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -12,13 +13,14 @@ use clap::{Args, Parser, Subcommand};
                   that is the sandbox boundary.\n\n\
                   Pass args straight to the underlying agent after `--`:\n    \
                   aibox -- \"fix the build\"\n\n\
-                  Select Claude for runs/config/session instead of the default Codex agent with \
+                  Select Claude for a run instead of the default Codex agent with \
                   `--agent claude`.",
+    args_conflicts_with_subcommands = true,
     version
 )]
 pub struct Cli {
-    /// Agent selector for agent-scoped commands. Run/config/session default to Codex.
-    #[arg(long, value_enum)]
+    /// Agent selector for runs. Omit for Codex.
+    #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
 
     #[command(flatten)]
@@ -26,6 +28,157 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+impl Cli {
+    pub fn parse() -> Self {
+        Self::parse_from(std::env::args_os())
+    }
+
+    pub fn parse_from<I, T>(itr: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        match Self::try_parse_from(itr) {
+            Ok(cli) => cli,
+            Err(error) => error.exit(),
+        }
+    }
+
+    pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
+        reject_duplicate_scoped_options(&args)?;
+        <Self as Parser>::try_parse_from(args)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Scope {
+    Root,
+    Config,
+    Session,
+    OtherCommand,
+}
+
+#[derive(Clone, Copy)]
+enum ScopedOption {
+    Agent,
+    Profile,
+}
+
+#[derive(Default)]
+struct ScopedOptionCounts {
+    run_agent: bool,
+    run_profile: bool,
+    config_agent: bool,
+    config_profile: bool,
+    session_agent: bool,
+    session_profile: bool,
+}
+
+impl ScopedOptionCounts {
+    fn record(
+        &mut self,
+        scope: Scope,
+        option: ScopedOption,
+        display: &'static str,
+    ) -> Result<(), clap::Error> {
+        let seen = match (scope, option) {
+            (Scope::Root, ScopedOption::Agent) => &mut self.run_agent,
+            (Scope::Root, ScopedOption::Profile) => &mut self.run_profile,
+            (Scope::Config, ScopedOption::Agent) => &mut self.config_agent,
+            (Scope::Config, ScopedOption::Profile) => &mut self.config_profile,
+            (Scope::Session, ScopedOption::Agent) => &mut self.session_agent,
+            (Scope::Session, ScopedOption::Profile) => &mut self.session_profile,
+            (Scope::OtherCommand, _) => return Ok(()),
+        };
+
+        if *seen {
+            Err(duplicate_scoped_option_error(display))
+        } else {
+            *seen = true;
+            Ok(())
+        }
+    }
+}
+
+fn duplicate_scoped_option_error(option: &str) -> clap::Error {
+    clap::Error::raw(
+        clap::error::ErrorKind::ArgumentConflict,
+        format!("{option} must be provided only once in a command scope"),
+    )
+    .with_cmd(&Cli::command())
+}
+
+fn reject_duplicate_scoped_options(args: &[OsString]) -> Result<(), clap::Error> {
+    let mut scope = Scope::Root;
+    let mut counts = ScopedOptionCounts::default();
+    let mut skip_next_value = false;
+
+    for arg in args.iter().skip(1) {
+        if skip_next_value {
+            skip_next_value = false;
+            continue;
+        }
+        if arg == OsStr::new("--") {
+            break;
+        }
+
+        let Some(token) = arg.to_str() else {
+            continue;
+        };
+
+        if let Some(next_scope) = subcommand_scope(scope, token) {
+            scope = next_scope;
+            continue;
+        }
+
+        if token == "--agent" {
+            counts.record(scope, ScopedOption::Agent, "--agent")?;
+            skip_next_value = true;
+        } else if token.starts_with("--agent=") {
+            counts.record(scope, ScopedOption::Agent, "--agent")?;
+        } else if token == "--profile" {
+            counts.record(scope, ScopedOption::Profile, "--profile")?;
+            skip_next_value = true;
+        } else if token.starts_with("--profile=") {
+            counts.record(scope, ScopedOption::Profile, "--profile")?;
+        } else if token == "-p" {
+            counts.record(scope, ScopedOption::Profile, "--profile")?;
+            skip_next_value = true;
+        } else if token.starts_with("-p") && !token.starts_with("--") {
+            counts.record(scope, ScopedOption::Profile, "--profile")?;
+        } else if takes_value(token) {
+            skip_next_value = true;
+        }
+    }
+
+    Ok(())
+}
+
+fn subcommand_scope(current: Scope, token: &str) -> Option<Scope> {
+    if current != Scope::Root || token.starts_with('-') {
+        return None;
+    }
+
+    match token {
+        "config" => Some(Scope::Config),
+        "session" => Some(Scope::Session),
+        "build" | "profile" => Some(Scope::OtherCommand),
+        _ => None,
+    }
+}
+
+fn takes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "--work" | "-w" | "--mount" | "-m" | "--agent" | "--profile" | "-p"
+    )
 }
 
 #[derive(Debug, Subcommand)]
@@ -50,26 +203,42 @@ pub struct BuildArgs {
 #[derive(Debug, Args)]
 pub struct SessionArgs {
     /// Session backend to browse. Omit for Codex.
-    #[arg(long, value_enum)]
+    #[arg(
+        id = "session-agent",
+        long = "agent",
+        value_name = "AGENT",
+        value_enum,
+        global = true
+    )]
     pub agent: Option<AgentKind>,
+
+    /// Config profile name. Use `host` to browse real host sessions.
+    #[arg(
+        id = "session-profile",
+        short = 'p',
+        long = "profile",
+        value_name = "PROFILE",
+        value_parser = parse_profile,
+        global = true
+    )]
+    pub profile: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<SessionCommand>,
 }
 
+impl SessionArgs {
+    pub fn profile_name(&self) -> &str {
+        self.profile.as_deref().unwrap_or("default")
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
-    List {
-        /// Session backend to browse. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
-    },
+    List,
     Get {
         /// Session short id or unique prefix.
         id: String,
-        /// Session backend to browse. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
     Delete {
         /// Session short id or unique prefix. Accepts many; none means all.
@@ -81,49 +250,56 @@ pub enum SessionCommand {
         /// Skip delete confirmations.
         #[arg(short = 'y', long)]
         yes: bool,
-        /// Session backend to browse. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
 }
 
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
     /// Provider agent to manage. Omit for Codex.
-    #[arg(long, value_enum)]
+    #[arg(
+        id = "config-agent",
+        long = "agent",
+        value_name = "AGENT",
+        value_enum,
+        global = true
+    )]
     pub agent: Option<AgentKind>,
+
+    /// Config profile name. Use `host` to manage real host agent config.
+    #[arg(
+        id = "config-profile",
+        short = 'p',
+        long = "profile",
+        value_name = "PROFILE",
+        value_parser = parse_profile,
+        global = true
+    )]
+    pub profile: Option<String>,
 
     #[command(subcommand)]
     pub command: ConfigCommand,
 }
 
+impl ConfigArgs {
+    pub fn profile_name(&self) -> &str {
+        self.profile.as_deref().unwrap_or("default")
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    List {
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
-    },
+    List,
     Get {
         #[arg(value_parser = parse_provider)]
         provider: String,
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
     Create {
         #[arg(value_parser = parse_provider)]
         provider: String,
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
     Apply {
         #[arg(value_parser = parse_provider)]
         provider: String,
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
     Edit {
         #[arg(value_parser = parse_provider)]
@@ -131,9 +307,6 @@ pub enum ConfigCommand {
         /// Edit the auth file. Codex only.
         #[arg(long)]
         auth: bool,
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
     Delete {
         /// Provider name. Accepts many; none means all.
@@ -145,9 +318,6 @@ pub enum ConfigCommand {
         /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
-        /// Provider agent to manage. Omit for Codex.
-        #[arg(long, value_enum)]
-        agent: Option<AgentKind>,
     },
 }
 
@@ -179,8 +349,14 @@ pub enum ProfileCommand {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Config profile name. Use `host` only with config/session commands.
-    #[arg(short, long, value_parser = parse_profile)]
+    /// Profile home name.
+    #[arg(
+        id = "run-profile",
+        short = 'p',
+        long = "profile",
+        value_name = "PROFILE",
+        value_parser = parse_ordinary_profile
+    )]
     pub profile: Option<String>,
 
     /// Project dir mounted at /work (default: current dir).
@@ -237,10 +413,16 @@ pub fn split_passthrough(argv: Vec<String>) -> (Vec<String>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::error::ErrorKind;
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn help(args: &[&str]) -> String {
+        let err = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        err.to_string()
     }
 
     #[test]
@@ -269,23 +451,18 @@ mod tests {
 
     #[test]
     fn parses_config_commands() {
-        let cli = Cli::try_parse_from([
-            "aibox", "--agent", "claude", "-p", "host", "config", "apply", "openai",
-        ])
-        .unwrap();
-        assert_eq!(cli.agent, Some(AgentKind::Claude));
-        assert_eq!(cli.run.profile_name(), "host");
+        let cli = Cli::try_parse_from(["aibox", "config", "--profile", "host", "apply", "openai"])
+            .unwrap();
+        assert_eq!(cli.agent, None);
+        assert_eq!(cli.run.profile_name(), "default");
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command:
-                    ConfigCommand::Apply {
-                        provider,
-                        agent: apply_agent,
-                    },
+                profile,
+                command: ConfigCommand::Apply { provider },
             }) => {
                 assert_eq!(*agent, None);
-                assert_eq!(*apply_agent, None);
+                assert_eq!(profile.as_deref(), Some("host"));
                 assert_eq!(provider, "openai");
             }
             _ => panic!("expected config apply"),
@@ -299,15 +476,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command:
-                    ConfigCommand::Edit {
-                        provider,
-                        auth,
-                        agent: edit_agent,
-                    },
+                profile,
+                command: ConfigCommand::Edit { provider, auth },
             }) => {
                 assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(*edit_agent, None);
+                assert_eq!(*profile, None);
                 assert_eq!(provider, "openai");
                 assert!(*auth);
             }
@@ -319,10 +492,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command: ConfigCommand::List { agent: list_agent },
+                profile,
+                command: ConfigCommand::List,
             }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*list_agent, Some(AgentKind::Claude));
+                assert_eq!(*agent, Some(AgentKind::Claude));
+                assert_eq!(*profile, None);
             }
             _ => panic!("expected config list"),
         }
@@ -333,40 +507,56 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
                 agent,
-                command:
-                    ConfigCommand::Get {
-                        provider,
-                        agent: get_agent,
-                    },
+                profile,
+                command: ConfigCommand::Get { provider },
             }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*get_agent, Some(AgentKind::Claude));
+                assert_eq!(*agent, Some(AgentKind::Claude));
+                assert_eq!(*profile, None);
                 assert_eq!(provider, "openai");
             }
             _ => panic!("expected config get"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "aibox",
+            "config",
+            "create",
+            "openai",
+            "--agent",
+            "codex",
+            "--profile",
+            "host",
+        ])
+        .unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs {
+                agent,
+                profile,
+                command: ConfigCommand::Create { provider },
+            }) => {
+                assert_eq!(*agent, Some(AgentKind::Codex));
+                assert_eq!(profile.as_deref(), Some("host"));
+                assert_eq!(provider, "openai");
+            }
+            _ => panic!("expected config create"),
         }
     }
 
     #[test]
     fn parses_session_delete() {
         let cli = Cli::try_parse_from([
-            "aibox", "--agent", "claude", "-p", "host", "session", "delete", "-y", "abc",
+            "aibox", "session", "--agent", "claude", "-p", "host", "delete", "-y", "abc",
         ])
         .unwrap();
-        assert_eq!(cli.agent, Some(AgentKind::Claude));
+        assert_eq!(cli.agent, None);
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
-                command:
-                    Some(SessionCommand::Delete {
-                        ids,
-                        all,
-                        yes,
-                        agent: delete_agent,
-                    }),
+                profile,
+                command: Some(SessionCommand::Delete { ids, all, yes }),
             }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*delete_agent, None);
+                assert_eq!(*agent, Some(AgentKind::Claude));
+                assert_eq!(profile.as_deref(), Some("host"));
                 assert_eq!(ids, &["abc".to_string()]);
                 assert!(!*all);
                 assert!(*yes);
@@ -380,16 +570,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
-                command:
-                    Some(SessionCommand::Delete {
-                        ids,
-                        all,
-                        yes,
-                        agent: delete_agent,
-                    }),
+                profile,
+                command: Some(SessionCommand::Delete { ids, all, yes }),
             }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*delete_agent, Some(AgentKind::Claude));
+                assert_eq!(*agent, Some(AgentKind::Claude));
+                assert_eq!(*profile, None);
                 assert_eq!(ids, &["abc".to_string()]);
                 assert!(!*all);
                 assert!(!*yes);
@@ -401,16 +586,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
-                command:
-                    Some(SessionCommand::Delete {
-                        ids,
-                        all,
-                        yes,
-                        agent: delete_agent,
-                    }),
+                profile,
+                command: Some(SessionCommand::Delete { ids, all, yes }),
             }) => {
                 assert_eq!(*agent, None);
-                assert_eq!(*delete_agent, None);
+                assert_eq!(*profile, None);
                 assert_eq!(ids, &["abc".to_string()]);
                 assert!(!*all);
                 assert!(*yes);
@@ -438,16 +618,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
-                command:
-                    Some(SessionCommand::Delete {
-                        ids,
-                        all,
-                        yes,
-                        agent: delete_agent,
-                    }),
+                profile,
+                command: Some(SessionCommand::Delete { ids, all, yes }),
             }) => {
                 assert_eq!(*agent, None);
-                assert_eq!(*delete_agent, None);
+                assert_eq!(*profile, None);
                 assert!(ids.is_empty());
                 assert!(!*all);
                 assert!(*yes);
@@ -461,9 +636,11 @@ mod tests {
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
                 agent,
+                profile,
                 command: None,
             }) => {
                 assert_eq!(*agent, None);
+                assert_eq!(*profile, None);
             }
             _ => panic!("expected session"),
         }
@@ -471,16 +648,17 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "config", "delete", "--yes", "openai"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
+                agent,
+                profile,
                 command:
                     ConfigCommand::Delete {
                         providers,
                         all,
                         yes,
-                        agent,
                     },
-                ..
             }) => {
                 assert_eq!(*agent, None);
+                assert_eq!(*profile, None);
                 assert_eq!(providers, &["openai".to_string()]);
                 assert!(!*all);
                 assert!(*yes);
@@ -550,15 +728,12 @@ mod tests {
         let cli = Cli::try_parse_from(["aibox", "config", "edit", "--auth", "openai"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
-                command:
-                    ConfigCommand::Edit {
-                        provider,
-                        auth,
-                        agent,
-                    },
-                ..
+                agent,
+                profile,
+                command: ConfigCommand::Edit { provider, auth },
             }) => {
                 assert_eq!(*agent, None);
+                assert_eq!(*profile, None);
                 assert_eq!(provider, "openai");
                 assert!(*auth);
             }
@@ -628,12 +803,121 @@ mod tests {
     }
 
     #[test]
-    fn non_global_options_cannot_cross_command_boundaries() {
-        assert!(Cli::try_parse_from(["aibox", "session", "-p", "host", "list"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "config", "-p", "host", "list"]).is_err());
+    fn command_scoped_profile_option_can_cross_config_and_session_boundaries() {
+        let cli = Cli::try_parse_from(["aibox", "session", "-p", "host", "list"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Session(SessionArgs { profile, .. }) => {
+                assert_eq!(profile.as_deref(), Some("host"));
+            }
+            _ => panic!("expected session"),
+        }
+
+        let cli = Cli::try_parse_from(["aibox", "config", "-p", "host", "list"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs { profile, .. }) => {
+                assert_eq!(profile.as_deref(), Some("host"));
+            }
+            _ => panic!("expected config"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["aibox", "config", "get", "--profile", "host", "openai"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs { profile, .. }) => {
+                assert_eq!(profile.as_deref(), Some("host"));
+            }
+            _ => panic!("expected config"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["aibox", "config", "get", "openai", "--profile", "host"]).unwrap();
+        match cli.command.as_ref().unwrap() {
+            Command::Config(ConfigArgs { profile, .. }) => {
+                assert_eq!(profile.as_deref(), Some("host"));
+            }
+            _ => panic!("expected config"),
+        }
+    }
+
+    #[test]
+    fn root_run_options_cannot_cross_command_boundaries() {
+        for argv in [
+            &["aibox", "--agent", "claude", "config", "list"][..],
+            &["aibox", "-p", "work", "config", "list"][..],
+            &["aibox", "--exec", "config", "list"][..],
+            &["aibox", "--work", ".", "config", "list"][..],
+            &["aibox", "--mount", "/tmp:/tmp", "config", "list"][..],
+            &["aibox", "--agent", "claude", "build"][..],
+            &["aibox", "-p", "work", "build"][..],
+            &["aibox", "--agent", "claude", "profile", "list"][..],
+            &["aibox", "-p", "work", "profile", "list"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "{argv:?} should reject root run options before a subcommand"
+            );
+        }
+
         assert!(Cli::try_parse_from(["aibox", "--force", "build"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "--agent", "claude", "list"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude"]).is_err());
+    }
+
+    #[test]
+    fn scoped_options_reject_duplicates() {
+        for argv in [
+            &["aibox", "--agent", "claude", "--agent", "claude"][..],
+            &["aibox", "-p", "work", "--profile", "work"][..],
+            &[
+                "aibox", "config", "--agent", "claude", "get", "openai", "--agent", "claude",
+            ][..],
+            &[
+                "aibox",
+                "config",
+                "--profile",
+                "host",
+                "get",
+                "openai",
+                "--profile",
+                "host",
+            ][..],
+            &[
+                "aibox", "session", "--agent", "claude", "list", "--agent", "claude",
+            ][..],
+            &[
+                "aibox",
+                "session",
+                "--profile",
+                "host",
+                "list",
+                "--profile",
+                "host",
+            ][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "{argv:?} should reject duplicate scoped options"
+            );
+        }
+    }
+
+    #[test]
+    fn help_shows_only_options_for_the_current_scope() {
+        let build = help(&["aibox", "build", "--help"]);
+        assert!(!build.contains("--profile"), "{build}");
+        assert!(!build.contains("--agent"), "{build}");
+
+        let profile = help(&["aibox", "profile", "--help"]);
+        assert!(!profile.contains("--profile"), "{profile}");
+        assert!(!profile.contains("--agent"), "{profile}");
+
+        let config_get = help(&["aibox", "config", "get", "--help"]);
+        assert!(config_get.contains("--profile"), "{config_get}");
+        assert!(config_get.contains("--agent"), "{config_get}");
+
+        let session_delete = help(&["aibox", "session", "delete", "--help"]);
+        assert!(session_delete.contains("--profile"), "{session_delete}");
+        assert!(session_delete.contains("--agent"), "{session_delete}");
     }
 
     #[test]
@@ -679,13 +963,6 @@ mod tests {
             _ => panic!("expected build"),
         }
 
-        let cli = Cli::try_parse_from(["aibox", "--agent", "claude", "build"]).unwrap();
-        assert_eq!(cli.agent, Some(AgentKind::Claude));
-        match cli.command.unwrap() {
-            Command::Build(BuildArgs { force }) => assert!(!force),
-            _ => panic!("expected build"),
-        }
-
         let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
         assert_eq!(cli.agent, None);
         match cli.command.unwrap() {
@@ -718,6 +995,8 @@ mod tests {
     #[test]
     fn invalid_names_are_rejected_by_parser() {
         assert!(Cli::try_parse_from(["aibox", "-p", "bad.name"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "-p", "host"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "config", "-p", "bad.name", "list"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "config", "get", "bad.name"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "create", "bad.name"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "create", "host"]).is_err());

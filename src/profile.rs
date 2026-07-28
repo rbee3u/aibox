@@ -703,6 +703,61 @@ mod tests {
         assert!(root.path().join(".config/work/claude").is_dir());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn claude_statusline_is_compatible_with_bash_without_mapfile() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+
+        let scratch = tempfile::tempdir().unwrap();
+        let fake_bin = scratch.path().join("bin");
+        let workspace = scratch.path().join("workspace");
+        fs::create_dir(&fake_bin).unwrap();
+        fs::create_dir(&workspace).unwrap();
+
+        let fake_jq = fake_bin.join("jq");
+        fs::write(
+            &fake_jq,
+            "#!/bin/sh\nprintf '%s\\n' 'Opus' '' \"$AIBOX_TEST_STATUS_WORKSPACE\" '42' '200000' '84000'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&fake_jq, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let script = scratch.path().join("statusline.sh");
+        fs::write(&script, CLAUDE_STATUSLINE_SCRIPT).unwrap();
+
+        let mut paths = vec![fake_bin];
+        if let Some(path) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&path));
+        }
+        let path = std::env::join_paths(paths).unwrap();
+
+        let mut child = Command::new("bash")
+            .arg(&script)
+            .env("PATH", path)
+            .env("AIBOX_TEST_STATUS_WORKSPACE", &workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"{}\n").unwrap();
+        drop(stdin);
+
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(stderr.is_empty(), "{stderr}");
+        assert!(stdout.contains("workspace | [Opus]"), "{stdout}");
+        assert!(stdout.contains("42% (84k/200k)"), "{stdout}");
+    }
+
     #[test]
     fn create_ordinary_profile_is_idempotent_and_preserves_regular_files() {
         let root = tempfile::tempdir().unwrap();

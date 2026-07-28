@@ -6,7 +6,6 @@
 //! it can be unit-tested without spawning a process.
 
 use aibox::cli::{split_passthrough, Cli};
-use clap::Parser;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

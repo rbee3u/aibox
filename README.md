@@ -8,9 +8,9 @@ selected profile home.
 ## Commands
 
 ```sh
-aibox [--agent codex|claude] [options] [-- <args passed to agent>]
-aibox [--agent codex|claude] config <list|get|create|apply|edit|delete> ...
-aibox [--agent codex|claude] session [list|get|delete] ...
+aibox [--agent codex|claude] [run-options] [-- <args passed to agent>]
+aibox config [--agent codex|claude] [-p <profile>] <list|get|create|apply|edit|delete> ...
+aibox session [--agent codex|claude] [-p <profile>] [list|get|delete] ...
 aibox build [--force]
 aibox profile <list|create|delete> ...
 ```
@@ -49,14 +49,14 @@ $AIBOX_ROOT/
             └── .state.json
 ```
 
-`aibox -p work` and `aibox --agent claude -p work` both mount `$AIBOX_ROOT/work`
-as the agent home. Codex state lives under `.codex`; Claude state lives under
-`.claude`.
+For runs, `aibox -p work` and `aibox --agent claude -p work` both mount
+`$AIBOX_ROOT/work` as the agent home. Codex state lives under `.codex`; Claude
+state lives under `.claude`.
 
 `-p host` is special and only valid for `config` and `session`. It manages the
 real host `$HOME/.codex` or `$HOME/.claude`, while provider snapshots and
-backups still live under `$AIBOX_ROOT/.config/host/<agent>/`. Docker runs reject
-`-p host`.
+backups still live under `$AIBOX_ROOT/.config/host/<agent>/`. Docker runs do not
+accept `-p host`.
 
 Profile and provider names must contain only letters, numbers, `_`, and `-`.
 
@@ -91,9 +91,9 @@ aibox config delete openai --yes
 aibox config delete openai anthropic --yes
 aibox config delete --all --yes
 
-aibox --agent claude -p work config create anthropic
-aibox --agent claude -p work config edit anthropic
-aibox --agent claude -p work config apply anthropic
+aibox config --agent claude -p work create anthropic
+aibox config --agent claude -p work edit anthropic
+aibox config --agent claude -p work apply anthropic
 ```
 
 For `profile delete` and `config delete`, omitting targets is the same as
@@ -129,9 +129,9 @@ and a command status line:
     "type": "command",
     "command": "bash ~/.claude/statusline.sh"
   },
+  "skipDangerousModePermissionPrompt": true,
   "permissions": {
-    "defaultMode": "bypassPermissions",
-    "skipDangerousModePermissionPrompt": true
+    "defaultMode": "bypassPermissions"
   }
 }
 ```
@@ -183,7 +183,7 @@ aibox session get 3f2a
 aibox session delete 3f2a
 aibox session delete --all -y
 aibox session delete -y
-aibox -p host session list
+aibox session -p host list
 ```
 
 `list` prints short id, date, and title. `get <id>` prints your typed prompts.
@@ -192,13 +192,20 @@ omitting ids is the same as passing `--all`.
 
 ## Run Options
 
+Options are scoped to the command they affect. Put run options before any
+subcommand; put `config` and `session` options after `config` or `session`.
+
 ```text
---agent <codex|claude>      agent selector for run/config/session, default: codex
--p, --profile <name>        profile home, default: default
+--agent <codex|claude>      agent selector for a run, default: codex
+-p, --profile <name>        run profile home, default: default
 -w, --work <dir>            directory mounted at /work, default: current dir
 -m, --mount <spec>          extra bind mount host:container[:ro], repeatable
 --exec                      Codex only: run `codex exec`
 ```
+
+`config` and `session` each accept their own `--agent <codex|claude>` and
+`-p, --profile <name>` after the command name; those scoped options can appear
+before or after the leaf subcommand and its arguments.
 
 New provider templates default the agents to unrestricted permission mode
 because Docker is the sandbox boundary. To restore agent prompts or sandboxing,

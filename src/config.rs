@@ -54,9 +54,9 @@ const DEFAULT_CLAUDE_SETTINGS_TEMPLATE: &[u8] = br#"{
     "type": "command",
     "command": "bash ~/.claude/statusline.sh"
   },
+  "skipDangerousModePermissionPrompt": true,
   "permissions": {
-    "defaultMode": "bypassPermissions",
-    "skipDangerousModePermissionPrompt": true
+    "defaultMode": "bypassPermissions"
   }
 }
 "#;
@@ -75,7 +75,7 @@ struct State {
 
 pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) -> Result<i32> {
     match command {
-        ConfigCommand::List { .. } => {
+        ConfigCommand::List => {
             for provider in list_providers(profile)? {
                 let marker = if provider.last_applied { "*" } else { " " };
                 if !crate::print_line(&format!("{marker} {}", provider.name))? {
@@ -989,10 +989,14 @@ model = "gpt-5.5"
             settings["statusLine"]["command"],
             "bash ~/.claude/statusline.sh"
         );
+        assert_eq!(settings["skipDangerousModePermissionPrompt"], true);
         assert_eq!(settings["permissions"]["defaultMode"], "bypassPermissions");
         assert_eq!(
-            settings["permissions"]["skipDangerousModePermissionPrompt"],
-            true
+            settings["permissions"]
+                .as_object()
+                .unwrap()
+                .get("skipDangerousModePermissionPrompt"),
+            None
         );
         assert!(get_provider(&p, "anthropic")
             .unwrap()

@@ -129,72 +129,27 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
             profile::dispatch(&args.command)
         }
         Some(Command::Config(args)) => {
-            let agent = resolve_agent_selection(
-                root_agent,
-                args.agent,
-                config_command_agent(&args.command),
-            )?
-            .unwrap_or(AgentKind::Codex);
-            run_config_command(agent, &run_args, &args.command, &passthrough)
+            if root_agent.is_some() {
+                anyhow::bail!("config does not accept root --agent");
+            }
+            reject_run_only_options(&run_args)?;
+            let agent = args.agent.unwrap_or(AgentKind::Codex);
+            run_config_command(agent, args.profile_name(), &args.command, &passthrough)
         }
         Some(Command::Session(args)) => {
-            let agent = resolve_agent_selection(
-                root_agent,
-                args.agent,
-                session_command_agent(args.command.as_ref()),
-            )?
-            .unwrap_or(AgentKind::Codex);
-            run_session_command(agent, &run_args, &args, &passthrough)
+            if root_agent.is_some() {
+                anyhow::bail!("session does not accept root --agent");
+            }
+            reject_run_only_options(&run_args)?;
+            let agent = args.agent.unwrap_or(AgentKind::Codex);
+            run_session_command(agent, args.profile_name(), &args, &passthrough)
         }
-    }
-}
-
-fn resolve_agent(
-    root_agent: Option<AgentKind>,
-    command_agent: Option<AgentKind>,
-) -> Result<Option<AgentKind>> {
-    match (root_agent, command_agent) {
-        (Some(root), Some(command)) if root != command => {
-            anyhow::bail!("--agent must be provided only once")
-        }
-        (Some(agent), Some(_)) => Ok(Some(agent)),
-        (Some(agent), None) | (None, Some(agent)) => Ok(Some(agent)),
-        (None, None) => Ok(None),
-    }
-}
-
-fn resolve_agent_selection(
-    root_agent: Option<AgentKind>,
-    command_agent: Option<AgentKind>,
-    subcommand_agent: Option<AgentKind>,
-) -> Result<Option<AgentKind>> {
-    let agent = resolve_agent(root_agent, command_agent)?;
-    resolve_agent(agent, subcommand_agent)
-}
-
-fn config_command_agent(command: &cli::ConfigCommand) -> Option<AgentKind> {
-    match command {
-        cli::ConfigCommand::List { agent }
-        | cli::ConfigCommand::Get { agent, .. }
-        | cli::ConfigCommand::Create { agent, .. }
-        | cli::ConfigCommand::Apply { agent, .. }
-        | cli::ConfigCommand::Edit { agent, .. }
-        | cli::ConfigCommand::Delete { agent, .. } => *agent,
-    }
-}
-
-fn session_command_agent(command: Option<&cli::SessionCommand>) -> Option<AgentKind> {
-    match command {
-        None => None,
-        Some(cli::SessionCommand::List { agent })
-        | Some(cli::SessionCommand::Get { agent, .. })
-        | Some(cli::SessionCommand::Delete { agent, .. }) => *agent,
     }
 }
 
 fn run_config_command(
     agent: AgentKind,
-    run: &RunArgs,
+    profile_name: &str,
     command: &cli::ConfigCommand,
     passthrough: &[String],
 ) -> Result<i32> {
@@ -203,15 +158,14 @@ fn run_config_command(
             "`-- <args>` applies only to a run; config/session take no pass-through args"
         );
     }
-    reject_run_only_options(run)?;
     let root = profile::config_root()?;
-    let prof = Profile::resolve(agent, &root, run.profile_name())?;
+    let prof = Profile::resolve(agent, &root, profile_name)?;
     config::dispatch(agent, &prof, command)
 }
 
 fn run_session_command(
     agent: AgentKind,
-    run: &RunArgs,
+    profile_name: &str,
     args: &SessionArgs,
     passthrough: &[String],
 ) -> Result<i32> {
@@ -220,12 +174,11 @@ fn run_session_command(
             "`-- <args>` applies only to a run; config/session take no pass-through args"
         );
     }
-    reject_run_only_options(run)?;
     let root = profile::config_root()?;
-    let prof = Profile::resolve(agent, &root, run.profile_name())?;
+    let prof = Profile::resolve(agent, &root, profile_name)?;
     prof.validate_session_home()?;
     match args.command.as_ref() {
-        None | Some(cli::SessionCommand::List { .. }) => {
+        None | Some(cli::SessionCommand::List) => {
             session::dispatch(agent, &prof.home_dir, "list", &[], false, false)
         }
         Some(cli::SessionCommand::Get { id, .. }) => session::dispatch(
@@ -353,7 +306,6 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
 mod tests {
     use super::*;
     use crate::testutil::EnvGuard;
-    use clap::Parser;
 
     #[cfg(unix)]
     fn write_successful_run_docker(dir: &std::path::Path) {
@@ -632,21 +584,17 @@ printf '\nEND\n' >> "$log"
     #[test]
     fn host_profile_is_rejected_for_run_but_allowed_for_session() {
         let fx = RunFixture::new();
-        let err = fx
-            .run(&["aibox", "-p", "host"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("profile 'host' is only valid"));
+        assert!(Cli::try_parse_from(["aibox", "-p", "host"]).is_err());
 
         let code = fx
-            .run(&["aibox", "-p", "host", "session"], Vec::new())
+            .run(&["aibox", "session", "-p", "host"], Vec::new())
             .unwrap();
         assert_eq!(code, 0);
     }
 
     #[cfg(unix)]
     #[test]
-    fn config_and_session_reject_passthrough_and_run_only_options() {
+    fn config_and_session_reject_passthrough() {
         let fx = RunFixture::new();
         let err = fx
             .run(&["aibox", "config", "list"], vec!["ignored".to_string()])
@@ -654,11 +602,7 @@ printf '\nEND\n' >> "$log"
             .to_string();
         assert!(err.contains("applies only to a run"));
 
-        let err = fx
-            .run(&["aibox", "--exec", "config", "list"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("config/session do not accept run-only options"));
+        assert!(Cli::try_parse_from(["aibox", "--exec", "config", "list"]).is_err());
     }
 
     #[cfg(unix)]
@@ -712,10 +656,9 @@ printf '\nEND\n' >> "$log"
                 "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
             ][..],
         ] {
-            let err = fx.run(argv, Vec::new()).unwrap_err().to_string();
             assert!(
-                err.contains("--agent must be provided only once"),
-                "{argv:?} should reject conflicting agent selectors, got {err:?}"
+                Cli::try_parse_from(argv).is_err(),
+                "{argv:?} should reject conflicting agent selectors"
             );
         }
         assert_eq!(
@@ -736,11 +679,7 @@ printf '\nEND\n' >> "$log"
             .to_string();
         assert!(err.contains("build takes no pass-through args"), "{err}");
 
-        let err = fx
-            .run(&["aibox", "-p", "work", "build"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("build does not accept run options"), "{err}");
+        assert!(Cli::try_parse_from(["aibox", "-p", "work", "build"]).is_err());
 
         let err = fx
             .run(&["aibox", "profile", "list"], vec!["ignored".to_string()])
@@ -748,11 +687,7 @@ printf '\nEND\n' >> "$log"
             .to_string();
         assert!(err.contains("profile takes no pass-through args"), "{err}");
 
-        let err = fx
-            .run(&["aibox", "-m", "src:/src", "profile", "list"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("profile does not accept run options"), "{err}");
+        assert!(Cli::try_parse_from(["aibox", "-m", "src:/src", "profile", "list"]).is_err());
         assert_eq!(
             fx.log(),
             "",
@@ -836,42 +771,19 @@ printf '\nEND\n' >> "$log"
             .to_string();
         assert!(err.contains("--exec is codex-only"));
 
-        let err = fx
-            .run(
-                &["aibox", "--agent", "claude", "profile", "list"],
-                Vec::new(),
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("profile is shared across agents"));
+        assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "profile", "list"]).is_err());
 
-        let err = fx
-            .run(&["aibox", "--agent", "claude", "build"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("build does not accept --agent"));
+        assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "build"]).is_err());
 
-        let err = fx
-            .run(
-                &[
-                    "aibox", "--agent", "claude", "config", "list", "--agent", "codex",
-                ],
-                Vec::new(),
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("--agent must be provided only once"));
+        assert!(Cli::try_parse_from([
+            "aibox", "--agent", "claude", "config", "list", "--agent", "codex",
+        ])
+        .is_err());
 
-        let err = fx
-            .run(
-                &[
-                    "aibox", "--agent", "claude", "session", "delete", "abc", "--agent", "codex",
-                ],
-                Vec::new(),
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("--agent must be provided only once"));
+        assert!(Cli::try_parse_from([
+            "aibox", "--agent", "claude", "session", "delete", "abc", "--agent", "codex",
+        ])
+        .is_err());
     }
 
     #[test]

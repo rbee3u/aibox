@@ -2,9 +2,12 @@
 # Claude Code status line: model, effort, dir, git branch, and context usage.
 input=$(cat)
 
-# One jq pass, one field per line (mapfile keeps empty lines, so a missing
-# effort — models without the parameter — stays an empty slot, not a shift).
-mapfile -t fields < <(jq -r '
+# One jq pass, one field per line. Keep this compatible with macOS' default
+# Bash 3.2, where mapfile/readarray is unavailable.
+fields=()
+while IFS= read -r field; do
+    fields+=("$field")
+done < <(jq -r '
   .model.display_name                 // "?",
   .effort.level                       // "",
   (.workspace.current_dir // .cwd     // "."),
@@ -12,12 +15,12 @@ mapfile -t fields < <(jq -r '
   .context_window.context_window_size // 0,
   .context_window.total_input_tokens  // 0
 ' <<<"$input")
-model=${fields[0]}
-effort=${fields[1]}
-workspace_dir=${fields[2]}
-context_percent=${fields[3]}
-context_size=${fields[4]}
-input_tokens=${fields[5]}
+model=${fields[0]:-"?"}
+effort=${fields[1]:-}
+workspace_dir=${fields[2]:-"."}
+context_percent=${fields[3]:-0}
+context_size=${fields[4]:-0}
+input_tokens=${fields[5]:-0}
 
 # git branch, best-effort (empty and silent outside a repo)
 branch=$(git -C "$workspace_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
