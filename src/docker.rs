@@ -1,12 +1,11 @@
 //! Building and running the container.
 //!
-//! Two entry points: [`build_image`] (invoked by `aibox build`) and [`run`]
-//! (spawn `docker run` for the agent). Both shell out to the `docker`
-//! CLI via [`std::process::Command`].
+//! Image inspection, [`build_image`] (invoked by `aibox build`), and [`run`]
+//! (which spawns `docker run` for the agent) all shell out to the Docker CLI.
 //!
 //! ## Why the Dockerfile comes from stdin
 //!
-//! The embedded Dockerfiles have no `COPY`; they fetch everything with
+//! The embedded Dockerfile has no `COPY`; it fetches everything with
 //! apt/curl/npm. So the build context is unused, and we feed the Dockerfile to
 //! `docker build -f - <ctx>` on stdin with an empty context directory.
 
@@ -123,12 +122,21 @@ fn image_ref_for_exact_ls(image: &str) -> String {
 }
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
-/// exit code. A child (not `exec`) so the caller's credential cleanup still runs
+/// exit code. A child (not `exec`) so the caller's container cleanup still runs
 /// after it returns. The child's pid and `--cidfile` are registered with `creds`
 /// for the run's duration, so a SIGINT/SIGTERM aimed at the wrapper alone stops
 /// the container instead of leaving it running unsupervised — killing just the
 /// docker CLI is not enough when a TTY is attached (the CLI only proxies
 /// signals without one; see `creds`).
+///
+/// `after_container_created` runs at most once, after Docker has written a
+/// container id and before this function waits for the container to exit. It is
+/// not called if the Docker child exits before creating a container. If a
+/// successful Docker child leaves a live or uninspectable container behind,
+/// aibox attempts to kill it and returns a non-zero exit code.
+///
+/// This function uses a process-wide child/cidfile registry and must not be
+/// called concurrently.
 pub fn run(
     run_args: &[String],
     image: &str,
@@ -181,10 +189,9 @@ pub fn run(
         }
         ContainerCreate::ChildExited(status) => Ok(status),
         ContainerCreate::TimedOut => {
-            // If Docker is unusually slow to materialize the cidfile, keep any
-            // pre-spawn mount-target locks until the daemon does record the
-            // container id. If it never does, keep the conservative old behavior:
-            // the locks stay held until the child exits.
+            // If Docker is slow to materialize the cidfile, defer the callback
+            // until the daemon records a container id. If the child exits
+            // without one, the callback must not run.
             wait_with_delayed_container_create(&mut child, &cid_path, &mut after_container_created)
         }
     };
@@ -585,7 +592,7 @@ printf '\nEND\n' >> "$log"
         fs::write(&cid, " \n\t").unwrap();
         assert!(
             !cidfile_has_id(&cid),
-            "whitespace-only cidfile must not release spawn locks"
+            "whitespace-only cidfile does not identify a created container"
         );
         fs::write(&cid, "fake-container\n").unwrap();
         assert!(cidfile_has_id(&cid));
@@ -608,7 +615,7 @@ printf '\nEND\n' >> "$log"
         assert!(err.contains("spawn docker run"), "{err}");
         assert!(
             !callback_marker.exists(),
-            "spawn failure means no container exists, so spawn locks must not be released"
+            "spawn failure means no container exists, so the callback must not run"
         );
     }
 
@@ -729,7 +736,7 @@ printf '\nEND\n' >> "$log"
         assert_eq!(code, 23);
         assert!(
             !callback_marker.exists(),
-            "no container id means mount-target locks stay held for drop cleanup"
+            "no container id means the created callback must not run"
         );
     }
 
@@ -752,7 +759,7 @@ printf '\nEND\n' >> "$log"
         assert_eq!(code, 24);
         assert!(
             !callback_marker.exists(),
-            "callback must remain locked out even after the initial create wait timed out"
+            "callback must remain uncalled after the initial create wait times out"
         );
     }
 

@@ -1,8 +1,8 @@
 //! Signal-aware cleanup for Docker runs.
 //!
-//! Provider config is applied persistently before launch, so this module owns
-//! only the Docker child/cidfile registry used to stop containers on
-//! wrapper-only signals.
+//! This module owns the process-wide Docker child/cidfile registry used to stop
+//! containers on wrapper-only signals and to detect a container that outlives
+//! its attached Docker client.
 //!
 //! ## The signal gap
 //!
@@ -33,6 +33,12 @@
 //! the agent is the container's PID 1, and PID 1 ignores signals it has no
 //! handler installed for, so waiting on the graceful signal alone could wait
 //! forever.
+//!
+//! ## Process model
+//!
+//! The child pid, cidfile, and run state form one process-wide registry. The
+//! aibox CLI starts at most one agent run, so this module intentionally does not
+//! support concurrent `docker run` children.
 
 use anyhow::{Context, Result};
 use std::io::Read;
@@ -110,7 +116,9 @@ fn cidfile() -> &'static Mutex<Option<PathBuf>> {
 /// Call *before* spawning the child: the path is known upfront, and registering
 /// it first closes the window where a signal lands after spawn but before any
 /// registration — the watcher could then stop the container via the daemon even
-/// with no child pid recorded yet. Pair with [`clear_child`].
+/// with no child pid recorded yet. If spawning fails, call [`clear_child`];
+/// otherwise register the child with [`set_child`] and finish it with
+/// [`finish_child`].
 pub fn set_cidfile(cidfile_path: &Path) -> Result<()> {
     install_signal_handler()?;
     *cidfile().lock().unwrap() = Some(cidfile_path.to_path_buf());
@@ -119,14 +127,17 @@ pub fn set_cidfile(cidfile_path: &Path) -> Result<()> {
 }
 
 /// Register the spawned `docker run` child's pid for signal forwarding. Call
-/// right after spawn (after [`set_cidfile`]); pair with [`clear_child`] once
-/// the child has been reaped.
+/// right after spawn (after [`set_cidfile`]). Once the child has been reaped,
+/// call [`finish_child`] so a container that outlived the Docker client is
+/// detected before the registration is cleared.
 pub fn set_child(pid: u32) {
     CHILD_PID.store(pid as i32, Ordering::SeqCst);
 }
 
-/// Forget the child and its cidfile (it exited and was reaped, so its pid may
-/// be recycled). Also the cleanup for a spawn that failed after [`set_cidfile`].
+/// Abandon a run registration when spawning failed after [`set_cidfile`].
+///
+/// After a successful spawn, reap the child and call [`finish_child`] instead;
+/// clearing directly would skip the lingering-container check.
 pub fn clear_child() {
     CHILD_PID.store(0, Ordering::SeqCst);
     RUN_STATE.store(RUN_IDLE, Ordering::SeqCst);
@@ -139,7 +150,8 @@ pub fn clear_child() {
 /// the cidfile to stop a still-running container before unregistering the run.
 /// If a fatal signal raced with the wait, clear the now-stale pid, retain the
 /// cidfile, and keep this thread alive until the watcher terminates the process
-/// after daemon-side cleanup.
+/// after daemon-side cleanup. Returns `true` when a live or uninspectable
+/// lingering container required a kill attempt.
 pub fn finish_child() -> bool {
     CHILD_PID.store(0, Ordering::SeqCst);
     let stopped_lingering_container = stop_container_left_by_child();
@@ -374,7 +386,7 @@ fn stop_active_run(sig: i32) {
 /// On the signal path, the main thread normally stays blocked in `child.wait()`
 /// while the watcher performs this escalation; that is why the watcher stops
 /// the container *before* touching the CLI child. The post-wait orphan check
-/// also uses this function directly on the main thread when the CLI detached.
+/// takes a separate immediate-kill path because no attached client remains.
 fn stop_container_id(sig: i32, cid: &str) {
     let name = match sig {
         s if s == signal_hook::consts::SIGINT => "INT",
@@ -489,8 +501,8 @@ fn install_signal_handler() -> Result<()> {
             // A signal can land in the tiny interval after the state action is
             // registered but before `Signals` installs its wakeup action. It
             // was recorded but could not wake the watcher, so re-deliver it
-            // now that the complete handler is live. This happens before any
-            // credential is staged or Docker child is spawned.
+            // now that the complete handler is live. This happens before the
+            // Docker child is spawned.
             if SIGNAL_COUNT.load(Ordering::SeqCst) > initial_signal_count {
                 let sig = LAST_SIGNAL.load(Ordering::SeqCst);
                 if sig != 0 {
@@ -568,9 +580,6 @@ mod tests {
         std::fs::write(dir.join("survived"), "survived\n").unwrap();
     }
 
-    /// Under `nohup` (or an equivalent parent), SIGHUP starts as SIG_IGN. The
-    /// cleanup watcher must not install over that inherited disposition: doing
-    /// so would turn a deliberately survivable hangup into a fatal signal.
     #[cfg(unix)]
     #[test]
     fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
@@ -595,10 +604,8 @@ mod tests {
         );
     }
 
-    /// Body of the signal subprocess: arm exactly what a real run arms for
-    /// daemon-side cleanup — a populated cidfile — then report ready and block.
-    /// It must never exit on its own; the parent's signal is what ends it, and
-    /// the parent asserts on what survived.
+    // Arm the same daemon-side cleanup handle as a real run, report ready, and
+    // block until the parent delivers the signal under test.
     #[cfg(unix)]
     #[test]
     fn signal_helper_process() {
@@ -617,9 +624,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(60));
     }
 
-    /// Run `signal_helper_process` as a subprocess with a stubbed `docker`, wait
-    /// for it to arm its cidfile, then deliver `sig`. Returns the scratch dir
-    /// and the child's exit status.
+    // Run the helper with a stubbed Docker, wait for its cidfile, then signal it.
     #[cfg(unix)]
     fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) {
         let scratch = stable_tempdir();
@@ -662,10 +667,8 @@ mod tests {
         (scratch, status)
     }
 
-    /// The module's headline invariant, on the path `Drop` cannot cover. Ctrl-C
-    /// (and a service-manager SIGTERM) must leave no container running —
-    /// AGENTS.md flags this as the manual check for any `creds.rs` change, so
-    /// cover it here instead.
+    // Exercise the fatal-signal path in a subprocess because unwinding and
+    // `Drop` cannot cover it.
     #[cfg(unix)]
     #[test]
     fn fatal_signal_stops_the_container() {
@@ -725,11 +728,8 @@ esac
         );
     }
 
-    /// A `docker` stub whose `inspect` can report a *running* container, which
-    /// [`write_signal_fake_docker`] never does (it always says stopped, so
-    /// `stop_container_id` returns before its grace/escalation logic). Reports
-    /// running for the first `AIBOX_FAKE_DOCKER_RUNNING_INSPECTS` inspects, then
-    /// stopped — or forever when that count is `always`.
+    // Report a running container for a configurable number of inspections so
+    // tests can reach the grace and escalation paths.
     #[cfg(unix)]
     fn write_running_container_docker(dir: &Path) {
         crate::testutil::write_stub_script(
@@ -770,8 +770,7 @@ esac
         );
     }
 
-    /// Restores [`SIGNAL_COUNT`] on drop. The counter is process-global and the
-    /// watcher reads it, so a test that fakes a second signal must put it back.
+    // SIGNAL_COUNT is process-global, so tests that fake a signal restore it.
     struct SignalCountGuard(usize);
 
     impl SignalCountGuard {
@@ -787,9 +786,6 @@ esac
         }
     }
 
-    /// The graceful half of the escalation: deliver the signal to PID 1, and if
-    /// the container is still running, wait it out rather than SIGKILLing an
-    /// agent that is shutting down cleanly.
     #[cfg(unix)]
     #[test]
     fn stop_container_id_waits_out_a_container_that_stops_on_the_signal() {
@@ -825,9 +821,6 @@ esac
         );
     }
 
-    /// The escalation: the agent is the container's PID 1, and PID 1 ignores
-    /// signals it has no handler for, so a graceful signal alone can never
-    /// land. A second signal must cut the wait short and SIGKILL now.
     #[cfg(unix)]
     #[test]
     fn stop_container_id_escalates_to_sigkill_on_a_second_signal() {
@@ -863,8 +856,6 @@ esac
         );
     }
 
-    /// The wrapper's fatal signal has to reach the container as the *same*
-    /// signal; a mismapped name would make the agent miss its shutdown path.
     #[cfg(unix)]
     #[test]
     fn stop_container_id_forwards_each_signal_under_its_own_name() {
@@ -989,11 +980,6 @@ esac
         );
     }
 
-    /// The orphan-on-detach guarantee: an attached `docker run` CLI can exit
-    /// (Docker's detach key sequence, or a client/daemon disconnect) while its
-    /// container keeps running. `finish_child` must notice the live container
-    /// and kill it rather than leave it running unsupervised after the wrapper
-    /// exits — the exact failure the "kill lingering containers" fix targets.
     #[cfg(unix)]
     #[test]
     fn finish_child_kills_a_container_that_outlived_its_detached_client() {
@@ -1026,10 +1012,6 @@ esac
         );
     }
 
-    /// The common case must stay cheap and side-effect-free: after an ordinary
-    /// `--rm` exit the container id no longer resolves, so `finish_child` must
-    /// return without a `docker kill` and without entering any grace wait. A
-    /// regression here would stall or kill on every clean run.
     #[cfg(unix)]
     #[test]
     fn finish_child_leaves_a_cleanly_exited_run_alone() {

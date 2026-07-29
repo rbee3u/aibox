@@ -10,8 +10,8 @@
 //! Codex has no ai-title, so a session's preview is its first *real* prompt. It
 //! also records injected wrapper turns (environment/instructions context blocks,
 //! `!`-shell commands, skill payloads, the per-project AGENTS.md preamble) as
-//! text-like content items; those are filtered by `is_wrapper_text`. A turn left
-//! with no text after filtering is skipped for previews and `get`.
+//! text-like content items; [`real_text_fragment`] removes those prefixes. A
+//! turn left with no text after filtering is skipped for previews and `get`.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
@@ -106,6 +106,7 @@ fn first_line_is_instructions_preamble(t: &str) -> bool {
         .is_some_and(|first| first.starts_with('#') && first.contains(" instructions for "))
 }
 
+/// Parser for OpenAI Codex's on-disk rollout format.
 pub struct Codex;
 
 impl SessionBackend for Codex {
@@ -121,7 +122,6 @@ impl SessionBackend for Codex {
 
     fn id_of(&self, path: &Path) -> String {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        // The uuid is the trailing 36 chars of the stem (rollout-<date>-<uuid>).
         trailing_uuid(stem).unwrap_or(stem).to_string()
     }
 
@@ -140,6 +140,8 @@ impl SessionBackend for Codex {
             .filter(|ts| !ts.is_empty())
     }
 
+    /// Fall back to the first event timestamp for legacy or damaged rollouts
+    /// that have no readable `session_meta`.
     fn fallback_start_ts_of(&self, v: &Value) -> Option<String> {
         let ts = session::ts_of(v);
         (!ts.is_empty()).then_some(ts)
@@ -229,9 +231,6 @@ mod tests {
         assert_eq!(files, vec![rollout]);
     }
 
-    /// `list` walks the same tree through the tolerant path, so it must apply
-    /// the same `rollout-` filter — otherwise `list` would show rows that
-    /// `get`/`delete` (which use `files`) then refuse to resolve.
     #[test]
     fn list_files_apply_the_same_rollout_filter_as_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -254,8 +253,6 @@ mod tests {
 
     #[test]
     fn list_files_and_files_are_empty_before_the_first_codex_run() {
-        // No `.codex/sessions` yet: an unused profile lists as empty rather
-        // than failing.
         let dir = tempfile::tempdir().unwrap();
 
         assert!(Codex.files(dir.path()).unwrap().is_empty());
@@ -272,8 +269,6 @@ mod tests {
         assert_eq!(Codex.id_of(p), "3f2a1b6c-1111-2222-3333-444455556666");
     }
 
-    /// A stem shorter than a uuid has no trailing-36-char id to slice; the
-    /// whole stem is the id. Slicing unconditionally would panic instead.
     #[test]
     fn id_of_short_stem_falls_back_to_the_whole_stem() {
         assert_eq!(

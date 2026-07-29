@@ -5,6 +5,7 @@ use crate::agent::AgentKind;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::ffi::{OsStr, OsString};
 
+/// Parsed aibox command line, excluding agent arguments after `--`.
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
@@ -23,18 +24,27 @@ pub struct Cli {
     #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
 
+    /// Options accepted only when no subcommand is present.
     #[command(flatten)]
     pub run: RunArgs,
 
+    /// Host-side operation, or `None` for an agent run.
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
 impl Cli {
+    /// Parse the unsplit process command line, printing clap errors before
+    /// exiting.
+    ///
+    /// Use this only when agent pass-through arguments cannot be present.
+    /// Production callers must collect argv, call [`split_passthrough`], and
+    /// pass its left side to [`Self::parse_from`], as the aibox binary does.
     pub fn parse() -> Self {
         Self::parse_from(std::env::args_os())
     }
 
+    /// Parse a pre-split argument iterator, printing clap errors before exiting.
     pub fn parse_from<I, T>(itr: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -46,6 +56,10 @@ impl Cli {
         }
     }
 
+    /// Parse arguments without exiting on an error.
+    ///
+    /// This also rejects repeated `--agent` or `--profile` options within one
+    /// command scope, including forms clap would otherwise accept.
     pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
@@ -181,175 +195,10 @@ fn takes_value(token: &str) -> bool {
     )
 }
 
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Build the aibox Docker image.
-    Build(BuildArgs),
-    /// Manage shared profile homes.
-    Profile(ProfileArgs),
-    /// Manage provider configuration overlays.
-    Config(ConfigArgs),
-    /// Browse this profile's saved chat transcripts (host-side; no container).
-    Session(SessionArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct BuildArgs {
-    /// Disable the Docker build cache and pull a fresh Debian base image.
-    #[arg(short, long)]
-    pub force: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct SessionArgs {
-    /// Session backend to browse. Omit for Codex.
-    #[arg(
-        id = "session-agent",
-        long = "agent",
-        value_name = "AGENT",
-        value_enum,
-        global = true
-    )]
-    pub agent: Option<AgentKind>,
-
-    /// Config profile name. Use `host` to browse real host sessions.
-    #[arg(
-        id = "session-profile",
-        short = 'p',
-        long = "profile",
-        value_name = "PROFILE",
-        value_parser = parse_profile,
-        global = true
-    )]
-    pub profile: Option<String>,
-
-    #[command(subcommand)]
-    pub command: Option<SessionCommand>,
-}
-
-impl SessionArgs {
-    pub fn profile_name(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default")
-    }
-}
-
-#[derive(Debug, Subcommand)]
-pub enum SessionCommand {
-    List,
-    Get {
-        /// Session short id or unique prefix.
-        id: String,
-    },
-    Delete {
-        /// Session short id or unique prefix. Accepts many; none means all.
-        #[arg(value_name = "ID")]
-        ids: Vec<String>,
-        /// Delete all sessions explicitly.
-        #[arg(long)]
-        all: bool,
-        /// Skip delete confirmations.
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-}
-
-#[derive(Debug, Args)]
-pub struct ConfigArgs {
-    /// Provider agent to manage. Omit for Codex.
-    #[arg(
-        id = "config-agent",
-        long = "agent",
-        value_name = "AGENT",
-        value_enum,
-        global = true
-    )]
-    pub agent: Option<AgentKind>,
-
-    /// Config profile name. Use `host` to manage real host agent config.
-    #[arg(
-        id = "config-profile",
-        short = 'p',
-        long = "profile",
-        value_name = "PROFILE",
-        value_parser = parse_profile,
-        global = true
-    )]
-    pub profile: Option<String>,
-
-    #[command(subcommand)]
-    pub command: ConfigCommand,
-}
-
-impl ConfigArgs {
-    pub fn profile_name(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default")
-    }
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ConfigCommand {
-    List,
-    Get {
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-    },
-    Create {
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-    },
-    Apply {
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-    },
-    Edit {
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-        /// Edit the auth file. Codex only.
-        #[arg(long)]
-        auth: bool,
-    },
-    Delete {
-        /// Provider name. Accepts many; none means all.
-        #[arg(value_name = "PROVIDER", value_parser = parse_provider)]
-        providers: Vec<String>,
-        /// Delete all providers explicitly.
-        #[arg(long)]
-        all: bool,
-        /// Skip delete confirmations.
-        #[arg(short, long)]
-        yes: bool,
-    },
-}
-
-#[derive(Debug, Args)]
-pub struct ProfileArgs {
-    #[command(subcommand)]
-    pub command: ProfileCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ProfileCommand {
-    List,
-    Create {
-        #[arg(value_parser = parse_ordinary_profile)]
-        profile: String,
-    },
-    Delete {
-        /// Profile name. Accepts many; none means all.
-        #[arg(value_name = "PROFILE", value_parser = parse_ordinary_profile)]
-        profiles: Vec<String>,
-        /// Delete all profiles explicitly.
-        #[arg(long)]
-        all: bool,
-        /// Skip delete confirmations.
-        #[arg(short, long)]
-        yes: bool,
-    },
-}
-
+/// Options for launching an agent in Docker.
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Profile home name.
+    /// Ordinary profile name (default: `default`).
     #[arg(
         id = "run-profile",
         short = 'p',
@@ -373,9 +222,206 @@ pub struct RunArgs {
 }
 
 impl RunArgs {
+    /// Selected ordinary profile, defaulting to `default`.
     pub fn profile_name(&self) -> &str {
         self.profile.as_deref().unwrap_or("default")
     }
+}
+
+/// Top-level host-side subcommands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Build the aibox Docker image.
+    Build(BuildArgs),
+    /// Manage shared profile homes.
+    Profile(ProfileArgs),
+    /// Manage provider configuration overlays.
+    Config(ConfigArgs),
+    /// Browse this profile's saved chat transcripts (host-side; no container).
+    Session(SessionArgs),
+}
+
+/// Options for `aibox build`.
+#[derive(Debug, Args)]
+pub struct BuildArgs {
+    /// Disable the Docker build cache and pull a fresh Debian base image.
+    #[arg(short, long)]
+    pub force: bool,
+}
+
+/// Arguments for profile management.
+#[derive(Debug, Args)]
+pub struct ProfileArgs {
+    /// Profile operation to perform.
+    #[command(subcommand)]
+    pub command: ProfileCommand,
+}
+
+/// Profile-management operations.
+#[derive(Debug, Subcommand)]
+pub enum ProfileCommand {
+    /// List ordinary profiles and the built-in `host` profile.
+    List,
+    /// Create or initialize an ordinary profile.
+    Create {
+        /// Profile to create.
+        #[arg(value_parser = parse_ordinary_profile)]
+        profile: String,
+    },
+    /// Delete one or more ordinary profiles.
+    Delete {
+        /// Profile name. Accepts many; none means all.
+        #[arg(value_name = "PROFILE", value_parser = parse_ordinary_profile)]
+        profiles: Vec<String>,
+        /// Delete all profiles explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+/// Agent-scoped arguments for provider configuration management.
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    /// Agent whose provider configuration to manage. Omit for Codex.
+    #[arg(
+        id = "config-agent",
+        long = "agent",
+        value_name = "AGENT",
+        value_enum,
+        global = true
+    )]
+    pub agent: Option<AgentKind>,
+
+    /// Profile name. Use `host` to manage the real host agent configuration.
+    #[arg(
+        id = "config-profile",
+        short = 'p',
+        long = "profile",
+        value_name = "PROFILE",
+        value_parser = parse_profile,
+        global = true
+    )]
+    pub profile: Option<String>,
+
+    /// Provider operation to perform.
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+impl ConfigArgs {
+    /// Selected profile, defaulting to `default`.
+    pub fn profile_name(&self) -> &str {
+        self.profile.as_deref().unwrap_or("default")
+    }
+}
+
+/// Provider configuration operations.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// List providers, marking the last applied one with `*`.
+    List,
+    /// Print a provider's managed configuration files.
+    Get {
+        /// Provider to print.
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    /// Create a provider from the built-in template.
+    Create {
+        /// Provider to create.
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    /// Merge a provider into the active agent configuration.
+    Apply {
+        /// Provider to apply.
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+    },
+    /// Open a provider file in `$VISUAL` or `$EDITOR`.
+    Edit {
+        /// Provider to edit.
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+        /// Edit the auth file. Codex only.
+        #[arg(long)]
+        auth: bool,
+    },
+    /// Delete one or more providers.
+    Delete {
+        /// Provider name. Accepts many; none means all.
+        #[arg(value_name = "PROVIDER", value_parser = parse_provider)]
+        providers: Vec<String>,
+        /// Delete all providers explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+/// Agent-scoped arguments for host-side session browsing.
+#[derive(Debug, Args)]
+pub struct SessionArgs {
+    /// Agent whose sessions to browse. Omit for Codex.
+    #[arg(
+        id = "session-agent",
+        long = "agent",
+        value_name = "AGENT",
+        value_enum,
+        global = true
+    )]
+    pub agent: Option<AgentKind>,
+
+    /// Profile name. Use `host` to browse real host sessions.
+    #[arg(
+        id = "session-profile",
+        short = 'p',
+        long = "profile",
+        value_name = "PROFILE",
+        value_parser = parse_profile,
+        global = true
+    )]
+    pub profile: Option<String>,
+
+    /// Session operation, or `None` for the default list operation.
+    #[command(subcommand)]
+    pub command: Option<SessionCommand>,
+}
+
+impl SessionArgs {
+    /// Selected profile, defaulting to `default`.
+    pub fn profile_name(&self) -> &str {
+        self.profile.as_deref().unwrap_or("default")
+    }
+}
+
+/// Saved-session operations.
+#[derive(Debug, Subcommand)]
+pub enum SessionCommand {
+    /// List sessions, newest first.
+    List,
+    /// Print the prompts you typed in one session.
+    Get {
+        /// Session short id or unique prefix.
+        id: String,
+    },
+    /// Delete one or more session transcripts.
+    Delete {
+        /// Session short id or unique prefix. Accepts many; none means all.
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+        /// Delete all sessions explicitly.
+        #[arg(long)]
+        all: bool,
+        /// Skip delete confirmations.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 fn parse_profile(value: &str) -> Result<String, String> {

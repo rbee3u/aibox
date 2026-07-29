@@ -1,4 +1,9 @@
-//! The one place the two agents diverge.
+//! Agent-specific runtime and configuration contracts.
+//!
+//! Shared orchestration asks [`AgentKind`] for paths, managed files, supported
+//! invocation modes, and command construction. Transcript parsing remains in
+//! the two session backend modules because the agents use different on-disk
+//! formats.
 
 use crate::runspec::{Invocation, RunOpts};
 use anyhow::Result;
@@ -6,11 +11,14 @@ use anyhow::Result;
 /// Which agent a command targets. Selected by `--agent` on agent-scoped commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum AgentKind {
+    /// Anthropic Claude Code.
     Claude,
+    /// OpenAI Codex.
     Codex,
 }
 
 impl AgentKind {
+    /// Lowercase name used by the CLI, paths, and executable.
     pub fn tag(self) -> &'static str {
         match self {
             AgentKind::Claude => "claude",
@@ -18,22 +26,26 @@ impl AgentKind {
         }
     }
 
+    /// Default shared Docker image for this agent.
     pub fn image_default(self) -> &'static str {
         match self {
             AgentKind::Claude | AgentKind::Codex => crate::docker::IMAGE,
         }
     }
 
+    /// Whether this agent supports aibox's `--exec` run mode.
     pub fn supports_exec(self) -> bool {
         matches!(self, AgentKind::Codex)
     }
 
+    /// Absolute home directory mounted inside the container.
     pub fn container_home(self) -> &'static str {
         match self {
             AgentKind::Claude | AgentKind::Codex => "/home/aibox",
         }
     }
 
+    /// Agent state directory relative to the shared profile home.
     pub fn active_dir_name(self) -> &'static str {
         match self {
             AgentKind::Claude => ".claude",
@@ -41,6 +53,7 @@ impl AgentKind {
         }
     }
 
+    /// Primary configuration file managed by provider overlays.
     pub fn main_config_file(self) -> &'static str {
         match self {
             AgentKind::Claude => "settings.json",
@@ -48,6 +61,7 @@ impl AgentKind {
         }
     }
 
+    /// Separately managed authentication file, if the agent uses one.
     pub fn auth_file(self) -> Option<&'static str> {
         match self {
             AgentKind::Claude => None,
@@ -55,6 +69,7 @@ impl AgentKind {
         }
     }
 
+    /// All active files owned by provider apply and backup operations.
     pub fn managed_config_files(self) -> &'static [&'static str] {
         match self {
             AgentKind::Claude => &["settings.json"],
@@ -62,6 +77,10 @@ impl AgentKind {
         }
     }
 
+    /// Build the agent command without adding provider data to the container.
+    ///
+    /// This method does not reject unsupported modes. Callers must reject
+    /// `opts.exec` when [`Self::supports_exec`] is false.
     pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
         let mut agent_cmd = vec![self.tag().to_string()];
         if self == AgentKind::Codex && opts.exec {

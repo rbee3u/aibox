@@ -1,4 +1,10 @@
-//! Provider overlay management for `aibox <agent> config ...`.
+//! Persistent provider overlays for `aibox config`.
+//!
+//! Providers are host-only snapshots. Applying one merges its TOML or JSON into
+//! the selected profile's active agent configuration, replaces Codex
+//! `auth.json` as a whole, and backs up existing managed files. The top-level
+//! `aibox` table/object is reserved for apply metadata and stripped from active
+//! output.
 
 use crate::agent::AgentKind;
 use crate::cli::ConfigCommand;
@@ -21,7 +27,7 @@ const DEFAULT_CODEX_CONFIG_TEMPLATE: &[u8] = br#"approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 # model_instructions_file = "~/prompts/gpt-5.5-base-instructions.md"
 model_provider = "custom"
 
@@ -61,9 +67,12 @@ const DEFAULT_CLAUDE_SETTINGS_TEMPLATE: &[u8] = br#"{
 }
 "#;
 
+/// One row returned by provider listing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderListEntry {
+    /// Valid provider directory name.
     pub name: String,
+    /// Whether this provider was the last one applied successfully.
     pub last_applied: bool,
 }
 
@@ -73,6 +82,10 @@ struct State {
     last_applied_at: Option<u64>,
 }
 
+/// Execute one parsed provider command for a resolved profile.
+///
+/// `agent` must match [`Profile::agent`]; it is accepted separately because
+/// the parsed command dispatcher validates agent-specific CLI flags.
 pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) -> Result<i32> {
     match command {
         ConfigCommand::List => {
@@ -110,6 +123,12 @@ pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) ->
     Ok(0)
 }
 
+/// Create a provider directory containing the selected agent's templates.
+///
+/// Existing providers are never overwritten. For an ordinary profile this
+/// also finishes initializing the shared home and both agents' management
+/// directories; for the host profile it creates only host-side provider
+/// metadata.
 pub fn create_provider(profile: &Profile, provider: &str) -> Result<()> {
     create_provider_with_templates(profile, provider, write_provider_templates)
 }
@@ -166,6 +185,7 @@ fn write_provider_templates(agent: AgentKind, provider_dir: &Path) -> Result<()>
     Ok(())
 }
 
+/// List valid provider directories in name order.
 pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
     let state = read_state(profile)?;
     let providers = list_provider_names(profile)?
@@ -204,6 +224,9 @@ fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
     Ok(providers)
 }
 
+/// Render all managed files for one provider, with file-name headings.
+///
+/// Codex output includes `auth.json` and must be treated as secret.
 pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
@@ -226,6 +249,13 @@ pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
     Ok(output)
 }
 
+/// Apply a provider to the active agent configuration.
+///
+/// Main configuration objects are deep-merged, while Codex `auth.json` is
+/// validated and replaced as a whole. Existing managed files are backed up
+/// before prepared replacements are committed. The main-config merge starts
+/// from the current active file; applying a different provider does not reset
+/// keys left by earlier applies.
 pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
@@ -289,6 +319,8 @@ pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     Ok(())
 }
 
+/// Open a provider's main config, or its Codex auth file, in the configured
+/// editor.
 pub fn edit_provider(profile: &Profile, provider: &str, edit_auth: bool) -> Result<()> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
@@ -330,10 +362,19 @@ pub fn edit_provider(profile: &Profile, provider: &str, edit_auth: bool) -> Resu
     Ok(())
 }
 
+/// Delete one provider, optionally skipping confirmation.
+///
+/// This does not revert configuration already applied to the active agent
+/// directory.
 pub fn delete_provider(profile: &Profile, provider: &str, yes: bool) -> Result<()> {
     delete_providers(profile, &[provider.to_string()], false, yes)
 }
 
+/// Delete selected providers, or every provider when `all` or an empty slice
+/// selects all.
+///
+/// Provider names and `all` are mutually exclusive. Unless `yes` is set, each
+/// target requires interactive confirmation.
 pub fn delete_providers(
     profile: &Profile,
     providers: &[String],
@@ -930,7 +971,7 @@ mod tests {
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 "#
         ));
         assert!(codex_config.contains("requires_openai_auth = true"));
@@ -939,10 +980,13 @@ model = "gpt-5.5"
             fs::read_to_string(provider.join("auth.json")).unwrap(),
             "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"
         );
-        assert!(root.path().join("default/.codex").is_dir());
-        assert!(root.path().join("default/.claude/statusline.sh").is_file());
-        assert!(root.path().join("default/.gitconfig").is_file());
-        assert!(root.path().join(".config/default/claude").is_dir());
+        assert!(root.path().join("default/home/.codex").is_dir());
+        assert!(root
+            .path()
+            .join("default/home/.claude/statusline.sh")
+            .is_file());
+        assert!(root.path().join("default/home/.gitconfig").is_file());
+        assert!(root.path().join("default/config/claude").is_dir());
         profile::ensure_real_dir(&p.backups_dir(), "backup directory").unwrap();
         fs::write(p.state_path(), "{}\n").unwrap();
         assert_eq!(
@@ -1001,10 +1045,13 @@ model = "gpt-5.5"
         assert!(get_provider(&p, "anthropic")
             .unwrap()
             .contains(r#""ANTHROPIC_BASE_URL": "https://example.ai""#));
-        assert!(root.path().join("default/.codex").is_dir());
-        assert!(root.path().join("default/.claude/statusline.sh").is_file());
-        assert!(root.path().join("default/.gitconfig").is_file());
-        assert!(root.path().join(".config/default/codex").is_dir());
+        assert!(root.path().join("default/home/.codex").is_dir());
+        assert!(root
+            .path()
+            .join("default/home/.claude/statusline.sh")
+            .is_file());
+        assert!(root.path().join("default/home/.gitconfig").is_file());
+        assert!(root.path().join("default/config/codex").is_dir());
     }
 
     #[test]
@@ -1045,44 +1092,45 @@ model = "gpt-5.5"
 
     #[cfg(unix)]
     #[test]
-    fn provider_commands_reject_symlinked_management_root() {
+    fn provider_commands_reject_symlinked_profile_config() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        symlink(outside.path(), root.path().join(".config")).unwrap();
+        fs::create_dir(root.path().join("default")).unwrap();
+        symlink(outside.path(), root.path().join("default/config")).unwrap();
         let p = profile(root.path(), AgentKind::Codex);
 
         let err = create_provider(&p, "openai").unwrap_err().to_string();
         assert!(
-            err.contains("profile management root is not a real directory"),
+            err.contains("profile layout entry is not a real directory"),
             "{err}"
         );
         assert!(
-            !outside.path().join("default").exists(),
-            "provider create must not write through a symlinked .config"
+            !outside.path().join("codex").exists(),
+            "provider create must not write through a symlinked profile config"
         );
 
-        fs::create_dir_all(outside.path().join("default/codex/openai")).unwrap();
+        fs::create_dir_all(outside.path().join("codex/openai")).unwrap();
         fs::write(
-            outside.path().join("default/codex/openai/config.toml"),
+            outside.path().join("codex/openai/config.toml"),
             "model = \"outside\"\n",
         )
         .unwrap();
         fs::write(
-            outside.path().join("default/codex/openai/auth.json"),
+            outside.path().join("codex/openai/auth.json"),
             "{\"token\":\"outside\"}\n",
         )
         .unwrap();
 
         let err = list_providers(&p).unwrap_err().to_string();
         assert!(
-            err.contains("profile management root is not a real directory"),
+            err.contains("profile layout entry is not a real directory"),
             "{err}"
         );
         let err = get_provider(&p, "openai").unwrap_err().to_string();
         assert!(
-            err.contains("profile management root is not a real directory"),
+            err.contains("profile layout entry is not a real directory"),
             "{err}"
         );
     }
@@ -2076,7 +2124,7 @@ printf '{"token":"edited"}\n' > "$1"
         );
         assert!(!host_home.path().join(".gitconfig").exists());
         assert!(!host_home.path().join(".claude").exists());
-        let backup = fs::read_dir(root.path().join(".config/host/codex/.backup"))
+        let backup = fs::read_dir(root.path().join("host/config/codex/.backup"))
             .unwrap()
             .next()
             .unwrap()

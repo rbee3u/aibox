@@ -1,12 +1,8 @@
-//! Browsing saved chat transcripts straight from the profile home — no container,
-//! no relay. The `session` surface (`list` / `get` / `delete`) is shared, with the
-//! per-agent on-disk format behind [`SessionBackend`].
-//!
-//! [`serde_json`] parses each JSONL line, so string decoding (UTF-8, `\uXXXX`,
-//! surrogate pairs) falls out for free. The two agents differ only in *where* the
-//! fields live; that difference is the two agent-specific backend modules.
-//! Everything below — file discovery glue, id-prefix resolution, newest-first
-//! listing, and delete confirmation — is shared.
+//! Browse saved chat transcripts directly from a profile home without starting
+//! a container. Discovery, id resolution, listing, and deletion are shared;
+//! [`SessionBackend`] isolates the two agents' on-disk formats. Strict discovery
+//! protects `get` and `delete` from partial views, while `list` can report
+//! traversal errors alongside readable sessions.
 
 use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
@@ -35,7 +31,9 @@ pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Op
 /// Transcript discovery for `session list`: usable files plus non-fatal walk
 /// errors that should be reported without hiding every readable transcript.
 pub struct SessionDiscovery {
+    /// Transcript files that were discovered safely.
     pub files: Vec<PathBuf>,
+    /// Non-fatal traversal failures to report alongside partial list results.
     pub errors: Vec<String>,
 }
 
@@ -84,6 +82,8 @@ pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec
     Ok(out)
 }
 
+/// Tolerant counterpart to [`walk_jsonl`]: return readable transcripts plus
+/// child traversal errors. An unsafe or unreadable `base` itself still fails.
 pub(crate) fn walk_jsonl_tolerant(
     base: &Path,
     keep: impl Fn(&str) -> bool,
@@ -116,9 +116,8 @@ pub(crate) fn walk_jsonl_tolerant(
 }
 
 /// Read a transcript line by line, parsing each as JSON and feeding each parsed
-/// line to `f` (unparseable lines are skipped, matching the old
-/// collect-then-filter behavior). Open and read failures are returned to the
-/// caller instead of being misreported as an empty session.
+/// line to `f`. Malformed JSON lines are skipped; open and read failures are
+/// returned instead of being misreported as an empty session.
 ///
 /// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
@@ -143,9 +142,7 @@ pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(&Value)) -> Resu
     }
 }
 
-/// A line's top-level `timestamp` as a string (empty if absent). The one field
-/// both formats surface identically; folded here so neither backend repeats the
-/// `get("timestamp").and_then(as_str).unwrap_or("")` dance.
+/// A line's top-level timestamp, shared by both transcript formats, or empty.
 pub(crate) fn ts_of(v: &Value) -> String {
     v.get("timestamp")
         .and_then(Value::as_str)
@@ -161,8 +158,8 @@ pub struct SessionSummary {
     pub id: String,
     /// Session start timestamp (ISO-8601), or empty if none was found.
     pub start_ts: String,
-    /// The agent-generated title (Claude) or first typed prompt (both), or empty
-    /// when the session has neither (a tool/injected-only shell).
+    /// The agent-generated title when available, otherwise the first typed
+    /// prompt, or empty for a tool/injected-only session.
     pub title: String,
 }
 
@@ -186,7 +183,7 @@ pub struct Prompt {
 pub trait SessionBackend {
     /// Path components of the transcript tree beneath the profile home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
-    /// entries — see [`checked_session_dir`].
+    /// entries so agent-created symlinks are never followed.
     fn session_dir_components(&self) -> &'static [&'static str];
 
     /// Whether a `.jsonl` file name is a transcript. Claude keeps all; Codex
@@ -223,9 +220,9 @@ pub trait SessionBackend {
     /// Codex off a wrapper-filtered `response_item` user message.
     fn typed_text(&self, v: &Value) -> Option<String>;
 
-    /// The session start timestamp from one parsed line; the first `Some` wins
-    /// and stops the lookup. Claude answers for any line bearing a top-level
-    /// `timestamp`; Codex answers for the first `session_meta` timestamp.
+    /// The session start timestamp from one parsed line; the first `Some` is
+    /// retained. Claude answers for any line bearing a top-level `timestamp`;
+    /// Codex answers for a `session_meta` timestamp.
     fn start_ts_of(&self, v: &Value) -> Option<String>;
 
     /// Lower-confidence timestamp candidate used only when
@@ -301,7 +298,12 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     }
 }
 
-/// `session` dispatch: `list` (default), `get <id>`, `delete [id...]`.
+/// Dispatch a host-side session action.
+///
+/// `list` accepts no ids or flags; `get` requires exactly one id; `delete`
+/// accepts ids or selects every transcript when `all` is true or `ids` is
+/// empty. Only `delete` accepts `yes`. The return value is the command exit
+/// code; `list` returns 1 when it can show only a partial result.
 pub fn dispatch(
     agent: AgentKind,
     home: &Path,
@@ -523,16 +525,15 @@ fn delete_targets(
     }
 
     if all || ids.is_empty() {
-        // Every transcript, matching `list` (which now shows them all). An
-        // all-target delete clears the whole profile, tool/injected-only shells
-        // included.
+        // Match `list`: bulk deletion includes tool/injected-only transcripts
+        // that have no typed prompt.
         let mut targets = backend.files(home)?;
         targets.sort_by_key(|p| backend.id_of(p));
         return Ok(targets);
     }
 
-    // Walk the transcript tree once, then resolve every id against that one
-    // snapshot — `delete a b c` used to re-walk per id.
+    // Resolve every id against one strict snapshot so one command cannot act on
+    // different views of a changing transcript tree.
     let files = backend.files(home)?;
     let mut targets = Vec::new();
     for id in ids {
@@ -772,15 +773,6 @@ mod tests {
         );
     }
 
-    /// A transcript that opens but fails mid-read — invalid UTF-8 from a
-    /// truncated multi-byte write, an interrupted flush, or on-disk corruption —
-    /// makes `BufRead::read_line` fail with `InvalidData`. That is a distinct arm
-    /// from the missing-file open error and from a merely unparseable-but-UTF-8
-    /// line, which is silently skipped. The contract: `list` reports it and
-    /// returns non-zero instead of a blank row, and the read paths fail fast
-    /// rather than pretend the session is empty — checked through the public
-    /// `get` entry point and through `prompts` underneath it (which names the
-    /// file it could not read).
     #[test]
     fn non_utf8_transcript_is_reported_by_list_and_fails_the_read_paths() {
         let dir = tempfile::tempdir().unwrap();
@@ -789,8 +781,6 @@ mod tests {
         std::fs::write(&path, b"{\"typed\":\"ok\"}\n\xff\xfe").unwrap();
         let backend = ExplicitFilesBackend::new(vec![path.clone()]);
 
-        // `prompts` fails fast with the read-error context, naming the file,
-        // rather than reading the transcript as an empty prompt list.
         let err = backend
             .prompts(&path)
             .err()
@@ -799,7 +789,6 @@ mod tests {
         assert!(err.contains("read session transcript"), "{err}");
         assert!(err.contains("33333333.jsonl"), "{err}");
 
-        // `get` surfaces that same failure through its own public entry point.
         let err = get_with_printer(&backend, dir.path(), "3333", |_| Ok(true))
             .unwrap_err()
             .to_string();
@@ -808,8 +797,6 @@ mod tests {
             "get must surface the read failure: {err}"
         );
 
-        // `list` surfaces the failure and returns non-zero rather than a blank
-        // row for a session it could not actually read.
         let mut lines = Vec::new();
         let code = list_with_printer(&backend, dir.path(), |line| {
             lines.push(line.to_string());
@@ -1272,8 +1259,6 @@ mod tests {
 
     #[test]
     fn list_and_delete_report_an_empty_profile_without_failing() {
-        // A profile with no transcripts is a normal state (nothing run yet), so
-        // both read and destructive paths exit 0.
         let dir = tempfile::tempdir().unwrap();
         let mut printed = Vec::new();
 
@@ -1362,8 +1347,6 @@ mod tests {
 
     #[test]
     fn summarize_empty_shell_has_empty_title() {
-        // A transcript with no typed prompt still summarizes for `list`; its
-        // title is empty.
         let dir = tempfile::tempdir().unwrap();
         let shell = dir.path().join("sessions").join("33333333.jsonl");
         std::fs::create_dir_all(shell.parent().unwrap()).unwrap();

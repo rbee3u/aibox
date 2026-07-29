@@ -1,4 +1,4 @@
-//! Host-platform probes: uid/gid, TTY detection, OS gate.
+//! Host-platform probes for Linux-specific flags, uid/gid, and TTY detection.
 //!
 //! These decide the Linux-only `--user`/`--add-host` flags and the `-it` vs `-i`
 //! Docker flag, so they must reflect the *host* the wrapper runs on — not the
@@ -7,8 +7,8 @@
 use std::io::IsTerminal;
 
 /// True when the host is Linux. Gates the `--user host-uid:gid` and
-/// `--add-host host.docker.internal:host-gateway` Docker flags (Docker Desktop on
-/// macOS/Windows handles ownership and that hostname on its own).
+/// `--add-host host.docker.internal:host-gateway` Docker flags. Docker Desktop
+/// on macOS handles ownership and that hostname without these flags.
 pub fn is_linux() -> bool {
     cfg!(target_os = "linux")
 }
@@ -23,6 +23,8 @@ pub fn uid_gid() -> (u32, u32) {
 }
 
 #[cfg(not(unix))]
+/// Compatibility fallback for non-Unix builds. Run assembly calls this only on
+/// Linux.
 pub fn uid_gid() -> (u32, u32) {
     (0, 0)
 }

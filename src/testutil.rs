@@ -1,23 +1,5 @@
-//! Shared test scaffolding.
-//!
-//! [`EnvGuard`]: nearly every module's tests need to set an env var
-//! (`$AIBOX_ROOT`, `$HOME`, `$TMPDIR`, `$PATH`) for the duration of one
-//! test and put it back afterwards. Five near-identical copies had drifted apart
-//! in what they supported; one shared version keeps a test from reaching for a
-//! helper its module's copy happens to lack.
-//!
-//! [`write_stub_script`]: run-path tests stub `docker` on `$PATH` (the check
-//! AGENTS.md prescribes for anything the unit tests can't reach). Nine copies of
-//! the same write-then-chmod-0755 boilerplate had accumulated; the *scripts*
-//! stay in their own modules, since each encodes what that test needs Docker to
-//! do, but the mechanics live here once.
-//!
-//! [`contains_pair`] / [`pair_pos`]: argv assertions for flag/value pairs such
-//! as `-v src:dst`. Multiple modules need the same two-token window search.
-//!
-//! [`write_jsonl`]: the two session backends' tests each write a transcript
-//! fixture from a list of JSON lines; the mkdir-then-writeln mechanics are the
-//! same, only the relative path and the lines differ.
+//! Shared test helpers for environment isolation, executable stubs, argv
+//! assertions, and JSONL fixtures.
 //!
 //! Env vars are process-global, so a test that installs a guard must also hold
 //! [`crate::test_env_lock`] to keep a parallel test from observing the change.
@@ -67,12 +49,9 @@ pub(crate) fn write_jsonl(dir: &Path, rel: &str, lines: &[&str]) -> PathBuf {
     path
 }
 
-/// Makes a directory unreadable/unsearchable (mode 0) and restores its original
-/// mode on drop. This is how the tests reach the `Err(e)` arms that report a
-/// real `PermissionDenied` from `lstat`/`read_dir` — the paths that distinguish
-/// "this is broken" from "this is absent", which a plain missing path can't
-/// exercise. Restoring on drop (rather than at the end of the test body) keeps a
-/// failing assertion from leaving a directory the tempdir cleanup can't remove.
+/// Make a directory unreadable so tests can exercise `PermissionDenied`, then
+/// restore its original mode on drop so failed assertions do not break tempdir
+/// cleanup.
 #[cfg(unix)]
 pub(crate) struct UnreadableDir {
     path: PathBuf,

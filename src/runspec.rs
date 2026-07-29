@@ -1,4 +1,5 @@
-//! Assembling the `docker run` invocation shared by both agents.
+//! Resolve bind mounts, enforce the host/container boundary, and assemble the
+//! `docker run` arguments shared by both agents.
 
 use crate::agent::AgentKind;
 use crate::platform;
@@ -23,6 +24,9 @@ pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the work directory to an existing absolute UTF-8 path.
+///
+/// Relative input is anchored to the process working directory.
 pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
     let cwd = std::env::current_dir().context("get current dir for /work")?;
     let path = match work {
@@ -46,6 +50,13 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
         .to_string())
 }
 
+/// Parse and resolve user bind mounts into Docker `-v` specifications.
+///
+/// Sources must exist; relative sources are anchored to the process working
+/// directory. Targets must be absolute, and the only accepted mode is `ro`.
+/// This function does not enforce managed-target or aibox-root boundaries;
+/// callers must subsequently use [`validate_extra_mount_targets`] and
+/// [`validate_aibox_mount_sources`].
 pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
     mounts
         .iter()
@@ -99,6 +110,8 @@ fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
     }
 }
 
+/// Reject extra mounts that replace `/work`, the agent home, or an ancestor of
+/// either managed target.
 pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Result<()> {
     for mount in mounts {
         let target = bind_target(mount)?;
@@ -114,24 +127,29 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
     Ok(())
 }
 
-pub fn validate_no_management_mounts(
+/// Keep host-only aibox data out of user-selected bind mounts.
+///
+/// Sources unrelated to `aibox_root` are allowed. Its ancestors are rejected
+/// because mounting one would expose the root indirectly. Sources inside the
+/// root must resolve beneath an ordinary profile's `home` subtree; profile
+/// roots, management data, tracing data, and the host profile are rejected.
+/// Sources are resolved before comparison, so a symlink cannot disguise an
+/// aibox-internal target as an unrelated path.
+pub fn validate_aibox_mount_sources(
     work_dir: &str,
     extra_mounts: &[String],
-    management_root: &Path,
+    aibox_root: &Path,
 ) -> Result<()> {
-    let management_root = canonicalize_existing_prefix(management_root).with_context(|| {
-        format!(
-            "resolve provider management directory {}",
-            management_root.display()
-        )
-    })?;
+    let resolved_root = canonicalize_existing_prefix(aibox_root)
+        .with_context(|| format!("resolve aibox root {}", aibox_root.display()))?;
     let work_source = canonicalize_existing_prefix(Path::new(work_dir))
         .with_context(|| format!("resolve work dir {work_dir}"))?;
-    reject_management_overlap(
+    reject_aibox_internal_source(
         "work dir",
         Path::new(work_dir),
         &work_source,
-        &management_root,
+        &resolved_root,
+        aibox_root,
     )?;
 
     for mount in extra_mounts {
@@ -139,27 +157,59 @@ pub fn validate_no_management_mounts(
         let source_path = Path::new(source);
         let resolved_source = canonicalize_existing_prefix(source_path)
             .with_context(|| format!("resolve mount host path {source}"))?;
-        reject_management_overlap(
+        reject_aibox_internal_source(
             "mount host",
             source_path,
             &resolved_source,
-            &management_root,
+            &resolved_root,
+            aibox_root,
         )?;
     }
     Ok(())
 }
 
-fn reject_management_overlap(
+fn reject_aibox_internal_source(
     kind: &str,
     display_path: &Path,
     source: &Path,
-    management_root: &Path,
+    resolved_root: &Path,
+    aibox_root: &Path,
 ) -> Result<()> {
-    if source.starts_with(management_root) || management_root.starts_with(source) {
+    if resolved_root.starts_with(source) {
         bail!(
-            "{kind} would expose aibox provider management data: {} overlaps {}",
+            "{kind} would expose aibox internal data: {} overlaps {}",
             display_path.display(),
-            management_root.display()
+            aibox_root.display()
+        );
+    }
+    let Ok(relative) = source.strip_prefix(resolved_root) else {
+        return Ok(());
+    };
+    let mut components = relative.components();
+    let Some(Component::Normal(profile_name)) = components.next() else {
+        bail!(
+            "{kind} would expose aibox internal data: {}",
+            display_path.display()
+        );
+    };
+    let Some(profile_name) = profile_name.to_str() else {
+        bail!(
+            "{kind} would expose aibox internal data: {}",
+            display_path.display()
+        );
+    };
+    let is_home = matches!(
+        components.next(),
+        Some(Component::Normal(name)) if name == crate::profile::PROFILE_HOME_DIR
+    );
+    if !is_home
+        || crate::profile::validate_ordinary_profile_name(profile_name).is_err()
+        || crate::profile::validate_profile_layout(aibox_root, profile_name).is_err()
+    {
+        bail!(
+            "{kind} would expose aibox internal data: {}; only ordinary profile home trees may be mounted from {}",
+            display_path.display(),
+            aibox_root.display()
         );
     }
     Ok(())
@@ -269,16 +319,29 @@ pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
     crate::profile::ensure_agent_state(agent, home_dir)
 }
 
+/// Agent-specific command options that remain after aibox parses its own CLI.
 pub struct RunOpts<'a> {
+    /// Whether to select Codex's headless `exec` subcommand.
     pub exec: bool,
+    /// Arguments copied verbatim after the agent executable and run mode.
     pub passthrough: &'a [String],
 }
 
+/// Agent command and any agent-specific additions to `docker run`.
 pub struct Invocation {
+    /// Docker arguments required by this agent before the image name.
     pub extra_run_args: Vec<String>,
+    /// Executable and arguments to run inside the container.
     pub agent_cmd: Vec<String>,
 }
 
+/// Assemble Docker arguments for the managed home, work tree, and extra mounts.
+///
+/// Callers must resolve `work_dir` and `extra_mounts` with
+/// [`resolve_work_dir`] and [`resolve_mounts`], then apply
+/// [`validate_extra_mount_targets`] and [`validate_aibox_mount_sources`].
+/// `home_dir` must also pass [`reject_colon_in_bind_source`]. This function is
+/// only a pure argument builder and repeats none of those checks.
 pub fn assemble_run_args(
     agent: AgentKind,
     work_dir: &str,
@@ -414,110 +477,96 @@ mod tests {
     }
 
     #[test]
-    fn host_bind_sources_must_not_expose_provider_management_tree() {
+    fn aibox_mount_sources_only_allow_ordinary_profile_home_trees() {
         let root = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("default");
-        let management_root = root.path().join(".config");
-        fs::create_dir(&profile_home).unwrap();
+        let profile_home = root.path().join("default/home");
+        let home_child = profile_home.join("projects/demo");
+        let profile_config = root.path().join("default/config");
+        let tracing = root.path().join("default/tracing");
+        let host = root.path().join("host/config");
+        fs::create_dir_all(&home_child).unwrap();
+        fs::create_dir_all(profile_config.join("codex")).unwrap();
+        fs::create_dir(&tracing).unwrap();
+        fs::create_dir_all(&host).unwrap();
 
-        let err =
-            validate_no_management_mounts(root.path().to_str().unwrap(), &[], &management_root)
+        for rejected in [
+            root.path(),
+            &root.path().join("default"),
+            &profile_config,
+            &profile_config.join("codex"),
+            &tracing,
+            &root.path().join("host"),
+            &host,
+            root.path().parent().unwrap(),
+        ] {
+            let err = validate_aibox_mount_sources(rejected.to_str().unwrap(), &[], root.path())
                 .unwrap_err()
                 .to_string();
-        assert!(err.contains("provider management data"), "{err}");
+            assert!(err.contains("aibox internal data"), "{rejected:?}: {err}");
+        }
 
-        validate_no_management_mounts(profile_home.to_str().unwrap(), &[], &management_root)
-            .unwrap();
-
-        fs::create_dir_all(management_root.join("default/codex")).unwrap();
-        let err = validate_no_management_mounts(
-            profile_home.to_str().unwrap(),
-            &[format!("{}:/secrets:ro", management_root.display())],
-            &management_root,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("provider management data"), "{err}");
-
-        let err = validate_no_management_mounts(
-            profile_home.to_str().unwrap(),
-            &[format!(
-                "{}:/provider:ro",
-                management_root.join("default/codex").display()
-            )],
-            &management_root,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("provider management data"), "{err}");
+        validate_aibox_mount_sources(profile_home.to_str().unwrap(), &[], root.path()).unwrap();
+        validate_aibox_mount_sources(home_child.to_str().unwrap(), &[], root.path()).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
-    fn management_mount_check_resolves_symlinked_sources() {
+    fn aibox_mount_check_resolves_symlinked_sources() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let links = tempfile::tempdir().unwrap();
-        let linked_root = links.path().join("aibox-root");
-        symlink(root.path(), &linked_root).unwrap();
+        fs::create_dir_all(root.path().join("default/config/codex")).unwrap();
+        let linked_config = links.path().join("config");
+        symlink(root.path().join("default/config"), &linked_config).unwrap();
 
-        let err = validate_no_management_mounts(
-            linked_root.to_str().unwrap(),
-            &[],
-            &root.path().join(".config"),
-        )
-        .unwrap_err()
-        .to_string();
+        let err = validate_aibox_mount_sources(linked_config.to_str().unwrap(), &[], root.path())
+            .unwrap_err()
+            .to_string();
 
-        assert!(err.contains("provider management data"), "{err}");
+        assert!(err.contains("aibox internal data"), "{err}");
     }
 
     #[test]
-    fn management_mount_check_normalizes_dotdot_sources() {
+    fn aibox_mount_check_normalizes_dotdot_sources() {
         let root = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("default");
-        let management_root = root.path().join(".config");
-        fs::create_dir(&profile_home).unwrap();
-        fs::create_dir(&management_root).unwrap();
+        let profile_home = root.path().join("default/home");
+        let management = root.path().join("default/config");
+        fs::create_dir_all(&profile_home).unwrap();
+        fs::create_dir(&management).unwrap();
 
         let work = profile_home.join("..");
-        let err = validate_no_management_mounts(work.to_str().unwrap(), &[], &management_root)
+        let err = validate_aibox_mount_sources(work.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("provider management data"),
-            "a dotdot work path that resolves to the aibox root would expose .config: {err}"
+            err.contains("aibox internal data"),
+            "a dotdot work path that resolves to the profile root must fail: {err}"
         );
 
-        let mount_source = profile_home.join("../.config");
-        let err = validate_no_management_mounts(
+        let mount_source = profile_home.join("../config");
+        let err = validate_aibox_mount_sources(
             profile_home.to_str().unwrap(),
             &[format!("{}:/secrets:ro", mount_source.display())],
-            &management_root,
+            root.path(),
         )
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("provider management data"),
-            "a dotdot mount source that resolves into .config must be rejected: {err}"
+            err.contains("aibox internal data"),
+            "a dotdot mount source that resolves into config must be rejected: {err}"
         );
     }
 
     #[test]
-    fn management_mount_check_allows_sibling_prefix_paths() {
+    fn aibox_mount_check_allows_unrelated_paths() {
         let root = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("default");
-        let management_root = root.path().join(".config");
-        let sibling = root.path().join(".config-backup");
-        fs::create_dir(&profile_home).unwrap();
-        fs::create_dir(&management_root).unwrap();
-        fs::create_dir(&sibling).unwrap();
+        let outside = tempfile::tempdir().unwrap();
 
-        validate_no_management_mounts(
-            profile_home.to_str().unwrap(),
-            &[format!("{}:/archive:ro", sibling.display())],
-            &management_root,
+        validate_aibox_mount_sources(
+            outside.path().to_str().unwrap(),
+            &[format!("{}:/archive:ro", outside.path().display())],
+            root.path(),
         )
         .unwrap();
     }

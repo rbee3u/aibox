@@ -81,8 +81,8 @@ RUN set -eux; \
 # --- Node.js -----------------------------------------------------------------
 # Pinned by default so cached builds stay stable. Change NODE_VERSION here when
 # you intentionally want to upgrade Node.
-# Installed under /usr/local (root-owned) so `npm -g` never touches the mounted
-# home and avoids permission surprises.
+# Installed under /usr/local so Node and the global agent CLIs are image-owned
+# rather than persisted in a profile; upgrade them by rebuilding the image.
 ARG NODE_VERSION=v24.4.0
 RUN set -eux; \
     version="${NODE_VERSION}"; \

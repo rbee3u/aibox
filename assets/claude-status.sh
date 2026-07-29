@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code status line: model, effort, dir, git branch, and context usage.
+# `jq` provides the payload fields; the Git branch is best-effort.
 input=$(cat)
 
 # One jq pass, one field per line. Keep this compatible with macOS' default

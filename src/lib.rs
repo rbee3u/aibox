@@ -1,5 +1,16 @@
 //! aibox — run coding agents inside a Docker container that is the sandbox
 //! boundary, with host-side provider configuration management.
+//!
+//! The binary pre-splits pass-through arguments at `--`, parses the left side
+//! into [`cli::Cli`], and calls [`run`]. Provider and session operations stay
+//! on the host; only an agent run starts Docker. Runs consume previously
+//! applied active agent files and never mount provider snapshots.
+//!
+//! Most users should use the `aibox` binary. The library exposes the same
+//! orchestration components so command assembly and host-side operations can be
+//! tested or embedded without invoking the binary entry point.
+
+#![warn(missing_docs)]
 
 pub mod agent;
 pub mod cli;
@@ -91,6 +102,11 @@ fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
     }
 }
 
+/// Execute one parsed aibox command.
+///
+/// `passthrough` must contain only the arguments after the first `--`; they are
+/// forwarded unchanged for an agent run and rejected for subcommands. The
+/// returned value is the process exit code to expose to the caller.
 pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
     let Cli {
         agent: root_agent,
@@ -276,7 +292,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<
     let work_dir = runspec::resolve_work_dir(run.work.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
     runspec::validate_extra_mount_targets(agent, &mounts)?;
-    runspec::validate_no_management_mounts(&work_dir, &mounts, &root.join(".config"))?;
+    runspec::validate_aibox_mount_sources(&work_dir, &mounts, &root)?;
     runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
     if !docker::image_exists(&image)? {
@@ -507,22 +523,23 @@ printf '\nEND\n' >> "$log"
         let log = fx.log();
         assert!(log.contains(&format!(
             "<{}:/home/aibox>",
-            fx.root.path().join("default").display()
+            fx.root.path().join("default/home").display()
         )));
         assert!(log.contains("<aibox:latest> <codex>"), "{log}");
         assert!(
             !log.contains("<--dangerously-bypass-approvals-and-sandbox>"),
             "{log}"
         );
-        assert!(fx.root.path().join("default/.codex").is_dir());
+        assert!(fx.root.path().join("default/home/.codex").is_dir());
         assert!(fx
             .root
             .path()
-            .join("default/.claude/statusline.sh")
+            .join("default/home/.claude/statusline.sh")
             .is_file());
-        assert!(fx.root.path().join("default/.gitconfig").is_file());
-        assert!(fx.root.path().join(".config/default/codex").is_dir());
-        assert!(fx.root.path().join(".config/default/claude").is_dir());
+        assert!(fx.root.path().join("default/home/.gitconfig").is_file());
+        assert!(fx.root.path().join("default/config/codex").is_dir());
+        assert!(fx.root.path().join("default/config/claude").is_dir());
+        assert!(!fx.root.path().join("default/tracing").exists());
         assert!(!log.contains("<--env-file>"), "{log}");
         assert!(!log.contains("<-c>"), "{log}");
     }
@@ -560,23 +577,23 @@ printf '\nEND\n' >> "$log"
         let log = fx.log();
         assert!(log.contains(&format!(
             "<{}:/home/aibox>",
-            fx.root.path().join("default").display()
+            fx.root.path().join("default/home").display()
         )));
         assert!(log.contains("<aibox:latest> <claude>"), "{log}");
         assert!(!log.contains("<--dangerously-skip-permissions>"), "{log}");
         assert!(fx
             .root
             .path()
-            .join("default/.claude/statusline.sh")
+            .join("default/home/.claude/statusline.sh")
             .exists());
-        assert!(fx.root.path().join("default/.codex").is_dir());
-        assert!(fx.root.path().join("default/.gitconfig").is_file());
-        assert!(fx.root.path().join(".config/default/codex").is_dir());
-        assert!(fx.root.path().join(".config/default/claude").is_dir());
+        assert!(fx.root.path().join("default/home/.codex").is_dir());
+        assert!(fx.root.path().join("default/home/.gitconfig").is_file());
+        assert!(fx.root.path().join("default/config/codex").is_dir());
+        assert!(fx.root.path().join("default/config/claude").is_dir());
         assert!(!fx
             .root
             .path()
-            .join("default/.claude/settings.json")
+            .join("default/home/.claude/settings.json")
             .exists());
     }
 
@@ -628,12 +645,12 @@ printf '\nEND\n' >> "$log"
         assert!(fx
             .root
             .path()
-            .join(".config/default/claude/anthropic/settings.json")
+            .join("default/config/claude/anthropic/settings.json")
             .is_file());
         assert!(
             !fx.root
                 .path()
-                .join(".config/default/codex/anthropic")
+                .join("default/config/codex/anthropic")
                 .exists(),
             "a command-level --agent claude must not create a Codex provider"
         );
@@ -727,7 +744,7 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn run_rejects_work_dir_that_would_expose_provider_management_tree() {
+    fn run_rejects_work_dir_that_would_expose_aibox_internal_tree() {
         let fx = RunFixture::new();
         let work = fx.root.path().to_str().unwrap();
         let err = fx
@@ -735,16 +752,16 @@ printf '\nEND\n' >> "$log"
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("provider management data"), "{err}");
+        assert!(err.contains("aibox internal data"), "{err}");
         assert!(!fx.root.path().join("default").exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn run_rejects_mount_that_would_expose_provider_management_tree() {
+    fn run_rejects_mount_that_would_expose_profile_config() {
         let fx = RunFixture::new();
-        let management = fx.root.path().join(".config");
-        std::fs::create_dir_all(management.join("default/codex")).unwrap();
+        let management = fx.root.path().join("default/config");
+        std::fs::create_dir_all(management.join("codex")).unwrap();
         let mount = format!("{}:/secrets:ro", management.display());
 
         let err = fx
@@ -752,8 +769,8 @@ printf '\nEND\n' >> "$log"
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("provider management data"), "{err}");
-        assert!(!fx.root.path().join("default").exists());
+        assert!(err.contains("aibox internal data"), "{err}");
+        assert!(!fx.root.path().join("default/home").exists());
         assert_eq!(
             fx.log(),
             "",

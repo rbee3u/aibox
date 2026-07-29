@@ -1,13 +1,13 @@
-//! Claude transcript format: `<home>/.claude/projects/*/<uuid>.jsonl`.
+//! Claude transcript format: `<home>/.claude/projects/**/<uuid>.jsonl`.
 //!
 //! Each line is a JSON object. The fields we read:
 //! - a top-level `timestamp` (first one seen = session start);
 //! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
 //! - `{"type":"user","promptSource":"typed", …, "message":{"content":"…"}}` — a
 //!   prompt the user actually typed (as opposed to injected/tool turns). The text
-//!   lives in the nested `message.content` (a plain string, or a block array),
-//!   *not* a top-level `content`. `promptSource` marks turns that count as typed
-//!   prompts.
+//!   lives in the nested `message.content` (a plain string, or an array of
+//!   text-bearing blocks), *not* a top-level `content`. `promptSource` marks turns
+//!   that count as typed prompts.
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
@@ -15,6 +15,7 @@ use crate::session::SessionBackend;
 use serde_json::Value;
 use std::path::Path;
 
+/// Parser for Claude Code's on-disk transcript format.
 pub struct Claude;
 
 impl SessionBackend for Claude {
@@ -64,16 +65,15 @@ impl SessionBackend for Claude {
     }
 }
 
-/// True for a user turn the human actually typed (`"promptSource":"typed"`).
 fn is_typed(v: &Value) -> bool {
     v.get("promptSource").and_then(Value::as_str) == Some("typed")
 }
 
 /// Pull a user turn's text out of its `message.content` — Claude nests the turn
 /// under a `message` object (`{"role":"user","content":…}`), not at the top level.
-/// The content is typically a plain string; some turns use the block array form
-/// `[{"type":"text","text":"…"}]`, so we handle both and join text blocks with
-/// newlines. Returns `None` if the `message.content` is absent or empty.
+/// The content is typically a plain string; some turns use an array of blocks,
+/// so we join their non-empty `text` fields with newlines and ignore blocks
+/// without text. Returns `None` if `message.content` is absent or empty.
 fn content_text(v: &Value) -> Option<String> {
     match v.get("message").and_then(|m| m.get("content")) {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
@@ -130,8 +130,6 @@ mod tests {
 
     #[test]
     fn list_files_discovers_the_same_transcripts_tolerantly() {
-        // `list` uses the tolerant walk so one bad path can't hide every
-        // readable session; on a healthy tree it must still agree with `files`.
         let dir = tempfile::tempdir().unwrap();
         let transcript = write_jsonl(
             dir.path(),
@@ -147,8 +145,6 @@ mod tests {
 
     #[test]
     fn list_files_and_files_are_empty_before_the_first_claude_run() {
-        // A fresh profile home has no `.claude/projects` yet. Both discovery
-        // paths must report empty rather than erroring on the missing tree.
         let dir = tempfile::tempdir().unwrap();
 
         assert!(Claude.files(dir.path()).unwrap().is_empty());
@@ -248,8 +244,6 @@ mod tests {
 
     #[test]
     fn sessions_without_typed_prompts_still_summarize_with_empty_title() {
-        // No `promptSource:typed` line, so no title — but the session still
-        // summarizes (empty title) so `list`/`delete` can see and clear it.
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             dir.path(),
@@ -291,12 +285,6 @@ mod tests {
         assert_eq!(content_text(&v).as_deref(), Some("a\nb"));
     }
 
-    /// A real image-paste turn: the content array mixes a non-text block (an
-    /// `image`, which carries no `text` field) with the typed text block. Only
-    /// the text survives, through the public `prompts` path — not just the
-    /// `content_text` helper. This also pins Claude's divergence from Codex:
-    /// Claude pulls `text` from any block regardless of `type`, where Codex
-    /// filters to `input_text`/`text`. A change either direction should fail here.
     #[test]
     fn typed_prompt_with_mixed_content_array_keeps_only_text() {
         let dir = tempfile::tempdir().unwrap();

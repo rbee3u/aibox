@@ -11,13 +11,11 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let (left, passthrough) = split_passthrough(std::env::args().collect());
 
-    // clap prints help/version/errors and exits on its own for those cases.
     let cli = Cli::parse_from(left);
 
     match aibox::run(cli, passthrough) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(e) => {
-            // anyhow's Display chain, prefixed with `!!` to mark an error.
             eprintln!("!! {e:#}");
             ExitCode::from(1)
         }

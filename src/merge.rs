@@ -1,9 +1,19 @@
+//! Deep-merge support for provider configuration.
+//!
+//! Objects and tables merge recursively when both sides have that shape;
+//! otherwise the provider value replaces the active value. The top-level
+//! `aibox` namespace is reserved metadata and never enters active
+//! configuration. Its `config.apply.remove` list removes dotted key paths after
+//! the merge.
+
 use anyhow::{bail, Result};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 const APPLY_METADATA_PATH: &str = "aibox.config.apply";
 
+/// Recursively merge when both values are JSON objects; otherwise replace the
+/// base value with the overlay.
 pub fn merge_json(base: &mut JsonValue, overlay: JsonValue) {
     match (base, overlay) {
         (JsonValue::Object(base_map), JsonValue::Object(overlay_map)) => {
@@ -22,6 +32,10 @@ pub fn merge_json(base: &mut JsonValue, overlay: JsonValue) {
     }
 }
 
+/// Merge two TOML documents and apply provider removal metadata.
+///
+/// Empty input is treated as an empty document. The top-level `aibox` table is
+/// reserved and removed from both inputs and the result.
 pub fn merge_toml_strings(base: &str, overlay: &str) -> Result<String> {
     let mut base_doc = parse_toml_or_empty(base)?;
     let mut overlay_doc = parse_toml_or_empty(overlay)?;
@@ -36,6 +50,11 @@ pub fn merge_toml_strings(base: &str, overlay: &str) -> Result<String> {
     Ok(base_doc.to_string())
 }
 
+/// Merge a JSON provider object into an active object and apply removal
+/// metadata.
+///
+/// The top-level `aibox` object is reserved and removed from both inputs and
+/// the result.
 pub fn merge_json_with_apply_metadata(base: &mut JsonValue, mut overlay: JsonValue) -> Result<()> {
     let remove_paths = extract_json_remove_paths(&overlay)?;
     remove_reserved_json_metadata(base);
@@ -48,6 +67,7 @@ pub fn merge_json_with_apply_metadata(base: &mut JsonValue, mut overlay: JsonVal
     Ok(())
 }
 
+/// Parse JSON, treating empty content as an empty object.
 pub fn parse_json_or_empty_object(content: &str) -> Result<JsonValue> {
     if content.trim().is_empty() {
         Ok(JsonValue::Object(Default::default()))
