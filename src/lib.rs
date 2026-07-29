@@ -2,7 +2,7 @@
 //! boundary, with host-side provider configuration management.
 //!
 //! The binary pre-splits pass-through arguments at `--`, parses the left side
-//! into [`cli::Cli`], and calls [`run`]. Provider and session operations stay
+//! into [`cli::Cli`], and calls [`run_os`]. Provider and session operations stay
 //! on the host; only an agent run starts Docker. Runs consume previously
 //! applied active agent files and never mount provider snapshots.
 //!
@@ -14,6 +14,7 @@
 
 pub mod agent;
 pub mod cli;
+mod completion;
 pub mod config;
 pub mod creds;
 pub mod docker;
@@ -39,6 +40,7 @@ use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
 use profile::Profile;
 use runspec::RunOpts;
+use std::ffi::OsString;
 
 pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
@@ -49,6 +51,16 @@ pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
             anyhow::bail!("{name} is not valid UTF-8")
         }
     }
+}
+
+/// Handle an environment-activated shell completion request before normal
+/// argument splitting and parsing.
+///
+/// This returns immediately for ordinary invocations and exits the process
+/// after writing completion output for requests made by a generated shell
+/// registration script.
+pub fn handle_completion() {
+    completion::handle_env();
 }
 
 fn image_for(image_override: Option<&str>) -> Result<String> {
@@ -102,12 +114,21 @@ fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
     }
 }
 
-/// Execute one parsed aibox command.
+/// Execute one parsed aibox command with UTF-8 agent pass-through arguments.
+///
+/// Use [`run_os`] when arguments collected from the operating system must be
+/// forwarded without requiring UTF-8.
+pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
+    run_os(cli, passthrough.into_iter().map(OsString::from).collect())
+}
+
+/// Execute one parsed aibox command, preserving opaque operating-system
+/// strings after the pass-through boundary.
 ///
 /// `passthrough` must contain only the arguments after the first `--`; they are
 /// forwarded unchanged for an agent run and rejected for subcommands. The
 /// returned value is the process exit code to expose to the caller.
-pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
+pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
     let Cli {
         agent: root_agent,
         run: run_args,
@@ -131,6 +152,18 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
             }
             reject_command_run_options("build", &run_args)?;
             run_build(&args)
+        }
+        Some(Command::Completion(args)) => {
+            if !passthrough.is_empty() {
+                anyhow::bail!(
+                    "`-- <args>` applies only to a run; completion takes no pass-through args"
+                );
+            }
+            if root_agent.is_some() {
+                anyhow::bail!("completion does not accept --agent");
+            }
+            reject_command_run_options("completion", &run_args)?;
+            completion::dispatch(&args)
         }
         Some(Command::Profile(args)) => {
             if !passthrough.is_empty() {
@@ -167,7 +200,7 @@ fn run_config_command(
     agent: AgentKind,
     profile_name: &str,
     command: &cli::ConfigCommand,
-    passthrough: &[String],
+    passthrough: &[OsString],
 ) -> Result<i32> {
     if !passthrough.is_empty() {
         anyhow::bail!(
@@ -183,7 +216,7 @@ fn run_session_command(
     agent: AgentKind,
     profile_name: &str,
     args: &SessionArgs,
-    passthrough: &[String],
+    passthrough: &[OsString],
 ) -> Result<i32> {
     if !passthrough.is_empty() {
         anyhow::bail!(
@@ -271,7 +304,7 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[String]) -> Result<i32> {
+fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Result<i32> {
     if run.exec && !agent.supports_exec() {
         anyhow::bail!("--exec is codex-only");
     }
@@ -687,7 +720,7 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn build_and_profile_reject_passthrough_and_run_options() {
+    fn build_profile_and_completion_reject_passthrough_and_run_options() {
         let fx = RunFixture::new();
 
         let err = fx
@@ -705,6 +738,17 @@ printf '\nEND\n' >> "$log"
         assert!(err.contains("profile takes no pass-through args"), "{err}");
 
         assert!(Cli::try_parse_from(["aibox", "-m", "src:/src", "profile", "list"]).is_err());
+
+        let err = fx
+            .run(&["aibox", "completion", "zsh"], vec!["ignored".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("completion takes no pass-through args"),
+            "{err}"
+        );
+
+        assert!(Cli::try_parse_from(["aibox", "--work", ".", "completion", "zsh"]).is_err());
         assert_eq!(
             fx.log(),
             "",
@@ -804,9 +848,9 @@ printf '\nEND\n' >> "$log"
     }
 
     #[test]
-    fn write_line_treats_broken_pipe_as_clean_stop() {
-        struct Broken;
-        impl std::io::Write for Broken {
+    fn output_writes_treat_broken_pipes_as_clean_stops_but_report_other_errors() {
+        struct AlwaysBroken;
+        impl std::io::Write for AlwaysBroken {
             fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
                 Err(std::io::ErrorKind::BrokenPipe.into())
             }
@@ -814,7 +858,43 @@ printf '\nEND\n' >> "$log"
                 Ok(())
             }
         }
-        assert!(!write_line(&mut Broken, "x").unwrap());
-        assert!(!write_text(&mut Broken, "x").unwrap());
+
+        struct BrokenOnNewline {
+            writes: usize,
+        }
+        impl std::io::Write for BrokenOnNewline {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                if self.writes == 1 {
+                    Ok(buf.len())
+                } else {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        struct PermissionDenied;
+        impl std::io::Write for PermissionDenied {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        assert!(!write_line(&mut AlwaysBroken, "x").unwrap());
+        assert!(!write_text(&mut AlwaysBroken, "x").unwrap());
+        assert!(
+            !write_line(&mut BrokenOnNewline { writes: 0 }, "x").unwrap(),
+            "a reader may hang up after the line body but before its delimiter"
+        );
+        let err = write_text(&mut PermissionDenied, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("write to stdout"), "{err}");
     }
 }

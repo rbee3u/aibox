@@ -2,7 +2,7 @@
 //! args away from clap.
 
 use crate::agent::AgentKind;
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::ffi::{OsStr, OsString};
 
 /// Parsed aibox command line, excluding agent arguments after `--`.
@@ -183,7 +183,7 @@ fn subcommand_scope(current: Scope, token: &str) -> Option<Scope> {
     match token {
         "config" => Some(Scope::Config),
         "session" => Some(Scope::Session),
-        "build" | "profile" => Some(Scope::OtherCommand),
+        "build" | "profile" | "completion" => Some(Scope::OtherCommand),
         _ => None,
     }
 }
@@ -233,6 +233,8 @@ impl RunArgs {
 pub enum Command {
     /// Build the aibox Docker image.
     Build(BuildArgs),
+    /// Generate a shell completion registration script.
+    Completion(CompletionArgs),
     /// Manage shared profile homes.
     Profile(ProfileArgs),
     /// Manage provider configuration overlays.
@@ -247,6 +249,25 @@ pub struct BuildArgs {
     /// Disable the Docker build cache and pull a fresh Debian base image.
     #[arg(short, long)]
     pub force: bool,
+}
+
+/// Arguments for `aibox completion`.
+#[derive(Debug, Args)]
+pub struct CompletionArgs {
+    /// Shell whose dynamic completion registration script to generate.
+    #[arg(value_enum)]
+    pub shell: CompletionShell,
+}
+
+/// Shells with supported aibox dynamic completion adapters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CompletionShell {
+    /// Bourne Again Shell.
+    Bash,
+    /// Z shell.
+    Zsh,
+    /// Friendly Interactive Shell.
+    Fish,
 }
 
 /// Arguments for profile management.
@@ -444,8 +465,8 @@ fn parse_provider(value: &str) -> Result<String, String> {
 
 /// Split argv at the first `--`: everything before is parsed by clap, everything
 /// after is pass-through for the agent. The `--` itself is dropped.
-pub fn split_passthrough(argv: Vec<String>) -> (Vec<String>, Vec<String>) {
-    match argv.iter().position(|a| a == "--") {
+pub fn split_passthrough<T: AsRef<OsStr>>(argv: Vec<T>) -> (Vec<T>, Vec<T>) {
+    match argv.iter().position(|arg| arg.as_ref() == OsStr::new("--")) {
         Some(i) => {
             let mut left = argv;
             let right = left.split_off(i + 1);
@@ -476,6 +497,22 @@ mod tests {
         let (left, right) = split_passthrough(v(&["aibox", "--exec", "--", "fix", "--", "tests"]));
         assert_eq!(left, v(&["aibox", "--exec"]));
         assert_eq!(right, v(&["fix", "--", "tests"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_preserves_non_utf8_passthrough_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
+        let (left, right) = split_passthrough(vec![
+            OsString::from("aibox"),
+            OsString::from("--"),
+            opaque.clone(),
+        ]);
+
+        assert_eq!(left, [OsString::from("aibox")]);
+        assert_eq!(right, [opaque]);
     }
 
     #[test]
@@ -897,6 +934,8 @@ mod tests {
             &["aibox", "-p", "work", "build"][..],
             &["aibox", "--agent", "claude", "profile", "list"][..],
             &["aibox", "-p", "work", "profile", "list"][..],
+            &["aibox", "--agent", "claude", "completion", "zsh"][..],
+            &["aibox", "-p", "work", "completion", "zsh"][..],
         ] {
             assert!(
                 Cli::try_parse_from(argv).is_err(),
@@ -907,6 +946,7 @@ mod tests {
         assert!(Cli::try_parse_from(["aibox", "--force", "build"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "--agent", "claude", "list"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "completion", "zsh", "--agent", "claude"]).is_err());
     }
 
     #[test]
@@ -914,6 +954,9 @@ mod tests {
         for argv in [
             &["aibox", "--agent", "claude", "--agent", "claude"][..],
             &["aibox", "-p", "work", "--profile", "work"][..],
+            &[
+                "aibox", "--agent", "codex", "--work", "config", "--agent", "codex",
+            ][..],
             &[
                 "aibox", "config", "--agent", "claude", "get", "openai", "--agent", "claude",
             ][..],
@@ -956,6 +999,13 @@ mod tests {
         let profile = help(&["aibox", "profile", "--help"]);
         assert!(!profile.contains("--profile"), "{profile}");
         assert!(!profile.contains("--agent"), "{profile}");
+
+        let completion = help(&["aibox", "completion", "--help"]);
+        assert!(!completion.contains("--profile"), "{completion}");
+        assert!(!completion.contains("--agent"), "{completion}");
+        assert!(completion.contains("bash"), "{completion}");
+        assert!(completion.contains("zsh"), "{completion}");
+        assert!(completion.contains("fish"), "{completion}");
 
         let config_get = help(&["aibox", "config", "get", "--help"]);
         assert!(config_get.contains("--profile"), "{config_get}");
@@ -1025,6 +1075,26 @@ mod tests {
 
         assert!(Cli::try_parse_from(["aibox", "build", "--agent", "claude"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "build", "--force", "--agent", "claude"]).is_err());
+    }
+
+    #[test]
+    fn parses_completion_commands() {
+        for (name, expected) in [
+            ("bash", CompletionShell::Bash),
+            ("zsh", CompletionShell::Zsh),
+            ("fish", CompletionShell::Fish),
+        ] {
+            let cli = Cli::try_parse_from(["aibox", "completion", name]).unwrap();
+            assert_eq!(cli.agent, None);
+            match cli.command.unwrap() {
+                Command::Completion(CompletionArgs { shell }) => assert_eq!(shell, expected),
+                _ => panic!("expected completion"),
+            }
+        }
+
+        assert!(Cli::try_parse_from(["aibox", "completion"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "completion", "powershell"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "completion", "nu"]).is_err());
     }
 
     #[test]

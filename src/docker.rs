@@ -10,6 +10,7 @@
 //! `docker build -f - <ctx>` on stdin with an empty context directory.
 
 use anyhow::{bail, Context, Result};
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -140,7 +141,7 @@ fn image_ref_for_exact_ls(image: &str) -> String {
 pub fn run(
     run_args: &[String],
     image: &str,
-    cmd: &[String],
+    cmd: &[OsString],
     after_container_created: impl FnOnce(),
 ) -> Result<i32> {
     let mut after_container_created = Some(after_container_created);
@@ -341,6 +342,10 @@ if [ "$1" = "image" ] && [ "$2" = "ls" ]; then
             exit 96
             ;;
     esac
+fi
+if [ "$1" = "container" ] && [ "$2" = "ls" ]; then
+    # Normal fixture runs model an already-removed --rm container.
+    exit 0
 fi
 if { [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-stubborn" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-failure" ] || [ "$AIBOX_FAKE_DOCKER_MODE" = "lingering-kill-failure" ]; } && [ "$1" = "inspect" ]; then
     if [ -e "$AIBOX_FAKE_DOCKER_STOPPED" ]; then
@@ -642,7 +647,7 @@ printf '\nEND\n' >> "$log"
             "--security-opt".to_string(),
             "no-new-privileges".to_string(),
         ];
-        let cmd = vec!["exec".to_string(), "--flag".to_string()];
+        let cmd = vec![OsString::from("exec"), OsString::from("--flag")];
         let code = run(&run_args, IMAGE, &cmd, || {}).unwrap();
 
         assert_eq!(code, 0);

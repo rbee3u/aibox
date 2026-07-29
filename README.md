@@ -22,6 +22,35 @@ Ensure Cargo's binary directory (normally `$HOME/.cargo/bin`) is on `PATH`.
 `aibox build` downloads the image's development toolchains and pinned agent CLI
 versions, so the first image build can take a while.
 
+### Shell Completion
+
+Generate and load dynamic completion for your current shell:
+
+```sh
+# Bash
+source <(aibox completion bash)
+
+# Zsh
+source <(aibox completion zsh)
+
+# Fish
+aibox completion fish | source
+```
+
+If a bare Zsh setup has not initialized completion yet, run
+`autoload -Uz compinit && compinit` first. Most Zsh frameworks do this already.
+
+To enable completion in future shells, add the matching command itself to
+`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`. Keep the command in
+the startup file instead of caching its output: the generated registration
+script calls back into the installed `aibox` binary and should be regenerated
+after upgrades.
+
+Completion covers aibox commands and options, local profile/provider/session
+names, and host paths for `--work` and the source side of `--mount`. It stops at
+the first `--`; arguments forwarded to Codex or Claude are not completed, and
+completion never starts Docker.
+
 ## First Run and Authentication
 
 Start the agent interactively the first time and follow its own sign-in flow:
@@ -43,6 +72,7 @@ before using a headless run.
 ```sh
 aibox [--agent codex|claude] [run-options] [-- <args passed to agent>]
 aibox build [--force]
+aibox completion <bash|zsh|fish>
 aibox profile <list|create|delete> ...
 aibox config [--agent codex|claude] [-p <profile>] <list|get|create|apply|edit|delete> ...
 aibox session [--agent codex|claude] [-p <profile>] [list|get|delete] ...
@@ -77,8 +107,8 @@ aibox --agent claude -p work -- --model MODEL_NAME
 
 Without `--exec`, aibox starts the selected agent normally. With `--exec`, it
 inserts Codex's `exec` subcommand before the forwarded arguments. Subcommands
-such as `build`, `profile`, `config`, and `session` do not accept pass-through
-arguments.
+such as `build`, `completion`, `profile`, `config`, and `session` do not accept
+pass-through arguments.
 
 ## Profile Layout
 

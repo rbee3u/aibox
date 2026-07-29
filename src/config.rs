@@ -888,9 +888,8 @@ fn split_shell_words(input: &str) -> Result<Vec<String>> {
                     in_word = true;
                 }
                 '\\' => {
-                    if let Some(next) = chars.next() {
-                        current.push(next);
-                    }
+                    let next = chars.next().context("trailing escape in editor command")?;
+                    current.push(next);
                     in_word = true;
                 }
                 character if character.is_whitespace() => {
@@ -1931,6 +1930,9 @@ printf '{"token":"edited"}\n' > "$1"
             .unwrap_err()
             .to_string();
         assert!(err.contains("unterminated quote"), "{err}");
+
+        let err = split_shell_words("vim \\").unwrap_err().to_string();
+        assert!(err.contains("trailing escape"), "{err}");
     }
 
     #[test]
@@ -1974,6 +1976,54 @@ printf '{"token":"edited"}\n' > "$1"
             !p.backups_dir().exists(),
             "failed apply must not create a misleading backup"
         );
+    }
+
+    #[test]
+    fn malformed_provider_configs_do_not_change_active_files_or_state() {
+        let codex_root = tempfile::tempdir().unwrap();
+        let codex = profile(codex_root.path(), AgentKind::Codex);
+        create_provider(&codex, "broken").unwrap();
+        fs::write(codex.provider_file("broken", "config.toml"), "model = [\n").unwrap();
+        fs::write(
+            codex.provider_file("broken", "auth.json"),
+            r#"{"token":"new"}"#,
+        )
+        .unwrap();
+        fs::write(codex.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(codex.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+
+        let err = format!("{:#}", apply_provider(&codex, "broken").unwrap_err());
+
+        assert!(err.contains("merge codex config"), "{err}");
+        assert_eq!(
+            fs::read_to_string(codex.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(codex.active_file("auth.json")).unwrap(),
+            r#"{"token":"old"}"#
+        );
+        assert!(!codex.state_path().exists());
+        assert!(!codex.backups_dir().exists());
+
+        let claude_root = tempfile::tempdir().unwrap();
+        let claude = profile(claude_root.path(), AgentKind::Claude);
+        create_provider(&claude, "broken").unwrap();
+        fs::write(claude.provider_file("broken", "settings.json"), "[]").unwrap();
+        fs::write(claude.active_file("settings.json"), r#"{"model":"old"}"#).unwrap();
+
+        let err = format!("{:#}", apply_provider(&claude, "broken").unwrap_err());
+
+        assert!(
+            err.contains("provider settings must be a JSON object"),
+            "{err}"
+        );
+        assert_eq!(
+            fs::read_to_string(claude.active_file("settings.json")).unwrap(),
+            r#"{"model":"old"}"#
+        );
+        assert!(!claude.state_path().exists());
+        assert!(!claude.backups_dir().exists());
     }
 
     #[test]

@@ -58,11 +58,11 @@ const CONTAINER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 // Main-thread fallback when a signal raced with `docker run` exiting. Covers
 // cid discovery on the *late-cidfile* path (the first bounded wait fails, then
-// the longer late wait succeeds), a graceful kill + inspect, the full grace
-// window (including one last bounded inspect), the final SIGKILL, and two
-// seconds of scheduling slack — so the main thread never exits before the
-// watcher can finish its worst-case bounded cleanup.
-const SIGNAL_FINISH_WAIT: Duration = Duration::from_secs(25);
+// the longer late wait succeeds), a graceful kill + bounded state probe, the
+// full grace window (including one last bounded probe), the final SIGKILL, and
+// scheduling slack — so the main thread never exits before the watcher can
+// finish its worst-case bounded cleanup.
+const SIGNAL_FINISH_WAIT: Duration = Duration::from_secs(27);
 
 /// Whether the watcher thread is up. A `Mutex<bool>` rather than a `OnceLock`
 /// so a failed install (Signals::new or thread spawn error) isn't remembered as
@@ -258,8 +258,7 @@ fn wait_current_cid(timeout: Duration) -> Option<String> {
 enum CommandOutcome {
     /// Exited zero; carries captured stdout.
     Succeeded(String),
-    /// Ran to completion but exited non-zero — a definitive failure, e.g.
-    /// `docker inspect` on a container id that no longer resolves.
+    /// Ran to completion but exited non-zero.
     Failed,
     /// Did not finish within the timeout, or could not be spawned or reaped.
     /// The subprocess may be wedged, so callers must not read this as a
@@ -328,7 +327,7 @@ enum ContainerState {
     Unknown,
 }
 
-fn parse_container_state(outcome: CommandOutcome) -> ContainerState {
+fn parse_container_state(outcome: &CommandOutcome) -> ContainerState {
     match outcome {
         CommandOutcome::Succeeded(out) => match out.trim() {
             "true" => ContainerState::Running,
@@ -337,27 +336,47 @@ fn parse_container_state(outcome: CommandOutcome) -> ContainerState {
             // format string; stay conservative rather than assume "stopped".
             _ => ContainerState::Unknown,
         },
-        // `inspect` ran and exited non-zero: the id no longer resolves because
-        // the container is gone (the common `--rm` case). That is effectively
-        // stopped — reporting it lets the grace loop exit immediately instead
-        // of waiting out the full window for a container that no longer exists.
-        CommandOutcome::Failed => ContainerState::Stopped,
-        // Timed out / unspawnable: the daemon may be wedged. Treating that as
-        // "done" could leave a container alive, so keep it unknown.
-        CommandOutcome::Unfinished => ContainerState::Unknown,
+        // A non-zero exit, timeout, or spawn failure is not enough to prove the
+        // container is gone. `container_state` may disambiguate a fast inspect
+        // failure with an exact list query; otherwise stay conservative.
+        CommandOutcome::Failed | CommandOutcome::Unfinished => ContainerState::Unknown,
     }
 }
 
 /// The daemon's view of the container. A wedged daemon is unknown, not stopped:
-/// treating it as "done" can leave the container alive. A definitive `inspect`
-/// failure (the id no longer resolves) is stopped: the container is gone.
+/// treating it as "done" can leave the container alive. A fast non-zero
+/// `inspect` is ambiguous — the id may be gone, or the daemon may be failing —
+/// so an exact `container ls` query distinguishes those cases.
 fn container_state(cid: &str) -> ContainerState {
     let outcome = command_quiet(
         "docker",
         &["inspect", "-f", "{{.State.Running}}", cid],
         DOCKER_INSPECT_TIMEOUT,
     );
-    parse_container_state(outcome)
+    let state = parse_container_state(&outcome);
+    if state != ContainerState::Unknown || !matches!(outcome, CommandOutcome::Failed) {
+        return state;
+    }
+
+    let filter = format!("id={cid}");
+    match command_quiet(
+        "docker",
+        &[
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--no-trunc",
+            "--filter",
+            &filter,
+        ],
+        DOCKER_INSPECT_TIMEOUT,
+    ) {
+        CommandOutcome::Succeeded(output) if output.trim().is_empty() => ContainerState::Stopped,
+        CommandOutcome::Succeeded(_) | CommandOutcome::Failed | CommandOutcome::Unfinished => {
+            ContainerState::Unknown
+        }
+    }
 }
 
 /// Stop the active run without letting a slow cidfile create window orphan the
@@ -890,11 +909,12 @@ esac
         // bounded wait fails (CIDFILE_WAIT), then after signalling the child the
         // longer late wait succeeds (LATE_CIDFILE_WAIT), then `stop_container_id`
         // runs its full graceful/escalating cleanup.
+        let container_state_timeout = DOCKER_INSPECT_TIMEOUT + DOCKER_INSPECT_TIMEOUT;
         let worst_case_stop_container_id = DOCKER_KILL_TIMEOUT
-            + DOCKER_INSPECT_TIMEOUT
+            + container_state_timeout
             + CONTAINER_GRACE
             + CONTAINER_POLL_INTERVAL
-            + DOCKER_INSPECT_TIMEOUT
+            + container_state_timeout
             + DOCKER_KILL_TIMEOUT;
         let worst_case_signal_cleanup =
             CIDFILE_WAIT + LATE_CIDFILE_WAIT + worst_case_stop_container_id;
@@ -1097,34 +1117,78 @@ esac
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn failed_inspect_distinguishes_a_missing_container_from_a_daemon_failure() {
+        let _env_lock = crate::test_env_lock();
+        let fake_docker = stable_tempdir();
+        crate::testutil::write_stub_script(
+            fake_docker.path(),
+            "docker",
+            r#"#!/bin/sh
+case "$1" in
+    inspect)
+        exit 1
+        ;;
+    container)
+        if [ "$AIBOX_FAKE_DOCKER_STATE" = "missing" ]; then
+            exit 0
+        fi
+        exit 1
+        ;;
+    *)
+        exit 99
+        ;;
+esac
+"#,
+        );
+        let _path = EnvGuard::prepend_path(fake_docker.path());
+
+        {
+            let _state = EnvGuard::set("AIBOX_FAKE_DOCKER_STATE", "missing");
+            assert_eq!(
+                container_state("gone-container"),
+                ContainerState::Stopped,
+                "an exact empty container list confirms that the id is gone"
+            );
+        }
+
+        {
+            let _state = EnvGuard::set("AIBOX_FAKE_DOCKER_STATE", "daemon-error");
+            assert_eq!(
+                container_state("possibly-running-container"),
+                ContainerState::Unknown,
+                "two failed daemon queries must not be mistaken for a stopped container"
+            );
+        }
+    }
+
     #[test]
     fn container_state_parser_distinguishes_running_stopped_unknown() {
         assert_eq!(
-            parse_container_state(CommandOutcome::Succeeded("true\n".into())),
+            parse_container_state(&CommandOutcome::Succeeded("true\n".into())),
             ContainerState::Running
         );
         assert_eq!(
-            parse_container_state(CommandOutcome::Succeeded("false\n".into())),
+            parse_container_state(&CommandOutcome::Succeeded("false\n".into())),
             ContainerState::Stopped
         );
         assert_eq!(
-            parse_container_state(CommandOutcome::Succeeded(String::new())),
+            parse_container_state(&CommandOutcome::Succeeded(String::new())),
             ContainerState::Unknown
         );
         assert_eq!(
-            parse_container_state(CommandOutcome::Succeeded("docker error".into())),
+            parse_container_state(&CommandOutcome::Succeeded("docker error".into())),
             ContainerState::Unknown
         );
-        // A definitive non-zero `inspect` means the id no longer resolves — the
-        // container is gone, so the grace loop can stop waiting immediately.
         assert_eq!(
-            parse_container_state(CommandOutcome::Failed),
-            ContainerState::Stopped
+            parse_container_state(&CommandOutcome::Failed),
+            ContainerState::Unknown
         );
         // A timeout / unspawnable docker is not an answer: stay Unknown so a
         // wedged daemon can't be mistaken for a stopped container.
         assert_eq!(
-            parse_container_state(CommandOutcome::Unfinished),
+            parse_container_state(&CommandOutcome::Unfinished),
             ContainerState::Unknown
         );
     }

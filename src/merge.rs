@@ -286,6 +286,25 @@ mod tests {
     }
 
     #[test]
+    fn json_merge_replaces_values_when_only_one_side_is_an_object() {
+        for (mut base, overlay, expected) in [
+            (
+                json!({"value": {"old": true}}),
+                json!({"value": "replacement"}),
+                json!({"value": "replacement"}),
+            ),
+            (
+                json!({"value": "old"}),
+                json!({"value": {"replacement": true}}),
+                json!({"value": {"replacement": true}}),
+            ),
+        ] {
+            merge_json(&mut base, overlay);
+            assert_eq!(base, expected);
+        }
+    }
+
+    #[test]
     fn toml_merge_recurses_tables_and_preserves_unmentioned_keys() {
         let base = r#"
 model = "common"
@@ -306,6 +325,41 @@ base_url = "new"
         assert!(merged.contains(r#"model = "provider""#));
         assert!(merged.contains(r#"base_url = "new""#));
         assert!(merged.contains("legacy = true"));
+    }
+
+    #[test]
+    fn toml_merge_replaces_conflicting_shapes_and_arrays_of_tables() {
+        let merged = merge_toml_strings(
+            r#"
+[service]
+url = "old"
+keep = true
+
+[[models]]
+name = "old"
+"#,
+            r#"
+service = "disabled"
+
+[[models]]
+name = "new"
+"#,
+        )
+        .unwrap();
+        let merged: DocumentMut = merged.parse().unwrap();
+        assert_eq!(merged["service"].as_str(), Some("disabled"));
+        let models = merged["models"].as_array_of_tables().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models.get(0).unwrap()["name"].as_str(), Some("new"));
+
+        let merged = merge_toml_strings(
+            "service = \"legacy\"\n",
+            "service = { url = \"new\", retry = 2 }\n",
+        )
+        .unwrap();
+        let merged: DocumentMut = merged.parse().unwrap();
+        assert_eq!(merged["service"]["url"].as_str(), Some("new"));
+        assert_eq!(merged["service"]["retry"].as_integer(), Some(2));
     }
 
     #[test]

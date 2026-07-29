@@ -4,6 +4,7 @@
 use crate::agent::AgentKind;
 use crate::platform;
 use anyhow::{bail, Context, Result};
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 /// Reject a bind source containing `:` because Docker's `-v` short syntax
@@ -43,6 +44,8 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
     if !path.is_dir() {
         bail!("work dir is not a directory: {}", path.display());
     }
+    let path = std::fs::canonicalize(&path)
+        .with_context(|| format!("resolve work dir {}", path.display()))?;
     reject_colon_in_bind_source("work dir", &path)?;
     Ok(path
         .to_str()
@@ -73,6 +76,8 @@ pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
             if !host_path.exists() {
                 bail!("mount host path does not exist: {}", host_path.display());
             }
+            let host_path = std::fs::canonicalize(&host_path)
+                .with_context(|| format!("resolve mount host path {}", host_path.display()))?;
             reject_colon_in_bind_source("mount host", &host_path)?;
             let host_path = host_path
                 .to_str()
@@ -324,7 +329,7 @@ pub struct RunOpts<'a> {
     /// Whether to select Codex's headless `exec` subcommand.
     pub exec: bool,
     /// Arguments copied verbatim after the agent executable and run mode.
-    pub passthrough: &'a [String],
+    pub passthrough: &'a [OsString],
 }
 
 /// Agent command and any agent-specific additions to `docker run`.
@@ -332,7 +337,7 @@ pub struct Invocation {
     /// Docker arguments required by this agent before the image name.
     pub extra_run_args: Vec<String>,
     /// Executable and arguments to run inside the container.
-    pub agent_cmd: Vec<String>,
+    pub agent_cmd: Vec<OsString>,
 }
 
 /// Assemble Docker arguments for the managed home, work tree, and extra mounts.
@@ -390,7 +395,12 @@ mod tests {
     #[test]
     fn resolve_work_dir_none_uses_cwd() {
         let got = resolve_work_dir(None).unwrap();
-        assert_eq!(got, std::env::current_dir().unwrap().to_string_lossy());
+        assert_eq!(
+            got,
+            std::fs::canonicalize(std::env::current_dir().unwrap())
+                .unwrap()
+                .to_string_lossy()
+        );
     }
 
     #[test]
@@ -399,7 +409,12 @@ mod tests {
 
         let got = resolve_work_dir(Some("src")).unwrap();
 
-        assert_eq!(got, cwd.join("src").to_string_lossy());
+        assert_eq!(
+            got,
+            std::fs::canonicalize(cwd.join("src"))
+                .unwrap()
+                .to_string_lossy()
+        );
     }
 
     #[test]
@@ -410,14 +425,42 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                format!("{}:/src", cwd.join("src").display()),
-                format!("{}:/readonly:ro", cwd.join("src").display())
+                format!(
+                    "{}:/src",
+                    std::fs::canonicalize(cwd.join("src")).unwrap().display()
+                ),
+                format!(
+                    "{}:/readonly:ro",
+                    std::fs::canonicalize(cwd.join("src")).unwrap().display()
+                )
             ]
         );
 
         assert!(resolve_mounts(&["/no/such/dir:/data".to_string()]).is_err());
         assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
         assert!(resolve_mounts(&["src:/cache:rw".to_string()]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_bind_sources_do_not_leave_symlinks_for_docker() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &link).unwrap();
+        let canonical_target = fs::canonicalize(&target).unwrap();
+
+        assert_eq!(
+            resolve_work_dir(Some(link.to_str().unwrap())).unwrap(),
+            canonical_target.to_string_lossy()
+        );
+        assert_eq!(
+            resolve_mounts(&[format!("{}:/data:ro", link.display())]).unwrap(),
+            [format!("{}:/data:ro", canonical_target.display())]
+        );
     }
 
     #[test]
@@ -572,17 +615,78 @@ mod tests {
     }
 
     #[test]
-    fn assemble_run_args_mounts_shared_home_at_agent_home() {
+    fn aibox_mount_check_rejects_an_ancestor_before_the_root_exists() {
+        let parent = tempfile::tempdir().unwrap();
+        let future_root = parent.path().join("future/.aibox");
+
+        let err = validate_aibox_mount_sources(parent.path().to_str().unwrap(), &[], &future_root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("aibox internal data"), "{err}");
+        assert!(!future_root.exists());
+    }
+
+    #[test]
+    fn ordinary_profile_home_children_are_valid_extra_mount_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let home_child = root.path().join("work/home/projects/demo");
+        fs::create_dir_all(&home_child).unwrap();
+        fs::create_dir_all(root.path().join("work/config/codex")).unwrap();
+
+        validate_aibox_mount_sources(
+            outside.path().to_str().unwrap(),
+            &[format!("{}:/demo:ro", home_child.display())],
+            root.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn assemble_run_args_keeps_sandbox_flags_and_mount_order() {
         let args = assemble_run_args(
             AgentKind::Codex,
             "/abs/work",
             Path::new("/abs/profile"),
-            &[],
-            &[],
+            &["/abs/cache:/cache:ro".to_string()],
+            &["--network=none".to_string()],
         );
+
+        assert_eq!(args.first().map(String::as_str), Some("--rm"));
+        assert_eq!(
+            args.get(1).map(String::as_str),
+            Some(if platform::has_tty() { "-it" } else { "-i" })
+        );
+        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
+        assert!(contains_pair(&args, "--cap-drop", "ALL"));
         assert!(contains_pair(&args, "-v", "/abs/profile:/home/aibox"));
         assert!(contains_pair(&args, "-v", "/abs/work:/work"));
+        assert!(contains_pair(&args, "-v", "/abs/cache:/cache:ro"));
+        assert!(contains_pair(&args, "-w", "/work"));
+        assert!(
+            crate::testutil::pair_pos(&args, "-v", "/abs/profile:/home/aibox")
+                < crate::testutil::pair_pos(&args, "-v", "/abs/work:/work")
+        );
+        assert!(
+            crate::testutil::pair_pos(&args, "-v", "/abs/work:/work")
+                < crate::testutil::pair_pos(&args, "-v", "/abs/cache:/cache:ro")
+        );
+        assert_eq!(args.last().map(String::as_str), Some("--network=none"));
         assert!(!args.iter().any(|arg| arg == "--env-file"));
+
+        if platform::is_linux() {
+            let (uid, gid) = platform::uid_gid();
+            assert!(contains_pair(&args, "--user", &format!("{uid}:{gid}")));
+            assert!(contains_pair(
+                &args,
+                "--add-host",
+                "host.docker.internal:host-gateway"
+            ));
+        } else {
+            assert!(!args.iter().any(|arg| arg == "--user"));
+            assert!(!args.iter().any(|arg| arg == "--add-host"));
+        }
     }
 
     #[test]

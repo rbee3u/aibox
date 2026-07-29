@@ -7,6 +7,7 @@
 
 use crate::runspec::{Invocation, RunOpts};
 use anyhow::Result;
+use std::ffi::OsString;
 
 /// Which agent a command targets. Selected by `--agent` on agent-scoped commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -82,9 +83,9 @@ impl AgentKind {
     /// This method does not reject unsupported modes. Callers must reject
     /// `opts.exec` when [`Self::supports_exec`] is false.
     pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
-        let mut agent_cmd = vec![self.tag().to_string()];
+        let mut agent_cmd = vec![OsString::from(self.tag())];
         if self == AgentKind::Codex && opts.exec {
-            agent_cmd.push("exec".to_string());
+            agent_cmd.push(OsString::from("exec"));
         }
         agent_cmd.extend(opts.passthrough.iter().cloned());
         Ok(Invocation {
@@ -99,7 +100,7 @@ mod tests {
     use super::*;
     use crate::runspec::RunOpts;
 
-    fn opts(passthrough: &[String]) -> RunOpts<'_> {
+    fn opts(passthrough: &[OsString]) -> RunOpts<'_> {
         RunOpts {
             exec: false,
             passthrough,
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn build_invocation_no_longer_injects_provider_config() {
-        let pass = vec!["--model".to_string(), "opus".to_string()];
+        let pass = vec![OsString::from("--model"), OsString::from("opus")];
         let inv = AgentKind::Claude.build_invocation(&opts(&pass)).unwrap();
         assert_eq!(inv.agent_cmd, ["claude", "--model", "opus"]);
         assert!(inv.extra_run_args.is_empty());
@@ -141,12 +142,25 @@ mod tests {
 
     #[test]
     fn codex_exec_uses_exec_subcommand_without_permission_overrides() {
-        let pass = vec!["fix tests".to_string(), "--json".to_string()];
+        let pass = vec![OsString::from("fix tests"), OsString::from("--json")];
         let mut o = opts(&pass);
         o.exec = true;
 
         let inv = AgentKind::Codex.build_invocation(&o).unwrap();
 
         assert_eq!(inv.agent_cmd, ["codex", "exec", "fix tests", "--json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invocation_preserves_non_utf8_passthrough_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
+        let pass = vec![opaque.clone()];
+
+        let inv = AgentKind::Codex.build_invocation(&opts(&pass)).unwrap();
+
+        assert_eq!(inv.agent_cmd, [OsString::from("codex"), opaque]);
     }
 }

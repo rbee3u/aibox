@@ -440,10 +440,10 @@ fn agent_management_dir_exists(root: &Path, profile: &str, agent: AgentKind) -> 
 }
 
 fn validate_root_layout(root: &Path) -> Result<()> {
-    reject_legacy_management_root(root)?;
     if !real_dir_exists(root, "aibox root")? {
         return Ok(());
     }
+    reject_legacy_management_root(root)?;
     for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
         let entry = entry.with_context(|| format!("read entry in {}", root.display()))?;
         let name = entry.file_name();
@@ -459,6 +459,10 @@ fn validate_root_layout(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn validate_profile_layout(root: &Path, profile: &str) -> Result<()> {
+    validate_name("profile", profile)?;
+    if !real_dir_exists(root, "aibox root")? {
+        return Ok(());
+    }
     reject_legacy_management_root(root)?;
     validate_profile_layout_inner(root, profile)
 }
@@ -544,9 +548,10 @@ pub fn config_root() -> Result<PathBuf> {
 }
 
 fn host_home() -> Result<PathBuf> {
-    crate::env_override("HOME")?
+    let home = crate::env_override("HOME")?
         .map(PathBuf::from)
-        .context("$HOME is not set")
+        .context("$HOME is not set")?;
+    absolutize(home).context("resolve $HOME")
 }
 
 fn absolutize(path: PathBuf) -> Result<PathBuf> {
@@ -631,7 +636,10 @@ fn open_no_follow(path: &Path) -> io::Result<fs::File> {
 
     fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        // A regular file ignores O_NONBLOCK. A FIFO or device swapped in
+        // after the type check opens without hanging, then the descriptor
+        // metadata check in `open_real_file` rejects it.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
 }
 
@@ -719,8 +727,12 @@ fn install_missing_file(path: &Path, kind: &str, content: &[u8], mode: u32) -> R
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))
-            .with_context(|| format!("chmod {:o} {}", mode, path.display()))?;
+        // Anchor chmod to the file we created: the mounted home can be changed
+        // concurrently, so resolving `path` again could follow a replacement.
+        if let Err(error) = file.set_permissions(fs::Permissions::from_mode(mode)) {
+            let _ = fs::remove_file(path);
+            return Err(error).with_context(|| format!("chmod {:o} {}", mode, path.display()));
+        }
     }
     #[cfg(not(unix))]
     let _ = mode;
@@ -743,7 +755,9 @@ fn confirm_delete(profile: &str) -> Result<bool> {
 /// Restrict a file to owner read/write permissions on Unix.
 pub fn set_600(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+
+    let file = open_real_file(path, "private config file")?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
         .with_context(|| format!("chmod 600 {}", path.display()))
 }
 
@@ -787,6 +801,19 @@ mod tests {
         let err = config_root().unwrap_err().to_string();
 
         assert!(err.contains("$HOME is not set"), "{err}");
+    }
+
+    #[test]
+    fn relative_home_is_anchored_to_the_current_directory() {
+        let _env_lock = crate::test_env_lock();
+        let cwd = std::env::current_dir().unwrap();
+        let _home = EnvGuard::set("HOME", "relative-home");
+
+        let profile =
+            Profile::resolve(AgentKind::Codex, Path::new("/aibox"), HOST_PROFILE).unwrap();
+
+        assert_eq!(profile.home_dir, cwd.join("relative-home"));
+        assert_eq!(profile.active_agent_dir, cwd.join("relative-home/.codex"));
     }
 
     #[test]
@@ -1263,6 +1290,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn set_600_rejects_symlinks_without_changing_the_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        let link = dir.path().join("link");
+        fs::write(&real, "secret\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o644)).unwrap();
+        symlink(&real, &link).unwrap();
+
+        let err = set_600(&link).unwrap_err().to_string();
+
+        assert!(
+            err.contains("private config file is not a regular file"),
+            "{err}"
+        );
+        assert_eq!(
+            fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn create_ordinary_profile_rejects_legacy_management_root() {
         use std::os::unix::fs::symlink;
 
@@ -1283,6 +1334,28 @@ mod tests {
         assert!(
             !root.path().join("work").exists(),
             "profile home should not be created after rejecting the management root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_profile_operations_reject_a_symlinked_aibox_root() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        create_ordinary_profile(outside.path(), "work").unwrap();
+        let linked_root = parent.path().join("root");
+        symlink(outside.path(), &linked_root).unwrap();
+
+        let err = delete_ordinary_profile(&linked_root, "work", true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("aibox root is not a real directory"), "{err}");
+        assert!(
+            outside.path().join("work").is_dir(),
+            "profile deletion must not traverse a symlinked AIBOX_ROOT"
         );
     }
 

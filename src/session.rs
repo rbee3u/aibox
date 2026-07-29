@@ -7,8 +7,11 @@
 use crate::agent::AgentKind;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
+#[cfg(unix)]
+use std::ffi::OsString;
+use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Resolve a transcript directory only through real directory entries beneath
 /// the profile home. The home is writable by the container, so following an
@@ -122,8 +125,12 @@ pub(crate) fn walk_jsonl_tolerant(
 /// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
 /// held in memory at once.
-pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(&Value)) -> Result<()> {
-    let file = crate::profile::open_real_file(path, "session transcript")?;
+pub(crate) fn for_each_json_line(
+    home: &Path,
+    path: &Path,
+    mut f: impl FnMut(&Value),
+) -> Result<()> {
+    let file = open_session_transcript(home, path)?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
     loop {
@@ -140,6 +147,210 @@ pub(crate) fn for_each_json_line(path: &Path, mut f: impl FnMut(&Value)) -> Resu
             f(&v);
         }
     }
+}
+
+#[cfg(test)]
+fn test_transcript_home(path: &Path, components: &[&str]) -> Result<PathBuf> {
+    if components.is_empty() {
+        return path
+            .parent()
+            .map(Path::to_path_buf)
+            .with_context(|| format!("session transcript has no parent: {}", path.display()));
+    }
+
+    let session_suffix: PathBuf = components.iter().collect();
+    let Some(session_dir) = path.parent().and_then(|parent| {
+        parent
+            .ancestors()
+            .find(|dir| dir.ends_with(&session_suffix))
+    }) else {
+        bail!(
+            "session transcript is outside the expected session tree: {}",
+            path.display()
+        );
+    };
+    let mut home = session_dir.to_path_buf();
+    for _ in components {
+        if !home.pop() {
+            bail!(
+                "session transcript has no profile home ancestor: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(home)
+}
+
+#[cfg(unix)]
+fn open_session_transcript(home: &Path, path: &Path) -> Result<fs::File> {
+    let (parent, file_name) = open_session_parent(home, path)?;
+    open_session_transcript_at(&parent, &file_name, path)
+}
+
+#[cfg(unix)]
+fn open_session_transcript_at(
+    parent: &std::os::fd::OwnedFd,
+    file_name: &std::ffi::OsStr,
+    path: &Path,
+) -> Result<fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let file_name = os_str_c_string(file_name)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            file_name.as_ptr(),
+            // A transcript can be replaced after discovery. O_NONBLOCK is a
+            // no-op for regular files but prevents a FIFO replacement from
+            // hanging this host-side read before the descriptor type check.
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            bail!(
+                "session transcript is not a regular file: {}",
+                path.display()
+            );
+        }
+        return Err(error).with_context(|| format!("open session transcript {}", path.display()));
+    }
+    let file = unsafe { fs::File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("inspect session transcript {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!(
+            "session transcript is not a regular file: {}",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_session_transcript(home: &Path, path: &Path) -> Result<fs::File> {
+    validate_session_ancestors(home, path)?;
+    crate::profile::open_real_file(path, "session transcript")
+}
+
+#[cfg(unix)]
+fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let (parent, file_name) = open_session_parent(home, path)?;
+    // Require a regular final entry before unlinking it. `unlinkat` is anchored
+    // to the already-open real parent directory, so an agent cannot redirect
+    // this deletion by swapping an ancestor for a symlink after discovery.
+    drop(open_session_transcript_at(&parent, &file_name, path)?);
+    let file_name = os_str_c_string(&file_name)?;
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), file_name.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error()).with_context(|| format!("delete {}", path.display()))
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
+    validate_session_ancestors(home, path)?;
+    crate::profile::open_real_file(path, "session transcript")?;
+    fs::remove_file(path).with_context(|| format!("delete {}", path.display()))
+}
+
+#[cfg(unix)]
+fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd, OsString)> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let relative = path.strip_prefix(home).with_context(|| {
+        format!(
+            "session transcript {} is outside profile home {}",
+            path.display(),
+            home.display()
+        )
+    })?;
+    let mut components = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => components.push(name.to_os_string()),
+            _ => bail!(
+                "session transcript path is not a normalized child of the profile home: {}",
+                path.display()
+            ),
+        }
+    }
+    let file_name = components
+        .pop()
+        .with_context(|| format!("session transcript path is empty: {}", path.display()))?;
+
+    let home_path = std::ffi::CString::new(home.as_os_str().as_bytes())
+        .with_context(|| format!("profile home contains a NUL byte: {}", home.display()))?;
+    let home_fd = unsafe {
+        libc::open(
+            home_path.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if home_fd < 0 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("open profile home {}", home.display()));
+    }
+    let mut parent = unsafe { OwnedFd::from_raw_fd(home_fd) };
+
+    for component in components {
+        let component_c = os_str_c_string(&component)?;
+        let next_fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                component_c.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if next_fd < 0 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("open session path {}", path.display()));
+        }
+        parent = unsafe { OwnedFd::from_raw_fd(next_fd) };
+    }
+
+    Ok((parent, file_name))
+}
+
+#[cfg(unix)]
+fn os_str_c_string(value: &std::ffi::OsStr) -> Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(value.as_bytes()).context("session path contains a NUL byte")
+}
+
+#[cfg(not(unix))]
+fn validate_session_ancestors(home: &Path, path: &Path) -> Result<()> {
+    let relative = path.strip_prefix(home).with_context(|| {
+        format!(
+            "session transcript {} is outside profile home {}",
+            path.display(),
+            home.display()
+        )
+    })?;
+    let mut current = home.to_path_buf();
+    crate::profile::real_dir_exists(&current, "profile home")?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            bail!(
+                "session transcript path is not a normalized child of the profile home: {}",
+                path.display()
+            );
+        };
+        current.push(name);
+        if components.peek().is_some() {
+            crate::profile::real_dir_exists(&current, "session directory")?;
+        }
+    }
+    Ok(())
 }
 
 /// A line's top-level timestamp, shared by both transcript formats, or empty.
@@ -178,7 +389,7 @@ pub struct Prompt {
 /// names count, *where* each field lives on a line, and which lines count as
 /// a real prompt. The discovery walks and the summary/get loops that consume
 /// those answers ([`files`](Self::files) / [`list_files`](Self::list_files) /
-/// [`summarize`](Self::summarize) / [`prompts`](Self::prompts)) are written
+/// [`summarize_in`](Self::summarize_in) / [`prompts_in`](Self::prompts_in)) are written
 /// once here as provided methods, so the two backends can't drift out of sync.
 pub trait SessionBackend {
     /// Path components of the transcript tree beneath the profile home
@@ -244,12 +455,13 @@ pub trait SessionBackend {
     /// `title_of` finds something else, like Claude's `ai-title`), so tool/
     /// injected-only shells still list and can be cleared. One streaming pass
     /// with O(1) state; the per-agent answers come from the methods above.
-    fn summarize(&self, path: &Path) -> Result<SessionSummary> {
+    /// `home` anchors no-follow traversal of every path component.
+    fn summarize_in(&self, home: &Path, path: &Path) -> Result<SessionSummary> {
         let mut start_ts: Option<String> = None;
         let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
-        for_each_json_line(path, |v| {
+        for_each_json_line(home, path, |v| {
             if start_ts.is_none() {
                 start_ts = self.start_ts_of(v);
             }
@@ -272,12 +484,23 @@ pub trait SessionBackend {
         })
     }
 
+    #[cfg(test)]
+    /// Test helper that derives the fixture home from the backend's tree.
+    fn summarize(&self, path: &Path) -> Result<SessionSummary>
+    where
+        Self: Sized,
+    {
+        let home = test_transcript_home(path, self.session_dir_components())?;
+        self.summarize_in(&home, path)
+    }
+
     /// Every typed prompt in one transcript, in order, for `get`. Shared
     /// streaming loop; the per-line text (and wrapper filtering) is
-    /// [`typed_text`](Self::typed_text).
-    fn prompts(&self, path: &Path) -> Result<Vec<Prompt>> {
+    /// [`typed_text`](Self::typed_text). `home` anchors no-follow traversal of
+    /// every path component.
+    fn prompts_in(&self, home: &Path, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
-        for_each_json_line(path, |v| {
+        for_each_json_line(home, path, |v| {
             if let Some(text) = self.typed_text(v) {
                 out.push(Prompt {
                     timestamp: ts_of(v),
@@ -286,6 +509,16 @@ pub trait SessionBackend {
             }
         })?;
         Ok(out)
+    }
+
+    #[cfg(test)]
+    /// Test helper that derives the fixture home from the backend's tree.
+    fn prompts(&self, path: &Path) -> Result<Vec<Prompt>>
+    where
+        Self: Sized,
+    {
+        let home = test_transcript_home(path, self.session_dir_components())?;
+        self.prompts_in(&home, path)
     }
 }
 
@@ -421,7 +654,7 @@ fn list_with_printer(
         eprintln!("!! {e}");
     }
     for f in discovery.files {
-        match backend.summarize(&f) {
+        match backend.summarize_in(home, &f) {
             Ok(s) => {
                 let title = list_title(&s.title);
                 rows.push(Row {
@@ -477,7 +710,7 @@ fn get_with_printer(
     let path = resolve(backend, home, id)?;
     let sid = backend.id_of(&path);
     eprintln!(">> session {sid}");
-    let prompts = backend.prompts(&path)?;
+    let prompts = backend.prompts_in(home, &path)?;
     if prompts.is_empty() {
         print("(no typed prompts in this session)")?;
         return Ok(0);
@@ -511,7 +744,7 @@ fn delete(
         bail!("refusing to delete sessions without --yes in a non-interactive shell");
     }
     let mut input = stdin.lock();
-    delete_targets_with_input(backend, targets, yes, &mut input)
+    delete_targets_with_input(backend, home, targets, yes, &mut input)
 }
 
 fn delete_targets(
@@ -547,6 +780,7 @@ fn delete_targets(
 
 fn delete_targets_with_input(
     backend: &dyn SessionBackend,
+    home: &Path,
     targets: Vec<PathBuf>,
     yes: bool,
     input: &mut dyn BufRead,
@@ -555,7 +789,7 @@ fn delete_targets_with_input(
         let sid = backend.id_of(&path);
         let delete = yes || confirm_delete(&sid, input);
         if delete {
-            std::fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
+            remove_session_transcript(home, &path)?;
             eprintln!(">> deleted {sid}");
         } else {
             eprintln!(">> kept {sid}");
@@ -1063,6 +1297,46 @@ mod tests {
         assert!(err.contains("discovery failed"), "{err}");
     }
 
+    #[test]
+    fn resolved_snapshots_cannot_read_or_delete_outside_or_non_normalized_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_path = outside.path().join("outside.jsonl");
+        let inside_path = home.path().join("inside.jsonl");
+        std::fs::write(&outside_path, "{\"typed\":\"outside\"}\n").unwrap();
+        std::fs::write(&inside_path, "{\"typed\":\"inside\"}\n").unwrap();
+
+        for (candidate, expected) in [
+            (outside_path.clone(), "outside profile home"),
+            (
+                home.path().join("sessions/../inside.jsonl"),
+                "not a normalized child",
+            ),
+        ] {
+            let backend = ExplicitFilesBackend::new(vec![candidate.clone()]);
+            let id = backend.id_of(&candidate);
+            let err = get_with_printer(&backend, home.path(), &id, |_| Ok(true))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{candidate:?}: {err}");
+
+            let mut input = Cursor::new(Vec::<u8>::new());
+            let err = delete_targets_with_input(
+                &backend,
+                home.path(),
+                vec![candidate.clone()],
+                true,
+                &mut input,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains(expected), "{candidate:?}: {err}");
+        }
+
+        assert!(outside_path.exists());
+        assert!(inside_path.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn session_discovery_does_not_follow_transcript_symlinks() {
@@ -1106,6 +1380,91 @@ mod tests {
         assert!(
             err.contains("session transcript is not a regular file"),
             "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_rejects_fifo_replacement_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("11111111.jsonl");
+        let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        let result = unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) };
+        assert_eq!(result, 0, "create FIFO: {}", io::Error::last_os_error());
+        let backend = ExplicitFilesBackend::new(vec![fifo]);
+
+        let err = get_with_printer(&backend, dir.path(), "1111", |_| Ok(true))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("session transcript is not a regular file"),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_do_not_follow_an_ancestor_replaced_after_discovery() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let transcript = write_session(home.path(), "11111111");
+        let snapshot = TestBackend.files(home.path()).unwrap();
+        assert_eq!(snapshot, [transcript]);
+
+        std::fs::remove_file(&snapshot[0]).unwrap();
+        std::fs::remove_dir(home.path().join("sessions")).unwrap();
+        std::fs::write(
+            outside.path().join("11111111.jsonl"),
+            "{\"typed\":\"outside\"}\n",
+        )
+        .unwrap();
+        symlink(outside.path(), home.path().join("sessions")).unwrap();
+
+        let err = TestBackend
+            .prompts_in(home.path(), &snapshot[0])
+            .err()
+            .expect("a replaced ancestor must be rejected")
+            .to_string();
+
+        assert!(err.contains("open session path"), "{err}");
+        assert!(
+            outside.path().join("11111111.jsonl").exists(),
+            "reading a resolved snapshot must not follow a replaced ancestor"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_does_not_follow_an_ancestor_replaced_after_discovery() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let transcript = write_session(home.path(), "11111111");
+        let targets =
+            delete_targets(&TestBackend, home.path(), &["1111".to_string()], false).unwrap();
+        assert_eq!(targets, [transcript]);
+
+        std::fs::remove_file(&targets[0]).unwrap();
+        std::fs::remove_dir(home.path().join("sessions")).unwrap();
+        let outside_transcript = outside.path().join("11111111.jsonl");
+        std::fs::write(&outside_transcript, "{}\n").unwrap();
+        symlink(outside.path(), home.path().join("sessions")).unwrap();
+
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let err = delete_targets_with_input(&TestBackend, home.path(), targets, true, &mut input)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("open session path"), "{err}");
+        assert!(
+            outside_transcript.exists(),
+            "deleting a resolved snapshot must not follow a replaced ancestor"
         );
     }
 
@@ -1371,7 +1730,7 @@ mod tests {
         .unwrap();
         let mut input = Cursor::new(b"y\nn\n");
 
-        delete_targets_with_input(&TestBackend, targets, false, &mut input).unwrap();
+        delete_targets_with_input(&TestBackend, dir.path(), targets, false, &mut input).unwrap();
 
         assert!(keep.exists());
         assert!(!remove.exists());
