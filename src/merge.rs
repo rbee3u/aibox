@@ -68,6 +68,9 @@ pub fn merge_json_with_apply_metadata(base: &mut JsonValue, mut overlay: JsonVal
 }
 
 /// Parse JSON, treating empty content as an empty object.
+///
+/// Non-empty JSON is returned as-is; callers that require an object must
+/// validate its shape separately.
 pub fn parse_json_or_empty_object(content: &str) -> Result<JsonValue> {
     if content.trim().is_empty() {
         Ok(JsonValue::Object(Default::default()))

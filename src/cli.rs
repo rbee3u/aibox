@@ -3,6 +3,7 @@
 
 use crate::agent::AgentKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 
 /// Parsed aibox command line, excluding agent arguments after `--`.
@@ -71,7 +72,7 @@ impl Cli {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Scope {
     Root,
     Config,
@@ -79,45 +80,50 @@ enum Scope {
     OtherCommand,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum ScopedOption {
     Agent,
     Profile,
 }
 
 #[derive(Default)]
-struct ScopedOptionCounts {
-    run_agent: bool,
-    run_profile: bool,
-    config_agent: bool,
-    config_profile: bool,
-    session_agent: bool,
-    session_profile: bool,
+struct SeenScopedOptions {
+    options: BTreeSet<(Scope, ScopedOption)>,
 }
 
-impl ScopedOptionCounts {
-    fn record(
-        &mut self,
-        scope: Scope,
-        option: ScopedOption,
-        display: &'static str,
-    ) -> Result<(), clap::Error> {
-        let seen = match (scope, option) {
-            (Scope::Root, ScopedOption::Agent) => &mut self.run_agent,
-            (Scope::Root, ScopedOption::Profile) => &mut self.run_profile,
-            (Scope::Config, ScopedOption::Agent) => &mut self.config_agent,
-            (Scope::Config, ScopedOption::Profile) => &mut self.config_profile,
-            (Scope::Session, ScopedOption::Agent) => &mut self.session_agent,
-            (Scope::Session, ScopedOption::Profile) => &mut self.session_profile,
-            (Scope::OtherCommand, _) => return Ok(()),
-        };
-
-        if *seen {
-            Err(duplicate_scoped_option_error(display))
-        } else {
-            *seen = true;
-            Ok(())
+impl ScopedOption {
+    fn display(self) -> &'static str {
+        match self {
+            ScopedOption::Agent => "--agent",
+            ScopedOption::Profile => "--profile",
         }
+    }
+}
+
+impl SeenScopedOptions {
+    fn record(&mut self, scope: Scope, option: ScopedOption) -> Result<(), clap::Error> {
+        if scope == Scope::OtherCommand {
+            return Ok(());
+        }
+        if self.options.insert((scope, option)) {
+            Ok(())
+        } else {
+            Err(duplicate_scoped_option_error(option.display()))
+        }
+    }
+}
+
+fn scoped_option(token: &str) -> Option<(ScopedOption, bool)> {
+    match token {
+        "--agent" => Some((ScopedOption::Agent, true)),
+        "--profile" | "-p" => Some((ScopedOption::Profile, true)),
+        _ if token.starts_with("--agent=") => Some((ScopedOption::Agent, false)),
+        _ if token.starts_with("--profile=")
+            || (token.starts_with("-p") && !token.starts_with("--")) =>
+        {
+            Some((ScopedOption::Profile, false))
+        }
+        _ => None,
     }
 }
 
@@ -131,7 +137,7 @@ fn duplicate_scoped_option_error(option: &str) -> clap::Error {
 
 fn reject_duplicate_scoped_options(args: &[OsString]) -> Result<(), clap::Error> {
     let mut scope = Scope::Root;
-    let mut counts = ScopedOptionCounts::default();
+    let mut seen = SeenScopedOptions::default();
     let mut skip_next_value = false;
 
     for arg in args.iter().skip(1) {
@@ -152,21 +158,9 @@ fn reject_duplicate_scoped_options(args: &[OsString]) -> Result<(), clap::Error>
             continue;
         }
 
-        if token == "--agent" {
-            counts.record(scope, ScopedOption::Agent, "--agent")?;
-            skip_next_value = true;
-        } else if token.starts_with("--agent=") {
-            counts.record(scope, ScopedOption::Agent, "--agent")?;
-        } else if token == "--profile" {
-            counts.record(scope, ScopedOption::Profile, "--profile")?;
-            skip_next_value = true;
-        } else if token.starts_with("--profile=") {
-            counts.record(scope, ScopedOption::Profile, "--profile")?;
-        } else if token == "-p" {
-            counts.record(scope, ScopedOption::Profile, "--profile")?;
-            skip_next_value = true;
-        } else if token.starts_with("-p") && !token.starts_with("--") {
-            counts.record(scope, ScopedOption::Profile, "--profile")?;
+        if let Some((option, takes_value)) = scoped_option(token) {
+            seen.record(scope, option)?;
+            skip_next_value = takes_value;
         } else if takes_value(token) {
             skip_next_value = true;
         }
@@ -493,10 +487,19 @@ mod tests {
     }
 
     #[test]
-    fn split_cuts_argv_at_the_first_dashdash_only() {
+    fn split_honors_the_first_boundary_and_preserves_unbounded_argv() {
         let (left, right) = split_passthrough(v(&["aibox", "--exec", "--", "fix", "--", "tests"]));
         assert_eq!(left, v(&["aibox", "--exec"]));
         assert_eq!(right, v(&["fix", "--", "tests"]));
+
+        let argv = v(&["aibox", "--exec", "prompt"]);
+        let (left, right) = split_passthrough(argv.clone());
+        assert_eq!(left, argv);
+        assert!(right.is_empty());
+
+        let (left, right) = split_passthrough(v(&["aibox", "--"]));
+        assert_eq!(left, v(&["aibox"]));
+        assert!(right.is_empty());
     }
 
     #[cfg(unix)]
@@ -696,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_subcommand_options_before_their_positionals() {
+    fn parses_session_options_before_their_positionals() {
         let cli = Cli::try_parse_from(["aibox", "session", "delete", "--yes"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Session(SessionArgs {
@@ -727,7 +730,10 @@ mod tests {
             }
             _ => panic!("expected session"),
         }
+    }
 
+    #[test]
+    fn parses_config_options_before_their_positionals() {
         let cli = Cli::try_parse_from(["aibox", "config", "delete", "--yes", "openai"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Config(ConfigArgs {
@@ -822,7 +828,10 @@ mod tests {
             }
             _ => panic!("expected config edit"),
         }
+    }
 
+    #[test]
+    fn parses_profile_options_before_their_positionals() {
         let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--yes", "default"]).unwrap();
         match cli.command.as_ref().unwrap() {
             Command::Profile(ProfileArgs {
@@ -954,11 +963,21 @@ mod tests {
         for argv in [
             &["aibox", "--agent", "claude", "--agent", "claude"][..],
             &["aibox", "-p", "work", "--profile", "work"][..],
+            &["aibox", "--profile=work", "-pwork"][..],
             &[
                 "aibox", "--agent", "codex", "--work", "config", "--agent", "codex",
             ][..],
             &[
                 "aibox", "config", "--agent", "claude", "get", "openai", "--agent", "claude",
+            ][..],
+            &[
+                "aibox",
+                "config",
+                "--agent=claude",
+                "get",
+                "openai",
+                "--agent",
+                "claude",
             ][..],
             &[
                 "aibox",

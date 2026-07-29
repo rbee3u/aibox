@@ -288,6 +288,9 @@ mod tests {
             dir,
             "docker",
             r#"#!/bin/sh
+if [ -n "$AIBOX_FAKE_DOCKER_IMAGE_LOG" ] && [ "$1" = "image" ]; then
+    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_IMAGE_LOG"
+fi
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
     case "$AIBOX_FAKE_DOCKER_IMAGE_MODE" in
         exists)
@@ -531,17 +534,32 @@ printf '\nEND\n' >> "$log"
     fn image_exists_uses_exact_image_inspect() {
         let _env_lock = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("image.log");
         write_fake_docker(dir.path());
         let _path = EnvGuard::prepend_path(dir.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_LOG", log.as_os_str());
 
         {
             let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "exists");
             assert!(image_exists("repo/name:tag").unwrap());
+            let calls = fs::read_to_string(&log).unwrap();
+            assert!(calls.contains("image inspect --format {{.Id}} repo/name:tag"));
+            assert!(
+                !calls.contains("image ls"),
+                "a successful exact inspect must not fall back to a repository listing: {calls}"
+            );
         }
 
         {
+            fs::write(&log, "").unwrap();
             let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing-localized");
             assert!(!image_exists("repo/name:tag").unwrap());
+            let calls = fs::read_to_string(&log).unwrap();
+            assert!(calls.contains("image inspect --format {{.Id}} repo/name:tag"));
+            assert!(
+                calls.contains("image ls --quiet --no-trunc repo/name:tag"),
+                "a failed inspect must use an exact tag in the fallback lookup: {calls}"
+            );
         }
 
         {

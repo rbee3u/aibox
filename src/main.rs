@@ -1,9 +1,10 @@
 //! `aibox` binary entry point — a thin shell over [`aibox`] the library.
 //!
-//! Its only jobs: split argv at the first `--` (so agent pass-through args never
-//! reach clap; see [`aibox::cli::split_passthrough`]), let clap parse the left
-//! half, and hand off to [`aibox::run_os`]. All real logic lives in the library so
-//! it can be unit-tested without spawning a process.
+//! It first handles callbacks from generated completion scripts. Ordinary
+//! invocations are then split at the first `--` (so agent pass-through args
+//! never reach clap; see [`aibox::cli::split_passthrough`]), parsed on the left,
+//! and handed to [`aibox::run_os`]. All real logic lives in the library so it
+//! can be unit-tested without spawning a process.
 
 use aibox::cli::{split_passthrough, Cli};
 use std::process::ExitCode;

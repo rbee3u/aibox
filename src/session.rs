@@ -56,10 +56,15 @@ impl SessionDiscovery {
 /// boundary. Shared by the strict and tolerant walks so they can't drift on which
 /// files count.
 fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {
-    let p = entry.path();
+    let path = entry.path();
     entry.file_type().is_file()
-        && p.extension().is_some_and(|e| e == "jsonl")
-        && p.file_name().and_then(|n| n.to_str()).is_some_and(keep)
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(keep)
 }
 
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
@@ -128,7 +133,7 @@ pub(crate) fn walk_jsonl_tolerant(
 pub(crate) fn for_each_json_line(
     home: &Path,
     path: &Path,
-    mut f: impl FnMut(&Value),
+    mut visit: impl FnMut(&Value),
 ) -> Result<()> {
     let file = open_session_transcript(home, path)?;
     let mut reader = io::BufReader::new(file);
@@ -137,14 +142,14 @@ pub(crate) fn for_each_json_line(
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => return Ok(()),
-            Err(e) => {
-                return Err(e)
+            Err(error) => {
+                return Err(error)
                     .with_context(|| format!("read session transcript {}", path.display()));
             }
             Ok(_) => {}
         }
-        if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            f(&v);
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            visit(&value);
         }
     }
 }
@@ -354,8 +359,9 @@ fn validate_session_ancestors(home: &Path, path: &Path) -> Result<()> {
 }
 
 /// A line's top-level timestamp, shared by both transcript formats, or empty.
-pub(crate) fn ts_of(v: &Value) -> String {
-    v.get("timestamp")
+pub(crate) fn ts_of(value: &Value) -> String {
+    value
+        .get("timestamp")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
@@ -389,8 +395,9 @@ pub struct Prompt {
 /// names count, *where* each field lives on a line, and which lines count as
 /// a real prompt. The discovery walks and the summary/get loops that consume
 /// those answers ([`files`](Self::files) / [`list_files`](Self::list_files) /
-/// [`summarize_in`](Self::summarize_in) / [`prompts_in`](Self::prompts_in)) are written
-/// once here as provided methods, so the two backends can't drift out of sync.
+/// [`summarize_in`](Self::summarize_in) /
+/// [`prompts_in`](Self::prompts_in)) are written once here as provided methods,
+/// so the two backends can't drift out of sync.
 pub trait SessionBackend {
     /// Path components of the transcript tree beneath the profile home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
@@ -461,19 +468,19 @@ pub trait SessionBackend {
         let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
-        for_each_json_line(home, path, |v| {
+        for_each_json_line(home, path, |value| {
             if start_ts.is_none() {
-                start_ts = self.start_ts_of(v);
+                start_ts = self.start_ts_of(value);
             }
             if fallback_start_ts.is_none() {
-                fallback_start_ts = self.fallback_start_ts_of(v);
+                fallback_start_ts = self.fallback_start_ts_of(value);
             }
             if first_typed.is_none() {
-                first_typed = self.typed_text(v);
+                first_typed = self.typed_text(value);
             }
-            if let Some(t) = self.title_of(v) {
-                if !t.is_empty() {
-                    title = Some(t);
+            if let Some(candidate) = self.title_of(value) {
+                if !candidate.is_empty() {
+                    title = Some(candidate);
                 }
             }
         })?;
@@ -500,10 +507,10 @@ pub trait SessionBackend {
     /// every path component.
     fn prompts_in(&self, home: &Path, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
-        for_each_json_line(home, path, |v| {
-            if let Some(text) = self.typed_text(v) {
+        for_each_json_line(home, path, |value| {
+            if let Some(text) = self.typed_text(value) {
                 out.push(Prompt {
-                    timestamp: ts_of(v),
+                    timestamp: ts_of(value),
                     text,
                 });
             }
@@ -600,12 +607,12 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
     }
     let mut exact_matches: Vec<PathBuf> = Vec::new();
     let mut prefix_matches: Vec<PathBuf> = Vec::new();
-    for f in files {
-        let id = backend.id_of(f);
+    for file in files {
+        let id = backend.id_of(file);
         if id == query {
-            exact_matches.push(f.clone());
+            exact_matches.push(file.clone());
         } else if id.starts_with(query) {
-            prefix_matches.push(f.clone());
+            prefix_matches.push(file.clone());
         }
     }
     let candidates = if exact_matches.is_empty() {
@@ -617,11 +624,15 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
         0 => bail!("no session matches: {query}"),
         1 => Ok(candidates.into_iter().next().unwrap()),
         n => {
-            let mut msg = format!("ambiguous id '{query}' matches {n} sessions:");
-            for m in &candidates {
-                msg.push_str(&format!("\n     {}  {}", backend.id_of(m), m.display()));
+            let mut message = format!("ambiguous id '{query}' matches {n} sessions:");
+            for candidate in &candidates {
+                message.push_str(&format!(
+                    "\n     {}  {}",
+                    backend.id_of(candidate),
+                    candidate.display()
+                ));
             }
-            bail!(msg)
+            bail!(message)
         }
     }
 }
@@ -650,21 +661,21 @@ fn list_with_printer(
     let mut rows = Vec::new();
     let discovery = backend.list_files(home)?;
     let mut failed = !discovery.errors.is_empty();
-    for e in discovery.errors {
-        eprintln!("!! {e}");
+    for error in discovery.errors {
+        eprintln!("!! {error}");
     }
-    for f in discovery.files {
-        match backend.summarize_in(home, &f) {
-            Ok(s) => {
-                let title = list_title(&s.title);
+    for file in discovery.files {
+        match backend.summarize_in(home, &file) {
+            Ok(summary) => {
+                let title = list_title(&summary.title);
                 rows.push(Row {
-                    start_ts: s.start_ts,
-                    id: s.id,
+                    start_ts: summary.start_ts,
+                    id: summary.id,
                     title,
                 });
             }
-            Err(e) => {
-                eprintln!("!! {}: {e:#}", f.display());
+            Err(error) => {
+                eprintln!("!! {}: {error:#}", file.display());
                 failed = true;
             }
         }
@@ -686,9 +697,9 @@ fn list_with_printer(
     {
         // By chars, not bytes: ids come from arbitrary transcript file names,
         // and a byte slice could split a multi-byte char and panic.
-        let short: String = id.chars().take(8).collect();
-        let disp = fmt_ts(&start_ts);
-        if !print(&format!("{short:<8}  {disp:<16}  {title}"))? {
+        let short_id: String = id.chars().take(8).collect();
+        let timestamp = fmt_ts(&start_ts);
+        if !print(&format!("{short_id:<8}  {timestamp:<16}  {title}"))? {
             break; // reader hung up; nothing left to show
         }
     }
@@ -715,9 +726,9 @@ fn get_with_printer(
         print("(no typed prompts in this session)")?;
         return Ok(0);
     }
-    for (i, p) in prompts.iter().enumerate() {
-        let d = fmt_ts(&p.timestamp);
-        if !print(&format!("\n[{}] {d}\n{}", i + 1, p.text))? {
+    for (index, prompt) in prompts.iter().enumerate() {
+        let timestamp = fmt_ts(&prompt.timestamp);
+        if !print(&format!("\n[{}] {timestamp}\n{}", index + 1, prompt.text))? {
             break; // reader hung up; nothing left to show
         }
     }
@@ -801,9 +812,9 @@ fn delete_targets_with_input(
 fn confirm_delete(sid: &str, input: &mut dyn BufRead) -> bool {
     eprint!("delete session {sid}? [y/N] ");
     io::stderr().flush().ok();
-    let mut ans = String::new();
-    input.read_line(&mut ans).ok();
-    matches!(ans.trim().to_lowercase().as_str(), "y" | "yes")
+    let mut answer = String::new();
+    input.read_line(&mut answer).ok();
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 /// Format an ISO-8601 timestamp as `YYYY-MM-DD HH:MM` for display, or empty if
@@ -824,14 +835,14 @@ fn fmt_ts(ts: &str) -> String {
 fn collapse_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_run = false;
-    for c in s.chars() {
-        if c.is_control() || (c.is_whitespace() && c != ' ') {
+    for character in s.chars() {
+        if character.is_control() || (character.is_whitespace() && character != ' ') {
             if !in_run {
                 out.push(' ');
                 in_run = true;
             }
         } else {
-            out.push(c);
+            out.push(character);
             in_run = false;
         }
     }
@@ -1380,6 +1391,47 @@ mod tests {
         assert!(
             err.contains("session transcript is not a regular file"),
             "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_rejects_a_transcript_replaced_by_a_symlink_after_discovery() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let transcript = write_session(home.path(), "11111111");
+        let targets =
+            delete_targets(&TestBackend, home.path(), &["1111".to_string()], false).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], transcript);
+
+        std::fs::remove_file(&transcript).unwrap();
+        let outside_transcript = outside.path().join("outside.jsonl");
+        std::fs::write(&outside_transcript, "{\"typed\":\"outside\"}\n").unwrap();
+        symlink(&outside_transcript, &transcript).unwrap();
+
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let err = delete_targets_with_input(&TestBackend, home.path(), targets, true, &mut input)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("session transcript is not a regular file"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside_transcript).unwrap(),
+            "{\"typed\":\"outside\"}\n"
+        );
+        assert!(
+            transcript
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "a failed delete must leave the replacement symlink itself untouched"
         );
     }
 

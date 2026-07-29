@@ -3,18 +3,20 @@
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
 container that **is** the sandbox boundary:
 `aibox [--agent codex|claude] [options] [-- <args passed straight to the agent>]`.
-Top-level subcommands carry `config` for provider overlays and `session` for
-host-side transcript browsing. Run/config/session accept `--agent`; `build` and
-`profile` do not. User docs live in `README.md`.
+Host-side subcommands manage the image, completion, profiles, provider
+overlays, and transcripts. Runs and the separately scoped `config`/`session`
+commands accept `--agent`; `build`, `completion`, and `profile` do not. User
+docs live in `README.md`.
 
 ## Layout
 
 ```
 src/
   lib.rs               # orchestration (run / run_agent) + module wiring
-  main.rs              # thin bin: split argv at `--`, clap parse, call lib::run
+  main.rs              # completion hook, argv split, clap parse, call run_os
   agent.rs             # AgentKind enum + trait-like methods; divergence point
   cli.rs               # clap types + split_passthrough
+  completion.rs        # dynamic shell registration + host-side candidates
   config.rs            # provider create/list/get/apply/edit/delete
   merge.rs             # TOML/JSON deep-merge helpers
   creds.rs             # docker run pid/cidfile signal cleanup
@@ -42,8 +44,15 @@ transcript parsing is the only split backend.
 **The first `--` is the agent-argument boundary.** `main.rs` must split argv
 before clap sees it, and only an agent run may consume the pass-through side.
 Root `--agent`/`--profile` select a run; `config` and `session` own their
-agent/profile options; `build` and `profile` accept neither. Keep clap help,
-README examples, and scope-rejection tests aligned when changing this surface.
+agent/profile options; `build`, `completion`, and `profile` accept neither. Keep
+clap help, README examples, and scope-rejection tests aligned when changing
+this surface.
+
+**Completion mirrors the CLI without side effects.** Generated registration
+scripts call back into `handle_completion` before normal argument splitting.
+The completion command reuses `Cli::command`, must honor scoped options and the
+first `--`, and discovers profiles, providers, sessions, and paths host-side.
+Candidate discovery must not initialize profiles or start Docker.
 
 **Provider metadata never enters the container.** Normal profiles use
 `$AIBOX_ROOT/{profile}/home` as the mounted home for both agents. Provider

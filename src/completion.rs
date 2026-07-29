@@ -161,6 +161,12 @@ impl CompletionContext {
             return context;
         }
 
+        let option_parts = context.capture_scoped_options(&values, top_index);
+        context.capture_scoped_leaf_and_positionals(&values, top_index, &option_parts);
+        context
+    }
+
+    fn capture_scoped_options(&mut self, values: &[&str], top_index: usize) -> BTreeSet<usize> {
         let mut option_parts = BTreeSet::new();
         let mut seen_agent = false;
         let mut seen_profile = false;
@@ -170,48 +176,48 @@ impl CompletionContext {
             if token == "--agent" {
                 option_parts.insert(index);
                 if index + 1 >= values.len() {
-                    context.selection_valid = false;
+                    self.selection_valid = false;
                     break;
                 }
                 option_parts.insert(index + 1);
-                context.record_agent(values[index + 1], &mut seen_agent);
+                self.record_agent(values[index + 1], &mut seen_agent);
                 index += 2;
                 continue;
             }
             if let Some(value) = token.strip_prefix("--agent=") {
                 option_parts.insert(index);
-                context.record_agent(value, &mut seen_agent);
+                self.record_agent(value, &mut seen_agent);
                 index += 1;
                 continue;
             }
             if token == "--profile" || token == "-p" {
                 option_parts.insert(index);
                 if index + 1 >= values.len() {
-                    context.selection_valid = false;
+                    self.selection_valid = false;
                     break;
                 }
                 option_parts.insert(index + 1);
-                context.record_profile(values[index + 1], &mut seen_profile);
+                self.record_profile(values[index + 1], &mut seen_profile);
                 index += 2;
                 continue;
             }
             if let Some(value) = token.strip_prefix("--profile=") {
                 option_parts.insert(index);
-                context.record_profile(value, &mut seen_profile);
+                self.record_profile(value, &mut seen_profile);
                 index += 1;
                 continue;
             }
             if let Some(value) = token.strip_prefix("-p") {
                 if !value.is_empty() && !token.starts_with("--") {
                     option_parts.insert(index);
-                    context.record_profile(value, &mut seen_profile);
+                    self.record_profile(value, &mut seen_profile);
                 }
             }
             index += 1;
         }
-        context.capture_scoped_leaf_and_positionals(&values, top_index, &option_parts);
-        context
+        option_parts
     }
+
     fn record_agent(&mut self, value: &str, seen: &mut bool) {
         if *seen {
             self.selection_valid = false;
@@ -714,6 +720,26 @@ mod tests {
         ]);
         assert_eq!(escaped.agent, AgentKind::Codex);
         assert_eq!(escaped.positionals, BTreeSet::from(["openai".to_string()]));
+    }
+
+    #[test]
+    fn context_does_not_treat_run_option_values_as_subcommands() {
+        for argv in [
+            &["aibox", "--work", "config"][..],
+            &["aibox", "-w", "session"][..],
+            &["aibox", "--mount", "profile"][..],
+            &["aibox", "-m", "completion"][..],
+            &["aibox", "--profile", "build"][..],
+            &["aibox", "-p", "config"][..],
+            &["aibox", "--agent", "session"][..],
+        ] {
+            let context = context(argv);
+            assert_eq!(
+                context.top,
+                TopCommand::Run,
+                "{argv:?} must remain a run while its option value is incomplete or subcommand-shaped"
+            );
+        }
     }
 
     #[test]

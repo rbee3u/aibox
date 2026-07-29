@@ -10,7 +10,7 @@ use crate::cli::ProfileCommand;
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Reserved profile name that points to the real host agent state.
 pub const HOST_PROFILE: &str = "host";
@@ -225,7 +225,8 @@ fn profile_list_entries(root: &Path) -> Result<Vec<String>> {
 
 /// List ordinary profile names in lexical order.
 ///
-/// The built-in host profile is intentionally not included.
+/// The complete root layout is validated before any names are returned. The
+/// built-in host profile is intentionally not included.
 pub fn list_profiles(root: &Path) -> Result<Vec<String>> {
     validate_root_layout(root)?;
     let entries = match fs::read_dir(root) {
@@ -268,7 +269,10 @@ pub fn delete_ordinary_profile(root: &Path, profile: &str, yes: bool) -> Result<
 /// slice selects all.
 ///
 /// Deletion removes the complete profile tree, including both agents' state,
-/// sessions, provider data, backups, and reserved tracing data.
+/// sessions, provider data, backups, and reserved tracing data. `all` and
+/// explicit names are mutually exclusive. Every target is resolved before
+/// deletion begins, and each requires interactive confirmation unless `yes`
+/// is set.
 pub fn delete_ordinary_profiles(
     root: &Path,
     profiles: &[String],
@@ -311,7 +315,7 @@ fn delete_profile_targets(root: &Path, profiles: &[String], all: bool) -> Result
             bail!("profile '{profile}' does not exist");
         }
         if !targets.contains(profile) {
-            targets.push(profile.to_string());
+            targets.push(profile.clone());
         }
     }
     Ok(targets)
@@ -555,13 +559,44 @@ fn host_home() -> Result<PathBuf> {
 }
 
 fn absolutize(path: PathBuf) -> Result<PathBuf> {
-    if path.is_absolute() {
-        Ok(path)
+    let absolute = if path.is_absolute() {
+        path
     } else {
-        Ok(std::env::current_dir()
+        std::env::current_dir()
             .context("get current dir for config root")?
-            .join(path))
+            .join(path)
+    };
+
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                resolved.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let mut existing = fs::canonicalize(&resolved).with_context(|| {
+                    format!(
+                        "resolve parent component in path {}; {} must exist first",
+                        absolute.display(),
+                        resolved.display()
+                    )
+                })?;
+                let metadata = fs::metadata(&existing)
+                    .with_context(|| format!("inspect {}", existing.display()))?;
+                if !metadata.is_dir() {
+                    bail!(
+                        "cannot resolve parent component through non-directory {} in path {}",
+                        existing.display(),
+                        absolute.display()
+                    );
+                }
+                existing.pop();
+                resolved = existing;
+            }
+        }
     }
+    Ok(resolved)
 }
 
 /// Validate a profile or provider name as a single safe ASCII path segment.
@@ -752,7 +787,10 @@ fn confirm_delete(profile: &str) -> Result<bool> {
 }
 
 #[cfg(unix)]
-/// Restrict a file to owner read/write permissions on Unix.
+/// Restrict an existing regular file to owner read/write permissions on Unix.
+///
+/// The final path entry is opened without following symlinks. Callers below a
+/// container-writable home must validate ancestor directories first.
 pub fn set_600(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -790,6 +828,39 @@ mod tests {
 
         let _root = EnvGuard::set("AIBOX_ROOT", "relative-root");
         assert_eq!(config_root().unwrap(), cwd.join("relative-root"));
+    }
+
+    #[test]
+    fn config_root_resolves_parent_components_only_through_existing_directories() {
+        let _env_lock = crate::test_env_lock();
+        let scratch = tempfile::tempdir().unwrap();
+        let existing = scratch.path().join("existing");
+        fs::create_dir(&existing).unwrap();
+
+        {
+            let configured = existing.join("../resolved-root");
+            let _root = EnvGuard::set("AIBOX_ROOT", configured.as_os_str());
+            assert_eq!(
+                config_root().unwrap(),
+                fs::canonicalize(scratch.path())
+                    .unwrap()
+                    .join("resolved-root")
+            );
+        }
+
+        let unresolved = scratch.path().join("future/../unexpected-root");
+        let _root = EnvGuard::set("AIBOX_ROOT", unresolved.as_os_str());
+        let err = config_root().unwrap_err().to_string();
+
+        assert!(err.contains("must exist first"), "{err}");
+        assert!(
+            !scratch.path().join("future").exists(),
+            "resolving a config root must not create an intermediate path"
+        );
+        assert!(
+            !scratch.path().join("unexpected-root").exists(),
+            "an unresolved parent component must not redirect later profile creation"
+        );
     }
 
     #[test]
@@ -1121,6 +1192,36 @@ mod tests {
         assert!(root.path().join("default").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn delete_all_profiles_validates_the_complete_layout_before_removing_anything() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "keep").unwrap();
+        fs::write(outside.path().join("sentinel"), "outside\n").unwrap();
+        symlink(outside.path(), root.path().join("unsafe")).unwrap();
+
+        let err = delete_ordinary_profiles(root.path(), &[], true, true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("profile directory is not a real directory"),
+            "{err}"
+        );
+        assert!(
+            root.path().join("keep").is_dir(),
+            "bulk deletion must not remove a valid profile before discovering an unsafe one"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.path().join("sentinel")).unwrap(),
+            "outside\n",
+            "bulk deletion must never traverse a symlinked profile"
+        );
+    }
+
     #[test]
     fn delete_ordinary_profile_handles_config_only_leftover() {
         let root = tempfile::tempdir().unwrap();
@@ -1440,5 +1541,34 @@ mod tests {
         fs::create_dir_all(root.path().join("host/home")).unwrap();
         let err = list_profiles(root.path()).unwrap_err().to_string();
         assert!(err.contains("unknown profile entry"), "{err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn profile_layout_rejects_non_utf8_names_at_every_untrusted_level() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid_name = || std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(invalid_name())).unwrap();
+        let err = list_profiles(root.path()).unwrap_err().to_string();
+        assert!(err.contains("non-UTF-8 profile name"), "{err}");
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        fs::create_dir(root.path().join("work").join(invalid_name())).unwrap();
+        let err = validate_profile_layout(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-UTF-8 profile entry"), "{err}");
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work/config")).unwrap();
+        fs::create_dir(root.path().join("work/config").join(invalid_name())).unwrap();
+        let err = validate_profile_layout(root.path(), "work")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-UTF-8 agent config entry"), "{err}");
     }
 }

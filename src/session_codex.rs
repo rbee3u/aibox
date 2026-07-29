@@ -34,15 +34,15 @@ const WRAPPER_TAGS: &[(&str, &str)] = &[
     ("<recommended_plugins>", "</recommended_plugins>"),
 ];
 
-/// True if `t` is an injected wrapper item Codex records as a user turn but
+/// True if `text` is an injected wrapper item Codex records as a user turn but
 /// that the user never typed.
 #[cfg(test)]
-fn is_wrapper_text(t: &str) -> bool {
-    real_text_fragment(t).is_none()
+fn is_wrapper_text(text: &str) -> bool {
+    real_text_fragment(text).is_none()
 }
 
-fn real_text_fragment(t: &str) -> Option<String> {
-    let mut rest = t.trim_start();
+fn real_text_fragment(text: &str) -> Option<String> {
+    let mut rest = text.trim_start();
     let mut stripped_wrapper = false;
 
     loop {
@@ -74,34 +74,36 @@ fn real_text_fragment(t: &str) -> Option<String> {
         return if stripped_wrapper {
             Some(rest.to_string())
         } else {
-            Some(t.to_string())
+            Some(text.to_string())
         };
     }
 }
 
-fn strip_tagged_wrapper_prefix(t: &str) -> Option<&str> {
+fn strip_tagged_wrapper_prefix(text: &str) -> Option<&str> {
     WRAPPER_TAGS.iter().find_map(|(open, close)| {
-        t.starts_with(open)
-            .then(|| strip_through(t, close))
-            .flatten()
+        if text.starts_with(open) {
+            strip_through(text, close)
+        } else {
+            None
+        }
     })
 }
 
-fn strip_user_shell_prefix(t: &str) -> Option<&str> {
-    if !t.starts_with("<user_shell") {
+fn strip_user_shell_prefix(text: &str) -> Option<&str> {
+    if !text.starts_with("<user_shell") {
         return None;
     }
-    strip_through(t, "</user_shell>").or_else(|| t.find("/>").map(|index| &t[index + 2..]))
+    strip_through(text, "</user_shell>").or_else(|| text.find("/>").map(|index| &text[index + 2..]))
 }
 
-fn strip_through<'a>(t: &'a str, marker: &str) -> Option<&'a str> {
-    t.find(marker).map(|index| &t[index + marker.len()..])
+fn strip_through<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    text.find(marker).map(|index| &text[index + marker.len()..])
 }
 
-fn first_line_is_instructions_preamble(t: &str) -> bool {
+fn first_line_is_instructions_preamble(text: &str) -> bool {
     // `^#[^\n]* instructions for `: a `#` at string start, then " instructions
     // for " somewhere on that same first line.
-    t.lines()
+    text.lines()
         .next()
         .is_some_and(|first| first.starts_with('#') && first.contains(" instructions for "))
 }
@@ -121,30 +123,33 @@ impl SessionBackend for Codex {
     }
 
     fn id_of(&self, path: &Path) -> String {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
         trailing_uuid(stem).unwrap_or(stem).to_string()
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
     /// `user_turn_text`. Feeds shared summary and `get` paths.
-    fn typed_text(&self, v: &Value) -> Option<String> {
-        user_turn_text(v)
+    fn typed_text(&self, value: &Value) -> Option<String> {
+        user_turn_text(value)
     }
 
     /// The `session_meta` carries the session start timestamp. Look for it by
     /// type rather than line position, so a corrupt or skipped first line
     /// cannot make a later event timestamp look like the session start.
-    fn start_ts_of(&self, v: &Value) -> Option<String> {
-        (v.get("type").and_then(Value::as_str) == Some("session_meta"))
-            .then(|| session::ts_of(v))
+    fn start_ts_of(&self, value: &Value) -> Option<String> {
+        (value.get("type").and_then(Value::as_str) == Some("session_meta"))
+            .then(|| session::ts_of(value))
             .filter(|ts| !ts.is_empty())
     }
 
     /// Fall back to the first event timestamp for legacy or damaged rollouts
     /// that have no readable `session_meta`.
-    fn fallback_start_ts_of(&self, v: &Value) -> Option<String> {
-        let ts = session::ts_of(v);
-        (!ts.is_empty()).then_some(ts)
+    fn fallback_start_ts_of(&self, value: &Value) -> Option<String> {
+        let timestamp = session::ts_of(value);
+        (!timestamp.is_empty()).then_some(timestamp)
     }
 }
 
@@ -165,21 +170,21 @@ fn is_uuid(value: &str) -> bool {
         })
 }
 
-/// If `v` is a `response_item` user message, join its content items' text with
-/// newlines, dropping injected wrapper items. Returns `None` when `v`
+/// If `value` is a `response_item` user message, join its content items' text
+/// with newlines, dropping injected wrapper items. Returns `None` when `value`
 /// isn't a user turn or nothing real survives filtering.
-fn user_turn_text(v: &Value) -> Option<String> {
-    if v.get("type").and_then(Value::as_str) != Some("response_item") {
+fn user_turn_text(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("response_item") {
         return None;
     }
-    let payload = v.get("payload")?;
+    let payload = value.get("payload")?;
     if payload.get("role").and_then(Value::as_str) != Some("user") {
         return None;
     }
     let items = payload.get("content").and_then(Value::as_array)?;
     let mut parts = Vec::new();
-    for it in items {
-        if let Some(text) = real_content_item_text(it) {
+    for item in items {
+        if let Some(text) = real_content_item_text(item) {
             parts.push(text);
         }
     }
@@ -191,13 +196,14 @@ fn user_turn_text(v: &Value) -> Option<String> {
 }
 
 fn real_content_item_text(item: &Value) -> Option<String> {
-    let is_text = matches!(
+    if !matches!(
         item.get("type").and_then(Value::as_str),
         Some("input_text" | "text")
-    );
-    is_text
-        .then(|| item.get("text").and_then(Value::as_str))
-        .flatten()
+    ) {
+        return None;
+    }
+    item.get("text")
+        .and_then(Value::as_str)
         .and_then(real_text_fragment)
 }
 

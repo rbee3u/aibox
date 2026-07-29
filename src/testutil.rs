@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// Write `body` to `dir/name` as an executable stub, returning its path. Used to
 /// put a fake `docker` on `$PATH` (with [`EnvGuard::prepend_path`]).
 #[cfg(unix)]
-pub(crate) fn write_stub_script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+pub(crate) fn write_stub_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let path = dir.join(name);
@@ -69,7 +69,7 @@ impl UnreadableDir {
             .mode();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
             .expect("chmod 000 dir");
-        UnreadableDir {
+        Self {
             path: path.to_path_buf(),
             mode,
         }
@@ -77,7 +77,9 @@ impl UnreadableDir {
 
     /// Restore the mode early, for a test that must assert on a readable tree
     /// after provoking one failure.
-    pub(crate) fn restore(self) {}
+    pub(crate) fn restore(self) {
+        drop(self);
+    }
 }
 
 #[cfg(unix)]
@@ -99,13 +101,13 @@ impl EnvGuard {
     pub(crate) fn set(name: &'static str, value: impl Into<OsString>) -> Self {
         let old = std::env::var_os(name);
         std::env::set_var(name, value.into());
-        EnvGuard { name, old }
+        Self { name, old }
     }
 
     pub(crate) fn remove(name: &'static str) -> Self {
         let old = std::env::var_os(name);
         std::env::remove_var(name);
-        EnvGuard { name, old }
+        Self { name, old }
     }
 
     /// Put `dir` first on `$PATH`, so a stub `docker` there wins over a real one.
@@ -117,7 +119,7 @@ impl EnvGuard {
         }
         let joined = std::env::join_paths(paths).expect("join PATH");
         std::env::set_var("PATH", joined);
-        EnvGuard { name: "PATH", old }
+        Self { name: "PATH", old }
     }
 }
 

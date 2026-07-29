@@ -151,8 +151,10 @@ writes the selected agent's live host configuration, and
 creates the backups described below; session deletion does not.
 
 `aibox profile list` prints ordinary profiles in name order and then
-`host [external-home]`. The built-in `host` profile is never created, deleted,
-or selected by `profile delete --all`.
+`host [external-home]`. Profile-management commands never create or delete the
+built-in `host` profile, and `profile delete --all` never selects it. Provider
+metadata under `$AIBOX_ROOT/host/config/` may still be created by
+`config -p host`.
 
 `tracing` is reserved as a future sibling of `home` and `config`. This release
 does not create it or provide tracing commands. If present in an ordinary
@@ -369,7 +371,8 @@ Sessions with no recognized typed prompt still appear; their title is empty
 unless the agent stored one, so bulk deletion can find every transcript. If
 part of a session tree or a transcript cannot be read, `list` reports the
 problem, prints any readable rows, and exits non-zero; `get` and `delete` abort
-rather than operate on a partial view. Host-side browsing does not follow
+rather than operate on a partial view. Malformed JSONL records are skipped
+within an otherwise readable transcript. Host-side browsing does not follow
 symlinked profile homes, agent-state directories, transcript roots, or
 transcript files.
 
@@ -419,7 +422,9 @@ either managed mount or one of its ancestors.
 Each run drops Linux capabilities, enables `no-new-privileges`, and
 bind-mounts only the selected profile home, `/work`, and explicit `--mount`
 sources. On Linux, the container uses the invoking user's uid and gid so files
-created under `/work` keep host ownership.
+created under `/work` keep host ownership, and aibox maps
+`host.docker.internal` to Docker's host gateway. Docker Desktop provides that
+hostname on macOS without the extra mapping.
 
 The project mount, profile home, and extra mounts are writable by default.
 Append `:ro` to an extra mount to make it read-only; no other mount modes are

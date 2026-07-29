@@ -95,7 +95,7 @@ pub(crate) static RUN_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
 pub(crate) fn run_registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
     RUN_REGISTRY_TEST_LOCK
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The pid of the running `docker run` child, or 0 when none. The watcher
@@ -277,9 +277,8 @@ fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutc
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(_) => return CommandOutcome::Unfinished,
+    let Ok(mut child) = spawned else {
+        return CommandOutcome::Unfinished;
     };
     let started = Instant::now();
     loop {
@@ -1119,13 +1118,38 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn finish_child_treats_a_missing_docker_cli_as_unclean_and_resets_the_registry() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = run_registry_test_lock();
+        let _guard = CidfileGuard;
+        let scratch = stable_tempdir();
+        let cid_path = scratch.path().join("cid");
+        std::fs::write(&cid_path, "uninspectable-container\n").unwrap();
+        let empty_path = stable_tempdir();
+        let _path = EnvGuard::set("PATH", empty_path.path().as_os_str());
+        set_cidfile(&cid_path).unwrap();
+
+        assert!(
+            finish_child(),
+            "losing the Docker CLI after a child exit must be treated as an unclean run"
+        );
+        assert!(
+            !finish_child(),
+            "finishing the run must clear the process-global registration"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn failed_inspect_distinguishes_a_missing_container_from_a_daemon_failure() {
         let _env_lock = crate::test_env_lock();
         let fake_docker = stable_tempdir();
+        let log_path = fake_docker.path().join("docker.log");
         crate::testutil::write_stub_script(
             fake_docker.path(),
             "docker",
             r#"#!/bin/sh
+printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
 case "$1" in
     inspect)
         exit 1
@@ -1143,6 +1167,7 @@ esac
 "#,
         );
         let _path = EnvGuard::prepend_path(fake_docker.path());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log_path.as_os_str());
 
         {
             let _state = EnvGuard::set("AIBOX_FAKE_DOCKER_STATE", "missing");
@@ -1159,6 +1184,21 @@ esac
                 container_state("possibly-running-container"),
                 ContainerState::Unknown,
                 "two failed daemon queries must not be mistaken for a stopped container"
+            );
+        }
+
+        let log = std::fs::read_to_string(log_path).unwrap();
+        for cid in ["gone-container", "possibly-running-container"] {
+            assert!(
+                log.lines()
+                    .any(|line| line == format!("inspect -f {{{{.State.Running}}}} {cid}")),
+                "container state must inspect the exact id first:\n{log}"
+            );
+            assert!(
+                log.lines().any(|line| {
+                    line == format!("container ls --all --quiet --no-trunc --filter id={cid}")
+                }),
+                "a failed inspect must use one exact, non-truncated id filter:\n{log}"
             );
         }
     }

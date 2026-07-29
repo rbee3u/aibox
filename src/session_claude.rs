@@ -30,7 +30,7 @@ impl SessionBackend for Claude {
 
     fn id_of(&self, path: &Path) -> String {
         path.file_stem()
-            .and_then(|s| s.to_str())
+            .and_then(|stem| stem.to_str())
             .unwrap_or("")
             .to_string()
     }
@@ -38,35 +38,39 @@ impl SessionBackend for Claude {
     /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
     /// with a non-empty `message.content`. Feeds shared title selection and
     /// `get` paths.
-    fn typed_text(&self, v: &Value) -> Option<String> {
-        if v.get("type").and_then(Value::as_str) != Some("user") || !is_typed(v) {
+    fn typed_text(&self, value: &Value) -> Option<String> {
+        if value.get("type").and_then(Value::as_str) != Some("user") || !is_typed(value) {
             return None;
         }
-        content_text(v)
+        content_text(value)
     }
 
     /// Any line bearing a non-empty top-level `timestamp` is a candidate; the
     /// shared streaming loop keeps the first, which is the session start.
-    fn start_ts_of(&self, v: &Value) -> Option<String> {
-        v.get("timestamp")
+    fn start_ts_of(&self, value: &Value) -> Option<String> {
+        value
+            .get("timestamp")
             .and_then(Value::as_str)
-            .filter(|ts| !ts.is_empty())
+            .filter(|timestamp| !timestamp.is_empty())
             .map(str::to_string)
     }
 
     /// Surface the agent-generated `ai-title` lines. A session can carry
     /// several (re-titled mid-run); the shared loop keeps the last non-empty
     /// one, falling back to the first typed prompt when there is none.
-    fn title_of(&self, v: &Value) -> Option<String> {
-        (v.get("type").and_then(Value::as_str) == Some("ai-title"))
-            .then(|| v.get("aiTitle").and_then(Value::as_str))
-            .flatten()
+    fn title_of(&self, value: &Value) -> Option<String> {
+        if value.get("type").and_then(Value::as_str) != Some("ai-title") {
+            return None;
+        }
+        value
+            .get("aiTitle")
+            .and_then(Value::as_str)
             .map(str::to_string)
     }
 }
 
-fn is_typed(v: &Value) -> bool {
-    v.get("promptSource").and_then(Value::as_str) == Some("typed")
+fn is_typed(value: &Value) -> bool {
+    value.get("promptSource").and_then(Value::as_str) == Some("typed")
 }
 
 /// Pull a user turn's text out of its `message.content` — Claude nests the turn
@@ -74,9 +78,12 @@ fn is_typed(v: &Value) -> bool {
 /// The content is typically a plain string; some turns use an array of blocks,
 /// so we join their non-empty `text` fields with newlines and ignore blocks
 /// without text. Returns `None` if `message.content` is absent or empty.
-fn content_text(v: &Value) -> Option<String> {
-    match v.get("message").and_then(|m| m.get("content")) {
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+fn content_text(value: &Value) -> Option<String> {
+    match value
+        .get("message")
+        .and_then(|message| message.get("content"))
+    {
+        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
         Some(Value::Array(items)) => {
             let parts: Vec<String> = items
                 .iter()
@@ -96,7 +103,7 @@ fn content_text(v: &Value) -> Option<String> {
 fn content_block_text(item: &Value) -> Option<&str> {
     item.get("text")
         .and_then(Value::as_str)
-        .filter(|t| !t.is_empty())
+        .filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]

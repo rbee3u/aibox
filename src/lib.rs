@@ -31,7 +31,8 @@ mod testutil;
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 use agent::AgentKind;
@@ -78,7 +79,7 @@ fn validate_image_ref(image: &str) -> Result<()> {
     }
     if image
         .chars()
-        .any(|c| c.is_ascii_control() || c.is_ascii_whitespace())
+        .any(|character| character.is_ascii_control() || character.is_ascii_whitespace())
     {
         anyhow::bail!(
             "Docker image reference must not contain whitespace/control characters: {image:?}"
@@ -142,11 +143,7 @@ pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
             &passthrough,
         ),
         Some(Command::Build(args)) => {
-            if !passthrough.is_empty() {
-                anyhow::bail!(
-                    "`-- <args>` applies only to a run; build takes no pass-through args"
-                );
-            }
+            reject_passthrough("build takes no pass-through args", &passthrough)?;
             if root_agent.is_some() {
                 anyhow::bail!("build does not accept --agent");
             }
@@ -154,11 +151,7 @@ pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
             run_build(&args)
         }
         Some(Command::Completion(args)) => {
-            if !passthrough.is_empty() {
-                anyhow::bail!(
-                    "`-- <args>` applies only to a run; completion takes no pass-through args"
-                );
-            }
+            reject_passthrough("completion takes no pass-through args", &passthrough)?;
             if root_agent.is_some() {
                 anyhow::bail!("completion does not accept --agent");
             }
@@ -166,11 +159,7 @@ pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
             completion::dispatch(&args)
         }
         Some(Command::Profile(args)) => {
-            if !passthrough.is_empty() {
-                anyhow::bail!(
-                    "`-- <args>` applies only to a run; profile takes no pass-through args"
-                );
-            }
+            reject_passthrough("profile takes no pass-through args", &passthrough)?;
             if root_agent.is_some() {
                 anyhow::bail!("profile is shared across agents and does not accept --agent");
             }
@@ -202,11 +191,7 @@ fn run_config_command(
     command: &cli::ConfigCommand,
     passthrough: &[OsString],
 ) -> Result<i32> {
-    if !passthrough.is_empty() {
-        anyhow::bail!(
-            "`-- <args>` applies only to a run; config/session take no pass-through args"
-        );
-    }
+    reject_passthrough("config/session take no pass-through args", passthrough)?;
     let root = profile::config_root()?;
     let prof = Profile::resolve(agent, &root, profile_name)?;
     config::dispatch(agent, &prof, command)
@@ -218,11 +203,7 @@ fn run_session_command(
     args: &SessionArgs,
     passthrough: &[OsString],
 ) -> Result<i32> {
-    if !passthrough.is_empty() {
-        anyhow::bail!(
-            "`-- <args>` applies only to a run; config/session take no pass-through args"
-        );
-    }
+    reject_passthrough("config/session take no pass-through args", passthrough)?;
     let root = profile::config_root()?;
     let prof = Profile::resolve(agent, &root, profile_name)?;
     prof.validate_session_home()?;
@@ -242,6 +223,13 @@ fn run_session_command(
             session::dispatch(agent, &prof.home_dir, "delete", ids, *all, *yes)
         }
     }
+}
+
+fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()> {
+    if !passthrough.is_empty() {
+        anyhow::bail!("`-- <args>` applies only to a run; {restriction}");
+    }
+    Ok(())
 }
 
 fn reject_run_only_options(run: &RunArgs) -> Result<()> {
@@ -526,6 +514,26 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
+    fn non_utf8_image_override_is_rejected_before_docker_lookup() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let fx = RunFixture::new();
+        let image = OsString::from_vec(vec![b'a', b'i', b'b', b'o', b'x', 0xff]);
+        let _image = EnvGuard::set("AIBOX_IMAGE", image);
+
+        let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+
+        assert!(err.contains("AIBOX_IMAGE is not valid UTF-8"), "{err}");
+        assert_eq!(
+            fx.log(),
+            "",
+            "an unrepresentable image name must fail before docker is consulted"
+        );
+        assert!(!fx.root.path().join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn build_uses_single_image_and_aibox_image_override() {
         let _env_lock = test_env_lock();
         let dir = tempfile::tempdir().unwrap();
@@ -579,6 +587,55 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
+    fn run_preserves_applied_config_without_remounting_or_reapplying_provider_data() {
+        let fx = RunFixture::new();
+        let profile = Profile::resolve(AgentKind::Codex, fx.root.path(), "default").unwrap();
+        config::create_provider(&profile, "openai").unwrap();
+        std::fs::write(
+            profile.provider_file("openai", "config.toml"),
+            "model = \"provider\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile.provider_file("openai", "auth.json"),
+            r#"{"token":"provider"}"#,
+        )
+        .unwrap();
+        config::apply_provider(&profile, "openai").unwrap();
+
+        let active_config = "model = \"locally-adjusted\"\n";
+        let active_auth = r#"{"token":"locally-adjusted"}"#;
+        std::fs::write(profile.active_file("config.toml"), active_config).unwrap();
+        std::fs::write(profile.active_file("auth.json"), active_auth).unwrap();
+        let backups_before = std::fs::read_dir(profile.backups_dir()).unwrap().count();
+
+        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_to_string(profile.active_file("config.toml")).unwrap(),
+            active_config,
+            "a run must consume the persisted active config without reapplying the last provider"
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.active_file("auth.json")).unwrap(),
+            active_auth,
+            "a run must not replace persisted auth from provider metadata"
+        );
+        assert_eq!(
+            std::fs::read_dir(profile.backups_dir()).unwrap().count(),
+            backups_before,
+            "a run must not perform an implicit config apply or backup"
+        );
+        let log = fx.log();
+        assert!(
+            !log.contains(&profile.provider_root_dir().display().to_string()),
+            "provider metadata must stay host-only and never enter docker arguments: {log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn codex_exec_passes_prompt_after_exec_subcommand() {
         let fx = RunFixture::new();
 
@@ -598,6 +655,26 @@ printf '\nEND\n' >> "$log"
         assert!(
             !log.contains("<--dangerously-bypass-approvals-and-sandbox>"),
             "{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_os_preserves_non_utf8_agent_arguments_through_docker_spawn() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let fx = RunFixture::new();
+        let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
+        let cli = Cli::try_parse_from(["aibox"]).unwrap();
+
+        let code = run_os(cli, vec![opaque.clone()]).unwrap();
+
+        assert_eq!(code, 0);
+        let log = std::fs::read(&fx.docker_log).unwrap();
+        assert!(
+            log.windows(opaque.as_encoded_bytes().len())
+                .any(|window| window == opaque.as_encoded_bytes()),
+            "the opaque pass-through argument must reach the docker child unchanged"
         );
     }
 
