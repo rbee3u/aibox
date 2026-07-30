@@ -504,9 +504,10 @@ fn profile_values_at(root: &Path, mode: ProfileCandidates) -> Result<Vec<String>
             values.insert("default".to_string());
         }
         ProfileCandidates::Management => {
-            Profile::resolve(AgentKind::Codex, root, profile::HOST_PROFILE)?;
             values.insert("default".to_string());
-            values.insert(profile::HOST_PROFILE.to_string());
+            if Profile::resolve(AgentKind::Codex, root, profile::HOST_PROFILE).is_ok() {
+                values.insert(profile::HOST_PROFILE.to_string());
+            }
         }
         ProfileCandidates::Existing => {}
     }
@@ -531,10 +532,7 @@ fn complete_providers(
 
 fn provider_values_at(root: &Path, context: &CompletionContext) -> Result<Vec<String>> {
     let selected = Profile::resolve(context.agent, root, &context.profile)?;
-    Ok(crate::config::list_providers(&selected)?
-        .into_iter()
-        .map(|entry| entry.name)
-        .collect())
+    crate::config::list_provider_names(&selected)
 }
 
 fn complete_sessions(
@@ -802,6 +800,19 @@ mod tests {
     }
 
     #[test]
+    fn management_profile_values_keep_ordinary_profiles_without_a_host_home() {
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        profile::create_ordinary_profile(root.path(), "work").unwrap();
+        let _home = EnvGuard::remove("HOME");
+
+        assert_eq!(
+            profile_values_at(root.path(), ProfileCandidates::Management).unwrap(),
+            ["default", "work"]
+        );
+    }
+
+    #[test]
     fn provider_values_follow_agent_and_profile_selection() {
         let root = tempfile::tempdir().unwrap();
         profile::create_ordinary_profile(root.path(), "work").unwrap();
@@ -827,6 +838,21 @@ mod tests {
         assert_eq!(
             provider_values_at(root.path(), &claude_context).unwrap(),
             ["anthropic"]
+        );
+    }
+
+    #[test]
+    fn provider_values_do_not_depend_on_last_applied_state() {
+        let root = tempfile::tempdir().unwrap();
+        profile::create_ordinary_profile(root.path(), "work").unwrap();
+        let selected = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        crate::config::create_provider(&selected, "openai").unwrap();
+        std::fs::write(selected.state_path(), "not json\n").unwrap();
+        let context = context(&["aibox", "config", "-pwork", "get", ""]);
+
+        assert_eq!(
+            provider_values_at(root.path(), &context).unwrap(),
+            ["openai"]
         );
     }
 

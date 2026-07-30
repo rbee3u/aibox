@@ -326,14 +326,6 @@ pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
     crate::profile::ensure_agent_state(agent, home_dir)
 }
 
-/// Agent-specific command options that remain after aibox parses its own CLI.
-pub struct RunOpts<'a> {
-    /// Whether to select Codex's headless `exec` subcommand.
-    pub exec: bool,
-    /// Arguments copied verbatim after the agent executable and run mode.
-    pub passthrough: &'a [OsString],
-}
-
 /// Agent command and any agent-specific additions to `docker run`.
 pub struct Invocation {
     /// Docker arguments required by this agent before the image name.
@@ -417,6 +409,25 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
         );
+    }
+
+    #[test]
+    fn resolve_work_dir_rejects_missing_and_non_directory_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        let missing = dir.path().join("missing");
+        fs::write(&file, "not a directory\n").unwrap();
+
+        for path in [&file, &missing] {
+            let error = resolve_work_dir(Some(path.to_str().unwrap()))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("work dir is not a directory"), "{error}");
+            assert!(
+                error.contains(&path.display().to_string()),
+                "the rejected path should be identifiable: {error}"
+            );
+        }
     }
 
     #[test]
@@ -729,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_bind_source_with_colon() {
+    fn reject_bind_sources_that_short_syntax_cannot_represent() {
         let parent = tempfile::tempdir().unwrap();
         let colon_dir = parent.path().join("a:b");
         fs::create_dir(&colon_dir).unwrap();
@@ -737,6 +748,23 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("contains ':'"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+
+            let opaque = PathBuf::from(std::ffi::OsString::from_vec(vec![
+                b'w', b'o', b'r', b'k', 0xff,
+            ]));
+            let err = reject_colon_in_bind_source("mount host", &opaque)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("not valid UTF-8"), "{err}");
+            assert!(
+                err.contains("cannot be represented safely for docker"),
+                "{err}"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]

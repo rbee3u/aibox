@@ -43,7 +43,7 @@
 use anyhow::{Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -56,6 +56,7 @@ const CIDFILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINER_GRACE: Duration = Duration::from_secs(10);
 const CONTAINER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const COMMAND_OUTPUT_LIMIT: u64 = 1024 * 1024;
 // Main-thread fallback when a signal raced with `docker run` exiting. Covers
 // cid discovery on the *late-cidfile* path (the first bounded wait fails, then
 // the longer late wait succeeds), a graceful kill + bounded state probe, the
@@ -118,11 +119,17 @@ fn cidfile() -> &'static Mutex<Option<PathBuf>> {
 /// registration — the watcher could then stop the container via the daemon even
 /// with no child pid recorded yet. If spawning fails, call [`clear_child`];
 /// otherwise register the child with [`set_child`] and finish it with
-/// [`finish_child`].
+/// [`finish_child`]. A second registration is rejected while a run is active.
 pub fn set_cidfile(cidfile_path: &Path) -> Result<()> {
     install_signal_handler()?;
-    *cidfile().lock().unwrap() = Some(cidfile_path.to_path_buf());
-    RUN_STATE.store(RUN_ACTIVE, Ordering::SeqCst);
+    let mut registered_cidfile = cidfile().lock().unwrap();
+    if RUN_STATE
+        .compare_exchange(RUN_IDLE, RUN_ACTIVE, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        anyhow::bail!("another docker run is already registered in this process");
+    }
+    *registered_cidfile = Some(cidfile_path.to_path_buf());
     Ok(())
 }
 
@@ -139,9 +146,10 @@ pub fn set_child(pid: u32) {
 /// After a successful spawn, reap the child and call [`finish_child`] instead;
 /// clearing directly would skip the lingering-container check.
 pub fn clear_child() {
+    let mut registered_cidfile = cidfile().lock().unwrap();
     CHILD_PID.store(0, Ordering::SeqCst);
     RUN_STATE.store(RUN_IDLE, Ordering::SeqCst);
-    *cidfile().lock().unwrap() = None;
+    *registered_cidfile = None;
 }
 
 /// Finish a successfully spawned child after `wait` returns. An attached Docker
@@ -155,12 +163,14 @@ pub fn clear_child() {
 pub fn finish_child() -> bool {
     CHILD_PID.store(0, Ordering::SeqCst);
     let stopped_lingering_container = stop_container_left_by_child();
+    let mut registered_cidfile = cidfile().lock().unwrap();
     match RUN_STATE.compare_exchange(RUN_ACTIVE, RUN_IDLE, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) | Err(RUN_IDLE) => {
-            *cidfile().lock().unwrap() = None;
+            *registered_cidfile = None;
             stopped_lingering_container
         }
         Err(RUN_SIGNALLED) => {
+            drop(registered_cidfile);
             // The watcher is stopping the container and will terminate the
             // whole process (`process::exit(128+sig)`) once daemon-side cleanup
             // is done, tearing down this parked thread with it. Park until it
@@ -271,10 +281,22 @@ enum CommandOutcome {
 /// fatal signal. A fast non-zero exit is distinguished from a timeout so
 /// callers can tell "definitively no" from "no answer yet".
 fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutcome {
+    // A pipe can remain open in a subprocess descendant after the command we
+    // spawned has exited, making a post-wait `read_to_end` block forever.
+    // Capture into a regular temporary file instead: reading a snapshot of a
+    // regular file reaches EOF even while an inherited writer is still open.
+    let output = match tempfile::NamedTempFile::new() {
+        Ok(output) => output,
+        Err(_) => return CommandOutcome::Unfinished,
+    };
+    let child_stdout = match output.reopen() {
+        Ok(file) => file,
+        Err(_) => return CommandOutcome::Unfinished,
+    };
     let spawned = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(child_stdout))
         .stderr(Stdio::null())
         .spawn();
     let Ok(mut child) = spawned else {
@@ -287,26 +309,53 @@ fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutc
                 if !status.success() {
                     return CommandOutcome::Failed;
                 }
+                let Ok(stdout_file) = output.reopen() else {
+                    return CommandOutcome::Unfinished;
+                };
                 let mut stdout = Vec::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    let _ = pipe.read_to_end(&mut stdout);
+                if stdout_file
+                    .take(COMMAND_OUTPUT_LIMIT.saturating_add(1))
+                    .read_to_end(&mut stdout)
+                    .is_err()
+                    || stdout.len() as u64 > COMMAND_OUTPUT_LIMIT
+                {
+                    return CommandOutcome::Unfinished;
                 }
                 return CommandOutcome::Succeeded(String::from_utf8_lossy(&stdout).into_owned());
             }
             Ok(None) => {}
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_and_reap_in_background(child);
                 return CommandOutcome::Unfinished;
             }
         }
+        if output
+            .as_file()
+            .metadata()
+            .map_or(true, |metadata| metadata.len() > COMMAND_OUTPUT_LIMIT)
+        {
+            kill_and_reap_in_background(child);
+            return CommandOutcome::Unfinished;
+        }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_and_reap_in_background(child);
             return CommandOutcome::Unfinished;
         }
         std::thread::sleep(COMMAND_POLL_INTERVAL);
     }
+}
+
+/// Terminate a timed-out helper without letting process reaping defeat the
+/// caller's deadline. `Child::wait` can itself remain blocked when a process is
+/// stuck in uninterruptible kernel I/O, so a detached thread owns that
+/// best-effort reap. Dropping the join handle does not delay wrapper shutdown.
+fn kill_and_reap_in_background(mut child: Child) {
+    let _ = child.kill();
+    let _ = std::thread::Builder::new()
+        .name("aibox-command-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
 }
 
 /// Run `docker <args>` silently, returning stdout on success. The watcher's
@@ -902,6 +951,47 @@ esac
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn signal_child_forwards_each_supported_signal_to_the_registered_process() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _run_lock = run_registry_test_lock();
+        let _guard = CidfileGuard;
+
+        for signal in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGHUP,
+            signal_hook::consts::SIGTERM,
+        ] {
+            let mut child = std::process::Command::new("/bin/sleep")
+                .arg("60")
+                .spawn()
+                .unwrap();
+            set_child(child.id());
+
+            signal_child(signal);
+
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("signal {signal} did not terminate the registered child");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(
+                status.signal(),
+                Some(signal),
+                "the Docker CLI child must receive the wrapper's original signal"
+            );
+        }
+    }
+
     #[test]
     fn watcher_commands_are_bounded() {
         // Worst case is the late-cidfile path in `stop_active_run`: the first
@@ -927,11 +1017,41 @@ esac
             CommandOutcome::Succeeded(out) if out == "ok"
         ));
 
+        let inherited_stdout_started = Instant::now();
+        assert!(matches!(
+            command_quiet(
+                "/bin/sh",
+                &["-c", "sleep 5 & printf ok"],
+                Duration::from_secs(1)
+            ),
+            CommandOutcome::Succeeded(out) if out == "ok"
+        ));
+        assert!(
+            inherited_stdout_started.elapsed() < Duration::from_secs(2),
+            "an inherited stdout handle must not outlive the command timeout"
+        );
+
         // A fast non-zero exit is a definitive failure, distinct from a timeout.
         assert!(matches!(
             command_quiet("/bin/sh", &["-c", "exit 1"], Duration::from_secs(1)),
             CommandOutcome::Failed
         ));
+
+        let oversized_output = format!(
+            "dd if=/dev/zero bs={} count=1 2>/dev/null",
+            COMMAND_OUTPUT_LIMIT + 1
+        );
+        assert!(
+            matches!(
+                command_quiet(
+                    "/bin/sh",
+                    &["-c", &oversized_output],
+                    Duration::from_secs(1)
+                ),
+                CommandOutcome::Unfinished
+            ),
+            "watcher helpers must not retain unbounded command output"
+        );
 
         let started = Instant::now();
         let out = command_quiet("/bin/sh", &["-c", "sleep 5"], Duration::from_millis(50));
@@ -1028,6 +1148,28 @@ esac
         assert!(
             log.lines().any(|l| l == "kill detached-container"),
             "the lingering container must be SIGKILLed by id:\n{log}"
+        );
+    }
+
+    #[test]
+    fn a_second_active_run_registration_is_rejected_without_losing_the_first() {
+        let _run_lock = run_registry_test_lock();
+        let _guard = CidfileGuard;
+        let first = stable_tempdir();
+        let second = stable_tempdir();
+        let first_cid = first.path().join("cid");
+        let second_cid = second.path().join("cid");
+        std::fs::write(&first_cid, "first-container\n").unwrap();
+        std::fs::write(&second_cid, "second-container\n").unwrap();
+
+        set_cidfile(&first_cid).unwrap();
+        let error = set_cidfile(&second_cid).unwrap_err().to_string();
+
+        assert!(error.contains("another docker run is already registered"));
+        assert_eq!(
+            current_cid().as_deref(),
+            Some("first-container"),
+            "a rejected registration must not overwrite the active run's cleanup handle"
         );
     }
 

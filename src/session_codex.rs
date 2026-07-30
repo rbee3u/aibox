@@ -125,9 +125,9 @@ impl SessionBackend for Codex {
     fn id_of(&self, path: &Path) -> String {
         let stem = path
             .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("");
-        trailing_uuid(stem).unwrap_or(stem).to_string()
+            .map(|stem| stem.to_string_lossy())
+            .unwrap_or_default();
+        trailing_uuid(&stem).unwrap_or(&stem).to_string()
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
@@ -265,6 +265,18 @@ mod tests {
         let discovery = Codex.list_files(dir.path()).unwrap();
         assert!(discovery.files.is_empty());
         assert!(discovery.errors.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_rollout_names_have_a_lossy_addressable_id() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let transcript = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"rollout-session-\xff.jsonl".to_vec(),
+        ));
+
+        assert_eq!(Codex.id_of(&transcript), "rollout-session-\u{fffd}");
     }
 
     #[test]

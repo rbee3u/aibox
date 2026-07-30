@@ -30,9 +30,8 @@ impl SessionBackend for Claude {
 
     fn id_of(&self, path: &Path) -> String {
         path.file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("")
-            .to_string()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
@@ -158,6 +157,17 @@ mod tests {
         let discovery = Claude.list_files(dir.path()).unwrap();
         assert!(discovery.files.is_empty());
         assert!(discovery.errors.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_transcript_names_have_a_lossy_addressable_id() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let transcript =
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"session-\xff.jsonl".to_vec()));
+
+        assert_eq!(Claude.id_of(&transcript), "session-\u{fffd}");
     }
 
     #[test]
@@ -290,6 +300,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(content_text(&v).as_deref(), Some("a\nb"));
+
+        for content in [
+            serde_json::json!([]),
+            serde_json::json!([{"type": "image"}, {"type": "text", "text": ""}]),
+            serde_json::json!({"type": "text", "text": "not an array"}),
+        ] {
+            let value = serde_json::json!({"message": {"content": content}});
+            assert_eq!(
+                content_text(&value),
+                None,
+                "unsupported or empty content must not become a typed prompt: {value}"
+            );
+        }
     }
 
     #[test]

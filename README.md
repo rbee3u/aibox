@@ -84,7 +84,7 @@ Normal runs never build images automatically:
 aibox build
 cd ~/code/some-project
 aibox
-aibox --exec -- "run the tests and fix failures"
+aibox -- exec "run the tests and fix failures"
 aibox --agent claude -- "fix the build"
 ```
 
@@ -97,18 +97,19 @@ CI.
 
 The first `--` is a hard boundary: aibox parses everything before it and
 forwards everything after it unchanged to the selected agent. Put the profile,
-work directory, mounts, and `--exec` before the boundary; put agent-specific
-flags, prompts, and subcommands after it:
+work directory, and mounts before the boundary; put agent-specific flags,
+prompts, and subcommands after it:
 
 ```sh
 aibox -p work -- --model MODEL_NAME
+aibox -p work -- exec "run the tests and fix failures"
 aibox --agent claude -p work -- --model MODEL_NAME
 ```
 
-Without `--exec`, aibox starts the selected agent normally. With `--exec`, it
-inserts Codex's `exec` subcommand before the forwarded arguments. Subcommands
-such as `build`, `completion`, `profile`, `config`, and `session` do not accept
-pass-through arguments.
+Aibox starts the selected agent and does not interpret pass-through arguments.
+Subcommands such as Codex's `exec` must therefore appear after the boundary.
+Host-side subcommands such as `build`, `completion`, `profile`, `config`, and
+`session` do not accept pass-through arguments.
 
 ## Profile Layout
 
@@ -331,12 +332,14 @@ For Claude `settings.json`, use the same dotted paths in JSON:
 
 Remove paths that do not exist are ignored; malformed paths such as empty
 strings or `foo..bar` fail the apply. Codex `auth.json` is not merged; it is
-validated as a non-empty JSON object and replaced as a whole file.
+validated as a non-empty JSON object and replaced as a whole file after the
+reserved top-level `aibox` entry is stripped.
 
 Before replacing existing active managed files, `apply` backs them up under the
 profile's management directory and keeps the latest 20 backups. The first apply
 creates no empty backup when there are no active files yet. Codex auth files and
-auth backups are written with private permissions on Unix.
+auth backups are written with private permissions on Unix. Managed config files
+larger than 16 MiB are rejected before they are read or copied.
 
 Deleting a provider removes only its saved overlay and may clear the
 last-applied marker; it does not roll back files already applied to the active
@@ -374,7 +377,10 @@ problem, prints any readable rows, and exits non-zero; `get` and `delete` abort
 rather than operate on a partial view. Malformed JSONL records are skipped
 within an otherwise readable transcript. Host-side browsing does not follow
 symlinked profile homes, agent-state directories, transcript roots, or
-transcript files.
+transcript files. Individual JSONL records larger than 64 MiB are reported as
+unreadable rather than being loaded into host memory. Terminal control
+characters from transcript ids, timestamps, paths, and prompt text are escaped
+before display.
 
 ## Run Options
 
@@ -386,7 +392,6 @@ subcommand; put `config` and `session` options after `config` or `session`.
 -p, --profile <name>        run profile home, default: default
 -w, --work <dir>            directory mounted at /work, default: current dir
 -m, --mount <spec>          extra bind mount host:container[:ro], repeatable
---exec                      Codex only: run `codex exec`
 ```
 
 `config` and `session` each accept their own `--agent <codex|claude>` and

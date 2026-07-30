@@ -5,8 +5,7 @@
 //! the two session backend modules because the agents use different on-disk
 //! formats.
 
-use crate::runspec::{Invocation, RunOpts};
-use anyhow::Result;
+use crate::runspec::Invocation;
 use std::ffi::OsString;
 
 /// Which agent a command targets. Selected by `--agent` on agent-scoped commands.
@@ -32,11 +31,6 @@ impl AgentKind {
         match self {
             AgentKind::Claude | AgentKind::Codex => crate::docker::IMAGE,
         }
-    }
-
-    /// Whether this agent supports aibox's `--exec` run mode.
-    pub fn supports_exec(self) -> bool {
-        matches!(self, AgentKind::Codex)
     }
 
     /// Absolute home directory mounted inside the container.
@@ -79,33 +73,19 @@ impl AgentKind {
     }
 
     /// Build the agent command without adding provider data to the container.
-    ///
-    /// This method does not reject unsupported modes. Callers must reject
-    /// `opts.exec` when [`Self::supports_exec`] is false.
-    pub fn build_invocation(self, opts: &RunOpts) -> Result<Invocation> {
+    pub fn build_invocation(self, passthrough: &[OsString]) -> Invocation {
         let mut agent_cmd = vec![OsString::from(self.tag())];
-        if self == AgentKind::Codex && opts.exec {
-            agent_cmd.push(OsString::from("exec"));
-        }
-        agent_cmd.extend(opts.passthrough.iter().cloned());
-        Ok(Invocation {
+        agent_cmd.extend(passthrough.iter().cloned());
+        Invocation {
             extra_run_args: Vec::new(),
             agent_cmd,
-        })
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runspec::RunOpts;
-
-    fn opts(passthrough: &[OsString]) -> RunOpts<'_> {
-        RunOpts {
-            exec: false,
-            passthrough,
-        }
-    }
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
@@ -131,24 +111,13 @@ mod tests {
     #[test]
     fn build_invocation_no_longer_injects_provider_config() {
         let pass = vec![OsString::from("--model"), OsString::from("opus")];
-        let inv = AgentKind::Claude.build_invocation(&opts(&pass)).unwrap();
+        let inv = AgentKind::Claude.build_invocation(&pass);
         assert_eq!(inv.agent_cmd, ["claude", "--model", "opus"]);
         assert!(inv.extra_run_args.is_empty());
 
-        let inv = AgentKind::Codex.build_invocation(&opts(&[])).unwrap();
+        let inv = AgentKind::Codex.build_invocation(&[]);
         assert_eq!(inv.agent_cmd, ["codex"]);
         assert!(inv.extra_run_args.is_empty());
-    }
-
-    #[test]
-    fn codex_exec_uses_exec_subcommand_without_permission_overrides() {
-        let pass = vec![OsString::from("fix tests"), OsString::from("--json")];
-        let mut o = opts(&pass);
-        o.exec = true;
-
-        let inv = AgentKind::Codex.build_invocation(&o).unwrap();
-
-        assert_eq!(inv.agent_cmd, ["codex", "exec", "fix tests", "--json"]);
     }
 
     #[cfg(unix)]
@@ -159,7 +128,7 @@ mod tests {
         let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
         let pass = vec![opaque.clone()];
 
-        let inv = AgentKind::Codex.build_invocation(&opts(&pass)).unwrap();
+        let inv = AgentKind::Codex.build_invocation(&pass);
 
         assert_eq!(inv.agent_cmd, [OsString::from("codex"), opaque]);
     }

@@ -209,10 +209,6 @@ pub struct RunArgs {
     /// Extra bind mount, Docker syntax `host:container[:ro]` (repeatable).
     #[arg(short, long)]
     pub mount: Vec<String>,
-
-    /// Codex only: run headless `codex exec`. Pass the prompt after `--`.
-    #[arg(long)]
-    pub exec: bool,
 }
 
 impl RunArgs {
@@ -488,11 +484,13 @@ mod tests {
 
     #[test]
     fn split_honors_the_first_boundary_and_preserves_unbounded_argv() {
-        let (left, right) = split_passthrough(v(&["aibox", "--exec", "--", "fix", "--", "tests"]));
-        assert_eq!(left, v(&["aibox", "--exec"]));
-        assert_eq!(right, v(&["fix", "--", "tests"]));
+        let (left, right) = split_passthrough(v(&[
+            "aibox", "-p", "work", "--", "exec", "fix", "--", "tests",
+        ]));
+        assert_eq!(left, v(&["aibox", "-p", "work"]));
+        assert_eq!(right, v(&["exec", "fix", "--", "tests"]));
 
-        let argv = v(&["aibox", "--exec", "prompt"]);
+        let argv = v(&["aibox", "prompt"]);
         let (left, right) = split_passthrough(argv.clone());
         assert_eq!(left, argv);
         assert!(right.is_empty());
@@ -936,7 +934,6 @@ mod tests {
         for argv in [
             &["aibox", "--agent", "claude", "config", "list"][..],
             &["aibox", "-p", "work", "config", "list"][..],
-            &["aibox", "--exec", "config", "list"][..],
             &["aibox", "--work", ".", "config", "list"][..],
             &["aibox", "--mount", "/tmp:/tmp", "config", "list"][..],
             &["aibox", "--agent", "claude", "build"][..],
@@ -952,6 +949,7 @@ mod tests {
             );
         }
 
+        assert!(Cli::try_parse_from(["aibox", "--exec"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "--force", "build"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "--agent", "claude", "list"]).is_err());
         assert!(Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude"]).is_err());

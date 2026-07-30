@@ -23,6 +23,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const BACKUP_RETENTION: usize = 20;
+const MAX_MANAGED_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_CODEX_CONFIG_TEMPLATE: &[u8] = br#"approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
@@ -199,7 +200,8 @@ pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
     Ok(providers)
 }
 
-fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
+/// List valid provider directory names without consulting last-applied state.
+pub(crate) fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
     let provider_root = profile.provider_root_dir();
     if !profile.management_dir_exists()? {
         return Ok(Vec::new());
@@ -254,9 +256,10 @@ pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
 ///
 /// Main configuration objects are deep-merged, while Codex `auth.json` is
 /// validated and replaced as a whole. Existing managed files are backed up
-/// before prepared replacements are committed. The main-config merge starts
-/// from the current active file; applying a different provider does not reset
-/// keys left by earlier applies.
+/// before prepared replacements are committed. If a later replacement fails,
+/// earlier replacements from the same commit are restored. The main-config
+/// merge starts from the current active file; applying a different provider
+/// does not reset keys left by earlier applies.
 pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
@@ -289,7 +292,7 @@ fn plan_active_config_writes(profile: &Profile, provider: &str) -> Result<Vec<Pl
 
             let auth_path = profile.provider_file(provider, "auth.json");
             let provider_auth = read_required_string(&auth_path)?;
-            validate_codex_auth(&provider_auth)
+            let provider_auth = prepare_codex_auth(&provider_auth)
                 .with_context(|| format!("validate {}", auth_path.display()))?;
             Ok(vec![
                 PlannedWrite {
@@ -374,7 +377,8 @@ pub fn delete_provider(profile: &Profile, provider: &str, yes: bool) -> Result<(
 /// selects all.
 ///
 /// Provider names and `all` are mutually exclusive. Unless `yes` is set, each
-/// target requires interactive confirmation.
+/// target requires interactive confirmation. Bulk selection also clears stale
+/// last-applied state when no provider directories remain.
 pub fn delete_providers(
     profile: &Profile,
     providers: &[String],
@@ -383,6 +387,9 @@ pub fn delete_providers(
 ) -> Result<()> {
     let targets = delete_provider_targets(profile, providers, all)?;
     if targets.is_empty() {
+        if all || providers.is_empty() {
+            remove_state_file(profile)?;
+        }
         eprintln!(">> no providers in this profile");
         return Ok(());
     }
@@ -448,6 +455,12 @@ struct PlannedWrite {
 struct PreparedWrite {
     path: PathBuf,
     temp_path: PathBuf,
+    private: bool,
+}
+
+struct RollbackWrite {
+    path: PathBuf,
+    saved_path: Option<PathBuf>,
 }
 
 fn ensure_provider_exists(profile: &Profile, provider: &str) -> Result<()> {
@@ -479,11 +492,31 @@ fn read_optional_regular_string(path: &Path) -> Result<String> {
 }
 
 fn read_existing_regular_string(path: &Path) -> Result<String> {
-    let mut file = profile::open_real_file(path, "config file")?;
+    let file = profile::open_real_file(path, "config file")?;
+    let size = file
+        .metadata()
+        .with_context(|| format!("inspect {}", path.display()))?
+        .len();
+    reject_oversized_managed_file(path, size)?;
+
     let mut content = String::new();
-    file.read_to_string(&mut content)
+    let bytes = file
+        .take(MAX_MANAGED_FILE_BYTES.saturating_add(1))
+        .read_to_string(&mut content)
         .with_context(|| format!("read {}", path.display()))?;
+    reject_oversized_managed_file(path, bytes as u64)?;
     Ok(content)
+}
+
+fn reject_oversized_managed_file(path: &Path, size: u64) -> Result<()> {
+    if size > MAX_MANAGED_FILE_BYTES {
+        bail!(
+            "managed config file exceeds the {} byte limit: {}",
+            MAX_MANAGED_FILE_BYTES,
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn ensure_regular_file(path: &Path) -> Result<()> {
@@ -511,15 +544,28 @@ fn ensure_json_object(value: &JsonValue, label: &str) -> Result<()> {
     }
 }
 
-fn validate_codex_auth(content: &str) -> Result<()> {
-    let value: JsonValue = serde_json::from_str(content)?;
-    match value {
-        JsonValue::Object(map) if !map.is_empty() => {
-            reject_placeholder_credentials(map.values(), "codex auth.json")?;
-            Ok(())
-        }
-        JsonValue::Object(_) => bail!("codex auth.json must not be an empty object"),
-        _ => bail!("codex auth.json must be a JSON object"),
+fn prepare_codex_auth(content: &str) -> Result<String> {
+    let mut value: JsonValue = serde_json::from_str(content)?;
+    let Some(map) = value.as_object_mut() else {
+        bail!("codex auth.json must be a JSON object");
+    };
+    let stripped_metadata = match map.remove("aibox") {
+        Some(JsonValue::Object(_)) => true,
+        Some(_) => bail!("aibox metadata must be a JSON object"),
+        None => false,
+    };
+    if map.is_empty() {
+        bail!("codex auth.json must not be an empty object");
+    }
+    reject_placeholder_credentials(map.values(), "codex auth.json")?;
+
+    if stripped_metadata {
+        Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+    } else {
+        // Preserve the provider file byte-for-byte when there is no reserved
+        // metadata to remove: auth.json is a whole-file replacement rather
+        // than a merged configuration.
+        Ok(content.to_string())
     }
 }
 
@@ -706,6 +752,7 @@ fn prepare_writes(writes: &[PlannedWrite]) -> Result<Vec<PreparedWrite>> {
 }
 
 fn prepare_write(write: &PlannedWrite) -> Result<PreparedWrite> {
+    reject_oversized_managed_file(&write.path, write.content.len() as u64)?;
     let parent = write
         .path
         .parent()
@@ -734,22 +781,130 @@ fn prepare_write(write: &PlannedWrite) -> Result<PreparedWrite> {
     Ok(PreparedWrite {
         path: write.path.clone(),
         temp_path,
+        private: write.private,
     })
 }
 
 fn commit_prepared_writes(prepared_writes: &[PreparedWrite]) -> Result<()> {
+    let rollback_writes = match prepare_rollback_writes(prepared_writes) {
+        Ok(rollback_writes) => rollback_writes,
+        Err(error) => {
+            cleanup_prepared_writes(prepared_writes);
+            return Err(error);
+        }
+    };
+
     for (index, write) in prepared_writes.iter().enumerate() {
         if let Err(error) = fs::rename(&write.temp_path, &write.path) {
             cleanup_prepared_writes(&prepared_writes[index..]);
-            return Err(error).with_context(|| format!("replace {}", write.path.display()));
+            let rollback = rollback_committed_writes(&rollback_writes[..index]);
+            let replace_error =
+                anyhow::Error::new(error).context(format!("replace {}", write.path.display()));
+            return match rollback {
+                Ok(()) => {
+                    cleanup_rollback_writes(&rollback_writes);
+                    Err(replace_error
+                        .context("config commit failed; earlier replacements were rolled back"))
+                }
+                Err(rollback_error) => {
+                    // Successfully restored copies have already been renamed
+                    // away. Preserve any failed committed rollback copies for
+                    // manual recovery, but remove copies for writes that were
+                    // never attempted.
+                    cleanup_rollback_writes(&rollback_writes[index..]);
+                    Err(anyhow::anyhow!(
+                        "{replace_error:#}; restoring earlier config replacements also failed: {rollback_error:#}"
+                    ))
+                }
+            };
         }
     }
+    cleanup_rollback_writes(&rollback_writes);
     Ok(())
 }
 
 fn cleanup_prepared_writes(writes: &[PreparedWrite]) {
     for write in writes {
         let _ = fs::remove_file(&write.temp_path);
+    }
+}
+
+fn prepare_rollback_writes(writes: &[PreparedWrite]) -> Result<Vec<RollbackWrite>> {
+    let mut rollback_writes = Vec::with_capacity(writes.len());
+    for write in writes {
+        match prepare_rollback_write(&write.path, write.private) {
+            Ok(rollback_write) => rollback_writes.push(rollback_write),
+            Err(error) => {
+                cleanup_rollback_writes(&rollback_writes);
+                return Err(error);
+            }
+        }
+    }
+    Ok(rollback_writes)
+}
+
+fn prepare_rollback_write(path: &Path, private: bool) -> Result<RollbackWrite> {
+    let saved_path = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {
+            let file_name = path_file_name(path)?;
+            let saved_path = path.with_file_name(format!(
+                ".{file_name}.aibox-rollback-{}-{}",
+                std::process::id(),
+                now_nanos()?
+            ));
+            copy_regular_file(path, &saved_path, private).with_context(|| {
+                format!(
+                    "prepare rollback copy {} from {}",
+                    saved_path.display(),
+                    path.display()
+                )
+            })?;
+            Some(saved_path)
+        }
+        Ok(_) => bail!("{} is not a regular file", path.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {}", path.display()));
+        }
+    };
+    Ok(RollbackWrite {
+        path: path.to_path_buf(),
+        saved_path,
+    })
+}
+
+fn rollback_committed_writes(writes: &[RollbackWrite]) -> Result<()> {
+    let mut failures = Vec::new();
+    for write in writes.iter().rev() {
+        let (restored, recovery_hint) = match &write.saved_path {
+            Some(saved_path) => (
+                fs::rename(saved_path, &write.path),
+                format!(" from saved rollback {}", saved_path.display()),
+            ),
+            None => (fs::remove_file(&write.path), String::new()),
+        };
+        if let Err(error) = restored {
+            if write.saved_path.is_none() && error.kind() == io::ErrorKind::NotFound {
+                continue;
+            }
+            failures.push(format!(
+                "restore {}{recovery_hint}: {error}",
+                write.path.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("{}", failures.join("; "))
+    }
+}
+
+fn cleanup_rollback_writes(writes: &[RollbackWrite]) {
+    for write in writes {
+        if let Some(saved_path) = &write.saved_path {
+            let _ = fs::remove_file(saved_path);
+        }
     }
 }
 
@@ -799,30 +954,41 @@ fn create_new_file(path: &Path, private: bool) -> Result<fs::File> {
 }
 
 fn copy_regular_file(source: &Path, destination: &Path, private: bool) -> Result<()> {
-    let mut source_file = profile::open_real_file(source, "active config file")?;
+    let source_file = profile::open_real_file(source, "active config file")?;
+    let metadata = source_file
+        .metadata()
+        .with_context(|| format!("inspect {}", source.display()))?;
+    reject_oversized_managed_file(source, metadata.len())?;
     let permissions = if private {
         None
     } else {
-        Some(
-            source_file
-                .metadata()
-                .with_context(|| format!("inspect {}", source.display()))?
-                .permissions(),
-        )
+        Some(metadata.permissions())
     };
     let mut destination_file = create_new_file(destination, private)?;
     if let Some(permissions) = permissions {
         if let Err(error) = destination_file.set_permissions(permissions) {
+            drop(destination_file);
             let _ = fs::remove_file(destination);
             return Err(error)
                 .with_context(|| format!("set permissions on {}", destination.display()));
         }
     }
-    if let Err(error) = io::copy(&mut source_file, &mut destination_file) {
-        let _ = fs::remove_file(destination);
-        return Err(error.into());
+    let copied = io::copy(
+        &mut source_file.take(MAX_MANAGED_FILE_BYTES.saturating_add(1)),
+        &mut destination_file,
+    );
+    drop(destination_file);
+    match copied {
+        Ok(bytes) if bytes <= MAX_MANAGED_FILE_BYTES => Ok(()),
+        Ok(bytes) => {
+            let _ = fs::remove_file(destination);
+            reject_oversized_managed_file(source, bytes)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(destination);
+            Err(error.into())
+        }
     }
-    Ok(())
 }
 
 fn configured_editor() -> OsString {
@@ -972,6 +1138,83 @@ mod tests {
     }
 
     #[test]
+    fn oversized_managed_files_are_rejected_before_read_or_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("oversized.json");
+        let destination = dir.path().join("backup.json");
+        let file = fs::File::create(&source).unwrap();
+        file.set_len(MAX_MANAGED_FILE_BYTES + 1).unwrap();
+
+        let read_error = read_existing_regular_string(&source)
+            .unwrap_err()
+            .to_string();
+        assert!(read_error.contains("exceeds"), "{read_error}");
+        assert!(
+            read_error.contains(&MAX_MANAGED_FILE_BYTES.to_string()),
+            "{read_error}"
+        );
+
+        let copy_error = copy_regular_file(&source, &destination, true)
+            .unwrap_err()
+            .to_string();
+        assert!(copy_error.contains("exceeds"), "{copy_error}");
+        assert!(
+            !destination.exists(),
+            "a rejected oversized backup must not leave a partial destination"
+        );
+
+        let target = dir.path().join("target.json");
+        let oversized_write = PlannedWrite {
+            path: target.clone(),
+            content: vec![0; MAX_MANAGED_FILE_BYTES as usize + 1],
+            private: false,
+        };
+        let write_error = prepare_write(&oversized_write)
+            .err()
+            .expect("oversized generated config must fail")
+            .to_string();
+        assert!(write_error.contains("exceeds"), "{write_error}");
+        assert!(
+            !target.exists(),
+            "an oversized generated config must not be committed"
+        );
+    }
+
+    #[test]
+    fn failed_backup_copy_removes_the_incomplete_backup_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"keep\"\n").unwrap();
+        fs::create_dir(p.active_file("auth.json")).unwrap();
+
+        let error = create_backup(&p).unwrap_err().to_string();
+
+        assert!(error.contains("auth.json is not a regular file"), "{error}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"keep\"\n"
+        );
+        assert_eq!(
+            fs::read_dir(p.backups_dir()).unwrap().count(),
+            0,
+            "a failure after copying the first managed file must remove the partial backup"
+        );
+    }
+
+    #[test]
+    fn listing_without_management_state_is_empty_and_side_effect_free() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+
+        assert!(list_providers(&p).unwrap().is_empty());
+        assert!(
+            !root.path().join("default").exists(),
+            "listing providers must not initialize a profile"
+        );
+    }
+
+    #[test]
     fn create_list_and_get_codex_provider() {
         let root = tempfile::tempdir().unwrap();
         let p = profile(root.path(), AgentKind::Codex);
@@ -1066,6 +1309,37 @@ model = "gpt-5.6-sol"
             .is_file());
         assert!(root.path().join("default/home/.gitconfig").is_file());
         assert!(root.path().join("default/config/codex").is_dir());
+    }
+
+    #[test]
+    fn creating_an_existing_provider_never_overwrites_its_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        let config = "model = \"custom\"";
+        let auth = r#"{"token":"custom"}"#;
+        fs::write(p.provider_file("openai", "config.toml"), config).unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), auth).unwrap();
+
+        let error = create_provider(&p, "openai").unwrap_err().to_string();
+
+        assert!(
+            error.contains("provider 'openai' already exists"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(p.provider_file("openai", "config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            fs::read_to_string(p.provider_file("openai", "auth.json")).unwrap(),
+            auth
+        );
+        assert_eq!(
+            get_provider(&p, "openai").unwrap(),
+            "# config.toml\nmodel = \"custom\"\n\n# auth.json\n{\"token\":\"custom\"}\n",
+            "provider rendering should delimit files even when stored content lacks a final newline"
+        );
     }
 
     #[test]
@@ -1522,6 +1796,24 @@ printf 'model = "edited"\n' > "$1"
     }
 
     #[test]
+    fn delete_all_providers_clears_stale_state_when_no_providers_remain() {
+        for all in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let p = profile(root.path(), AgentKind::Codex);
+            p.ensure_management_dir().unwrap();
+            fs::write(p.state_path(), "{not json").unwrap();
+
+            delete_providers(&p, &[], all, true).unwrap();
+
+            assert!(
+                !p.state_path().exists(),
+                "bulk deletion must clear stale state even when provider directories are already empty"
+            );
+            assert!(list_providers(&p).unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn delete_providers_empty_or_all_flag_selects_every_provider() {
         for (target, all) in [(Vec::new(), false), (Vec::new(), true)] {
             let root = tempfile::tempdir().unwrap();
@@ -1797,11 +2089,35 @@ base_url = "old"
 
     #[test]
     fn empty_codex_auth_is_invalid() {
-        assert!(validate_codex_auth("{}").is_err());
-        assert!(validate_codex_auth("[]").is_err());
-        assert!(validate_codex_auth(r#"{"OPENAI_API_KEY":"sk-example"}"#).is_err());
-        assert!(validate_codex_auth(r#"{"nested":{"token":"sk-example"}}"#).is_err());
-        assert!(validate_codex_auth(r#"{"token":"x"}"#).is_ok());
+        assert!(prepare_codex_auth("{}").is_err());
+        assert!(prepare_codex_auth("[]").is_err());
+        assert!(prepare_codex_auth(r#"{"OPENAI_API_KEY":"sk-example"}"#).is_err());
+        assert!(prepare_codex_auth(r#"{"nested":{"token":"sk-example"}}"#).is_err());
+        assert!(prepare_codex_auth(r#"{"token":"x","aibox":true}"#).is_err());
+        assert!(prepare_codex_auth(r#"{"token":"x"}"#).is_ok());
+    }
+
+    #[test]
+    fn codex_auth_strips_reserved_metadata_before_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(
+            p.provider_file("openai", "auth.json"),
+            r#"{"token":"new","aibox":{"note":"host-only","credential":"sk-example"}}"#,
+        )
+        .unwrap();
+
+        apply_provider(&p, "openai").unwrap();
+
+        let active: JsonValue =
+            serde_json::from_str(&fs::read_to_string(p.active_file("auth.json")).unwrap()).unwrap();
+        assert_eq!(active, serde_json::json!({"token": "new"}));
     }
 
     #[test]
@@ -2284,11 +2600,23 @@ exit 23
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let managed_count = backups
+        let managed_backups: Vec<_> = backups
             .iter()
             .filter(|entry| is_managed_backup_dir_name(&entry.file_name()))
-            .count();
-        assert_eq!(managed_count, 20);
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(managed_backups.len(), 20);
+        let retained_configs: std::collections::BTreeSet<_> = managed_backups
+            .iter()
+            .map(|backup| fs::read_to_string(backup.join("config.toml")).unwrap())
+            .collect();
+        let expected_configs: std::collections::BTreeSet<_> = (5..25)
+            .map(|index| format!("model = \"{index}\"\n"))
+            .collect();
+        assert_eq!(
+            retained_configs, expected_configs,
+            "retention must discard the oldest snapshots rather than any five snapshots"
+        );
         assert_eq!(
             fs::read_to_string(unmanaged.join("sentinel")).unwrap(),
             "keep\n",
@@ -2445,6 +2773,86 @@ exit 23
                 assert!(!p.state_path().exists());
             }
         }
+    }
+
+    #[test]
+    fn commit_failure_restores_earlier_replacements() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let first_temp = dir.path().join(".first.tmp");
+        let missing_second_temp = dir.path().join(".second.tmp");
+        fs::write(&first, "old first\n").unwrap();
+        fs::write(&second, "old second\n").unwrap();
+        fs::write(&first_temp, "new first\n").unwrap();
+        let prepared = vec![
+            PreparedWrite {
+                path: first.clone(),
+                temp_path: first_temp,
+                private: true,
+            },
+            PreparedWrite {
+                path: second.clone(),
+                temp_path: missing_second_temp,
+                private: false,
+            },
+        ];
+
+        let error = commit_prepared_writes(&prepared).unwrap_err().to_string();
+
+        assert!(error.contains("rolled back"), "{error}");
+        assert_eq!(fs::read_to_string(&first).unwrap(), "old first\n");
+        assert_eq!(fs::read_to_string(second).unwrap(), "old second\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "a private rollback copy must not restore permissive auth-file permissions"
+            );
+        }
+        assert!(
+            fs::read_dir(dir.path()).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".aibox-rollback-")
+            }),
+            "rollback copies must not remain after a recovered commit failure"
+        );
+    }
+
+    #[test]
+    fn commit_failure_removes_earlier_files_that_were_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let new_path = dir.path().join("new.json");
+        let later_path = dir.path().join("later.json");
+        let new_temp = dir.path().join(".new.tmp");
+        let missing_later_temp = dir.path().join(".later.tmp");
+        fs::write(&later_path, "old later\n").unwrap();
+        fs::write(&new_temp, "new content\n").unwrap();
+        let prepared = vec![
+            PreparedWrite {
+                path: new_path.clone(),
+                temp_path: new_temp,
+                private: false,
+            },
+            PreparedWrite {
+                path: later_path.clone(),
+                temp_path: missing_later_temp,
+                private: false,
+            },
+        ];
+
+        commit_prepared_writes(&prepared).unwrap_err();
+
+        assert!(
+            !new_path.exists(),
+            "a failed first apply must not leave a newly-created active file behind"
+        );
+        assert_eq!(fs::read_to_string(later_path).unwrap(), "old later\n");
     }
 
     #[cfg(unix)]

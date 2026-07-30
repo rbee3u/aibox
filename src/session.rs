@@ -10,8 +10,34 @@ use serde_json::Value;
 #[cfg(unix)]
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
+
+const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
+
+fn terminal_safe(value: &str) -> String {
+    terminal_safe_with(value, |_| false)
+}
+
+fn terminal_safe_prompt(value: &str) -> String {
+    terminal_safe_with(value, |character| matches!(character, '\n' | '\t'))
+}
+
+fn terminal_safe_with(value: &str, keep_control: impl Fn(char) -> bool) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() && !keep_control(character) {
+            output.extend(character.escape_default());
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn safe_path(path: &Path) -> String {
+    terminal_safe(&path.to_string_lossy())
+}
 
 /// Resolve a transcript directory only through real directory entries beneath
 /// the profile home. The home is writable by the container, so following an
@@ -56,15 +82,15 @@ impl SessionDiscovery {
 /// boundary. Shared by the strict and tolerant walks so they can't drift on which
 /// files count.
 fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {
-    let path = entry.path();
-    entry.file_type().is_file()
-        && path
-            .extension()
-            .is_some_and(|extension| extension == "jsonl")
+    entry.file_type().is_file() && has_wanted_transcript_name(entry.path(), keep)
+}
+
+fn has_wanted_transcript_name(path: &Path, keep: &impl Fn(&str) -> bool) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "jsonl")
         && path
             .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(keep)
+            .is_some_and(|name| keep(&name.to_string_lossy()))
 }
 
 /// Collect every `.jsonl` transcript under `base` (recursively), keeping only
@@ -74,15 +100,24 @@ fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool)
 pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>> {
     match std::fs::symlink_metadata(base) {
         Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => bail!("session path is not a directory: {}", base.display()),
+        Ok(_) => bail!("session path is not a directory: {}", safe_path(base)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => {
-            return Err(e).with_context(|| format!("inspect session directory {}", base.display()));
+            return Err(e)
+                .with_context(|| format!("inspect session directory {}", safe_path(base)));
         }
     }
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(base) {
-        let entry = entry.with_context(|| format!("walk session directory {}", base.display()))?;
+        let entry = entry.map_err(|error| {
+            anyhow::anyhow!(
+                "{}",
+                terminal_safe(&format!(
+                    "walk session directory {}: {error}",
+                    safe_path(base)
+                ))
+            )
+        })?;
         if is_wanted_transcript(&entry, &keep) {
             out.push(entry.path().to_path_buf());
         }
@@ -98,12 +133,13 @@ pub(crate) fn walk_jsonl_tolerant(
 ) -> Result<SessionDiscovery> {
     match std::fs::symlink_metadata(base) {
         Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => bail!("session path is not a directory: {}", base.display()),
+        Ok(_) => bail!("session path is not a directory: {}", safe_path(base)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(SessionDiscovery::from_files(Vec::new()));
         }
         Err(e) => {
-            return Err(e).with_context(|| format!("inspect session directory {}", base.display()));
+            return Err(e)
+                .with_context(|| format!("inspect session directory {}", safe_path(base)));
         }
     }
     let mut out = SessionDiscovery::from_files(Vec::new());
@@ -111,8 +147,10 @@ pub(crate) fn walk_jsonl_tolerant(
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                out.errors
-                    .push(format!("walk session directory {}: {e}", base.display()));
+                out.errors.push(terminal_safe(&format!(
+                    "walk session directory {}: {e}",
+                    safe_path(base)
+                )));
                 continue;
             }
         };
@@ -133,23 +171,74 @@ pub(crate) fn walk_jsonl_tolerant(
 pub(crate) fn for_each_json_line(
     home: &Path,
     path: &Path,
+    visit: impl FnMut(&Value),
+) -> Result<()> {
+    for_each_json_line_with_limit(home, path, MAX_TRANSCRIPT_LINE_BYTES, visit)
+}
+
+fn for_each_json_line_with_limit(
+    home: &Path,
+    path: &Path,
+    max_line_bytes: u64,
     mut visit: impl FnMut(&Value),
+) -> Result<()> {
+    try_for_each_json_line_with_limit(home, path, max_line_bytes, |value| {
+        visit(value);
+        Ok(true)
+    })
+}
+
+fn try_for_each_json_line(
+    home: &Path,
+    path: &Path,
+    visit: impl FnMut(&Value) -> Result<bool>,
+) -> Result<()> {
+    try_for_each_json_line_with_limit(home, path, MAX_TRANSCRIPT_LINE_BYTES, visit)
+}
+
+fn try_for_each_json_line_with_limit(
+    home: &Path,
+    path: &Path,
+    max_line_bytes: u64,
+    mut visit: impl FnMut(&Value) -> Result<bool>,
 ) -> Result<()> {
     let file = open_session_transcript(home, path)?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
+    let mut line_number = 0_u64;
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
+        let read = (&mut reader)
+            // A JSONL record may be followed by either LF or CRLF. Read room
+            // for both delimiters so the byte limit applies to the JSON
+            // record itself rather than rejecting an exact-size record just
+            // because it has a conventional trailing newline.
+            .take(max_line_bytes.saturating_add(2))
+            .read_line(&mut line);
+        match read {
             Ok(0) => return Ok(()),
             Err(error) => {
                 return Err(error)
-                    .with_context(|| format!("read session transcript {}", path.display()));
+                    .with_context(|| format!("read session transcript {}", safe_path(path)));
             }
-            Ok(_) => {}
+            Ok(_) => {
+                let record = line.strip_suffix('\n').unwrap_or(&line);
+                let record = record.strip_suffix('\r').unwrap_or(record);
+                if record.len() as u64 > max_line_bytes {
+                    bail!(
+                        "session transcript line {} exceeds the {} byte limit: {}",
+                        line_number + 1,
+                        max_line_bytes,
+                        safe_path(path)
+                    );
+                }
+                line_number += 1;
+            }
         }
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
-            visit(&value);
+            if !visit(&value)? {
+                return Ok(());
+            }
         }
     }
 }
@@ -216,19 +305,19 @@ fn open_session_transcript_at(
         if error.raw_os_error() == Some(libc::ELOOP) {
             bail!(
                 "session transcript is not a regular file: {}",
-                path.display()
+                safe_path(path)
             );
         }
-        return Err(error).with_context(|| format!("open session transcript {}", path.display()));
+        return Err(error).with_context(|| format!("open session transcript {}", safe_path(path)));
     }
     let file = unsafe { fs::File::from_raw_fd(fd) };
     let metadata = file
         .metadata()
-        .with_context(|| format!("inspect session transcript {}", path.display()))?;
+        .with_context(|| format!("inspect session transcript {}", safe_path(path)))?;
     if !metadata.file_type().is_file() {
         bail!(
             "session transcript is not a regular file: {}",
-            path.display()
+            safe_path(path)
         );
     }
     Ok(file)
@@ -254,7 +343,7 @@ fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
     if result == 0 {
         Ok(())
     } else {
-        Err(io::Error::last_os_error()).with_context(|| format!("delete {}", path.display()))
+        Err(io::Error::last_os_error()).with_context(|| format!("delete {}", safe_path(path)))
     }
 }
 
@@ -262,7 +351,7 @@ fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
 fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
     validate_session_ancestors(home, path)?;
     crate::profile::open_real_file(path, "session transcript")?;
-    fs::remove_file(path).with_context(|| format!("delete {}", path.display()))
+    fs::remove_file(path).with_context(|| format!("delete {}", safe_path(path)))
 }
 
 #[cfg(unix)]
@@ -273,8 +362,8 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
     let relative = path.strip_prefix(home).with_context(|| {
         format!(
             "session transcript {} is outside profile home {}",
-            path.display(),
-            home.display()
+            safe_path(path),
+            safe_path(home)
         )
     })?;
     let mut components = Vec::new();
@@ -283,16 +372,16 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
             Component::Normal(name) => components.push(name.to_os_string()),
             _ => bail!(
                 "session transcript path is not a normalized child of the profile home: {}",
-                path.display()
+                safe_path(path)
             ),
         }
     }
     let file_name = components
         .pop()
-        .with_context(|| format!("session transcript path is empty: {}", path.display()))?;
+        .with_context(|| format!("session transcript path is empty: {}", safe_path(path)))?;
 
     let home_path = std::ffi::CString::new(home.as_os_str().as_bytes())
-        .with_context(|| format!("profile home contains a NUL byte: {}", home.display()))?;
+        .with_context(|| format!("profile home contains a NUL byte: {}", safe_path(home)))?;
     let home_fd = unsafe {
         libc::open(
             home_path.as_ptr(),
@@ -301,7 +390,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
     };
     if home_fd < 0 {
         return Err(io::Error::last_os_error())
-            .with_context(|| format!("open profile home {}", home.display()));
+            .with_context(|| format!("open profile home {}", safe_path(home)));
     }
     let mut parent = unsafe { OwnedFd::from_raw_fd(home_fd) };
 
@@ -316,7 +405,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
         };
         if next_fd < 0 {
             return Err(io::Error::last_os_error())
-                .with_context(|| format!("open session path {}", path.display()));
+                .with_context(|| format!("open session path {}", safe_path(path)));
         }
         parent = unsafe { OwnedFd::from_raw_fd(next_fd) };
     }
@@ -336,8 +425,8 @@ fn validate_session_ancestors(home: &Path, path: &Path) -> Result<()> {
     let relative = path.strip_prefix(home).with_context(|| {
         format!(
             "session transcript {} is outside profile home {}",
-            path.display(),
-            home.display()
+            safe_path(path),
+            safe_path(home)
         )
     })?;
     let mut current = home.to_path_buf();
@@ -347,7 +436,7 @@ fn validate_session_ancestors(home: &Path, path: &Path) -> Result<()> {
         let Component::Normal(name) = component else {
             bail!(
                 "session transcript path is not a normalized child of the profile home: {}",
-                path.display()
+                safe_path(path)
             );
         };
         current.push(name);
@@ -501,21 +590,40 @@ pub trait SessionBackend {
         self.summarize_in(&home, path)
     }
 
-    /// Every typed prompt in one transcript, in order, for `get`. Shared
-    /// streaming loop; the per-line text (and wrapper filtering) is
-    /// [`typed_text`](Self::typed_text). `home` anchors no-follow traversal of
-    /// every path component.
+    /// Collect every typed prompt in one transcript, in order.
+    ///
+    /// Call [`Self::for_each_prompt_in`] when prompts should be processed with
+    /// bounded memory, as the CLI `get` path does.
     fn prompts_in(&self, home: &Path, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
-        for_each_json_line(home, path, |value| {
+        self.for_each_prompt_in(home, path, &mut |prompt| {
+            out.push(prompt);
+            Ok(true)
+        })?;
+        Ok(out)
+    }
+
+    /// Visit typed prompts in order without retaining the full transcript's
+    /// prompt text. Returning `false` stops the read cleanly, which lets CLI
+    /// output stop immediately after a downstream pipe closes.
+    fn for_each_prompt_in(
+        &self,
+        home: &Path,
+        path: &Path,
+        visit: &mut dyn FnMut(Prompt) -> Result<bool>,
+    ) -> Result<usize> {
+        let mut count = 0;
+        try_for_each_json_line(home, path, |value| {
             if let Some(text) = self.typed_text(value) {
-                out.push(Prompt {
+                count += 1;
+                return visit(Prompt {
                     timestamp: ts_of(value),
                     text,
                 });
             }
+            Ok(true)
         })?;
-        Ok(out)
+        Ok(count)
     }
 
     #[cfg(test)]
@@ -621,15 +729,18 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
         exact_matches
     };
     match candidates.len() {
-        0 => bail!("no session matches: {query}"),
+        0 => bail!("no session matches: {}", terminal_safe(query)),
         1 => Ok(candidates.into_iter().next().unwrap()),
         n => {
-            let mut message = format!("ambiguous id '{query}' matches {n} sessions:");
+            let mut message = format!(
+                "ambiguous id '{}' matches {n} sessions:",
+                terminal_safe(query)
+            );
             for candidate in &candidates {
                 message.push_str(&format!(
                     "\n     {}  {}",
-                    backend.id_of(candidate),
-                    candidate.display()
+                    terminal_safe(&backend.id_of(candidate)),
+                    safe_path(candidate)
                 ));
             }
             bail!(message)
@@ -662,7 +773,7 @@ fn list_with_printer(
     let discovery = backend.list_files(home)?;
     let mut failed = !discovery.errors.is_empty();
     for error in discovery.errors {
-        eprintln!("!! {error}");
+        eprintln!("!! {}", terminal_safe(&error));
     }
     for file in discovery.files {
         match backend.summarize_in(home, &file) {
@@ -675,7 +786,11 @@ fn list_with_printer(
                 });
             }
             Err(error) => {
-                eprintln!("!! {}: {error:#}", file.display());
+                eprintln!(
+                    "!! {}: {}",
+                    safe_path(&file),
+                    terminal_safe(&format!("{error:#}"))
+                );
                 failed = true;
             }
         }
@@ -695,9 +810,9 @@ fn list_with_printer(
         title,
     } in rows
     {
-        // By chars, not bytes: ids come from arbitrary transcript file names,
-        // and a byte slice could split a multi-byte char and panic.
-        let short_id: String = id.chars().take(8).collect();
+        // Escape terminal controls before truncating: ids come from arbitrary
+        // transcript file names inside the container-writable profile home.
+        let short_id: String = terminal_safe(&id).chars().take(8).collect();
         let timestamp = fmt_ts(&start_ts);
         if !print(&format!("{short_id:<8}  {timestamp:<16}  {title}"))? {
             break; // reader hung up; nothing left to show
@@ -720,17 +835,16 @@ fn get_with_printer(
 ) -> Result<i32> {
     let path = resolve(backend, home, id)?;
     let sid = backend.id_of(&path);
-    eprintln!(">> session {sid}");
-    let prompts = backend.prompts_in(home, &path)?;
-    if prompts.is_empty() {
-        print("(no typed prompts in this session)")?;
-        return Ok(0);
-    }
-    for (index, prompt) in prompts.iter().enumerate() {
+    eprintln!(">> session {}", terminal_safe(&sid));
+    let mut index = 0;
+    let prompt_count = backend.for_each_prompt_in(home, &path, &mut |prompt| {
+        index += 1;
         let timestamp = fmt_ts(&prompt.timestamp);
-        if !print(&format!("\n[{}] {timestamp}\n{}", index + 1, prompt.text))? {
-            break; // reader hung up; nothing left to show
-        }
+        let text = terminal_safe_prompt(&prompt.text);
+        print(&format!("\n[{index}] {timestamp}\n{text}"))
+    })?;
+    if prompt_count == 0 {
+        print("(no typed prompts in this session)")?;
     }
     Ok(0)
 }
@@ -798,23 +912,27 @@ fn delete_targets_with_input(
 ) -> Result<i32> {
     for path in targets {
         let sid = backend.id_of(&path);
-        let delete = yes || confirm_delete(&sid, input);
+        let delete = yes || confirm_delete(&sid, input)?;
         if delete {
             remove_session_transcript(home, &path)?;
-            eprintln!(">> deleted {sid}");
+            eprintln!(">> deleted {}", terminal_safe(&sid));
         } else {
-            eprintln!(">> kept {sid}");
+            eprintln!(">> kept {}", terminal_safe(&sid));
         }
     }
     Ok(0)
 }
 
-fn confirm_delete(sid: &str, input: &mut dyn BufRead) -> bool {
-    eprint!("delete session {sid}? [y/N] ");
-    io::stderr().flush().ok();
+fn confirm_delete(sid: &str, input: &mut dyn BufRead) -> Result<bool> {
+    eprint!("delete session {}? [y/N] ", terminal_safe(sid));
+    io::stderr()
+        .flush()
+        .context("flush session delete prompt")?;
     let mut answer = String::new();
-    input.read_line(&mut answer).ok();
-    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+    input
+        .read_line(&mut answer)
+        .context("read session delete confirmation")?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Format an ISO-8601 timestamp as `YYYY-MM-DD HH:MM` for display, or empty if
@@ -826,7 +944,7 @@ fn fmt_ts(ts: &str) -> String {
     }
     let date: String = ts.chars().take(10).collect();
     let time: String = ts.chars().skip(11).take(5).collect();
-    format!("{date} {time}").trim_end().to_string()
+    terminal_safe(format!("{date} {time}").trim_end())
 }
 
 /// Collapse runs of control characters and non-plain-space whitespace to a
@@ -891,6 +1009,78 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{}\n").unwrap();
         path
+    }
+
+    #[test]
+    fn transcript_line_reader_rejects_oversized_lines_without_reading_the_whole_file() {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "oversized");
+        std::fs::write(&path, vec![b'x'; 33]).unwrap();
+
+        let error = for_each_json_line_with_limit(home.path(), &path, 32, |_| {})
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("line 1 exceeds the 32 byte limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn transcript_line_limit_accepts_an_exact_size_final_line() {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "exact");
+        let line = br#"{"typed":"ok"}"#;
+        std::fs::write(&path, line).unwrap();
+        let mut visits = 0;
+
+        for_each_json_line_with_limit(home.path(), &path, line.len() as u64, |_| {
+            visits += 1;
+        })
+        .unwrap();
+
+        assert_eq!(visits, 1);
+    }
+
+    #[test]
+    fn transcript_line_limit_excludes_jsonl_delimiters() {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "exact-with-newline");
+        let record = r#"{"typed":"ok"}"#;
+
+        for delimiter in ["\n", "\r\n"] {
+            std::fs::write(&path, format!("{record}{delimiter}")).unwrap();
+            let mut visits = 0;
+
+            for_each_json_line_with_limit(home.path(), &path, record.len() as u64, |_| visits += 1)
+                .unwrap();
+
+            assert_eq!(visits, 1, "delimiter {delimiter:?}");
+        }
+    }
+
+    #[test]
+    fn session_display_escapes_terminal_controls_from_container_owned_data() {
+        assert_eq!(terminal_safe("普通\x1b[2J\n"), "普通\\u{1b}[2J\\n");
+        assert_eq!(
+            terminal_safe_prompt("first\n\tsecond\x1b[2J"),
+            "first\n\tsecond\\u{1b}[2J"
+        );
+
+        let home = tempfile::tempdir().unwrap();
+        write_session(home.path(), "\x1b[2Jmalicious");
+        let mut lines = Vec::new();
+        let code = list_with_printer(&TestBackend, home.path(), |line| {
+            lines.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].contains('\x1b'), "{:?}", lines[0]);
+        assert!(lines[0].contains("\\u{1b}"), "{:?}", lines[0]);
     }
 
     struct ExplicitFilesBackend {
@@ -1131,14 +1321,11 @@ mod tests {
     #[test]
     fn get_stops_cleanly_when_printer_hangs_up() {
         // `session get | head` closes the pipe; the Rust runtime ignores
-        // SIGPIPE, so this must stop writing instead of panicking.
+        // SIGPIPE, so this must stop reading and writing instead of reaching
+        // malformed data later in a large transcript.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("33333333.jsonl");
-        std::fs::write(
-            &path,
-            "{\"typed\":\"first\"}\n{\"typed\":\"second\"}\n{\"typed\":\"third\"}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, b"{\"typed\":\"first\"}\n\xff\xfe").unwrap();
         let backend = ExplicitFilesBackend::new(vec![path]);
         let mut printed = Vec::new();
 
@@ -1671,19 +1858,26 @@ mod tests {
     #[test]
     fn list_and_delete_report_an_empty_profile_without_failing() {
         let dir = tempfile::tempdir().unwrap();
-        let mut printed = Vec::new();
+        let missing_home = dir.path().join("missing-home");
 
-        let code = list_with_printer(&TestBackend, dir.path(), |line| {
-            printed.push(line.to_string());
-            Ok(true)
-        })
-        .unwrap();
+        for home in [dir.path(), missing_home.as_path()] {
+            let mut printed = Vec::new();
+            let code = list_with_printer(&TestBackend, home, |line| {
+                printed.push(line.to_string());
+                Ok(true)
+            })
+            .unwrap();
 
-        assert_eq!(code, 0, "an empty profile is not a list failure");
-        assert!(printed.is_empty(), "no rows to print: {printed:?}");
+            assert_eq!(code, 0, "an empty profile is not a list failure");
+            assert!(printed.is_empty(), "no rows to print: {printed:?}");
 
-        let code = delete(&TestBackend, dir.path(), &[], false, true).unwrap();
-        assert_eq!(code, 0, "deleting nothing is not a failure");
+            let code = delete(&TestBackend, home, &[], false, true).unwrap();
+            assert_eq!(code, 0, "deleting nothing is not a failure");
+        }
+        assert!(
+            !missing_home.exists(),
+            "session discovery must not initialize a profile home"
+        );
     }
 
     #[test]
@@ -1756,6 +1950,20 @@ mod tests {
         assert_eq!(targets, vec![a, shell]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_transcript_names_still_pass_discovery_filters() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let transcript =
+            PathBuf::from(std::ffi::OsString::from_vec(b"invalid-\xff.jsonl".to_vec()));
+
+        assert!(
+            has_wanted_transcript_name(&transcript, &|name| name == "invalid-\u{fffd}.jsonl"),
+            "discovery must not silently omit a transcript solely because its name is not UTF-8"
+        );
+    }
+
     #[test]
     fn summarize_empty_shell_has_empty_title() {
         let dir = tempfile::tempdir().unwrap();
@@ -1817,13 +2025,47 @@ mod tests {
     fn confirm_delete_accepts_only_explicit_yes_answers() {
         for yes in ["y\n", "Y\n", "yes\n", " YES \n"] {
             let mut input = Cursor::new(yes.as_bytes());
-            assert!(confirm_delete("11111111", &mut input), "{yes:?}");
+            assert!(confirm_delete("11111111", &mut input).unwrap(), "{yes:?}");
         }
 
         for no in ["", "\n", "n\n", "yeah\n", "yep\n", " yes please\n"] {
             let mut input = Cursor::new(no.as_bytes());
-            assert!(!confirm_delete("11111111", &mut input), "{no:?}");
+            assert!(!confirm_delete("11111111", &mut input).unwrap(), "{no:?}");
         }
+    }
+
+    #[test]
+    fn delete_confirmation_read_errors_are_not_reported_as_successful_keeps() {
+        struct FailingInput;
+
+        impl io::Read for FailingInput {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("input failed"))
+            }
+        }
+
+        impl BufRead for FailingInput {
+            fn fill_buf(&mut self) -> io::Result<&[u8]> {
+                Err(io::Error::other("input failed"))
+            }
+
+            fn consume(&mut self, _amount: usize) {}
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = write_session(dir.path(), "11111111");
+        let targets =
+            delete_targets(&TestBackend, dir.path(), &["1111".to_string()], false).unwrap();
+        let error =
+            delete_targets_with_input(&TestBackend, dir.path(), targets, false, &mut FailingInput)
+                .unwrap_err()
+                .to_string();
+
+        assert!(
+            error.contains("read session delete confirmation"),
+            "{error}"
+        );
+        assert!(target.exists(), "an unread confirmation must not delete");
     }
 
     #[test]

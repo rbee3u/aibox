@@ -934,6 +934,32 @@ mod tests {
     }
 
     #[test]
+    fn host_config_and_session_operations_reject_a_missing_home() {
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let missing_home = root.path().join("missing-home");
+        let _home = EnvGuard::set("HOME", missing_home.as_os_str());
+        let p = Profile::resolve(AgentKind::Codex, root.path(), HOST_PROFILE).unwrap();
+
+        for error in [
+            p.validate_existing_active_agent_dir().unwrap_err(),
+            p.ensure_active_agent_dir().unwrap_err(),
+            p.validate_session_home().unwrap_err(),
+        ] {
+            let error = error.to_string();
+            assert!(error.contains("host home does not exist"), "{error}");
+        }
+        assert!(
+            !missing_home.exists(),
+            "validating the external host profile must not create the configured home"
+        );
+        assert!(
+            !root.path().join(HOST_PROFILE).exists(),
+            "a failed host operation must not create management state"
+        );
+    }
+
+    #[test]
     fn create_ordinary_profile_creates_full_baseline() {
         let root = tempfile::tempdir().unwrap();
 
@@ -1065,6 +1091,15 @@ mod tests {
             list_profiles(root.path()).unwrap(),
             vec!["alpha".to_string(), "zeta".to_string()]
         );
+    }
+
+    #[test]
+    fn listing_a_missing_root_is_empty_and_does_not_create_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("not-initialized");
+
+        assert!(list_profiles(&root).unwrap().is_empty());
+        assert!(!root.exists());
     }
 
     #[test]

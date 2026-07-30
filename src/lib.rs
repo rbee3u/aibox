@@ -40,7 +40,6 @@ use anyhow::{Context, Result};
 use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
 use profile::Profile;
-use runspec::RunOpts;
 use std::ffi::OsString;
 
 pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
@@ -268,9 +267,6 @@ fn used_run_only_options(run: &RunArgs) -> Vec<&'static str> {
     if !run.mount.is_empty() {
         used.push("--mount");
     }
-    if run.exec {
-        used.push("--exec");
-    }
     used
 }
 
@@ -293,10 +289,6 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
 }
 
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Result<i32> {
-    if run.exec && !agent.supports_exec() {
-        anyhow::bail!("--exec is codex-only");
-    }
-
     let image_override = env_override("AIBOX_IMAGE")?;
     let image = image_for(image_override.as_deref())?;
     if image_override.is_some() {
@@ -322,11 +314,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
 
     prof.ensure_ordinary_initialized()?;
 
-    let opts = RunOpts {
-        exec: run.exec,
-        passthrough,
-    };
-    let invocation = agent.build_invocation(&opts)?;
+    let invocation = agent.build_invocation(passthrough);
 
     let run_args = runspec::assemble_run_args(
         agent,
@@ -587,6 +575,27 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
+    fn run_uses_a_valid_image_override_for_lookup_and_launch() {
+        let fx = RunFixture::new();
+        let _image = EnvGuard::set("AIBOX_IMAGE", "registry.example/aibox:test");
+
+        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = fx.log();
+        assert!(
+            log.contains("<image> <inspect> <--format> <{{.Id}}> <registry.example/aibox:test>"),
+            "{log}"
+        );
+        assert!(
+            log.contains("<registry.example/aibox:test> <codex>"),
+            "the validated override must also be the launched image: {log}"
+        );
+        assert!(!log.contains("<aibox:latest> <codex>"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn run_preserves_applied_config_without_remounting_or_reapplying_provider_data() {
         let fx = RunFixture::new();
         let profile = Profile::resolve(AgentKind::Codex, fx.root.path(), "default").unwrap();
@@ -636,13 +645,17 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn codex_exec_passes_prompt_after_exec_subcommand() {
+    fn codex_exec_subcommand_can_be_passed_through() {
         let fx = RunFixture::new();
 
         let code = fx
             .run(
-                &["aibox", "--exec"],
-                vec!["fix tests".to_string(), "--json".to_string()],
+                &["aibox"],
+                vec![
+                    "exec".to_string(),
+                    "fix tests".to_string(),
+                    "--json".to_string(),
+                ],
             )
             .unwrap();
 
@@ -723,13 +736,21 @@ printf '\nEND\n' >> "$log"
     #[test]
     fn config_and_session_reject_passthrough() {
         let fx = RunFixture::new();
-        let err = fx
-            .run(&["aibox", "config", "list"], vec!["ignored".to_string()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("applies only to a run"));
-
-        assert!(Cli::try_parse_from(["aibox", "--exec", "config", "list"]).is_err());
+        for argv in [
+            &["aibox", "config", "list"][..],
+            &["aibox", "session", "list"][..],
+        ] {
+            let err = fx
+                .run(argv, vec!["ignored".to_string()])
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("applies only to a run"), "{argv:?}: {err}");
+        }
+        assert_eq!(
+            fx.log(),
+            "",
+            "rejected management commands must not consult Docker"
+        );
     }
 
     #[cfg(unix)]
@@ -763,6 +784,140 @@ printf '\nEND\n' >> "$log"
                 .join("default/config/codex/anthropic")
                 .exists(),
             "a command-level --agent claude must not create a Codex provider"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_commands_create_and_delete_without_starting_docker() {
+        let fx = RunFixture::new();
+
+        let code = fx
+            .run(&["aibox", "profile", "create", "work"], Vec::new())
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(fx.root.path().join("work/home/.codex").is_dir());
+        assert!(fx.root.path().join("work/home/.claude").is_dir());
+
+        let code = fx
+            .run(&["aibox", "profile", "delete", "work", "--yes"], Vec::new())
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(!fx.root.path().join("work").exists());
+        assert_eq!(
+            fx.log(),
+            "",
+            "host-side profile management must never invoke Docker"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_apply_and_delete_route_to_the_selected_profile_without_docker() {
+        let fx = RunFixture::new();
+
+        fx.run(
+            &["aibox", "config", "--profile", "work", "create", "openai"],
+            Vec::new(),
+        )
+        .unwrap();
+        let selected = Profile::resolve(AgentKind::Codex, fx.root.path(), "work").unwrap();
+        std::fs::write(
+            selected.provider_file("openai", "config.toml"),
+            "model = \"selected-profile\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            selected.provider_file("openai", "auth.json"),
+            r#"{"token":"selected-profile"}"#,
+        )
+        .unwrap();
+
+        let code = fx
+            .run(
+                &["aibox", "config", "apply", "openai", "--profile", "work"],
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_to_string(selected.active_file("config.toml")).unwrap(),
+            "model = \"selected-profile\"\n"
+        );
+        assert!(
+            !fx.root
+                .path()
+                .join("default/home/.codex/config.toml")
+                .exists(),
+            "a scoped config command must not fall back to the default profile"
+        );
+
+        let code = fx
+            .run(
+                &[
+                    "aibox",
+                    "config",
+                    "--profile=work",
+                    "delete",
+                    "openai",
+                    "--yes",
+                ],
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(!selected.provider_dir("openai").exists());
+        assert!(
+            selected.active_file("config.toml").exists(),
+            "deleting provider metadata must not roll back persisted active config"
+        );
+        assert_eq!(
+            fx.log(),
+            "",
+            "host-side config management must never invoke Docker"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_delete_routes_to_the_selected_profile_without_docker() {
+        let fx = RunFixture::new();
+        profile::create_ordinary_profile(fx.root.path(), "work").unwrap();
+        let id = "11111111-2222-3333-4444-555555555555";
+        let transcript = crate::testutil::write_jsonl(
+            fx.root.path(),
+            &format!("work/home/.codex/sessions/2026/07/30/rollout-test-{id}.jsonl"),
+            &[r#"{"timestamp":"2026-07-30T10:00:00Z","type":"session_meta"}"#],
+        );
+
+        let code = fx
+            .run(
+                &[
+                    "aibox",
+                    "session",
+                    "delete",
+                    id,
+                    "--yes",
+                    "--profile",
+                    "work",
+                ],
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(
+            !transcript.exists(),
+            "the selected profile's transcript should be deleted"
+        );
+        assert_eq!(
+            fx.log(),
+            "",
+            "host-side session management must never invoke Docker"
         );
     }
 
@@ -901,14 +1056,7 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn claude_exec_and_profile_agent_flag_are_rejected() {
-        let fx = RunFixture::new();
-        let err = fx
-            .run(&["aibox", "--agent", "claude", "--exec"], Vec::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("--exec is codex-only"));
-
+    fn root_agent_flag_cannot_cross_command_boundaries() {
         assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "profile", "list"]).is_err());
 
         assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "build"]).is_err());
