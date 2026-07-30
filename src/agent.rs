@@ -25,7 +25,7 @@ impl AgentKind {
         }
     }
 
-    /// Default shared Docker image for this agent.
+    /// Built-in shared Docker image tag for this agent.
     pub fn image_default(self) -> &'static str {
         match self {
             AgentKind::Claude | AgentKind::Codex => crate::docker::IMAGE,

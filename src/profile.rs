@@ -10,7 +10,11 @@ use crate::cli::ProfileCommand;
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{self, IsTerminal, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 /// Reserved profile name that points to the real host agent state.
 pub const HOST_PROFILE: &str = "host";
@@ -20,6 +24,11 @@ pub const PROFILE_HOME_DIR: &str = "home";
 pub const PROFILE_CONFIG_DIR: &str = "config";
 /// Reserved host-only tracing subtree of an ordinary profile.
 pub const PROFILE_TRACING_DIR: &str = "tracing";
+const PROFILE_LOCKS_DIR: &str = ".locks";
+#[cfg(unix)]
+const NONBLOCKING_LOCK_RETRY: Duration = Duration::from_millis(100);
+#[cfg(unix)]
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 const HOST_PROFILE_LIST_ENTRY: &str = "host [external-home]";
 const CLAUDE_STATUSLINE_SCRIPT: &[u8] = include_bytes!("../assets/claude-status.sh");
 // Profile homes do not receive host SSH keys. Preserve common GitHub clone URLs
@@ -40,6 +49,27 @@ pub struct Profile {
     root_dir: PathBuf,
     management_dir: PathBuf,
     is_host: bool,
+}
+
+/// Held advisory lock for one profile. The descriptor releases the lock on
+/// drop and remains valid even if the profile directory is deleted.
+#[derive(Debug)]
+pub(crate) struct ProfileLock {
+    _file: fs::File,
+}
+
+/// Held lock for access within one agent's provider-management directory.
+#[derive(Debug)]
+pub(crate) struct ProviderManagementLock {
+    _file: fs::File,
+    _profile: ProfileLock,
+}
+
+#[derive(Clone, Copy)]
+enum ProfileLockMode {
+    Shared,
+    SharedNonblocking,
+    Exclusive,
 }
 
 impl Profile {
@@ -84,6 +114,11 @@ impl Profile {
 
     /// Ensure the selected active agent directory is ready for config apply.
     pub fn ensure_active_agent_dir(&self) -> Result<()> {
+        let _lock = self.lock_exclusive()?;
+        self.ensure_active_agent_dir_locked()
+    }
+
+    pub(crate) fn ensure_active_agent_dir_locked(&self) -> Result<()> {
         if self.is_host {
             validate_profile_layout(&self.root_dir, &self.name)?;
             if !real_dir_exists(&self.home_dir, "host home")? {
@@ -91,7 +126,7 @@ impl Profile {
             }
             ensure_agent_state(self.agent, &self.home_dir)
         } else {
-            self.ensure_ordinary_initialized()
+            ensure_ordinary_profile_initialized_locked(&self.root_dir, &self.name)
         }
     }
 
@@ -117,6 +152,26 @@ impl Profile {
         Ok(())
     }
 
+    /// Require the ordinary profile home and selected state directory to still
+    /// exist after the run has acquired its shared profile lock.
+    pub(crate) fn validate_locked_run_paths(&self) -> Result<()> {
+        if self.is_host {
+            bail!("profile 'host' is not runnable");
+        }
+        validate_profile_layout(&self.root_dir, &self.name)?;
+        if !real_dir_exists(&self.home_dir, "profile home")? {
+            bail!("profile home does not exist: {}", self.home_dir.display());
+        }
+        let kind = match self.agent {
+            AgentKind::Claude => "Claude state directory",
+            AgentKind::Codex => "Codex state directory",
+        };
+        if !real_dir_exists(&self.active_agent_dir, kind)? {
+            bail!("{kind} does not exist: {}", self.active_agent_dir.display());
+        }
+        Ok(())
+    }
+
     /// Initialize this profile as a complete ordinary profile.
     ///
     /// This creates the shared home, both agent state directories, seed files,
@@ -126,6 +181,19 @@ impl Profile {
             bail!("profile 'host' is only valid for config/session commands, not profile creation");
         }
         ensure_ordinary_profile_initialized(&self.root_dir, &self.name)
+    }
+
+    /// Hold this profile stable for the lifetime of a Docker run.
+    pub(crate) fn lock_for_run(&self) -> Result<ProfileLock> {
+        if self.is_host {
+            bail!("profile 'host' cannot be locked for a Docker run");
+        }
+        acquire_profile_lock(&self.root_dir, &self.name, ProfileLockMode::Shared)
+    }
+
+    /// Prevent a run or another mutating host operation from using this profile.
+    pub(crate) fn lock_exclusive(&self) -> Result<ProfileLock> {
+        acquire_profile_lock(&self.root_dir, &self.name, ProfileLockMode::Exclusive)
     }
 
     /// Validate the existing home path before host-side transcript access.
@@ -183,10 +251,11 @@ impl Profile {
 
     /// Create the selected agent's provider-management directory safely.
     pub fn ensure_management_dir(&self) -> Result<()> {
+        let _lock = self.lock_exclusive()?;
         if self.is_host {
             ensure_agent_management_dir(&self.root_dir, &self.name, self.agent)
         } else {
-            self.ensure_ordinary_initialized()
+            ensure_ordinary_profile_initialized_locked(&self.root_dir, &self.name)
         }
     }
 
@@ -194,6 +263,89 @@ impl Profile {
     pub fn management_dir_exists(&self) -> Result<bool> {
         validate_profile_layout(&self.root_dir, &self.name)?;
         agent_management_dir_exists(&self.root_dir, &self.name, self.agent)
+    }
+
+    /// Prepare an ordinary profile and hold its shared lock for one Docker run.
+    /// Fully initialized profiles take only the shared lock, so independent runs
+    /// can use the same profile concurrently. Initialization still uses the
+    /// exclusive mutation path when the baseline is incomplete.
+    pub(crate) fn prepare_for_run(&self) -> Result<ProfileLock> {
+        if self.is_host {
+            bail!("profile 'host' cannot be prepared for a Docker run");
+        }
+
+        let lock = self.lock_for_run()?;
+        if ordinary_profile_is_initialized(&self.root_dir, &self.name)? {
+            return Ok(lock);
+        }
+        drop(lock);
+
+        if let Err(initialization_error) = self.ensure_ordinary_initialized() {
+            // A competing first run may have won the exclusive initialization
+            // lock. Wait for it through the shared lock, then reuse its complete
+            // baseline; preserve the original error if the profile is still
+            // incomplete (for example, an active container removed a seed).
+            let lock = self.lock_for_run()?;
+            if ordinary_profile_is_initialized(&self.root_dir, &self.name)? {
+                return Ok(lock);
+            }
+            return Err(initialization_error);
+        }
+        let lock = self.lock_for_run()?;
+        if !ordinary_profile_is_initialized(&self.root_dir, &self.name)? {
+            bail!("profile '{}' disappeared while being prepared", self.name);
+        }
+        Ok(lock)
+    }
+
+    /// Serialize provider snapshot mutations and keep them from overlapping
+    /// active-config apply or profile deletion. Docker runs can continue because
+    /// they only consume the separately applied active configuration.
+    pub(crate) fn lock_for_provider_mutation(&self) -> Result<ProviderManagementLock> {
+        self.lock_provider_management(ProfileLockMode::Exclusive)
+    }
+
+    /// Hold provider snapshots stable while a host-side command reads them.
+    pub(crate) fn lock_for_provider_read(&self) -> Result<ProviderManagementLock> {
+        self.lock_provider_management(ProfileLockMode::SharedNonblocking)
+    }
+
+    fn lock_provider_management(&self, mode: ProfileLockMode) -> Result<ProviderManagementLock> {
+        let profile_mode = match mode {
+            ProfileLockMode::SharedNonblocking => ProfileLockMode::SharedNonblocking,
+            ProfileLockMode::Shared | ProfileLockMode::Exclusive => ProfileLockMode::Shared,
+        };
+        let profile_lock = acquire_profile_lock(&self.root_dir, &self.name, profile_mode)?;
+        if !agent_management_dir_exists(&self.root_dir, &self.name, self.agent)? {
+            bail!(
+                "provider management directory does not exist: {}",
+                self.management_dir.display()
+            );
+        }
+
+        let lock_path = self.management_dir.join(".lock");
+        let file = open_lock_file(&lock_path, "provider management lock")?;
+        if let Err(error) = lock_file(&file, mode) {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                bail!(
+                    "provider configuration for profile '{}' and agent '{}' is in use by another aibox command (lock: {})",
+                    self.name,
+                    self.agent.tag(),
+                    lock_path.display()
+                );
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "lock provider configuration for profile '{}' and agent '{}'",
+                    self.name,
+                    self.agent.tag()
+                )
+            });
+        }
+        Ok(ProviderManagementLock {
+            _file: file,
+            _profile: profile_lock,
+        })
     }
 }
 
@@ -259,6 +411,9 @@ pub fn list_profiles(root: &Path) -> Result<Vec<String>> {
         if name == HOST_PROFILE {
             continue;
         }
+        if name == PROFILE_LOCKS_DIR {
+            continue;
+        }
         profiles.push(name.to_string());
     }
     profiles.sort();
@@ -303,6 +458,11 @@ pub fn delete_ordinary_profiles(
             }
         }
     }
+
+    let _locks = targets
+        .iter()
+        .map(|profile| acquire_profile_lock(root, profile, ProfileLockMode::Exclusive))
+        .collect::<Result<Vec<_>>>()?;
 
     for profile in targets {
         delete_ordinary_profile_dirs(root, &profile)?;
@@ -367,6 +527,12 @@ pub fn validate_ordinary_profile_name(profile: &str) -> Result<()> {
 pub fn ensure_ordinary_profile_initialized(root: &Path, profile: &str) -> Result<()> {
     validate_ordinary_profile_name(profile)?;
     preflight_ordinary_profile_paths(root, profile)?;
+    let _lock = acquire_profile_lock(root, profile, ProfileLockMode::Exclusive)?;
+    ensure_ordinary_profile_initialized_locked(root, profile)
+}
+
+fn ensure_ordinary_profile_initialized_locked(root: &Path, profile: &str) -> Result<()> {
+    preflight_ordinary_profile_paths(root, profile)?;
     ensure_real_dir(root, "aibox root")?;
     let profile_dir = profile_dir(root, profile);
     ensure_real_dir(&profile_dir, "profile directory")?;
@@ -383,6 +549,28 @@ pub fn ensure_ordinary_profile_initialized(root: &Path, profile: &str) -> Result
         )?;
     }
     Ok(())
+}
+
+fn ordinary_profile_is_initialized(root: &Path, profile: &str) -> Result<bool> {
+    preflight_ordinary_profile_paths(root, profile)?;
+    let dir = profile_dir(root, profile);
+    let home = profile_home_dir(root, profile);
+    let management = profile_management_dir(root, profile);
+    Ok(real_dir_exists(&dir, "profile directory")?
+        && real_dir_exists(&home, "profile home")?
+        && real_dir_exists(&home.join(".codex"), "Codex state directory")?
+        && real_dir_exists(&home.join(".claude"), "Claude state directory")?
+        && real_file_exists(&home.join(".gitconfig"), "profile gitconfig")?
+        && real_file_exists(&home.join(".claude/statusline.sh"), "Claude status line")?
+        && real_dir_exists(&management, "profile management directory")?
+        && real_dir_exists(
+            &management.join(AgentKind::Codex.tag()),
+            "config management directory",
+        )?
+        && real_dir_exists(
+            &management.join(AgentKind::Claude.tag()),
+            "config management directory",
+        )?)
 }
 
 fn preflight_ordinary_profile_paths(root: &Path, profile: &str) -> Result<()> {
@@ -459,12 +647,16 @@ fn validate_root_layout(root: &Path) -> Result<()> {
         return Ok(());
     }
     reject_legacy_management_root(root)?;
+    validate_profile_locks(root)?;
     for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
         let entry = entry.with_context(|| format!("read entry in {}", root.display()))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             return invalid_layout(&entry.path(), "non-UTF-8 profile name");
         };
+        if name == PROFILE_LOCKS_DIR {
+            continue;
+        }
         if validate_name("profile", name).is_err() {
             return invalid_layout(&entry.path(), "unknown aibox root entry");
         }
@@ -479,7 +671,119 @@ pub(crate) fn validate_profile_layout(root: &Path, profile: &str) -> Result<()> 
         return Ok(());
     }
     reject_legacy_management_root(root)?;
+    validate_profile_locks(root)?;
     validate_profile_layout_inner(root, profile)
+}
+
+fn validate_profile_locks(root: &Path) -> Result<()> {
+    let locks_dir = root.join(PROFILE_LOCKS_DIR);
+    if !layout_dir_exists(&locks_dir, "profile locks directory")? {
+        return Ok(());
+    }
+    for entry in
+        fs::read_dir(&locks_dir).with_context(|| format!("read {}", locks_dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("read entry in {}", locks_dir.display()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return invalid_layout(&entry.path(), "non-UTF-8 profile lock name");
+        };
+        if validate_name("profile", name).is_err() {
+            return invalid_layout(&entry.path(), "unknown profile lock entry");
+        }
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_file() => {}
+            Ok(_) => return invalid_layout(&entry.path(), "profile lock is not a regular file"),
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspect {}", entry.path().display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn acquire_profile_lock(root: &Path, profile: &str, mode: ProfileLockMode) -> Result<ProfileLock> {
+    validate_name("profile", profile)?;
+    validate_profile_layout(root, profile)?;
+    ensure_real_dir(root, "aibox root")?;
+    let locks_dir = root.join(PROFILE_LOCKS_DIR);
+    ensure_real_dir(&locks_dir, "profile locks directory")?;
+    let lock_path = locks_dir.join(profile);
+
+    let file = open_lock_file(&lock_path, "profile lock")?;
+    if let Err(error) = lock_file(&file, mode) {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            bail!(
+                "profile '{profile}' is in use by another aibox command (lock: {})",
+                lock_path.display()
+            );
+        }
+        return Err(error).with_context(|| format!("lock profile '{profile}'"));
+    }
+    Ok(ProfileLock { _file: file })
+}
+
+fn open_lock_file(path: &Path, kind: &str) -> Result<fs::File> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => bail!("{kind} is not a regular file: {}", path.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {kind} {}", path.display()));
+        }
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("open {kind} {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("inspect {kind} {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!("{kind} is not a regular file: {}", path.display());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn lock_file(file: &fs::File, mode: ProfileLockMode) -> io::Result<()> {
+    let operation = match mode {
+        ProfileLockMode::Shared => libc::LOCK_SH,
+        ProfileLockMode::SharedNonblocking => libc::LOCK_SH | libc::LOCK_NB,
+        ProfileLockMode::Exclusive => libc::LOCK_EX | libc::LOCK_NB,
+    };
+    let retry_until = matches!(
+        mode,
+        ProfileLockMode::SharedNonblocking | ProfileLockMode::Exclusive
+    )
+    .then(|| Instant::now() + NONBLOCKING_LOCK_RETRY);
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock
+                if retry_until.is_some_and(|deadline| Instant::now() < deadline) =>
+            {
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn lock_file(_file: &fs::File, _mode: ProfileLockMode) -> io::Result<()> {
+    Ok(())
 }
 
 fn reject_legacy_management_root(root: &Path) -> Result<()> {
@@ -989,6 +1293,177 @@ mod tests {
         assert!(root.path().join("work/config/codex").is_dir());
         assert!(root.path().join("work/config/claude").is_dir());
         assert!(!root.path().join("work/tracing").exists());
+        assert!(root.path().join(".locks/work").is_file());
+        assert_eq!(list_profiles(root.path()).unwrap(), ["work"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_lock_rejects_profile_mutation_until_released() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        let run_lock = profile.lock_for_run().unwrap();
+        let error = profile.lock_exclusive().unwrap_err().to_string();
+
+        assert!(error.contains("profile 'work' is in use"), "{error}");
+        drop(run_lock);
+        profile.lock_exclusive().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_lock_retries_a_transient_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        let run_lock = profile.lock_for_run().unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(run_lock);
+        });
+
+        let mutation_lock = profile.lock_exclusive().unwrap();
+
+        drop(mutation_lock);
+        releaser.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_profile_allows_concurrent_run_locks() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+
+        let first_run = profile.prepare_for_run().unwrap();
+        let second_run = profile.prepare_for_run().unwrap();
+
+        drop((first_run, second_run));
+        profile.lock_exclusive().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_preparation_waits_for_competing_first_initialization() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().to_path_buf();
+        let profile = Profile::resolve(AgentKind::Codex, &root_path, "work").unwrap();
+        let (initialized_tx, initialized_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let initializer = std::thread::spawn(move || {
+            let _lock =
+                acquire_profile_lock(&root_path, "work", ProfileLockMode::Exclusive).unwrap();
+            ensure_ordinary_profile_initialized_locked(&root_path, "work").unwrap();
+            initialized_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        initialized_rx.recv().unwrap();
+
+        let (prepared_tx, prepared_rx) = mpsc::channel();
+        let preparing = std::thread::spawn(move || {
+            prepared_tx.send(profile.prepare_for_run()).unwrap();
+        });
+        assert!(
+            prepared_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "run preparation must wait while the competing initializer holds the profile lock"
+        );
+
+        release_tx.send(()).unwrap();
+        initializer.join().unwrap();
+        let run_lock = prepared_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        drop(run_lock);
+        preparing.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_mutation_lock_blocks_apply_and_profile_deletion_but_not_runs() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        let provider_mutation = profile.lock_for_provider_mutation().unwrap();
+
+        let error = profile.lock_exclusive().unwrap_err().to_string();
+        assert!(error.contains("profile 'work' is in use"), "{error}");
+        let run = profile.prepare_for_run().unwrap();
+
+        drop((provider_mutation, run));
+        profile.lock_exclusive().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_read_locks_can_coexist() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+
+        let first = profile.lock_for_provider_read().unwrap();
+        let second = profile.lock_for_provider_read().unwrap();
+
+        drop((first, second));
+        profile.lock_for_provider_mutation().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_mutation_lock_rejects_a_symlinked_lock_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        let lock_path = profile.provider_root_dir().join(".lock");
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), &lock_path).unwrap();
+
+        let error = profile
+            .lock_for_provider_mutation()
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("provider management lock is not a regular file"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn locked_run_paths_require_the_initialized_profile_to_still_exist() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let profile = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
+        fs::remove_dir_all(root.path().join("work")).unwrap();
+        let _run_lock = profile.lock_for_run().unwrap();
+
+        let error = profile.validate_locked_run_paths().unwrap_err().to_string();
+
+        assert!(error.contains("profile home does not exist"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_layout_rejects_unsafe_lock_entries() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "work").unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), root.path().join(".locks/unsafe")).unwrap();
+
+        let error = list_profiles(root.path()).unwrap_err().to_string();
+
+        assert!(
+            error.contains("profile lock is not a regular file"),
+            "{error}"
+        );
     }
 
     #[cfg(unix)]
@@ -1243,6 +1718,30 @@ mod tests {
 
         assert!(err.contains("profile 'missing' does not exist"), "{err}");
         assert!(root.path().join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_ordinary_profiles_locks_every_target_before_deleting() {
+        let root = tempfile::tempdir().unwrap();
+        create_ordinary_profile(root.path(), "first").unwrap();
+        create_ordinary_profile(root.path(), "busy").unwrap();
+        let busy = Profile::resolve(AgentKind::Codex, root.path(), "busy").unwrap();
+        let run_lock = busy.lock_for_run().unwrap();
+        let targets = ["first".to_string(), "busy".to_string()];
+
+        let error = delete_ordinary_profiles(root.path(), &targets, false, true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("profile 'busy' is in use"), "{error}");
+        assert!(root.path().join("first").is_dir());
+        assert!(root.path().join("busy").is_dir());
+
+        drop(run_lock);
+        delete_ordinary_profiles(root.path(), &targets, false, true).unwrap();
+        assert!(!root.path().join("first").exists());
+        assert!(!root.path().join("busy").exists());
     }
 
     #[test]

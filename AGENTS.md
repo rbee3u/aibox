@@ -1,136 +1,73 @@
 # AGENTS.md
 
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
-container that **is** the sandbox boundary:
-`aibox [--agent codex|claude] [options] [-- <args passed straight to the agent>]`.
-Host-side subcommands manage the image, completion, profiles, provider
-overlays, and transcripts. Runs and the separately scoped `config`/`session`
-commands accept `--agent`; `build`, `completion`, and `profile` do not. User
-docs live in `README.md`.
+container. The container, not the agent process, is the sandbox boundary. User
+commands and behavior are documented in `README.md`.
 
-## Layout
+Keep this file limited to project-specific constraints that are hard to infer
+from the code and costly to violate. Prefer existing modules and data flows;
+add an abstraction, configuration layer, or compatibility path only for a
+demonstrated requirement, such as a user request, test, published behavior, or
+observed failure.
 
-```
-src/
-  lib.rs               # orchestration (run / run_agent) + module wiring
-  main.rs              # completion hook, argv split, clap parse, call run_os
-  agent.rs             # AgentKind enum + trait-like methods; divergence point
-  cli.rs               # clap types + split_passthrough
-  completion.rs        # dynamic shell registration + host-side candidates
-  config.rs            # provider create/list/get/apply/edit/delete
-  merge.rs             # TOML/JSON deep-merge helpers
-  creds.rs             # docker run pid/cidfile signal cleanup
-  docker.rs            # docker build/run child processes
-  platform.rs          # Linux-specific run flags, uid/gid, and TTY probes
-  profile.rs           # profile/root/host layout and path boundary checks
-  runspec.rs           # mount boundary checks + docker-run arg assembly
-  session.rs           # transcript browsing shared dispatch + backend trait
-  session_claude.rs    # Claude transcript backend
-  session_codex.rs     # Codex transcript backend
-  testutil.rs          # shared test-only env, stub, argv, and fixture helpers
-assets/
-  aibox.Dockerfile     # shared image, embedded via include_str!
-  claude-status.sh     # default Claude status-line helper
-```
+## Constraints
 
-## Hard Constraints
+**Centralize shared agent contracts.** Put agent-specific paths, managed files,
+and invocation behavior in `AgentKind` in `agent.rs`. Keep transcript-format
+parsing in `session_claude.rs` and `session_codex.rs`. The Docker image and
+container home remain shared so agent support does not fork shared
+orchestration.
 
-**Agent divergence is centralized in `AgentKind` (`agent.rs`).** Everything
-per-agent: active state dir (`.codex`/`.claude`), managed config files,
-supported invocation modes, command binary, and session backend. The Docker
-image and container home are shared. Shared logic takes an `AgentKind`;
-transcript parsing is the only split backend.
+**Preserve the CLI boundary.** Split argv at the first `--` before clap parses
+it, and pass the right side verbatim only to an agent run. Root
+`--agent`/`--profile` select a run; `config` and `session` own separately scoped
+options; `build`, `completion`, and `profile` accept neither. Completion must
+mirror these scopes and the `--` boundary; candidate discovery stays host-side
+and must not initialize profiles or start Docker. Keep clap help, README
+examples, and scope-rejection tests aligned.
 
-**The first `--` is the agent-argument boundary.** `main.rs` must split argv
-before clap sees it, and only an agent run may consume the pass-through side.
-Root `--agent`/`--profile` select a run; `config` and `session` own their
-agent/profile options; `build`, `completion`, and `profile` accept neither. Keep
-clap help, README examples, and scope-rejection tests aligned when changing
-this surface.
+**Keep provider application explicit and persistent.** A run consumes the
+active agent files left by `config apply`; it must not inject or reapply
+provider data. `config apply` deep-merges `config.toml` or `settings.json` into
+the current active config; Codex `auth.json` is validated and replaced as a
+whole. Changing providers is not an implicit rollback or reset, so previously
+applied keys may persist.
 
-**Completion mirrors the CLI without side effects.** Generated registration
-scripts call back into `handle_completion` before normal argument splitting.
-The completion command reuses `Cli::command`, must honor scoped options and the
-first `--`, and discovers profiles, providers, sessions, and paths host-side.
-Candidate discovery must not initialize profiles or start Docker.
+**Keep management data on the host.** Within `$AIBOX_ROOT`, only an ordinary
+profile's `home` may be used as a bind source; all other data is host-only. The
+special `host` profile lets `config` and `session` operate on the real host
+agent dirs while metadata stays under `$AIBOX_ROOT`; it has no managed home and
+must be rejected by Docker runs and profile deletion. This prevents management
+state and real host agent data from crossing the container boundary.
 
-**Provider metadata never enters the container.** Normal profiles use
-`$AIBOX_ROOT/{profile}/home` as the mounted home for both agents. Provider
-snapshots, `.backup`, and `.state.json` live under
-`$AIBOX_ROOT/{profile}/config/{agent}/`; provider directories are direct
-children of that directory. `tracing` is reserved as another host-only profile
-subtree. User mount sources inside `$AIBOX_ROOT` are allowed only beneath an
-ordinary profile's `home`. `$AIBOX_ROOT` defaults to `$HOME/.aibox`.
+**Validate every bind mount before Docker sees it.** Resolve host sources so
+they cannot become named volumes or escape path checks. Extra mounts may nest
+beneath managed targets, but must not replace `/work` or the shared container
+home.
 
-**`host` is a management-only profile.** `-p host` is valid for `config` and
-`session` only. It targets the real host `$HOME/.codex` or `$HOME/.claude` while
-keeping provider metadata under `$AIBOX_ROOT/host/config/{agent}/`. It has no
-managed `home`; Docker runs and profile deletion must reject `host`.
+**Treat container-writable profile paths as untrusted.** Host-side reads,
+writes, and deletions must reject symlinked or unexpected path entries and
+validate every relevant ancestor. `session list` may return readable rows with
+traversal errors; `session get` and `session delete` must fail on a partial
+view. Transcripts without a typed prompt must still be listed and included in
+delete-all operations.
 
-**Config apply is explicit and persistent.** Runs use the active agent files
-left by an earlier `config apply`; they do not reapply a provider or inject
-provider data at launch. Do not reintroduce `-e`, `base`, `envs`, runtime
-endpoint injection, or refresh templates. Codex providers own `config.toml`
-plus `auth.json`; Claude providers own `settings.json`. `config apply`
-deep-merges TOML/JSON config into the active agent dir. Codex `auth.json` is
-validated and replaced as a whole file. The top-level `aibox` table/object is
-reserved metadata and is stripped from active output. Applies merge into the
-current active files; changing providers is not an implicit rollback or reset.
+**Keep Docker runs single-active and cleanup-aware.** Agent runs must go through
+`docker::run`; its child/cidfile registry supports one active run per process.
+Register the cidfile before spawning Docker, register the child immediately
+afterward, and keep cleanup armed until `finish_child` checks for a container
+that outlived the Docker client, or a signal race can orphan the container.
 
-**Managed Docker mounts define the boundary.** `runspec.rs` owns `/work`, the
-shared container home, and every extra bind mount. Always resolve and
-validate host bind sources before passing them to Docker: relative sources can
-become named volumes, and `:` breaks `-v` parsing. User `-m` mounts may be
-nested under managed targets, but must not replace `/work` or
-`AgentKind::container_home()`.
-
-**Docker runs remain child processes.** `docker::run` registers the child pid
-and cidfile through `creds.rs`, so catchable wrapper-only signals trigger
-daemon-side container cleanup. The registry is process-global and supports one
-active run; do not call `docker::run` concurrently or bypass it for agent runs.
-Registration order is part of the safety contract: register the cidfile before
-spawning Docker and record the child pid immediately afterward. After a
-successful spawn, do not clear either until `finish_child` has checked for a
-container that outlived the client. Signal-path Docker commands must stay
-bounded, inherited ignored SIGHUP must remain ignored, and a second signal must
-retain immediate escalation.
-
-**Host-side session access must stay beneath the selected home.** Profile homes
-are container-writable, so transcript discovery and reads must reject symlinked
-homes, agent state directories, transcript roots, and transcript files.
-`session list` may report readable rows alongside traversal errors, but
-`get`/`delete` must fail on a partial view. A no-id delete includes every
-transcript, even one with no typed prompt.
-
-## Config Safety
-
-- Profile and provider names are restricted to `[A-Za-z0-9_-]+`.
-- Aibox-managed replacements of active config, provider templates, and state
-  use same-directory temporary files and atomic rename.
-- Backups use unique directories; failed backup creation removes the incomplete
-  directory.
-- Codex auth files and auth backups are private on Unix.
-- Profile initialization and deletion validate the complete selected profile
-  layout before writing or removing anything; legacy, unknown, and symlinked
-  layout entries are rejected.
-- Existing symlinked active dirs/files must be rejected rather than followed.
-- `real_dir_exists`, `open_real_file`, and `ensure_real_dir` protect only their
-  final path entry. Callers operating below container-writable homes must first
-  validate every ancestor instead of treating these helpers as recursive
-  symlink protection.
-- `config delete` must ask before removing a provider unless `-y/--yes` is set.
-
-## Dockerfiles
-
-The embedded Dockerfile must stay `COPY`-free (fetch via apt/curl/npm): the build
-context is unused, so `docker.rs` pipes it to `docker build -f -` with an
-empty context.
+**Keep the embedded Dockerfile context-free.** It must not depend on local
+build-context files: `docker.rs` passes it to `docker build -f -` with an empty
+context, so dependencies must be fetched during the build.
 
 ## Checks
+
+Run checks relevant to the change before handing it off and report any check
+the environment prevents. For Rust changes, run all of these:
 
 - `cargo fmt --check`
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
-- Run-path changes you cannot unit-test: stub `docker` on `$PATH` with a script
-  that echoes its args, and inspect the assembled `docker run` line.

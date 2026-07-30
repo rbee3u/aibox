@@ -140,17 +140,18 @@ fn create_provider_with_templates(
     write_templates: impl FnOnce(AgentKind, &Path) -> Result<()>,
 ) -> Result<()> {
     profile::validate_name("provider", provider)?;
+    if !profile.management_dir_exists()? {
+        profile.ensure_management_dir()?;
+    }
+    let _lock = profile.lock_for_provider_mutation()?;
     let provider_dir = profile.provider_dir(provider);
-    if profile.management_dir_exists()? {
-        match fs::symlink_metadata(&provider_dir) {
-            Ok(_) => bail!("provider '{provider}' already exists"),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("inspect {}", provider_dir.display()));
-            }
+    match fs::symlink_metadata(&provider_dir) {
+        Ok(_) => bail!("provider '{provider}' already exists"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {}", provider_dir.display()));
         }
     }
-    profile.ensure_management_dir()?;
     fs::create_dir(&provider_dir)
         .with_context(|| format!("create provider directory {}", provider_dir.display()))?;
 
@@ -188,6 +189,10 @@ fn write_provider_templates(agent: AgentKind, provider_dir: &Path) -> Result<()>
 
 /// List valid provider directories in name order.
 pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
+    if !profile.management_dir_exists()? {
+        return Ok(Vec::new());
+    }
+    let _lock = profile.lock_for_provider_read()?;
     let provider_names = list_provider_names(profile)?;
     let state = read_state(profile)?;
     let providers = provider_names
@@ -233,6 +238,8 @@ pub(crate) fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
 pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
+    let _lock = profile.lock_for_provider_read()?;
+    ensure_provider_exists(profile, provider)?;
 
     let mut output = String::new();
     for (index, file_name) in profile.agent.managed_config_files().iter().enumerate() {
@@ -256,12 +263,15 @@ pub fn get_provider(profile: &Profile, provider: &str) -> Result<String> {
 ///
 /// Main configuration objects are deep-merged, while Codex `auth.json` is
 /// validated and replaced as a whole. Existing managed files are backed up
-/// before prepared replacements are committed. If a later replacement fails,
-/// earlier replacements from the same commit are restored. The main-config
-/// merge starts from the current active file; applying a different provider
-/// does not reset keys left by earlier applies.
+/// before prepared replacements are committed; no empty backup is kept when
+/// none exist yet. If a later replacement fails, earlier replacements from the
+/// same commit are restored. The main-config merge starts from the current
+/// active file; applying a different provider does not reset keys left by
+/// earlier applies.
 pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     profile::validate_name("provider", provider)?;
+    ensure_provider_exists(profile, provider)?;
+    let _lock = profile.lock_exclusive()?;
     ensure_provider_exists(profile, provider)?;
     profile.validate_existing_active_agent_dir()?;
 
@@ -272,7 +282,7 @@ pub fn apply_provider(profile: &Profile, provider: &str) -> Result<()> {
     };
     writes.push(planned_state_write(profile, &state)?);
 
-    profile.ensure_active_agent_dir()?;
+    profile.ensure_active_agent_dir_locked()?;
     let prepared_writes = prepare_writes(&writes)?;
     if let Err(error) = create_backup(profile) {
         cleanup_prepared_writes(&prepared_writes);
@@ -331,6 +341,8 @@ fn plan_active_config_writes(profile: &Profile, provider: &str) -> Result<Vec<Pl
 pub fn edit_provider(profile: &Profile, provider: &str, edit_auth: bool) -> Result<()> {
     profile::validate_name("provider", provider)?;
     ensure_provider_exists(profile, provider)?;
+    let _lock = profile.lock_for_provider_mutation()?;
+    ensure_provider_exists(profile, provider)?;
 
     let file_name = match (edit_auth, profile.agent.auth_file()) {
         (true, Some(auth_file)) => auth_file,
@@ -387,14 +399,13 @@ pub fn delete_providers(
 ) -> Result<()> {
     let targets = delete_provider_targets(profile, providers, all)?;
     if targets.is_empty() {
-        if all || providers.is_empty() {
+        if (all || providers.is_empty()) && profile.management_dir_exists()? {
+            let _lock = profile.lock_for_provider_mutation()?;
             remove_state_file(profile)?;
         }
         eprintln!(">> no providers in this profile");
         return Ok(());
     }
-    let deleting_every_provider = list_provider_names(profile)?.len() == targets.len();
-
     if !yes {
         for provider in &targets {
             if !confirm_delete(provider)? {
@@ -403,19 +414,25 @@ pub fn delete_providers(
         }
     }
 
+    let _lock = profile.lock_for_provider_mutation()?;
+    for provider in &targets {
+        ensure_provider_exists(profile, provider)?;
+    }
+    let deleting_every_provider = list_provider_names(profile)?.len() == targets.len();
     let state = read_state_for_delete(profile)?;
-    let last_applied = state
-        .as_ref()
-        .and_then(|state| state.last_applied.as_deref());
-    let clear_state = state.is_none()
-        || deleting_every_provider
-        || last_applied.is_some_and(|last| targets.iter().any(|provider| provider == last));
+    let invalid_state = state.is_none();
+    let last_applied = state.as_ref().and_then(|state| state.last_applied.clone());
+    let mut state_cleared = false;
     for provider in &targets {
         let provider_dir = profile.provider_dir(provider);
         fs::remove_dir_all(&provider_dir)
             .with_context(|| format!("delete provider directory {}", provider_dir.display()))?;
+        if !state_cleared && (invalid_state || last_applied.as_deref() == Some(provider.as_str())) {
+            remove_state_file(profile)?;
+            state_cleared = true;
+        }
     }
-    if clear_state {
+    if !state_cleared && deleting_every_provider {
         remove_state_file(profile)?;
     }
     Ok(())
@@ -1605,6 +1622,38 @@ printf 'model = "edited"\n' > "$1"
 
     #[cfg(unix)]
     #[test]
+    fn partial_provider_delete_does_not_leave_state_for_a_deleted_provider() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "applied").unwrap();
+        create_provider(&p, "fails").unwrap();
+        fs::write(p.state_path(), r#"{"last_applied":"applied"}"#).unwrap();
+        fs::write(p.provider_dir("fails").join("blocker"), "keep\n").unwrap();
+        fs::set_permissions(p.provider_dir("fails"), fs::Permissions::from_mode(0o500)).unwrap();
+
+        let error = delete_providers(
+            &p,
+            &["applied".to_string(), "fails".to_string()],
+            false,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        fs::set_permissions(p.provider_dir("fails"), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.contains("delete provider directory"), "{error}");
+        assert!(!p.provider_dir("applied").exists());
+        assert!(p.provider_dir("fails").exists());
+        assert!(
+            !p.state_path().exists(),
+            "once the applied provider is deleted, a later failure must not leave its stale marker"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn delete_provider_rejects_symlinked_provider_dir_without_touching_target() {
         use std::os::unix::fs::symlink;
 
@@ -1657,6 +1706,28 @@ printf 'model = "edited"\n' > "$1"
                 }
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_reads_do_not_overlap_a_provider_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        let mutation = p.lock_for_provider_mutation().unwrap();
+
+        for error in [
+            list_providers(&p).unwrap_err().to_string(),
+            get_provider(&p, "openai").unwrap_err().to_string(),
+        ] {
+            assert!(error.contains("is in use"), "{error}");
+        }
+
+        drop(mutation);
+        assert_eq!(list_providers(&p).unwrap().len(), 1);
+        assert!(get_provider(&p, "openai")
+            .unwrap()
+            .contains("# config.toml"));
     }
 
     #[test]
@@ -1909,6 +1980,90 @@ printf 'model = "edited"\n' > "$1"
             0,
             "an initial apply has no prior active files to back up"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_refuses_to_modify_a_profile_while_it_is_running() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), r#"{"token":"new"}"#).unwrap();
+        fs::write(p.active_file("config.toml"), "model = \"old\"\n").unwrap();
+        fs::write(p.active_file("auth.json"), r#"{"token":"old"}"#).unwrap();
+        let run_lock = p.lock_for_run().unwrap();
+
+        let error = apply_provider(&p, "openai").unwrap_err().to_string();
+
+        assert!(error.contains("profile 'default' is in use"), "{error}");
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"old\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(p.active_file("auth.json")).unwrap(),
+            r#"{"token":"old"}"#
+        );
+        assert!(!p.state_path().exists());
+        assert!(!p.backups_dir().exists());
+
+        drop(run_lock);
+        apply_provider(&p, "openai").unwrap();
+        assert_eq!(
+            fs::read_to_string(p.active_file("config.toml")).unwrap(),
+            "model = \"new\"\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_mutations_are_serialized_and_keep_apply_out() {
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "openai").unwrap();
+        fs::write(
+            p.provider_file("openai", "config.toml"),
+            "model = \"new\"\n",
+        )
+        .unwrap();
+        fs::write(p.provider_file("openai", "auth.json"), r#"{"token":"new"}"#).unwrap();
+        let provider_mutation = p.lock_for_provider_mutation().unwrap();
+
+        for error in [
+            create_provider(&p, "other").unwrap_err().to_string(),
+            delete_provider(&p, "openai", true).unwrap_err().to_string(),
+            apply_provider(&p, "openai").unwrap_err().to_string(),
+        ] {
+            assert!(error.contains("is in use"), "{error}");
+        }
+        assert!(p.provider_dir("openai").is_dir());
+        assert!(!p.provider_dir("other").exists());
+        assert!(!p.active_file("config.toml").exists());
+
+        drop(provider_mutation);
+        apply_provider(&p, "openai").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_mutation_can_run_while_the_profile_is_in_use() {
+        let root = tempfile::tempdir().unwrap();
+        let p = profile(root.path(), AgentKind::Codex);
+        create_provider(&p, "first").unwrap();
+        let run = p.prepare_for_run().unwrap();
+
+        create_provider(&p, "second").unwrap();
+        delete_provider(&p, "first", true).unwrap();
+
+        assert!(!p.provider_dir("first").exists());
+        assert!(p.provider_dir("second").is_dir());
+        drop(run);
     }
 
     #[test]

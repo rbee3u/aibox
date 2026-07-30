@@ -306,20 +306,23 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
     let mounts = runspec::resolve_mounts(&run.mount)?;
     runspec::validate_extra_mount_targets(agent, &mounts)?;
     runspec::validate_aibox_mount_sources(&work_dir, &mounts, &root)?;
-    runspec::reject_colon_in_bind_source("profile home", &prof.home_dir)?;
 
     if !docker::image_exists(&image)? {
         anyhow::bail!("{image} is not present locally; build it first with `aibox build`");
     }
 
-    prof.ensure_ordinary_initialized()?;
+    let _profile_lock = prof.prepare_for_run()?;
+    prof.validate_locked_run_paths()?;
+    let home_dir = std::fs::canonicalize(&prof.home_dir)
+        .with_context(|| format!("resolve profile home {}", prof.home_dir.display()))?;
+    runspec::reject_colon_in_bind_source("profile home", &home_dir)?;
 
     let invocation = agent.build_invocation(passthrough);
 
     let run_args = runspec::assemble_run_args(
         agent,
         &work_dir,
-        &prof.home_dir,
+        &home_dir,
         &mounts,
         &invocation.extra_run_args,
     );
@@ -571,6 +574,38 @@ printf '\nEND\n' >> "$log"
         assert!(!fx.root.path().join("default/tracing").exists());
         assert!(!log.contains("<--env-file>"), "{log}");
         assert!(!log.contains("<-c>"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_resolves_a_symlinked_aibox_root_before_mounting_profile_home() {
+        use std::os::unix::fs::symlink;
+
+        let fx = RunFixture::new();
+        let parent_link = fx.root.path().join("parent-link");
+        let real_parent = fx.root.path().join("real-parent");
+        let real_root = real_parent.join("aibox-root");
+        std::fs::create_dir(&real_parent).unwrap();
+        std::fs::create_dir(&real_root).unwrap();
+        symlink(&real_parent, &parent_link).unwrap();
+        let configured_root = parent_link.join("aibox-root");
+        let _root = EnvGuard::set("AIBOX_ROOT", configured_root.as_os_str());
+
+        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        let log = fx.log();
+        assert!(
+            log.contains(&format!(
+                "<{}:/home/aibox>",
+                real_root.join("default/home").display()
+            )),
+            "Docker must receive a resolved bind source: {log}"
+        );
+        assert!(
+            !log.contains(&configured_root.display().to_string()),
+            "the symlinked bind source must not reach Docker: {log}"
+        );
     }
 
     #[cfg(unix)]

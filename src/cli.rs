@@ -418,12 +418,12 @@ pub enum SessionCommand {
     List,
     /// Print the prompts you typed in one session.
     Get {
-        /// Session short id or unique prefix.
+        /// Full session id or unique prefix.
         id: String,
     },
     /// Delete one or more session transcripts.
     Delete {
-        /// Session short id or unique prefix. Accepts many; none means all.
+        /// Full session id or unique prefix. Accepts many; none means all.
         #[arg(value_name = "ID")]
         ids: Vec<String>,
         /// Delete all sessions explicitly.

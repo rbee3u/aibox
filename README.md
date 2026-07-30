@@ -88,6 +88,8 @@ override resolves from the directory where aibox was launched.
 | `home/.cargo/`, `home/.rustup/` | Optional Rust installation |
 | `home/.goroot/`, `home/.gopath/` | Optional Go installation |
 | `config/<agent>/` | Host-only providers and backups |
+| `config/<agent>/.lock` | Host-only provider mutation coordination |
+| `.locks/<profile>` | Host-only run/mutation coordination |
 
 `-p host` is special and only valid for `config` and `session`. It manages the
 real host `$HOME/.codex` or `$HOME/.claude`, while provider snapshots and
@@ -97,8 +99,13 @@ writes the selected agent's live host configuration, and
 `session delete -p host` deletes its real host transcripts. Config apply still
 creates the backups described below; session deletion does not.
 
+Applying a Claude provider to `host` also installs and may enable the bundled
+status-line script in the real `$HOME/.claude`. It runs on the host and expects
+Bash and `jq`; Git branch detection is optional.
+
 Profile and provider names use only letters, numbers, `_`, and `-`. Keep
-`$AIBOX_ROOT` dedicated to aibox data.
+`$AIBOX_ROOT` dedicated to aibox data: profile operations reject unsupported
+or symlinked layout entries instead of guessing how to handle them.
 
 Manage profile homes explicitly when you want to pre-create or remove them:
 
@@ -191,8 +198,10 @@ remove = ["model_provider", "model_providers.custom"]
 ```
 
 For Claude JSON, use the equivalent nested object. The reserved top-level
-`aibox` metadata is stripped from active output. Applies keep the latest 20
-backups in the host-only management directory.
+`aibox` metadata is stripped from active output. Before replacing active
+managed files, apply copies the existing ones into the host-only management
+directory and retains the latest 20 generated backups. An initial apply with no
+active managed files does not create an empty backup.
 
 ```json
 {
@@ -214,7 +223,11 @@ aibox config delete --all --yes
 
 Deleting a provider does not roll back configuration already applied. Omitting
 provider names means all providers, and non-interactive deletion requires
-`--yes`.
+`--yes`. Provider create/edit/delete operations are serialized with each other
+and cannot overlap `config apply` or profile deletion. They may run while an
+agent uses the profile because runs consume only the separately applied active
+files. `config apply` and profile creation/deletion refuse to modify a profile
+while an aibox run is using it; stop that run and retry.
 
 There is no backup-restore command. To restore a backup, stop runs using the
 profile and copy its managed files from
@@ -234,9 +247,10 @@ aibox session delete --all --yes
 aibox session -p host list
 ```
 
-`get` accepts a full id or unique prefix. Deletion removes transcripts only and
-does not create backups. Omitting ids means all sessions; non-interactive
-deletion requires `--yes`.
+`list` prints each session's short id, start time, and title. `get` accepts a
+full id or unique prefix. Deletion removes transcripts only and does not create
+backups. Omitting ids means all sessions. Deletion asks before each transcript
+unless `--yes` is set, and non-interactive deletion requires it.
 
 Sessions without a recognized typed prompt still appear so bulk deletion can
 find every transcript. If discovery is only partially readable, `list` prints
@@ -274,14 +288,17 @@ aibox -w ../other-project -m ../reference:/reference:ro
 ```
 
 Relative sources resolve from the launch directory. Mount targets must be
-absolute. Extra mounts may be nested beneath `/work` or `/home/aibox`, but may
+absolute, sources must already exist, and `:ro` is the only accepted mode.
+Because aibox uses Docker's short `-v` syntax, source paths containing `:` are
+rejected. Extra mounts may be nested beneath `/work` or `/home/aibox`, but may
 not replace either managed mount or an ancestor.
 
 ## Sandbox Boundary
 
 Each run drops Linux capabilities, enables `no-new-privileges`, and mounts only
 the selected profile home, `/work`, and explicit extras. On Linux, the
-container uses the invoking uid and gid so project files keep host ownership.
+container uses the invoking uid and gid so project files keep host ownership,
+and maps `host.docker.internal` to Docker's host gateway.
 
 Mounts are writable unless marked `:ro`. Networking is enabled, and aibox adds
 no CPU, memory, or process limits. Credentials and extra mounts can authorize
@@ -300,7 +317,9 @@ aibox build --force
 ```
 
 The shared image contains both agents. Use `--force` to ignore Docker cache and
-pull a fresh Debian base. Set `AIBOX_IMAGE` to use a different image tag.
+pull a fresh Debian base. Set `AIBOX_IMAGE` to make both `build` and agent runs
+use a different image tag; a normal run still requires that image to exist
+locally.
 
 An image selected with `AIBOX_IMAGE` must provide the selected `codex` or
 `claude` binary on `PATH`, use `/home/aibox` as `HOME`, support `/work` as the
@@ -314,21 +333,6 @@ a persisted profile home as described in [Profile-local
 Rust](#profile-local-rust) and [Profile-local Go](#profile-local-go). The
 [embedded Dockerfile](assets/aibox.Dockerfile) is the source of truth for the
 installed package list and pinned version defaults.
-
-## Development
-
-Run the repository checks before submitting changes:
-
-```sh
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-```
-
-The embedded Dockerfile must remain `COPY`-free because builds use an empty
-context. For run-path changes that are difficult to unit-test, put a stub
-`docker` executable first on `PATH` and inspect the assembled command.
 
 ## License
 

@@ -48,8 +48,9 @@ impl BuildCache {
 
 /// Build `dockerfile` into `image` using `cache`.
 ///
-/// The Dockerfile is piped in on stdin; the context is an empty temp dir since
-/// no Dockerfile references it.
+/// The Dockerfile is piped in on stdin with an empty temporary build context.
+/// It must therefore be context-free and cannot use `COPY` or `ADD` for local
+/// sources.
 pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
     let ctx = tempfile::tempdir().context("create empty build context")?;
 
@@ -80,7 +81,11 @@ pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<(
     Ok(())
 }
 
-/// True if an image reference exists locally.
+/// Whether an image reference exists locally.
+///
+/// A failed exact inspection is checked with an exact `docker image ls` query;
+/// if Docker cannot complete either query, the daemon error is returned rather
+/// than treating the image as absent.
 pub fn image_exists(image: &str) -> Result<bool> {
     let inspect = Command::new("docker")
         .args(["image", "inspect", "--format", "{{.Id}}", image])
@@ -163,7 +168,7 @@ pub fn run(
         .arg(image)
         .args(cmd)
         .spawn();
-    let mut child = match spawned {
+    let child = match spawned {
         Ok(c) => c,
         Err(e) => {
             crate::creds::clear_child();
@@ -172,32 +177,31 @@ pub fn run(
     };
 
     crate::creds::set_child(child.id());
-    let create = match wait_for_container_create(&mut child, &cid_path) {
-        Ok(create) => create,
-        Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = crate::creds::finish_child();
-            return Err(e);
-        }
-    };
+    let mut registered_run = RegisteredRun::new(child);
+    let create = wait_for_container_create(registered_run.child_mut(), &cid_path)?;
     let waited: Result<ExitStatus> = match create {
         ContainerCreate::Created => {
             if let Some(callback) = after_container_created.take() {
                 callback();
             }
-            child.wait().map_err(anyhow::Error::from)
+            registered_run
+                .child_mut()
+                .wait()
+                .map_err(anyhow::Error::from)
         }
         ContainerCreate::ChildExited(status) => Ok(status),
         ContainerCreate::TimedOut => {
             // If Docker is slow to materialize the cidfile, defer the callback
             // until the daemon records a container id. If the child exits
             // without one, the callback must not run.
-            wait_with_delayed_container_create(&mut child, &cid_path, &mut after_container_created)
+            wait_with_delayed_container_create(
+                registered_run.child_mut(),
+                &cid_path,
+                &mut after_container_created,
+            )
         }
     };
-    let stopped_lingering_container = crate::creds::finish_child();
-    let status = waited.context("wait for docker run")?;
+    let (status, stopped_lingering_container) = registered_run.finish_after_wait(waited)?;
 
     let code = exit_code(status);
     Ok(if stopped_lingering_container && code == 0 {
@@ -205,6 +209,46 @@ pub fn run(
     } else {
         code
     })
+}
+
+struct RegisteredRun {
+    child: Child,
+    finished: bool,
+}
+
+impl RegisteredRun {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            finished: false,
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    fn finish(&mut self) -> bool {
+        let stopped_lingering_container = crate::creds::finish_child();
+        self.finished = true;
+        stopped_lingering_container
+    }
+
+    fn finish_after_wait(&mut self, waited: Result<ExitStatus>) -> Result<(ExitStatus, bool)> {
+        let status = waited.context("wait for docker run")?;
+        Ok((status, self.finish()))
+    }
+}
+
+impl Drop for RegisteredRun {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = crate::creds::finish_child();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -738,6 +782,57 @@ printf '\nEND\n' >> "$log"
             !early_marker.exists(),
             "callback must not run before the delayed container id exists"
         );
+    }
+
+    #[test]
+    fn run_cleans_up_the_container_and_registry_when_callback_panics() {
+        let _env_lock = crate::test_env_lock();
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_docker(dir.path());
+        let stopped_marker = dir.path().join("stopped");
+        let docker_log = dir.path().join("docker.log");
+        let _path = EnvGuard::prepend_path(dir.path());
+        let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "lingering");
+        let _stopped = EnvGuard::set("AIBOX_FAKE_DOCKER_STOPPED", stopped_marker.as_os_str());
+        let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str());
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = run(&[], "image:tag", &[], || panic!("callback failed"));
+        }));
+
+        assert!(panic.is_err());
+        assert!(
+            stopped_marker.exists(),
+            "unwinding out of the callback must still stop the created container"
+        );
+        assert!(
+            fs::read_to_string(&docker_log)
+                .unwrap()
+                .contains("kill fake-container"),
+            "callback cleanup must use the registered cidfile"
+        );
+
+        let _next_mode = EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "forwards-args");
+        assert_eq!(run(&[], "image:tag", &[], || {}).unwrap(), 0);
+    }
+
+    #[test]
+    fn wait_failure_keeps_registered_run_cleanup_armed() {
+        let _run_lock = crate::creds::run_registry_test_lock();
+        let cid_dir = tempfile::tempdir().unwrap();
+        crate::creds::set_cidfile(&cid_dir.path().join("cid")).unwrap();
+        let child = Command::new("sh").args(["-c", "sleep 10"]).spawn().unwrap();
+        crate::creds::set_child(child.id());
+        let mut run = RegisteredRun::new(child);
+
+        let error = run
+            .finish_after_wait(Err(anyhow::anyhow!("synthetic wait failure")))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("wait for docker run"), "{error}");
+        assert!(!run.finished, "the drop guard must remain armed");
     }
 
     #[test]
