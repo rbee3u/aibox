@@ -3,7 +3,7 @@
 //!
 //! Mapped from the codex-rs `rollout` crate: each line is a `RolloutLine` that
 //! flattens a top-level `timestamp` + `type` + `payload`. The first line is a
-//! `session_meta` (its `timestamp` is the session start). User turns are
+//! `session_meta` (its `payload.timestamp` is the session start). User turns are
 //! `response_item` messages with `role:"user"` whose `payload.content` is an
 //! array of `{type:"input_text"|"text", text:"…"}` items.
 //!
@@ -140,9 +140,19 @@ impl SessionBackend for Codex {
     /// type rather than line position, so a corrupt or skipped first line
     /// cannot make a later event timestamp look like the session start.
     fn start_ts_of(&self, value: &Value) -> Option<String> {
-        (value.get("type").and_then(Value::as_str) == Some("session_meta"))
-            .then(|| session::ts_of(value))
-            .filter(|ts| !ts.is_empty())
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            return None;
+        }
+        value
+            .get("payload")
+            .and_then(|payload| payload.get("timestamp"))
+            .and_then(Value::as_str)
+            .filter(|timestamp| !timestamp.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                let timestamp = session::ts_of(value);
+                (!timestamp.is_empty()).then_some(timestamp)
+            })
     }
 
     /// Fall back to the first event timestamp for legacy or damaged rollouts
@@ -320,6 +330,22 @@ mod tests {
         let s = Codex.summarize(&path).unwrap();
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert_eq!(s.title, "real question");
+    }
+
+    #[test]
+    fn summarize_prefers_session_meta_payload_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".codex/sessions/2026/07/14/rollout-x-abababab-1111-2222-3333-444455556666.jsonl",
+            &[
+                r#"{"timestamp":"2026-07-14T02:16:29Z","type":"session_meta","payload":{"timestamp":"2026-07-14T02:16:00Z"}}"#,
+            ],
+        );
+
+        let summary = Codex.summarize(&path).unwrap();
+
+        assert_eq!(summary.start_ts, "2026-07-14T02:16:00Z");
     }
 
     #[test]

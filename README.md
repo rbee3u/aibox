@@ -19,7 +19,7 @@ aibox build
 ```
 
 Ensure Cargo's binary directory (normally `$HOME/.cargo/bin`) is on `PATH`.
-`aibox build` downloads the image's development toolchains and pinned agent CLI
+`aibox build` downloads the image's development runtimes and pinned agent CLI
 versions, so the first image build can take a while.
 
 ### Shell Completion
@@ -37,48 +37,23 @@ source <(aibox completion zsh)
 aibox completion fish | source
 ```
 
-If a bare Zsh setup has not initialized completion yet, run
-`autoload -Uz compinit && compinit` first. Most Zsh frameworks do this already.
+Add the matching command to your shell startup file. A bare Zsh setup may need
+`autoload -Uz compinit && compinit` first.
 
-To enable completion in future shells, add the matching command itself to
-`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`. Keep the command in
-the startup file instead of caching its output: the generated registration
-script calls back into the installed `aibox` binary and should be regenerated
-after upgrades.
+Completion includes host-side profile, provider, session, and path candidates.
+It stops at the first `--` and never initializes profiles or starts Docker.
 
-Completion covers aibox commands and options, local profile/provider/session
-names, and host paths for `--work` and the source side of `--mount`. It stops at
-the first `--`; arguments forwarded to Codex or Claude are not completed, and
-completion never starts Docker.
+## Quick Start
 
-## First Run and Authentication
-
-Start the agent interactively the first time and follow its own sign-in flow:
+Start the agent interactively and follow its sign-in flow:
 
 ```sh
 aibox
 aibox --agent claude
 ```
 
-Agent credentials and settings persist in the selected profile home, so the
-default profile keeps Codex state in `$AIBOX_ROOT/default/home/.codex` and
-Claude state in `$AIBOX_ROOT/default/home/.claude`. Profiles do not share those
-agent state directories. For a custom or API-compatible provider, create and
-apply a provider overlay as described in [Config Providers](#config-providers)
-before using a headless run.
-
-## Commands
-
-```sh
-aibox [--agent codex|claude] [run-options] [-- <args passed to agent>]
-aibox build [--force]
-aibox completion <bash|zsh|fish>
-aibox profile <list|create|delete> ...
-aibox config [--agent codex|claude] [-p <profile>] <list|get|create|apply|edit|delete> ...
-aibox session [--agent codex|claude] [-p <profile>] [list|get|delete] ...
-```
-
-Normal runs never build images automatically:
+Credentials and settings persist in the selected profile. Profiles do not
+share agent state. Normal runs never build the image automatically:
 
 ```sh
 aibox build
@@ -87,13 +62,6 @@ aibox
 aibox -- exec "run the tests and fix failures"
 aibox --agent claude -- "fix the build"
 ```
-
-An agent run returns the `docker run` exit status, which is normally the
-selected agent's exit status. `aibox` setup, validation, and host-side command
-failures return non-zero, so these commands can be used directly in scripts and
-CI.
-
-### Passing Arguments to the Agent
 
 The first `--` is a hard boundary: aibox parses everything before it and
 forwards everything after it unchanged to the selected agent. Put the profile,
@@ -106,42 +74,20 @@ aibox -p work -- exec "run the tests and fix failures"
 aibox --agent claude -p work -- --model MODEL_NAME
 ```
 
-Aibox starts the selected agent and does not interpret pass-through arguments.
-Subcommands such as Codex's `exec` must therefore appear after the boundary.
-Host-side subcommands such as `build`, `completion`, `profile`, `config`, and
-`session` do not accept pass-through arguments.
+Use `aibox --help` and `aibox <command> --help` for the full command reference.
 
 ## Profile Layout
 
-The default root is `$HOME/.aibox`. Set `AIBOX_ROOT` to override it; a relative
-value resolves from the launch directory.
+The default root is `$HOME/.aibox`; set `AIBOX_ROOT` to override it. A relative
+override resolves from the directory where aibox was launched.
 
-```text
-$AIBOX_ROOT/
-├── default/
-│   ├── home/                        # only profile subtree mounted as agent home
-│   │   ├── .codex/
-│   │   ├── .claude/
-│   │   │   └── statusline.sh
-│   │   └── .gitconfig
-│   └── config/
-│       ├── codex/
-│       │   ├── <provider>/
-│       │   ├── .backup/<timestamp>/
-│       │   └── .state.json
-│       └── claude/
-│           ├── <provider>/
-│           ├── .backup/<timestamp>/
-│           └── .state.json
-└── host/
-    └── config/
-        ├── codex/
-        └── claude/
-```
-
-For runs, `aibox -p work` and `aibox --agent claude -p work` both mount
-`$AIBOX_ROOT/work/home` as the agent home. Codex state lives under `.codex`;
-Claude state lives under `.claude`.
+| Path | Purpose |
+| --- | --- |
+| `<profile>/home/` | Mounted at `/home/aibox` for both agents |
+| `home/.codex/`, `home/.claude/` | Agent credentials, settings, and sessions |
+| `home/.cargo/`, `home/.rustup/` | Optional Rust installation |
+| `home/.goroot/`, `home/.gopath/` | Optional Go installation |
+| `config/<agent>/` | Host-only providers and backups |
 
 `-p host` is special and only valid for `config` and `session`. It manages the
 real host `$HOME/.codex` or `$HOME/.claude`, while provider snapshots and
@@ -151,38 +97,8 @@ writes the selected agent's live host configuration, and
 `session delete -p host` deletes its real host transcripts. Config apply still
 creates the backups described below; session deletion does not.
 
-`aibox profile list` prints ordinary profiles in name order and then
-`host [external-home]`. Profile-management commands never create or delete the
-built-in `host` profile, and `profile delete --all` never selects it. Provider
-metadata under `$AIBOX_ROOT/host/config/` may still be created by
-`config -p host`.
-
-`tracing` is reserved as a future sibling of `home` and `config`. This release
-does not create it or provide tracing commands. If present in an ordinary
-profile, it is host-only data and is deleted with the profile.
-
-Profile and provider names must contain only letters, numbers, `_`, and `-`.
-Keep `$AIBOX_ROOT` dedicated to aibox data: `profile list` validates the whole
-root, and commands reject symlinked or unexpected entries in any profile they
-touch. Store unrelated files elsewhere rather than alongside `home`, `config`,
-or reserved `tracing` directories.
-
-### Upgrading the Legacy Layout
-
-This release does not migrate the former layout automatically. It rejects an
-`$AIBOX_ROOT/.config` directory and unexpected entries directly beneath a
-profile, rather than guessing how to combine credentials or provider data.
-Back up `$AIBOX_ROOT` and stop active aibox runs before moving data:
-
-| Legacy location | Current location |
-| --- | --- |
-| `$AIBOX_ROOT/<profile>/.codex`, `.claude`, `.gitconfig`, and other home entries | `$AIBOX_ROOT/<profile>/home/` |
-| `$AIBOX_ROOT/.config/<profile>/<agent>/` | `$AIBOX_ROOT/<profile>/config/<agent>/` |
-| `$AIBOX_ROOT/.config/host/<agent>/` | `$AIBOX_ROOT/host/config/<agent>/` |
-
-Create each destination first, move all former profile-home entries beneath its
-new `home/` directory, and remove the legacy `.config` tree only after checking
-the migrated profiles and providers.
+Profile and provider names use only letters, numbers, `_`, and `-`. Keep
+`$AIBOX_ROOT` dedicated to aibox data.
 
 Manage profile homes explicitly when you want to pre-create or remove them:
 
@@ -194,52 +110,63 @@ aibox profile delete work scratch --yes
 aibox profile delete --all --yes
 ```
 
-Profile creation is still implicit for normal runs and provider setup. Creating
-a profile initializes both `.codex` and `.claude`, installs Claude's
-`statusline.sh` helper if missing, writes a default `.gitconfig` that rewrites
-GitHub SSH URLs to HTTPS (the host's SSH keys are not mounted by default), and
-creates both agents' provider-management directories. Existing regular files
-are left untouched, so you can replace either file with profile-specific
-settings.
+Profiles are also initialized by a normal run or provider creation. This seeds
+both agent state directories, Claude's `statusline.sh`, and a `.gitconfig` that
+rewrites common GitHub SSH clone URLs to HTTPS. Existing regular seed files are
+preserved. Profiles do not inherit the host's Git identity, SSH keys, or
+credential helpers; configure those in the profile or mount them explicitly.
 
-Profiles deliberately do not inherit the host's Git identity, SSH keys, or
-credential helpers. The generated `.gitconfig` only rewrites common GitHub SSH
-clone URLs; configure commit identity and repository authentication inside the
-profile, or mount credentials explicitly and treat that mount as an authority
-grant.
+`profile delete` removes both agents' credentials, settings, sessions, caches,
+providers, and backups. It does not delete the shared image. Omitting names
+means all ordinary profiles. Deletion asks before each profile unless `--yes`
+is set, and non-interactive deletion requires it. There is no undo.
 
-`profile delete` removes the entire ordinary profile: both agents' credentials,
-settings, sessions, caches, provider snapshots, backups, and reserved tracing
-data. It does not delete the shared Docker image. There is no undo, so make a
-copy of anything you need before confirming. In a non-interactive shell,
-deletion requires `--yes`; otherwise aibox refuses to proceed.
+### Profile-local Rust
+
+Rust is not installed in the shared image. Have the agent run rustup, or use
+`docker exec -it <container> sh` while that profile's container is running:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --no-modify-path --profile default
+```
+
+Rustup persists binaries and caches in `$HOME/.cargo` and toolchains in
+`$HOME/.rustup`. Aibox already puts `$HOME/.cargo/bin` on `PATH`. Append
+`--default-toolchain <version>` to pin a release.
+
+### Profile-local Go
+
+Go is also profile-local. Have the agent run the following command, or use
+`docker exec` as above:
+
+```sh
+rm -rf "$HOME/.goroot" && mkdir "$HOME/.goroot"
+version=1.26.5
+curl -fsSL "https://go.dev/dl/go${version}.linux-$(dpkg --print-architecture).tar.gz" \
+  | tar -xz -C "$HOME/.goroot" --strip-components=1
+```
+
+Update `version` from the official [Go downloads](https://go.dev/dl/) page.
+Aibox sets
+`GOROOT=$HOME/.goroot`, `GOPATH=$HOME/.gopath`, and adds both binary directories
+to `PATH`. The module and build caches also stay in the selected profile home.
 
 ## Config Providers
 
-Provider snapshots are edited and applied explicitly:
+Create, edit, and explicitly apply a provider overlay:
 
 ```sh
 aibox config create openai
 aibox config edit openai
 aibox config edit openai --auth
 aibox config apply openai
-aibox config list
-aibox config get openai
-aibox config delete openai --yes
-aibox config delete openai anthropic --yes
-aibox config delete --all --yes
-
 aibox config --agent claude -p work create anthropic
-aibox config --agent claude -p work edit anthropic
 aibox config --agent claude -p work apply anthropic
 ```
 
-For `profile delete` and `config delete`, omitting targets is the same as
-passing `--all`.
-
-`config apply` is explicit: an agent run does not reapply a provider or mount
-provider metadata. It uses the active files left under `.codex` or `.claude` by
-the last apply (plus any later edits made by the agent or user).
+Runs use the active files left by `config apply`; they do not reapply or mount
+provider metadata.
 
 Apply is cumulative, not a clean provider switch. Each apply merges the
 provider's main config into the current active main config, so keys introduced
@@ -249,74 +176,23 @@ exception and is replaced as a whole. The `*` shown by `config list` records the
 last successful apply; it does not mean the active files contain only that
 provider's settings.
 
-Codex providers contain:
+Codex providers manage `config.toml` and `auth.json`; Claude providers manage
+`settings.json`. New providers are editable templates. Replace placeholder
+credentials before applying. `config edit` uses `$VISUAL`, then `$EDITOR`, and
+falls back to `vim`. `config get` may print credentials; treat its output as
+secret.
 
-```text
-config.toml
-auth.json
-```
-
-New Codex providers are skeletons for a custom Responses-compatible endpoint.
-Review the model and the custom provider's `name` and `base_url` in
-`config.toml`; `auth.json` carries the endpoint's `OPENAI_API_KEY`.
-
-Claude providers contain:
-
-```text
-settings.json
-```
-
-New Claude providers start with an `env` template for `ANTHROPIC_*` settings
-and a command status line:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-example",
-    "ANTHROPIC_BASE_URL": "https://example.ai",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-opus-5",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5[1m]",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/statusline.sh"
-  },
-  "skipDangerousModePermissionPrompt": true,
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  }
-}
-```
-
-Replace every `sk-example` placeholder before applying a provider; `apply`
-rejects templates that still contain placeholder credentials. `config edit`
-uses `$VISUAL`, then `$EDITOR`, and falls back to `vim`. `config list` marks the
-last successfully applied provider with `*`. `config get` prints every managed
-provider file, including Codex `auth.json`; treat its output as secret.
-
-When a Claude profile home is initialized, aibox installs that
-`~/.claude/statusline.sh` helper if it is missing. Existing regular files are
-left untouched. With `-p host`, the helper is installed in the real
-`$HOME/.claude` and runs on the host rather than in the image; its full
-model/context display uses Bash and `jq`, with Git branch detection when `git`
-is available. Edit the provider's `statusLine` setting if that is not suitable
-for the host.
-
-Applying a provider deep-merges TOML/JSON config into the active profile:
-objects and TOML tables merge recursively; scalars and arrays are replaced.
-Keys not mentioned by the provider remain in the active config unless the
-provider asks aibox to remove them. The entire top-level `aibox` table/object is
-reserved for aibox metadata and stripped before writing the active config. The
-currently supported metadata is `aibox.config.apply.remove`:
+Objects and TOML tables merge recursively; scalars and arrays are replaced. To
+remove keys during apply, use dotted paths in `aibox.config.apply.remove`:
 
 ```toml
 [aibox.config.apply]
 remove = ["model_provider", "model_providers.custom"]
 ```
 
-For Claude `settings.json`, use the same dotted paths in JSON:
+For Claude JSON, use the equivalent nested object. The reserved top-level
+`aibox` metadata is stripped from active output. Applies keep the latest 20
+backups in the host-only management directory.
 
 ```json
 {
@@ -330,25 +206,21 @@ For Claude `settings.json`, use the same dotted paths in JSON:
 }
 ```
 
-Remove paths that do not exist are ignored; malformed paths such as empty
-strings or `foo..bar` fail the apply. Codex `auth.json` is not merged; it is
-validated as a non-empty JSON object and replaced as a whole file after the
-reserved top-level `aibox` entry is stripped.
+```sh
+aibox config get openai
+aibox config delete openai --yes
+aibox config delete --all --yes
+```
 
-Before replacing existing active managed files, `apply` backs them up under the
-profile's management directory and keeps the latest 20 backups. The first apply
-creates no empty backup when there are no active files yet. Codex auth files and
-auth backups are written with private permissions on Unix. Managed config files
-larger than 16 MiB are rejected before they are read or copied.
+Deleting a provider does not roll back configuration already applied. Omitting
+provider names means all providers, and non-interactive deletion requires
+`--yes`.
 
-Deleting a provider removes only its saved overlay and may clear the
-last-applied marker; it does not roll back files already applied to the active
-agent directory. There is no backup-restore subcommand. To restore one, copy
-the desired managed files from its timestamped backup into
-`$AIBOX_ROOT/<profile>/home/.codex/` or `.claude/` while no aibox run is using
-that profile. For `-p host`, restore into the real `$HOME/.codex/` or
-`.claude/`. Keep `auth.json` readable only by its owner. Non-interactive
-provider deletion requires `--yes`.
+There is no backup-restore command. To restore a backup, stop runs using the
+profile and copy its managed files from
+`$AIBOX_ROOT/<profile>/config/<agent>/.backup/<timestamp>/` into the profile's
+`home/.codex/` or `home/.claude/` directory. For `-p host`, restore into the
+real host agent directory. Keep Codex `auth.json` readable only by its owner.
 
 ## Sessions
 
@@ -358,29 +230,19 @@ Sessions are browsed host-side; no container or provider is needed:
 aibox session
 aibox session get 3f2a
 aibox session delete 3f2a
-aibox session delete --all -y
-aibox session delete -y
+aibox session delete --all --yes
 aibox session -p host list
 ```
 
-`list` prints short id, date, and title. `get <id>` prints your typed prompts;
-`id` may be a full id or any unique prefix. `delete` asks before removing each
-transcript unless `-y/--yes` is supplied; omitting ids is the same as passing
-`--all`. Session deletion removes transcript files only; it does not remove
-credentials, settings, or provider data, and aibox does not back up deleted
-transcripts. Non-interactive deletion requires `--yes`.
+`get` accepts a full id or unique prefix. Deletion removes transcripts only and
+does not create backups. Omitting ids means all sessions; non-interactive
+deletion requires `--yes`.
 
-Sessions with no recognized typed prompt still appear; their title is empty
-unless the agent stored one, so bulk deletion can find every transcript. If
-part of a session tree or a transcript cannot be read, `list` reports the
-problem, prints any readable rows, and exits non-zero; `get` and `delete` abort
-rather than operate on a partial view. Malformed JSONL records are skipped
-within an otherwise readable transcript. Host-side browsing does not follow
-symlinked profile homes, agent-state directories, transcript roots, or
-transcript files. Individual JSONL records larger than 64 MiB are reported as
-unreadable rather than being loaded into host memory. Terminal control
-characters from transcript ids, timestamps, paths, and prompt text are escaped
-before display.
+Sessions without a recognized typed prompt still appear so bulk deletion can
+find every transcript. If discovery is only partially readable, `list` prints
+the readable rows and reports the errors, while `get` and `delete` abort rather
+than operate on a partial view. Transcript discovery does not follow symlinked
+homes, agent state directories, transcript roots, or transcript files.
 
 ## Run Options
 
@@ -394,20 +256,16 @@ subcommand; put `config` and `session` options after `config` or `session`.
 -m, --mount <spec>          extra bind mount host:container[:ro], repeatable
 ```
 
-`config` and `session` each accept their own `--agent <codex|claude>` and
-`-p, --profile <name>` after the command name; those scoped options can appear
-before or after the leaf subcommand and its arguments.
+`config` and `session` accept their own `--agent` and `--profile` options after
+the command name.
 
-New provider templates default the agents to unrestricted permission mode
-because Docker is the sandbox boundary. To restore agent prompts or sandboxing,
-edit and reapply the provider, or edit the active agent config directly.
+New provider templates put the selected agent in unrestricted permission mode
+because Docker is the sandbox boundary. Edit and reapply the provider, or edit
+the active agent config, to restore agent-level prompts or sandboxing.
 
-Within `$AIBOX_ROOT`, `--work` and `--mount` sources are allowed only from an
-ordinary `<profile>/home` tree. Profile roots, `config`, reserved `tracing`,
-`host`, and ancestors of `$AIBOX_ROOT` are rejected so host-only data cannot
-enter the container. This still permits an explicit mount of another ordinary
-profile's home or a directory beneath it; doing so can expose that profile's
-agent credentials and should be treated as a deliberate authority grant.
+Within `$AIBOX_ROOT`, mount sources are allowed only beneath an ordinary
+profile's `home`; provider metadata and `host` remain host-only. Mounting a
+different profile's home is allowed, but can expose that profile's credentials.
 
 For example, select another project and expose reference material read-only:
 
@@ -415,30 +273,19 @@ For example, select another project and expose reference material read-only:
 aibox -w ../other-project -m ../reference:/reference:ro
 ```
 
-Relative `--work` and mount source paths resolve from the directory where aibox
-was launched. `--work` must name an existing directory; an extra mount source
-may be an existing file or directory. Mount targets must be absolute. Because
-aibox uses Docker's short `-v` syntax, source paths containing `:` are rejected.
-Extra mounts may be nested beneath `/work` or `/home/aibox`, but may not replace
-either managed mount or one of its ancestors.
+Relative sources resolve from the launch directory. Mount targets must be
+absolute. Extra mounts may be nested beneath `/work` or `/home/aibox`, but may
+not replace either managed mount or an ancestor.
 
 ## Sandbox Boundary
 
-Each run drops Linux capabilities, enables `no-new-privileges`, and
-bind-mounts only the selected profile home, `/work`, and explicit `--mount`
-sources. On Linux, the container uses the invoking user's uid and gid so files
-created under `/work` keep host ownership, and aibox maps
-`host.docker.internal` to Docker's host gateway. Docker Desktop provides that
-hostname on macOS without the extra mapping.
+Each run drops Linux capabilities, enables `no-new-privileges`, and mounts only
+the selected profile home, `/work`, and explicit extras. On Linux, the
+container uses the invoking uid and gid so project files keep host ownership.
 
-The project mount, profile home, and extra mounts are writable by default.
-Append `:ro` to an extra mount to make it read-only; no other mount modes are
-accepted. Container networking is not disabled, so the agent can still reach
-network services allowed by Docker and the host. The boundary does not limit
-remote actions authorized by credentials stored in the profile. Treat every
-credential and extra mount as an intentional expansion of the agent's
-authority. Aibox also adds no CPU, memory, or process-count limits; Docker
-daemon defaults apply unless limits are imposed outside aibox.
+Mounts are writable unless marked `:ro`. Networking is enabled, and aibox adds
+no CPU, memory, or process limits. Credentials and extra mounts can authorize
+effects outside the filesystem boundary; treat each as an explicit grant.
 
 The wrapper handles SIGINT, SIGTERM, and non-ignored SIGHUP by stopping the
 active container through Docker. Uncatchable termination such as SIGKILL, a
@@ -452,23 +299,21 @@ aibox build
 aibox build --force
 ```
 
-`aibox build` builds one shared `aibox:latest` image with both Codex and Claude
-Code installed. The embedded Dockerfile is `COPY`-free and pins the installed
-agent CLI versions. Use `--force` to ignore Docker cache and pull a fresh Debian
-base. Set `AIBOX_IMAGE` to build and run a different shared image tag.
+The shared image contains both agents. Use `--force` to ignore Docker cache and
+pull a fresh Debian base. Set `AIBOX_IMAGE` to use a different image tag.
+
+An image selected with `AIBOX_IMAGE` must provide the selected `codex` or
+`claude` binary on `PATH`, use `/home/aibox` as `HOME`, support `/work` as the
+working directory, and avoid an incompatible `ENTRYPOINT`. On Linux, required
+image files must be readable by an arbitrary uid because aibox runs the
+container as the invoking host user.
 
 The Debian-based image includes common Unix development and diagnostic tools,
-Python with pip/venv/uv, Node.js with npm, Rust, and Go. The
+Python with pip/venv/uv, and Node.js with npm. Rust and Go can be installed into
+a persisted profile home as described in [Profile-local
+Rust](#profile-local-rust) and [Profile-local Go](#profile-local-go). The
 [embedded Dockerfile](assets/aibox.Dockerfile) is the source of truth for the
 installed package list and pinned version defaults.
-
-`AIBOX_IMAGE` changes the image reference, not aibox's runtime contract. An
-independently built replacement must provide the selected `codex` or `claude`
-binary on `PATH`, set `HOME=/home/aibox`, and support `/work` as the working
-directory. It must not define an incompatible `ENTRYPOINT`. On Linux, aibox
-also overrides the container user with the invoking host uid and gid, so the
-image's executables and required files must be accessible to that arbitrary
-user.
 
 ## Development
 
@@ -481,10 +326,9 @@ cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
-The Dockerfile is embedded at compile time and must remain `COPY`-free because
-image builds use an empty context. For run-path changes that are difficult to
-unit-test, put a stub `docker` executable first on `PATH` and inspect the
-assembled command.
+The embedded Dockerfile must remain `COPY`-free because builds use an empty
+context. For run-path changes that are difficult to unit-test, put a stub
+`docker` executable first on `PATH` and inspect the assembled command.
 
 ## License
 

@@ -994,6 +994,12 @@ esac
 
     #[test]
     fn watcher_commands_are_bounded() {
+        // The `/bin/sh` helpers below resolve `sleep` through `$PATH`, so this
+        // must hold the env lock even though it installs no guard of its own: a
+        // parallel test that replaces `$PATH` with a stub directory would make
+        // `sleep` unresolvable and turn an expected timeout into a fast exit 127.
+        let _env_lock = crate::test_env_lock();
+
         // Worst case is the late-cidfile path in `stop_active_run`: the first
         // bounded wait fails (CIDFILE_WAIT), then after signalling the child the
         // longer late wait succeeds (LATE_CIDFILE_WAIT), then `stop_container_id`

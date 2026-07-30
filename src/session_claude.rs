@@ -3,11 +3,12 @@
 //! Each line is a JSON object. The fields we read:
 //! - a top-level `timestamp` (first one seen = session start);
 //! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
-//! - `{"type":"user","promptSource":"typed", …, "message":{"content":"…"}}` — a
-//!   prompt the user actually typed (as opposed to injected/tool turns). The text
+//! - `{"type":"user", …, "message":{"content":"…"}}` — a prompt the user
+//!   actually typed (as opposed to injected/tool turns). Older versions mark it
+//!   with `promptSource:"typed"`; current versions use `userType:"external"`
+//!   and mark injected messages with `isMeta:true`. The text
 //!   lives in the nested `message.content` (a plain string, or an array of
-//!   text-bearing blocks), *not* a top-level `content`. `promptSource` marks turns
-//!   that count as typed prompts.
+//!   text-bearing blocks), *not* a top-level `content`.
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
@@ -34,9 +35,10 @@ impl SessionBackend for Claude {
             .unwrap_or_default()
     }
 
-    /// A real prompt is a `type:user` turn the human typed (`promptSource:typed`),
-    /// with a non-empty `message.content`. Feeds shared title selection and
-    /// `get` paths.
+    /// A real prompt is a non-meta `type:user` turn with human text. Older
+    /// versions explicitly use `promptSource:typed`; current versions identify
+    /// CLI input with `userType:external`, while tool results have no text
+    /// blocks. Feeds shared title selection and `get` paths.
     fn typed_text(&self, value: &Value) -> Option<String> {
         if value.get("type").and_then(Value::as_str) != Some("user") || !is_typed(value) {
             return None;
@@ -69,7 +71,14 @@ impl SessionBackend for Claude {
 }
 
 fn is_typed(value: &Value) -> bool {
-    value.get("promptSource").and_then(Value::as_str) == Some("typed")
+    match value.get("promptSource").and_then(Value::as_str) {
+        Some("typed") => true,
+        Some(_) => false,
+        None => {
+            value.get("userType").and_then(Value::as_str) == Some("external")
+                && value.get("isMeta").and_then(Value::as_bool) != Some(true)
+        }
+    }
 }
 
 /// Pull a user turn's text out of its `message.content` — Claude nests the turn
@@ -257,6 +266,27 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].text, "real prompt");
         assert_eq!(summary.title, "real prompt");
+    }
+
+    #[test]
+    fn prompts_accept_current_unmarked_user_messages_but_reject_meta_and_tool_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            dir.path(),
+            ".claude/projects/p/current.jsonl",
+            &[
+                r#"{"type":"user","userType":"external","isMeta":true,"message":{"role":"user","content":"injected context"}}"#,
+                r#"{"type":"user","userType":"external","message":{"role":"user","content":[{"type":"tool_result","content":"tool output"}]}}"#,
+                r#"{"timestamp":"2026-07-14T09:00:00Z","type":"user","userType":"external","message":{"role":"user","content":"current real prompt"}}"#,
+            ],
+        );
+
+        let prompts = Claude.prompts(&path).unwrap();
+        let summary = Claude.summarize(&path).unwrap();
+
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].text, "current real prompt");
+        assert_eq!(summary.title, "current real prompt");
     }
 
     #[test]

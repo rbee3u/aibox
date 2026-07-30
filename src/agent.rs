@@ -1,9 +1,8 @@
 //! Agent-specific runtime and configuration contracts.
 //!
-//! Shared orchestration asks [`AgentKind`] for paths, managed files, supported
-//! invocation modes, and command construction. Transcript parsing remains in
-//! the two session backend modules because the agents use different on-disk
-//! formats.
+//! Shared orchestration asks [`AgentKind`] for paths, managed files, and command
+//! construction. Transcript parsing remains in the two session backend modules
+//! because the agents use different on-disk formats.
 
 use crate::runspec::Invocation;
 use std::ffi::OsString;

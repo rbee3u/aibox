@@ -12,8 +12,15 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Populated automatically by buildx (amd64/arm64/...); declaring it here injects
 # it into this stage. Falls back to dpkg for a plain `docker build`, where it's
-# empty. Used by the Node and Go layers below to pick the right arch tarball.
+# empty. Used by the Node layer below to pick the right arch tarball.
 ARG TARGETARCH
+
+# Create the runtime identity before installing tools so every profile-backed
+# path below can derive from one stable home. Build layers remain root-owned;
+# the final USER directive switches only the running container.
+RUN groupadd --gid 1000 aibox \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
+ENV HOME=/home/aibox
 
 # Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo,
 # Rust crates, and node native modules), plus the common development and
@@ -98,68 +105,35 @@ RUN set -eux; \
     node --version; \
     npm --version
 
-# --- Rust -------------------------------------------------------------------
-# Pinned by default so cached builds stay stable. Change RUST_VERSION here when
-# you intentionally want to upgrade Rust.
-ARG RUST_VERSION=1.88.0
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
-RUN set -eux; \
-    version="${RUST_VERSION}"; \
-    [ -n "$version" ]; \
-    curl -fsSL https://sh.rustup.rs | sh -s -- \
-        -y \
-        --no-modify-path \
-        --profile default \
-        --default-toolchain "$version"; \
-    chmod -R a+rwX "$RUSTUP_HOME" "$CARGO_HOME"; \
-    "$CARGO_HOME/bin/rustc" --version; \
-    "$CARGO_HOME/bin/cargo" --version; \
-    "$CARGO_HOME/bin/rustup" --version
+# Rust is installed on demand with rustup into the mounted profile home. Keep
+# its binaries available in non-login shells without making Rust image-owned.
+ENV PATH=$HOME/.cargo/bin:$PATH
 
-ENV PATH=/usr/local/cargo/bin:$PATH
-
-# --- Go ----------------------------------------------------------------------
-# Pinned by default so cached builds stay stable. Change GO_VERSION here when
-# you intentionally want to upgrade Go.
-ARG GO_VERSION=1.26.5
-RUN set -eux; \
-    version="${GO_VERSION}"; \
-    [ -n "$version" ]; \
-    case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-        amd64) arch=amd64 ;; \
-        arm64) arch=arm64 ;; \
-        *) echo "unsupported arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://go.dev/dl/go${version}.linux-${arch}.tar.gz" -o /tmp/go.tgz; \
-    tar -C /usr/local -xzf /tmp/go.tgz; \
-    rm /tmp/go.tgz; \
-    /usr/local/go/bin/go version
-
-# GOPATH lives in the mounted home => module cache persists per profile.
-ENV GOPATH=/home/aibox/go
-ENV PATH=/usr/local/go/bin:$PATH
-ENV PATH=/home/aibox/go/bin:$PATH
+# Go is installed on demand from an official archive into the mounted profile
+# home. Keep the SDK, installed commands, and module/build caches profile-local.
+ENV GOROOT=$HOME/.goroot
+ENV GOPATH=$HOME/.gopath
+ENV PATH=$GOROOT/bin:$PATH
+ENV PATH=$GOPATH/bin:$PATH
 
 # --- Agent CLIs --------------------------------------------------------------
 # Both CLIs live in the same immutable image. Upgrade by changing the pinned
 # versions and rebuilding, not by self-updating inside a profile.
-ARG CODEX_VERSION=0.145.0
+ARG CODEX_VERSION=0.146.0
 ARG CLAUDE_CODE_VERSION=2.1.220
-RUN npm install -g \
+RUN set -eux; \
+    export HOME=/tmp/aibox-build-home; \
+    export npm_config_cache=/tmp/npm-cache; \
+    mkdir -p "$HOME"; \
+    npm install -g \
         @openai/codex@${CODEX_VERSION} \
-        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && codex --version \
-    && claude --version \
-    && npm cache clean --force
+        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}; \
+    codex --version; \
+    claude --version; \
+    npm cache clean --force; \
+    rm -rf "$HOME" "$npm_config_cache"
 ENV DISABLE_AUTOUPDATER=1
 
-# Recreate a predictable non-root user at uid/gid 1000 so the mounted home has
-# a stable path.
-RUN groupadd --gid 1000 aibox \
-    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
-
-ENV HOME=/home/aibox
 # Debian's /etc/profile resets PATH for login shells. Agent command execution
 # can go through a shell, so mirror the image PATH there too.
 RUN printf "export PATH=%s\n" "$PATH" > /etc/profile.d/aibox-path.sh

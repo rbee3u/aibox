@@ -61,8 +61,6 @@ snapshots, `.backup`, and `.state.json` live under
 children of that directory. `tracing` is reserved as another host-only profile
 subtree. User mount sources inside `$AIBOX_ROOT` are allowed only beneath an
 ordinary profile's `home`. `$AIBOX_ROOT` defaults to `$HOME/.aibox`.
-The former root-level `.config/{profile}/{agent}` layout is rejected rather
-than migrated implicitly; the user migration map belongs in `README.md`.
 
 **`host` is a management-only profile.** `-p host` is valid for `config` and
 `session` only. It targets the real host `$HOME/.codex` or `$HOME/.claude` while

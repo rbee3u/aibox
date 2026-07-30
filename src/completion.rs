@@ -505,7 +505,7 @@ fn profile_values_at(root: &Path, mode: ProfileCandidates) -> Result<Vec<String>
         }
         ProfileCandidates::Management => {
             values.insert("default".to_string());
-            if Profile::resolve(AgentKind::Codex, root, profile::HOST_PROFILE).is_ok() {
+            if profile::host_home_is_usable() {
                 values.insert(profile::HOST_PROFILE.to_string());
             }
         }
@@ -804,12 +804,17 @@ mod tests {
         let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
         profile::create_ordinary_profile(root.path(), "work").unwrap();
-        let _home = EnvGuard::remove("HOME");
 
-        assert_eq!(
-            profile_values_at(root.path(), ProfileCandidates::Management).unwrap(),
-            ["default", "work"]
-        );
+        for home in [None, Some(root.path().join("missing-home"))] {
+            let _home = match home {
+                Some(home) => EnvGuard::set("HOME", home.as_os_str()),
+                None => EnvGuard::remove("HOME"),
+            };
+            assert_eq!(
+                profile_values_at(root.path(), ProfileCandidates::Management).unwrap(),
+                ["default", "work"]
+            );
+        }
     }
 
     #[test]

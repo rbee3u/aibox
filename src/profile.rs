@@ -218,9 +218,20 @@ pub fn dispatch(command: &ProfileCommand) -> Result<i32> {
 
 fn profile_list_entries(root: &Path) -> Result<Vec<String>> {
     let mut profiles = list_profiles(root)?;
-    host_home()?;
-    profiles.push(HOST_PROFILE_LIST_ENTRY.to_string());
+    // The host row only describes an external home. With no usable `$HOME`
+    // there is no host profile to manage, so drop the row instead of failing a
+    // listing of ordinary profiles that is otherwise complete — `AIBOX_ROOT`
+    // alone is enough to create, run, and delete those.
+    if host_home_is_usable() {
+        profiles.push(HOST_PROFILE_LIST_ENTRY.to_string());
+    }
     Ok(profiles)
+}
+
+pub(crate) fn host_home_is_usable() -> bool {
+    host_home()
+        .and_then(|home| real_dir_exists(&home, "host home"))
+        .unwrap_or(false)
 }
 
 /// List ordinary profile names in lexical order.
@@ -1105,7 +1116,8 @@ mod tests {
     #[test]
     fn profile_list_appends_marked_host_after_sorted_ordinary_profiles() {
         let _env_lock = crate::test_env_lock();
-        let _home = EnvGuard::set("HOME", "/host-home");
+        let host_home = tempfile::tempdir().unwrap();
+        let _home = EnvGuard::set("HOME", host_home.path().as_os_str());
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("zeta/home")).unwrap();
         fs::create_dir_all(root.path().join("alpha/home")).unwrap();
@@ -1118,6 +1130,25 @@ mod tests {
                 HOST_PROFILE_LIST_ENTRY.to_string()
             ]
         );
+    }
+
+    #[test]
+    fn profile_list_omits_the_host_row_without_a_usable_home() {
+        let _env_lock = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("work/home")).unwrap();
+
+        for home in [None, Some(root.path().join("missing-home"))] {
+            let _home = match home {
+                Some(home) => EnvGuard::set("HOME", home.as_os_str()),
+                None => EnvGuard::remove("HOME"),
+            };
+            assert_eq!(
+                profile_list_entries(root.path()).unwrap(),
+                vec!["work".to_string()],
+                "an unusable $HOME removes only the external host row"
+            );
+        }
     }
 
     #[test]
