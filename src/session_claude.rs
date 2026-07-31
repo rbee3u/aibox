@@ -4,11 +4,11 @@
 //! - a top-level `timestamp` (first one seen = session start);
 //! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
 //! - `{"type":"user", …, "message":{"content":"…"}}` — a prompt the user
-//!   actually typed (as opposed to injected/tool turns). Older versions mark it
-//!   with `promptSource:"typed"`; current versions use `userType:"external"`
-//!   and mark injected messages with `isMeta:true`. The text
-//!   lives in the nested `message.content` (a plain string, or an array of
-//!   text-bearing blocks), *not* a top-level `content`.
+//!   actually typed (as opposed to injected/tool turns). Accepted records use
+//!   either `promptSource:"typed"` or `userType:"external"`; injected messages
+//!   may carry `isMeta:true`. The text lives in the nested `message.content` (a
+//!   plain string, or an array of text-bearing blocks), *not* a top-level
+//!   `content`.
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
@@ -35,9 +35,8 @@ impl SessionBackend for Claude {
             .unwrap_or_default()
     }
 
-    /// A real prompt is a non-meta `type:user` turn with human text. Older
-    /// versions explicitly use `promptSource:typed`; current versions identify
-    /// CLI input with `userType:external`, while tool results have no text
+    /// A real prompt is a non-meta `type:user` turn with human text, identified
+    /// by `promptSource:typed` or `userType:external`. Tool results have no text
     /// blocks. Feeds shared title selection and `get` paths.
     fn typed_text(&self, value: &Value) -> Option<String> {
         if value.get("type").and_then(Value::as_str) != Some("user") || !is_typed(value) {

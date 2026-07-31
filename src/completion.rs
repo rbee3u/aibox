@@ -97,11 +97,12 @@ fn write_registration(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TopCommand {
+    Root,
     Run,
     Build,
     Completion,
     Profile,
-    Config,
+    Provider,
     Session,
 }
 
@@ -118,7 +119,7 @@ struct CompletionContext {
 impl Default for CompletionContext {
     fn default() -> Self {
         Self {
-            top: TopCommand::Run,
+            top: TopCommand::Root,
             agent: AgentKind::Codex,
             profile: "default".to_string(),
             selection_valid: true,
@@ -156,13 +157,18 @@ impl CompletionContext {
 
         let (top, top_index) = find_top_command(&values);
         context.top = top;
-        if !matches!(top, TopCommand::Config | TopCommand::Session) {
-            context.capture_leaf_and_positionals(&values, top_index);
-            return context;
+        match top {
+            TopCommand::Run => {
+                context.capture_scoped_options(&values, top_index);
+            }
+            TopCommand::Provider | TopCommand::Session => {
+                let option_parts = context.capture_scoped_options(&values, top_index);
+                context.capture_scoped_leaf_and_positionals(&values, top_index, &option_parts);
+            }
+            TopCommand::Root | TopCommand::Build | TopCommand::Completion | TopCommand::Profile => {
+                context.capture_leaf_and_positionals(&values, top_index)
+            }
         }
-
-        let option_parts = context.capture_scoped_options(&values, top_index);
-        context.capture_scoped_leaf_and_positionals(&values, top_index, &option_parts);
         context
     }
 
@@ -190,7 +196,7 @@ impl CompletionContext {
                 index += 1;
                 continue;
             }
-            if token == "--profile" || token == "-p" {
+            if token == "--profile" {
                 option_parts.insert(index);
                 if index + 1 >= values.len() {
                     self.selection_valid = false;
@@ -206,12 +212,6 @@ impl CompletionContext {
                 self.record_profile(value, &mut seen_profile);
                 index += 1;
                 continue;
-            }
-            if let Some(value) = token.strip_prefix("-p") {
-                if !value.is_empty() && !token.starts_with("--") {
-                    option_parts.insert(index);
-                    self.record_profile(value, &mut seen_profile);
-                }
             }
             index += 1;
         }
@@ -247,10 +247,11 @@ impl CompletionContext {
     fn capture_leaf_and_positionals(&mut self, values: &[&str], top_index: usize) {
         let leaves: &[&str] = match self.top {
             TopCommand::Profile => &["list", "create", "delete"],
-            TopCommand::Run
+            TopCommand::Root
+            | TopCommand::Run
             | TopCommand::Build
             | TopCommand::Completion
-            | TopCommand::Config
+            | TopCommand::Provider
             | TopCommand::Session => return,
         };
         let Some(leaf_index) =
@@ -268,11 +269,13 @@ impl CompletionContext {
         option_parts: &BTreeSet<usize>,
     ) {
         let leaves: &[&str] = match self.top {
-            TopCommand::Config => &["list", "get", "create", "apply", "edit", "delete"],
+            TopCommand::Provider => &["list", "get", "create", "apply", "edit", "delete"],
             TopCommand::Session => &["list", "get", "delete"],
-            TopCommand::Run | TopCommand::Build | TopCommand::Completion | TopCommand::Profile => {
-                return
-            }
+            TopCommand::Root
+            | TopCommand::Run
+            | TopCommand::Build
+            | TopCommand::Completion
+            | TopCommand::Profile => return,
         };
         let Some(leaf_index) = ((top_index + 1)..values.len())
             .find(|index| !option_parts.contains(index) && leaves.contains(&values[*index]))
@@ -302,31 +305,16 @@ impl CompletionContext {
 }
 
 fn find_top_command(values: &[&str]) -> (TopCommand, usize) {
-    let mut index = 1;
-    while index < values.len() {
-        let value = values[index];
-        let top = match value {
-            "build" => Some(TopCommand::Build),
-            "completion" => Some(TopCommand::Completion),
-            "profile" => Some(TopCommand::Profile),
-            "config" => Some(TopCommand::Config),
-            "session" => Some(TopCommand::Session),
-            _ => None,
-        };
-        if let Some(top) = top {
-            return (top, index);
-        }
-
-        if matches!(
-            value,
-            "--agent" | "--profile" | "-p" | "--work" | "-w" | "--mount" | "-m"
-        ) {
-            index += 2;
-        } else {
-            index += 1;
-        }
-    }
-    (TopCommand::Run, 0)
+    let top = match values.get(1).copied() {
+        Some("run") => TopCommand::Run,
+        Some("build") => TopCommand::Build,
+        Some("completion") => TopCommand::Completion,
+        Some("profile") => TopCommand::Profile,
+        Some("provider") => TopCommand::Provider,
+        Some("session") => TopCommand::Session,
+        _ => TopCommand::Root,
+    };
+    (top, usize::from(top != TopCommand::Root))
 }
 
 #[derive(Clone, Copy)]
@@ -338,31 +326,34 @@ enum ProfileCandidates {
 
 fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) -> clap::Command {
     let profile_delete_context = context.clone();
-    let config_context = context.clone();
-    let config_delete_context = context.clone();
+    let provider_context = context.clone();
+    let provider_delete_context = context.clone();
     let session_context = context.clone();
     let session_delete_context = context;
     let work_dir = current_dir.clone();
     let mount_dir = current_dir;
 
     Cli::command()
-        .mut_arg("run-profile", |arg| {
-            arg.value_hint(ValueHint::Other)
-                .add(ArgValueCompleter::new(move |current: &OsStr| {
-                    complete_profiles(ProfileCandidates::Run, current, &BTreeSet::new())
-                }))
-        })
-        .mut_arg("work", move |arg| {
-            arg.value_hint(ValueHint::DirPath)
-                .add(ArgValueCompleter::new(move |current: &OsStr| {
-                    complete_work(current, work_dir.as_deref())
-                }))
-        })
-        .mut_arg("mount", move |arg| {
-            arg.value_hint(ValueHint::Other)
-                .add(ArgValueCompleter::new(move |current: &OsStr| {
-                    complete_mount(current, mount_dir.as_deref())
-                }))
+        .mut_subcommand("run", move |command| {
+            command
+                .mut_arg("run-profile", |arg| {
+                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
+                        move |current: &OsStr| {
+                            complete_profiles(ProfileCandidates::Run, current, &BTreeSet::new())
+                        },
+                    ))
+                })
+                .mut_arg("work", move |arg| {
+                    arg.value_hint(ValueHint::DirPath)
+                        .add(ArgValueCompleter::new(move |current: &OsStr| {
+                            complete_work(current, work_dir.as_deref())
+                        }))
+                })
+                .mut_arg("mount", move |arg| {
+                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
+                        move |current: &OsStr| complete_mount(current, mount_dir.as_deref()),
+                    ))
+                })
         })
         .mut_subcommand("profile", |command| {
             command
@@ -388,9 +379,9 @@ fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) 
                     })
                 })
         })
-        .mut_subcommand("config", |command| {
+        .mut_subcommand("provider", |command| {
             command
-                .mut_arg("config-profile", |arg| {
+                .mut_arg("provider-profile", |arg| {
                     arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
                         move |current: &OsStr| {
                             complete_profiles(
@@ -405,18 +396,18 @@ fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) 
                     command.mut_arg("provider", |arg| arg.value_hint(ValueHint::Other))
                 })
                 .mut_subcommand("get", {
-                    let context = config_context.clone();
+                    let context = provider_context.clone();
                     move |command| add_provider_completer(command, context, false)
                 })
                 .mut_subcommand("apply", {
-                    let context = config_context.clone();
+                    let context = provider_context.clone();
                     move |command| add_provider_completer(command, context, false)
                 })
                 .mut_subcommand("edit", move |command| {
-                    add_provider_completer(command, config_context, false)
+                    add_provider_completer(command, provider_context, false)
                 })
                 .mut_subcommand("delete", move |command| {
-                    add_provider_completer(command, config_delete_context, true)
+                    add_provider_completer(command, provider_delete_context, true)
                 })
         })
         .mut_subcommand("session", |command| {
@@ -489,7 +480,7 @@ fn complete_profiles(
     excluded: &BTreeSet<String>,
 ) -> Vec<CompletionCandidate> {
     let values = (|| -> Result<Vec<String>> {
-        let root = profile::config_root()?;
+        let root = profile::aibox_root()?;
         profile_values_at(&root, mode)
     })()
     .unwrap_or_default();
@@ -523,7 +514,7 @@ fn complete_providers(
         return Vec::new();
     }
     let values = (|| -> Result<Vec<String>> {
-        let root = profile::config_root()?;
+        let root = profile::aibox_root()?;
         provider_values_at(&root, context)
     })()
     .unwrap_or_default();
@@ -532,7 +523,7 @@ fn complete_providers(
 
 fn provider_values_at(root: &Path, context: &CompletionContext) -> Result<Vec<String>> {
     let selected = Profile::resolve(context.agent, root, &context.profile)?;
-    crate::config::list_provider_names(&selected)
+    crate::provider::list_provider_names(&selected)
 }
 
 fn complete_sessions(
@@ -544,7 +535,7 @@ fn complete_sessions(
         return Vec::new();
     }
     let values = (|| -> Result<Vec<String>> {
-        let root = profile::config_root()?;
+        let root = profile::aibox_root()?;
         session_values_at(&root, context)
     })()
     .unwrap_or_default();
@@ -629,21 +620,21 @@ mod tests {
             "--shell-protocol-flag",
             "--",
             "aibox",
-            "config",
+            "provider",
             "apply",
             "openai",
             "--agent=claude",
             "--profile=work",
         ]));
 
-        assert_eq!(context.top, TopCommand::Config);
+        assert_eq!(context.top, TopCommand::Provider);
         assert_eq!(context.agent, AgentKind::Claude);
         assert_eq!(context.profile, "work");
         assert_eq!(context.positionals, BTreeSet::from(["openai".to_string()]));
 
         let no_boundary =
-            CompletionContext::from_protocol_argv(&words(&["aibox", "config", "--agent=claude"]));
-        assert_eq!(no_boundary.top, TopCommand::Run);
+            CompletionContext::from_protocol_argv(&words(&["aibox", "provider", "--agent=claude"]));
+        assert_eq!(no_boundary.top, TopCommand::Root);
         assert_eq!(no_boundary.agent, AgentKind::Codex);
         assert_eq!(no_boundary.profile, "default");
     }
@@ -671,22 +662,35 @@ mod tests {
     fn context_reads_scoped_options_in_every_supported_form_and_position() {
         for argv in [
             &[
-                "aibox", "config", "--agent", "claude", "-p", "work", "apply", "provider",
+                "aibox",
+                "provider",
+                "--agent",
+                "claude",
+                "--profile",
+                "work",
+                "apply",
+                "provider",
             ][..],
             &[
                 "aibox",
-                "config",
+                "provider",
                 "apply",
                 "provider",
                 "--agent=claude",
                 "--profile=work",
             ][..],
             &[
-                "aibox", "config", "apply", "provider", "--agent", "claude", "-pwork",
+                "aibox",
+                "provider",
+                "apply",
+                "provider",
+                "--agent",
+                "claude",
+                "--profile=work",
             ][..],
         ] {
             let context = context(argv);
-            assert_eq!(context.top, TopCommand::Config);
+            assert_eq!(context.top, TopCommand::Provider);
             assert_eq!(context.agent, AgentKind::Claude);
             assert_eq!(context.profile, "work");
             assert!(context.selection_valid);
@@ -702,7 +706,7 @@ mod tests {
         let duplicate = context(&[
             "aibox",
             "session",
-            "-p",
+            "--profile",
             "work",
             "get",
             "id",
@@ -710,41 +714,45 @@ mod tests {
         ]);
         assert!(!duplicate.selection_valid);
 
-        let invalid = context(&["aibox", "config", "--agent", "other", "list"]);
+        let invalid = context(&["aibox", "provider", "--agent", "other", "list"]);
         assert!(!invalid.selection_valid);
 
         let escaped = context(&[
-            "aibox", "config", "delete", "openai", "--", "--agent", "claude",
+            "aibox", "provider", "delete", "openai", "--", "--agent", "claude",
         ]);
         assert_eq!(escaped.agent, AgentKind::Codex);
         assert_eq!(escaped.positionals, BTreeSet::from(["openai".to_string()]));
     }
 
     #[test]
-    fn context_does_not_treat_run_option_values_as_subcommands() {
+    fn context_enters_run_scope_only_after_the_run_subcommand() {
         for argv in [
-            &["aibox", "--work", "config"][..],
-            &["aibox", "-w", "session"][..],
-            &["aibox", "--mount", "profile"][..],
-            &["aibox", "-m", "completion"][..],
-            &["aibox", "--profile", "build"][..],
-            &["aibox", "-p", "config"][..],
-            &["aibox", "--agent", "session"][..],
+            &["aibox", "run", "--work", "provider"][..],
+            &["aibox", "run", "-w", "session"][..],
+            &["aibox", "run", "--mount", "profile"][..],
+            &["aibox", "run", "-m", "completion"][..],
+            &["aibox", "run", "--profile", "build"][..],
+            &["aibox", "run", "--agent", "session"][..],
         ] {
             let context = context(argv);
             assert_eq!(
                 context.top,
                 TopCommand::Run,
-                "{argv:?} must remain a run while its option value is incomplete or subcommand-shaped"
+                "{argv:?} must remain in the explicit run scope"
             );
         }
+
+        assert_eq!(
+            context(&["aibox", "--work", "provider"]).top,
+            TopCommand::Root
+        );
     }
 
     #[test]
     fn context_tracks_delete_all_and_selected_values() {
         let context = context(&[
             "aibox",
-            "config",
+            "provider",
             "delete",
             "openai",
             "anthropic",
@@ -823,10 +831,10 @@ mod tests {
         profile::create_ordinary_profile(root.path(), "work").unwrap();
         let codex = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
         let claude = Profile::resolve(AgentKind::Claude, root.path(), "work").unwrap();
-        crate::config::create_provider(&codex, "openai").unwrap();
-        crate::config::create_provider(&claude, "anthropic").unwrap();
+        crate::provider::create_provider(&codex, "openai").unwrap();
+        crate::provider::create_provider(&claude, "anthropic").unwrap();
 
-        let codex_context = context(&["aibox", "config", "-pwork", "apply", ""]);
+        let codex_context = context(&["aibox", "provider", "--profile=work", "apply", ""]);
         assert_eq!(
             provider_values_at(root.path(), &codex_context).unwrap(),
             ["openai"]
@@ -834,7 +842,7 @@ mod tests {
 
         let claude_context = context(&[
             "aibox",
-            "config",
+            "provider",
             "apply",
             "",
             "--profile=work",
@@ -851,9 +859,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         profile::create_ordinary_profile(root.path(), "work").unwrap();
         let selected = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
-        crate::config::create_provider(&selected, "openai").unwrap();
+        crate::provider::create_provider(&selected, "openai").unwrap();
         std::fs::write(selected.state_path(), "not json\n").unwrap();
-        let context = context(&["aibox", "config", "-pwork", "get", ""]);
+        let context = context(&["aibox", "provider", "--profile=work", "get", ""]);
 
         assert_eq!(
             provider_values_at(root.path(), &context).unwrap(),
@@ -878,7 +886,7 @@ mod tests {
             &["also-not-json"],
         );
 
-        let codex_context = context(&["aibox", "session", "-p", "work", "get", ""]);
+        let codex_context = context(&["aibox", "session", "--profile", "work", "get", ""]);
         assert_eq!(
             session_values_at(root.path(), &codex_context).unwrap(),
             [codex_id]
@@ -927,30 +935,38 @@ mod tests {
         std::fs::write(current.path().join("notes.txt"), "notes").unwrap();
         std::fs::write(current.path().join("bad:notes.txt"), "notes").unwrap();
 
-        let values = engine_values(&["aibox", "co"], 1, current.path());
+        let values = engine_values(&["aibox", ""], 1, current.path());
+        assert!(values.contains(&"run".to_string()), "{values:?}");
         assert!(values.contains(&"completion".to_string()), "{values:?}");
-        assert!(values.contains(&"config".to_string()), "{values:?}");
+        assert!(values.contains(&"provider".to_string()), "{values:?}");
 
-        let values = engine_values(&["aibox", "--agent", "cl"], 2, current.path());
+        assert!(!values.contains(&"--agent".to_string()), "{values:?}");
+        assert!(!values.contains(&"--profile".to_string()), "{values:?}");
+
+        let values = engine_values(&["aibox", "run", "--agent", "cl"], 3, current.path());
         assert_eq!(values, ["claude"]);
 
-        let values = engine_values(&["aibox", "--work", "pro"], 2, current.path());
+        let values = engine_values(&["aibox", "run", "--work", "pro"], 3, current.path());
         assert!(
             values.iter().any(|value| value.starts_with("project")),
             "{values:?}"
         );
-        let values = engine_values(&["aibox", "--work", "bad"], 2, current.path());
+        let values = engine_values(&["aibox", "run", "--work", "bad"], 3, current.path());
         assert!(values.is_empty(), "{values:?}");
 
-        let values = engine_values(&["aibox", "--mount", "not"], 2, current.path());
+        let values = engine_values(&["aibox", "run", "--mount", "not"], 3, current.path());
         assert!(values.contains(&"notes.txt".to_string()), "{values:?}");
-        let values = engine_values(&["aibox", "--mount", "bad"], 2, current.path());
+        let values = engine_values(&["aibox", "run", "--mount", "bad"], 3, current.path());
         assert!(values.is_empty(), "{values:?}");
 
-        let values = engine_values(&["aibox", "--mount", "notes.txt:/work"], 2, current.path());
+        let values = engine_values(
+            &["aibox", "run", "--mount", "notes.txt:/work"],
+            3,
+            current.path(),
+        );
         assert!(values.is_empty(), "{values:?}");
 
-        let values = engine_values(&["aibox", "--", "--agent"], 2, current.path());
+        let values = engine_values(&["aibox", "run", "--", "--agent"], 3, current.path());
         assert!(values.is_empty(), "{values:?}");
     }
 
@@ -979,11 +995,11 @@ mod tests {
         profile::create_ordinary_profile(root.path(), "work").unwrap();
 
         let selected = Profile::resolve(AgentKind::Codex, root.path(), "work").unwrap();
-        crate::config::create_provider(&selected, "alpha").unwrap();
-        crate::config::create_provider(&selected, "beta").unwrap();
+        crate::provider::create_provider(&selected, "alpha").unwrap();
+        crate::provider::create_provider(&selected, "beta").unwrap();
 
         let values = engine_values(
-            &["aibox", "config", "delete", "alpha", "", "--profile=work"],
+            &["aibox", "provider", "delete", "alpha", "", "--profile=work"],
             4,
             root.path(),
         );
@@ -991,7 +1007,7 @@ mod tests {
         assert!(values.contains(&"beta".to_string()), "{values:?}");
 
         let values = engine_values(
-            &["aibox", "config", "delete", "--all", "", "--profile=work"],
+            &["aibox", "provider", "delete", "--all", "", "--profile=work"],
             4,
             root.path(),
         );
@@ -1037,7 +1053,7 @@ mod tests {
             root.path().join("work/home/.codex/sessions"),
         )
         .unwrap();
-        let context = context(&["aibox", "session", "-pwork", "get", ""]);
+        let context = context(&["aibox", "session", "--profile=work", "get", ""]);
 
         assert!(session_values_at(root.path(), &context).is_err());
         assert!(complete_sessions(&context, OsStr::new(""), &BTreeSet::new()).is_empty());

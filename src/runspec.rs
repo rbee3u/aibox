@@ -537,19 +537,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let profile_home = root.path().join("default/home");
         let home_child = profile_home.join("projects/demo");
-        let profile_config = root.path().join("default/config");
+        let profile_provider = root.path().join("default/provider");
         let tracing = root.path().join("default/tracing");
-        let host = root.path().join("host/config");
+        let host = root.path().join("host/provider");
         fs::create_dir_all(&home_child).unwrap();
-        fs::create_dir_all(profile_config.join("codex")).unwrap();
+        fs::create_dir_all(profile_provider.join("codex")).unwrap();
         fs::create_dir(&tracing).unwrap();
         fs::create_dir_all(&host).unwrap();
 
         for rejected in [
             root.path(),
             &root.path().join("default"),
-            &profile_config,
-            &profile_config.join("codex"),
+            &profile_provider,
+            &profile_provider.join("codex"),
             &tracing,
             &root.path().join("host"),
             &host,
@@ -572,11 +572,11 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let links = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("default/config/codex")).unwrap();
-        let linked_config = links.path().join("config");
-        symlink(root.path().join("default/config"), &linked_config).unwrap();
+        fs::create_dir_all(root.path().join("default/provider/codex")).unwrap();
+        let linked_provider = links.path().join("provider");
+        symlink(root.path().join("default/provider"), &linked_provider).unwrap();
 
-        let err = validate_aibox_mount_sources(linked_config.to_str().unwrap(), &[], root.path())
+        let err = validate_aibox_mount_sources(linked_provider.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
@@ -592,7 +592,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let profile_home = root.path().join("work/home");
         fs::create_dir_all(&profile_home).unwrap();
-        symlink(outside.path(), root.path().join("work/config")).unwrap();
+        symlink(outside.path(), root.path().join("work/provider")).unwrap();
 
         let err = validate_aibox_mount_sources(profile_home.to_str().unwrap(), &[], root.path())
             .unwrap_err()
@@ -608,7 +608,7 @@ mod tests {
     fn aibox_mount_check_normalizes_dotdot_sources() {
         let root = tempfile::tempdir().unwrap();
         let profile_home = root.path().join("default/home");
-        let management = root.path().join("default/config");
+        let management = root.path().join("default/provider");
         fs::create_dir_all(&profile_home).unwrap();
         fs::create_dir(&management).unwrap();
 
@@ -621,7 +621,7 @@ mod tests {
             "a dotdot work path that resolves to the profile root must fail: {err}"
         );
 
-        let mount_source = profile_home.join("../config");
+        let mount_source = profile_home.join("../provider");
         let err = validate_aibox_mount_sources(
             profile_home.to_str().unwrap(),
             &[format!("{}:/secrets:ro", mount_source.display())],
@@ -631,7 +631,7 @@ mod tests {
         .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into config must be rejected: {err}"
+            "a dotdot mount source that resolves into provider must be rejected: {err}"
         );
     }
 
@@ -667,7 +667,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let home_child = root.path().join("work/home/projects/demo");
         fs::create_dir_all(&home_child).unwrap();
-        fs::create_dir_all(root.path().join("work/config/codex")).unwrap();
+        fs::create_dir_all(root.path().join("work/provider/codex")).unwrap();
 
         validate_aibox_mount_sources(
             outside.path().to_str().unwrap(),

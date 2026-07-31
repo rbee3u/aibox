@@ -1,8 +1,12 @@
 # AGENTS.md
 
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
-container. The container, not the agent process, is the sandbox boundary. User
-commands and behavior are documented in `README.md`.
+container. The container, not the agent process, is the sandbox boundary.
+`README.md` is the concise entry point for evaluation, installation, first use,
+and the core safety model. Advanced user behavior has one canonical home in
+`docs/profiles.md`, `docs/providers.md`, or `docs/sandbox.md`; keep README
+examples, those guides, and clap help aligned without copying full references
+between them.
 
 Keep this file limited to project-specific constraints that are hard to infer
 from the code and costly to violate. Prefer existing modules and data flows;
@@ -19,23 +23,23 @@ container home remain shared so agent support does not fork shared
 orchestration.
 
 **Preserve the CLI boundary.** Split argv at the first `--` before clap parses
-it, and pass the right side verbatim only to an agent run. Root
-`--agent`/`--profile` select a run; `config` and `session` own separately scoped
-options; `build`, `completion`, and `profile` accept neither. Completion must
+it, and pass the right side verbatim only to `run`. The `run`, `provider`, and
+`session` commands own separately scoped `--agent`/`--profile` options;
+`build`, `completion`, and `profile` accept neither. Completion must
 mirror these scopes and the `--` boundary; candidate discovery stays host-side
 and must not initialize profiles or start Docker. Keep clap help, README
 examples, and scope-rejection tests aligned.
 
 **Keep provider application explicit and persistent.** A run consumes the
-active agent files left by `config apply`; it must not inject or reapply
-provider data. `config apply` deep-merges `config.toml` or `settings.json` into
+active agent files left by `provider apply`; it must not inject or reapply
+provider data. `provider apply` deep-merges `config.toml` or `settings.json` into
 the current active config; Codex `auth.json` is validated and replaced as a
 whole. Changing providers is not an implicit rollback or reset, so previously
 applied keys may persist.
 
 **Keep management data on the host.** Within `$AIBOX_ROOT`, only an ordinary
 profile's `home` may be used as a bind source; all other data is host-only. The
-special `host` profile lets `config` and `session` operate on the real host
+special `host` profile lets `provider` and `session` operate on the real host
 agent dirs while metadata stays under `$AIBOX_ROOT`; it has no managed home and
 must be rejected by Docker runs and profile deletion. This prevents management
 state and real host agent data from crossing the container boundary.

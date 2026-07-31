@@ -1,4 +1,4 @@
-//! Persistent provider overlays for `aibox config`.
+//! Persistent provider overlays for `aibox provider`.
 //!
 //! Providers are host-only snapshots. Applying one merges its TOML or JSON into
 //! the selected profile's active agent configuration, replaces Codex
@@ -7,7 +7,7 @@
 //! output.
 
 use crate::agent::AgentKind;
-use crate::cli::ConfigCommand;
+use crate::cli::ProviderCommand;
 use crate::merge::{
     merge_json_with_apply_metadata, merge_toml_strings, parse_json_or_empty_object,
 };
@@ -39,7 +39,7 @@ requires_openai_auth = true
 base_url = "https://example.ai/v1"
 
 # To remove fields from the active config when applying this provider:
-# [aibox.config.apply]
+# [aibox.provider.apply]
 # remove = ["model_provider", "model_providers.custom"]
 "#;
 
@@ -87,9 +87,9 @@ struct State {
 ///
 /// `agent` must match [`Profile::agent`]; it is accepted separately because
 /// the parsed command dispatcher validates agent-specific CLI flags.
-pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) -> Result<i32> {
+pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ProviderCommand) -> Result<i32> {
     match command {
-        ConfigCommand::List => {
+        ProviderCommand::List => {
             for provider in list_providers(profile)? {
                 let marker = if provider.last_applied { "*" } else { " " };
                 if !crate::print_line(&format!("{marker} {}", provider.name))? {
@@ -97,22 +97,22 @@ pub fn dispatch(agent: AgentKind, profile: &Profile, command: &ConfigCommand) ->
                 }
             }
         }
-        ConfigCommand::Get { provider, .. } => {
+        ProviderCommand::Get { provider, .. } => {
             crate::print_text(&get_provider(profile, provider)?)?;
         }
-        ConfigCommand::Create { provider, .. } => {
+        ProviderCommand::Create { provider, .. } => {
             create_provider(profile, provider)?;
         }
-        ConfigCommand::Apply { provider, .. } => {
+        ProviderCommand::Apply { provider, .. } => {
             apply_provider(profile, provider)?;
         }
-        ConfigCommand::Edit { provider, auth, .. } => {
+        ProviderCommand::Edit { provider, auth, .. } => {
             if *auth && agent.auth_file().is_none() {
                 bail!("{} does not have an auth file", agent.tag());
             }
             edit_provider(profile, provider, *auth)?;
         }
-        ConfigCommand::Delete {
+        ProviderCommand::Delete {
             providers,
             all,
             yes,
@@ -140,8 +140,8 @@ fn create_provider_with_templates(
     write_templates: impl FnOnce(AgentKind, &Path) -> Result<()>,
 ) -> Result<()> {
     profile::validate_name("provider", provider)?;
-    if !profile.management_dir_exists()? {
-        profile.ensure_management_dir()?;
+    if !profile.provider_root_exists()? {
+        profile.ensure_provider_root()?;
     }
     let _lock = profile.lock_for_provider_mutation()?;
     let provider_dir = profile.provider_dir(provider);
@@ -189,7 +189,7 @@ fn write_provider_templates(agent: AgentKind, provider_dir: &Path) -> Result<()>
 
 /// List valid provider directories in name order.
 pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
-    if !profile.management_dir_exists()? {
+    if !profile.provider_root_exists()? {
         return Ok(Vec::new());
     }
     let _lock = profile.lock_for_provider_read()?;
@@ -208,7 +208,7 @@ pub fn list_providers(profile: &Profile) -> Result<Vec<ProviderListEntry>> {
 /// List valid provider directory names without consulting last-applied state.
 pub(crate) fn list_provider_names(profile: &Profile) -> Result<Vec<String>> {
     let provider_root = profile.provider_root_dir();
-    if !profile.management_dir_exists()? {
+    if !profile.provider_root_exists()? {
         return Ok(Vec::new());
     }
 
@@ -399,7 +399,7 @@ pub fn delete_providers(
 ) -> Result<()> {
     let targets = delete_provider_targets(profile, providers, all)?;
     if targets.is_empty() {
-        if (all || providers.is_empty()) && profile.management_dir_exists()? {
+        if (all || providers.is_empty()) && profile.provider_root_exists()? {
             let _lock = profile.lock_for_provider_mutation()?;
             remove_state_file(profile)?;
         }
@@ -481,7 +481,7 @@ struct RollbackWrite {
 }
 
 fn ensure_provider_exists(profile: &Profile, provider: &str) -> Result<()> {
-    if !profile.management_dir_exists()? {
+    if !profile.provider_root_exists()? {
         bail!("provider '{provider}' does not exist");
     }
     let provider_dir = profile.provider_dir(provider);
@@ -1260,7 +1260,7 @@ model = "gpt-5.6-sol"
             .join("default/home/.claude/statusline.sh")
             .is_file());
         assert!(root.path().join("default/home/.gitconfig").is_file());
-        assert!(root.path().join("default/config/claude").is_dir());
+        assert!(root.path().join("default/provider/claude").is_dir());
         profile::ensure_real_dir(&p.backups_dir(), "backup directory").unwrap();
         fs::write(p.state_path(), "{}\n").unwrap();
         assert_eq!(
@@ -1325,7 +1325,7 @@ model = "gpt-5.6-sol"
             .join("default/home/.claude/statusline.sh")
             .is_file());
         assert!(root.path().join("default/home/.gitconfig").is_file());
-        assert!(root.path().join("default/config/codex").is_dir());
+        assert!(root.path().join("default/provider/codex").is_dir());
     }
 
     #[test]
@@ -1397,13 +1397,13 @@ model = "gpt-5.6-sol"
 
     #[cfg(unix)]
     #[test]
-    fn provider_commands_reject_symlinked_profile_config() {
+    fn provider_commands_reject_symlinked_profile_provider_directory() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("default")).unwrap();
-        symlink(outside.path(), root.path().join("default/config")).unwrap();
+        symlink(outside.path(), root.path().join("default/provider")).unwrap();
         let p = profile(root.path(), AgentKind::Codex);
 
         let err = create_provider(&p, "openai").unwrap_err().to_string();
@@ -1413,7 +1413,7 @@ model = "gpt-5.6-sol"
         );
         assert!(
             !outside.path().join("codex").exists(),
-            "provider create must not write through a symlinked profile config"
+            "provider create must not write through a symlinked profile provider directory"
         );
 
         fs::create_dir_all(outside.path().join("codex/openai")).unwrap();
@@ -1871,7 +1871,7 @@ printf 'model = "edited"\n' > "$1"
         for all in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let p = profile(root.path(), AgentKind::Codex);
-            p.ensure_management_dir().unwrap();
+            p.ensure_provider_root().unwrap();
             fs::write(p.state_path(), "{not json").unwrap();
 
             delete_providers(&p, &[], all, true).unwrap();
@@ -2091,7 +2091,7 @@ model = "common"
 
 [model_providers.openai]
 base_url = "old"
-legacy = true
+existing = true
 "#,
         )
         .unwrap();
@@ -2102,7 +2102,7 @@ legacy = true
         let merged = fs::read_to_string(p.active_file("config.toml")).unwrap();
         assert!(merged.contains(r#"model = "provider""#));
         assert!(merged.contains(r#"base_url = "new""#));
-        assert!(merged.contains("legacy = true"));
+        assert!(merged.contains("existing = true"));
         assert_eq!(
             fs::read_to_string(p.active_file("auth.json")).unwrap(),
             r#"{"token":"new"}"#
@@ -2135,7 +2135,7 @@ legacy = true
             r#"
 model = "gpt-5"
 
-[aibox.config.apply]
+[aibox.provider.apply]
 remove = ["model_provider", "model_providers.custom"]
 "#,
         )
@@ -2219,7 +2219,7 @@ base_url = "old"
         create_provider(&p, "anthropic").unwrap();
         fs::write(
             p.provider_file("anthropic", "settings.json"),
-            r#"{"model":"provider","aibox":{"config":{"apply":{"remove":["old","nested.drop"]}}}}"#,
+            r#"{"model":"provider","aibox":{"provider":{"apply":{"remove":["old","nested.drop"]}}}}"#,
         )
         .unwrap();
 
@@ -3054,7 +3054,7 @@ exit 23
         );
         assert!(!host_home.path().join(".gitconfig").exists());
         assert!(!host_home.path().join(".claude").exists());
-        let backup = fs::read_dir(root.path().join("host/config/codex/.backup"))
+        let backup = fs::read_dir(root.path().join("host/provider/codex/.backup"))
             .unwrap()
             .next()
             .unwrap()

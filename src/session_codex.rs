@@ -155,8 +155,7 @@ impl SessionBackend for Codex {
             })
     }
 
-    /// Fall back to the first event timestamp for legacy or damaged rollouts
-    /// that have no readable `session_meta`.
+    /// Use the first event timestamp when no readable `session_meta` exists.
     fn fallback_start_ts_of(&self, value: &Value) -> Option<String> {
         let timestamp = session::ts_of(value);
         (!timestamp.is_empty()).then_some(timestamp)

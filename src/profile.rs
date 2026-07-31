@@ -1,8 +1,8 @@
 //! Profile layout, initialization, and host-side path validation.
 //!
 //! Ordinary profiles keep the container-visible home under `<profile>/home`
-//! and provider metadata under `<profile>/config`. The built-in `host` profile
-//! points at the real host home for config/session commands but is never
+//! and provider metadata under `<profile>/provider`. The built-in `host` profile
+//! points at the real host home for provider/session commands but is never
 //! runnable or deletable.
 
 use crate::agent::AgentKind;
@@ -21,7 +21,7 @@ pub const HOST_PROFILE: &str = "host";
 /// Container-visible home subtree of an ordinary profile.
 pub const PROFILE_HOME_DIR: &str = "home";
 /// Host-only provider-management subtree of a profile.
-pub const PROFILE_CONFIG_DIR: &str = "config";
+pub const PROFILE_PROVIDER_DIR: &str = "provider";
 /// Reserved host-only tracing subtree of an ordinary profile.
 pub const PROFILE_TRACING_DIR: &str = "tracing";
 const PROFILE_LOCKS_DIR: &str = ".locks";
@@ -47,7 +47,7 @@ pub struct Profile {
     /// Selected agent's state directory beneath [`Self::home_dir`].
     pub active_agent_dir: PathBuf,
     root_dir: PathBuf,
-    management_dir: PathBuf,
+    provider_management_dir: PathBuf,
     is_host: bool,
 }
 
@@ -76,7 +76,7 @@ impl Profile {
     /// Resolve a validated profile name without creating any directories.
     ///
     /// The reserved `host` profile uses the process home for active state but
-    /// still stores provider metadata beneath `root/host/config`.
+    /// still stores provider metadata beneath `root/host/provider`.
     pub fn resolve(agent: AgentKind, root: &Path, profile: &str) -> Result<Self> {
         validate_name("profile", profile)?;
         let is_host = profile == HOST_PROFILE;
@@ -87,14 +87,14 @@ impl Profile {
             profile_dir.join(PROFILE_HOME_DIR)
         };
         let active_agent_dir = home_dir.join(agent.active_dir_name());
-        let management_dir = profile_dir.join(PROFILE_CONFIG_DIR).join(agent.tag());
+        let provider_management_dir = profile_dir.join(PROFILE_PROVIDER_DIR).join(agent.tag());
         Ok(Self {
             agent,
             name: profile.to_string(),
             home_dir,
             active_agent_dir,
             root_dir: root.to_path_buf(),
-            management_dir,
+            provider_management_dir,
             is_host,
         })
     }
@@ -107,12 +107,12 @@ impl Profile {
     /// Initialize an ordinary profile and reject the host profile.
     pub fn ensure_runnable_profile(&self) -> Result<()> {
         if self.is_host {
-            bail!("profile 'host' is only valid for config/session commands, not Docker runs");
+            bail!("profile 'host' is only valid for provider/session commands, not Docker runs");
         }
         self.ensure_ordinary_initialized()
     }
 
-    /// Ensure the selected active agent directory is ready for config apply.
+    /// Ensure the selected active agent directory is ready for provider apply.
     pub fn ensure_active_agent_dir(&self) -> Result<()> {
         let _lock = self.lock_exclusive()?;
         self.ensure_active_agent_dir_locked()
@@ -178,7 +178,9 @@ impl Profile {
     /// and both provider-management directories.
     pub fn ensure_ordinary_initialized(&self) -> Result<()> {
         if self.is_host {
-            bail!("profile 'host' is only valid for config/session commands, not profile creation");
+            bail!(
+                "profile 'host' is only valid for provider/session commands, not profile creation"
+            );
         }
         ensure_ordinary_profile_initialized(&self.root_dir, &self.name)
     }
@@ -221,7 +223,7 @@ impl Profile {
 
     /// Root containing provider directories for the selected agent.
     pub fn provider_root_dir(&self) -> PathBuf {
-        self.management_dir.clone()
+        self.provider_management_dir.clone()
     }
 
     /// Directory for one provider snapshot.
@@ -241,28 +243,28 @@ impl Profile {
 
     /// Directory containing timestamped active-config backups.
     pub fn backups_dir(&self) -> PathBuf {
-        self.management_dir.join(".backup")
+        self.provider_management_dir.join(".backup")
     }
 
     /// Path to the last-applied provider marker.
     pub fn state_path(&self) -> PathBuf {
-        self.management_dir.join(".state.json")
+        self.provider_management_dir.join(".state.json")
     }
 
     /// Create the selected agent's provider-management directory safely.
-    pub fn ensure_management_dir(&self) -> Result<()> {
+    pub fn ensure_provider_root(&self) -> Result<()> {
         let _lock = self.lock_exclusive()?;
         if self.is_host {
-            ensure_agent_management_dir(&self.root_dir, &self.name, self.agent)
+            ensure_agent_provider_dir(&self.root_dir, &self.name, self.agent)
         } else {
             ensure_ordinary_profile_initialized_locked(&self.root_dir, &self.name)
         }
     }
 
-    /// Whether the selected agent's real management directory exists.
-    pub fn management_dir_exists(&self) -> Result<bool> {
+    /// Whether the selected agent's real provider root exists.
+    pub fn provider_root_exists(&self) -> Result<bool> {
         validate_profile_layout(&self.root_dir, &self.name)?;
-        agent_management_dir_exists(&self.root_dir, &self.name, self.agent)
+        agent_provider_dir_exists(&self.root_dir, &self.name, self.agent)
     }
 
     /// Prepare an ordinary profile and hold its shared lock for one Docker run.
@@ -316,14 +318,14 @@ impl Profile {
             ProfileLockMode::Shared | ProfileLockMode::Exclusive => ProfileLockMode::Shared,
         };
         let profile_lock = acquire_profile_lock(&self.root_dir, &self.name, profile_mode)?;
-        if !agent_management_dir_exists(&self.root_dir, &self.name, self.agent)? {
+        if !agent_provider_dir_exists(&self.root_dir, &self.name, self.agent)? {
             bail!(
                 "provider management directory does not exist: {}",
-                self.management_dir.display()
+                self.provider_management_dir.display()
             );
         }
 
-        let lock_path = self.management_dir.join(".lock");
+        let lock_path = self.provider_management_dir.join(".lock");
         let file = open_lock_file(&lock_path, "provider management lock")?;
         if let Err(error) = lock_file(&file, mode) {
             if error.kind() == io::ErrorKind::WouldBlock {
@@ -351,7 +353,7 @@ impl Profile {
 
 /// Execute one parsed profile-management command.
 pub fn dispatch(command: &ProfileCommand) -> Result<i32> {
-    let root = config_root()?;
+    let root = aibox_root()?;
     match command {
         ProfileCommand::List => {
             for profile in profile_list_entries(&root)? {
@@ -404,7 +406,7 @@ pub fn list_profiles(root: &Path) -> Result<Vec<String>> {
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             bail!(
-                "unsupported entry in aibox root: {}; only the profile-centric layout is supported",
+                "unsupported entry in aibox root: {}",
                 entry.path().display()
             );
         };
@@ -515,7 +517,7 @@ fn delete_ordinary_profile_dirs(root: &Path, profile: &str) -> Result<()> {
 pub fn validate_ordinary_profile_name(profile: &str) -> Result<()> {
     validate_name("profile", profile)?;
     if profile == HOST_PROFILE {
-        bail!("profile 'host' is only valid for config/session commands");
+        bail!("profile 'host' is only valid for provider/session commands");
     }
     Ok(())
 }
@@ -541,11 +543,11 @@ fn ensure_ordinary_profile_initialized_locked(root: &Path, profile: &str) -> Res
     ensure_agent_state(AgentKind::Codex, &home_dir)?;
     ensure_agent_state(AgentKind::Claude, &home_dir)?;
     install_profile_gitconfig(&home_dir)?;
-    let management_dir = ensure_profile_management_dir(root, profile)?;
+    let provider_management_dir = ensure_profile_provider_dir(root, profile)?;
     for agent in [AgentKind::Codex, AgentKind::Claude] {
         ensure_real_dir(
-            &management_dir.join(agent.tag()),
-            "config management directory",
+            &provider_management_dir.join(agent.tag()),
+            "provider management directory",
         )?;
     }
     Ok(())
@@ -555,7 +557,7 @@ fn ordinary_profile_is_initialized(root: &Path, profile: &str) -> Result<bool> {
     preflight_ordinary_profile_paths(root, profile)?;
     let dir = profile_dir(root, profile);
     let home = profile_home_dir(root, profile);
-    let management = profile_management_dir(root, profile);
+    let management = profile_provider_dir(root, profile);
     Ok(real_dir_exists(&dir, "profile directory")?
         && real_dir_exists(&home, "profile home")?
         && real_dir_exists(&home.join(".codex"), "Codex state directory")?
@@ -565,22 +567,22 @@ fn ordinary_profile_is_initialized(root: &Path, profile: &str) -> Result<bool> {
         && real_dir_exists(&management, "profile management directory")?
         && real_dir_exists(
             &management.join(AgentKind::Codex.tag()),
-            "config management directory",
+            "provider management directory",
         )?
         && real_dir_exists(
             &management.join(AgentKind::Claude.tag()),
-            "config management directory",
+            "provider management directory",
         )?)
 }
 
 fn preflight_ordinary_profile_paths(root: &Path, profile: &str) -> Result<()> {
     validate_profile_layout(root, profile)?;
-    let management_dir = profile_management_dir(root, profile);
-    if real_dir_exists(&management_dir, "profile management directory")? {
+    let provider_management_dir = profile_provider_dir(root, profile);
+    if real_dir_exists(&provider_management_dir, "profile management directory")? {
         for agent in [AgentKind::Codex, AgentKind::Claude] {
             real_dir_exists(
-                &management_dir.join(agent.tag()),
-                "config management directory",
+                &provider_management_dir.join(agent.tag()),
+                "provider management directory",
             )?;
         }
     }
@@ -604,41 +606,41 @@ fn profile_home_dir(root: &Path, profile: &str) -> PathBuf {
     profile_dir(root, profile).join(PROFILE_HOME_DIR)
 }
 
-fn profile_management_dir(root: &Path, profile: &str) -> PathBuf {
-    profile_dir(root, profile).join(PROFILE_CONFIG_DIR)
+fn profile_provider_dir(root: &Path, profile: &str) -> PathBuf {
+    profile_dir(root, profile).join(PROFILE_PROVIDER_DIR)
 }
 
-fn ensure_profile_management_dir(root: &Path, profile: &str) -> Result<PathBuf> {
+fn ensure_profile_provider_dir(root: &Path, profile: &str) -> Result<PathBuf> {
     ensure_real_dir(root, "aibox root")?;
     ensure_real_dir(&profile_dir(root, profile), "profile directory")?;
-    let management_dir = profile_management_dir(root, profile);
-    ensure_real_dir(&management_dir, "profile management directory")?;
-    Ok(management_dir)
+    let provider_management_dir = profile_provider_dir(root, profile);
+    ensure_real_dir(&provider_management_dir, "profile management directory")?;
+    Ok(provider_management_dir)
 }
 
-fn ensure_agent_management_dir(root: &Path, profile: &str, agent: AgentKind) -> Result<()> {
+fn ensure_agent_provider_dir(root: &Path, profile: &str, agent: AgentKind) -> Result<()> {
     validate_profile_layout(root, profile)?;
-    let management_dir = ensure_profile_management_dir(root, profile)?;
+    let provider_management_dir = ensure_profile_provider_dir(root, profile)?;
     ensure_real_dir(
-        &management_dir.join(agent.tag()),
-        "config management directory",
+        &provider_management_dir.join(agent.tag()),
+        "provider management directory",
     )
 }
 
-fn profile_management_dir_exists(root: &Path, profile: &str) -> Result<bool> {
+fn profile_provider_dir_exists(root: &Path, profile: &str) -> Result<bool> {
     real_dir_exists(
-        &profile_management_dir(root, profile),
+        &profile_provider_dir(root, profile),
         "profile management directory",
     )
 }
 
-fn agent_management_dir_exists(root: &Path, profile: &str, agent: AgentKind) -> Result<bool> {
-    if !profile_management_dir_exists(root, profile)? {
+fn agent_provider_dir_exists(root: &Path, profile: &str, agent: AgentKind) -> Result<bool> {
+    if !profile_provider_dir_exists(root, profile)? {
         return Ok(false);
     }
     real_dir_exists(
-        &profile_management_dir(root, profile).join(agent.tag()),
-        "config management directory",
+        &profile_provider_dir(root, profile).join(agent.tag()),
+        "provider management directory",
     )
 }
 
@@ -646,7 +648,6 @@ fn validate_root_layout(root: &Path) -> Result<()> {
     if !real_dir_exists(root, "aibox root")? {
         return Ok(());
     }
-    reject_legacy_management_root(root)?;
     validate_profile_locks(root)?;
     for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
         let entry = entry.with_context(|| format!("read entry in {}", root.display()))?;
@@ -670,7 +671,6 @@ pub(crate) fn validate_profile_layout(root: &Path, profile: &str) -> Result<()> 
     if !real_dir_exists(root, "aibox root")? {
         return Ok(());
     }
-    reject_legacy_management_root(root)?;
     validate_profile_locks(root)?;
     validate_profile_layout_inner(root, profile)
 }
@@ -786,15 +786,6 @@ fn lock_file(_file: &fs::File, _mode: ProfileLockMode) -> io::Result<()> {
     Ok(())
 }
 
-fn reject_legacy_management_root(root: &Path) -> Result<()> {
-    let legacy = root.join(".config");
-    match fs::symlink_metadata(&legacy) {
-        Ok(_) => invalid_layout(&legacy, "legacy provider management root"),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("inspect {}", legacy.display())),
-    }
-}
-
 fn validate_profile_layout_inner(root: &Path, profile: &str) -> Result<()> {
     validate_name("profile", profile)?;
     let dir = profile_dir(root, profile);
@@ -809,7 +800,7 @@ fn validate_profile_layout_inner(root: &Path, profile: &str) -> Result<()> {
             return invalid_layout(&entry.path(), "non-UTF-8 profile entry");
         };
         let allowed = match name {
-            PROFILE_CONFIG_DIR | PROFILE_TRACING_DIR => true,
+            PROFILE_PROVIDER_DIR | PROFILE_TRACING_DIR => true,
             PROFILE_HOME_DIR => profile != HOST_PROFILE,
             _ => false,
         };
@@ -819,20 +810,21 @@ fn validate_profile_layout_inner(root: &Path, profile: &str) -> Result<()> {
         layout_dir_exists(&entry.path(), "profile layout entry")?;
     }
 
-    let config_dir = profile_management_dir(root, profile);
-    if layout_dir_exists(&config_dir, "profile management directory")? {
-        for entry in
-            fs::read_dir(&config_dir).with_context(|| format!("read {}", config_dir.display()))?
+    let provider_dir = profile_provider_dir(root, profile);
+    if layout_dir_exists(&provider_dir, "profile management directory")? {
+        for entry in fs::read_dir(&provider_dir)
+            .with_context(|| format!("read {}", provider_dir.display()))?
         {
-            let entry = entry.with_context(|| format!("read entry in {}", config_dir.display()))?;
+            let entry =
+                entry.with_context(|| format!("read entry in {}", provider_dir.display()))?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
-                return invalid_layout(&entry.path(), "non-UTF-8 agent config entry");
+                return invalid_layout(&entry.path(), "non-UTF-8 agent provider entry");
             };
             if !matches!(name, "codex" | "claude") {
-                return invalid_layout(&entry.path(), "unknown agent config entry");
+                return invalid_layout(&entry.path(), "unknown agent provider entry");
             }
-            layout_dir_exists(&entry.path(), "config management directory")?;
+            layout_dir_exists(&entry.path(), "provider management directory")?;
         }
     }
     Ok(())
@@ -848,16 +840,13 @@ fn layout_dir_exists(path: &Path, kind: &str) -> Result<bool> {
 }
 
 fn invalid_layout<T>(path: &Path, reason: &str) -> Result<T> {
-    bail!(
-        "{reason}: {}; only the profile-centric layout is supported",
-        path.display()
-    )
+    bail!("{reason}: {}", path.display())
 }
 
 /// Resolve the aibox root from `AIBOX_ROOT` or `$HOME/.aibox`.
 ///
 /// A relative override is anchored to the process working directory.
-pub fn config_root() -> Result<PathBuf> {
+pub fn aibox_root() -> Result<PathBuf> {
     let root = if let Some(root) = crate::env_override("AIBOX_ROOT")? {
         PathBuf::from(root)
     } else {
@@ -878,7 +867,7 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
         path
     } else {
         std::env::current_dir()
-            .context("get current dir for config root")?
+            .context("get current dir for aibox root")?
             .join(path)
     };
 
@@ -1137,16 +1126,16 @@ mod tests {
     }
 
     #[test]
-    fn config_root_uses_aibox_root_without_agent_suffix() {
+    fn aibox_root_uses_aibox_root_without_agent_suffix() {
         let _env_lock = crate::test_env_lock();
         let cwd = std::env::current_dir().unwrap();
 
         let _root = EnvGuard::set("AIBOX_ROOT", "relative-root");
-        assert_eq!(config_root().unwrap(), cwd.join("relative-root"));
+        assert_eq!(aibox_root().unwrap(), cwd.join("relative-root"));
     }
 
     #[test]
-    fn config_root_resolves_parent_components_only_through_existing_directories() {
+    fn aibox_root_resolves_parent_components_only_through_existing_directories() {
         let _env_lock = crate::test_env_lock();
         let scratch = tempfile::tempdir().unwrap();
         let existing = scratch.path().join("existing");
@@ -1156,7 +1145,7 @@ mod tests {
             let configured = existing.join("../resolved-root");
             let _root = EnvGuard::set("AIBOX_ROOT", configured.as_os_str());
             assert_eq!(
-                config_root().unwrap(),
+                aibox_root().unwrap(),
                 fs::canonicalize(scratch.path())
                     .unwrap()
                     .join("resolved-root")
@@ -1165,12 +1154,12 @@ mod tests {
 
         let unresolved = scratch.path().join("future/../unexpected-root");
         let _root = EnvGuard::set("AIBOX_ROOT", unresolved.as_os_str());
-        let err = config_root().unwrap_err().to_string();
+        let err = aibox_root().unwrap_err().to_string();
 
         assert!(err.contains("must exist first"), "{err}");
         assert!(
             !scratch.path().join("future").exists(),
-            "resolving a config root must not create an intermediate path"
+            "resolving an aibox root must not create an intermediate path"
         );
         assert!(
             !scratch.path().join("unexpected-root").exists(),
@@ -1179,12 +1168,12 @@ mod tests {
     }
 
     #[test]
-    fn config_root_requires_home_without_override() {
+    fn aibox_root_requires_home_without_override() {
         let _env_lock = crate::test_env_lock();
         let _root = EnvGuard::remove("AIBOX_ROOT");
         let _home = EnvGuard::remove("HOME");
 
-        let err = config_root().unwrap_err().to_string();
+        let err = aibox_root().unwrap_err().to_string();
 
         assert!(err.contains("$HOME is not set"), "{err}");
     }
@@ -1220,15 +1209,15 @@ mod tests {
         );
         assert_eq!(
             codex.provider_dir("openai"),
-            Path::new("/aibox/default/config/codex/openai")
+            Path::new("/aibox/default/provider/codex/openai")
         );
         assert_eq!(
             codex.backups_dir(),
-            Path::new("/aibox/default/config/codex/.backup")
+            Path::new("/aibox/default/provider/codex/.backup")
         );
         assert_eq!(
             codex.state_path(),
-            Path::new("/aibox/default/config/codex/.state.json")
+            Path::new("/aibox/default/provider/codex/.state.json")
         );
     }
 
@@ -1243,13 +1232,13 @@ mod tests {
         assert_eq!(p.active_agent_dir, Path::new("/host-home/.codex"));
         assert_eq!(
             p.provider_dir("openai"),
-            Path::new("/aibox/host/config/codex/openai")
+            Path::new("/aibox/host/provider/codex/openai")
         );
         assert!(p.ensure_runnable_profile().is_err());
     }
 
     #[test]
-    fn host_config_and_session_operations_reject_a_missing_home() {
+    fn host_provider_and_session_operations_reject_a_missing_home() {
         let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
         let missing_home = root.path().join("missing-home");
@@ -1290,8 +1279,8 @@ mod tests {
             fs::read_to_string(home.join(".gitconfig")).unwrap(),
             "[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n"
         );
-        assert!(root.path().join("work/config/codex").is_dir());
-        assert!(root.path().join("work/config/claude").is_dir());
+        assert!(root.path().join("work/provider/codex").is_dir());
+        assert!(root.path().join("work/provider/claude").is_dir());
         assert!(!root.path().join("work/tracing").exists());
         assert!(root.path().join(".locks/work").is_file());
         assert_eq!(list_profiles(root.path()).unwrap(), ["work"]);
@@ -1545,8 +1534,8 @@ mod tests {
             "#!/bin/sh\necho existing\n"
         );
         assert!(home.join(".codex").is_dir());
-        assert!(root.path().join("work/config/codex").is_dir());
-        assert!(root.path().join("work/config/claude").is_dir());
+        assert!(root.path().join("work/provider/codex").is_dir());
+        assert!(root.path().join("work/provider/claude").is_dir());
     }
 
     #[test]
@@ -1570,8 +1559,8 @@ mod tests {
     fn list_profiles_returns_sorted_valid_ordinary_profiles_only() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("zeta/home")).unwrap();
-        fs::create_dir_all(root.path().join("alpha/config")).unwrap();
-        fs::create_dir_all(root.path().join("host/config")).unwrap();
+        fs::create_dir_all(root.path().join("alpha/provider")).unwrap();
+        fs::create_dir_all(root.path().join("host/provider")).unwrap();
 
         assert_eq!(
             list_profiles(root.path()).unwrap(),
@@ -1678,8 +1667,8 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             create_ordinary_profile(root.path(), "default").unwrap();
             create_ordinary_profile(root.path(), "work").unwrap();
-            fs::create_dir_all(root.path().join("orphan/config/codex")).unwrap();
-            fs::create_dir_all(root.path().join("host/config/codex")).unwrap();
+            fs::create_dir_all(root.path().join("orphan/provider/codex")).unwrap();
+            fs::create_dir_all(root.path().join("host/provider/codex")).unwrap();
 
             delete_ordinary_profiles(root.path(), &target, all, true).unwrap();
 
@@ -1788,9 +1777,9 @@ mod tests {
     }
 
     #[test]
-    fn delete_ordinary_profile_handles_config_only_leftover() {
+    fn delete_ordinary_profile_handles_provider_only_leftover() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("work/config/codex")).unwrap();
+        fs::create_dir_all(root.path().join("work/provider/codex")).unwrap();
 
         delete_ordinary_profile(root.path(), "work", true).unwrap();
 
@@ -1865,7 +1854,7 @@ mod tests {
             "{err}"
         );
         assert!(
-            !root.path().join("work/config").exists(),
+            !root.path().join("work/provider").exists(),
             "profile creation must not leave management state after rejecting the home"
         );
     }
@@ -1887,7 +1876,7 @@ mod tests {
 
         assert!(err.contains("Codex state directory is not a real directory"));
         assert!(
-            !root.path().join("work/config").exists(),
+            !root.path().join("work/provider").exists(),
             "profile creation must not leave management state after rejecting an agent dir"
         );
     }
@@ -1978,29 +1967,15 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn create_ordinary_profile_rejects_legacy_management_root() {
-        use std::os::unix::fs::symlink;
-
+    fn profile_list_rejects_unknown_root_entries() {
         let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        symlink(outside.path(), root.path().join(".config")).unwrap();
+        fs::create_dir(root.path().join(".unexpected")).unwrap();
 
-        let err = create_ordinary_profile(root.path(), "work")
-            .unwrap_err()
-            .to_string();
+        let err = list_profiles(root.path()).unwrap_err().to_string();
 
-        assert!(err.contains("legacy provider management root"), "{err}");
-        assert!(err.contains("profile-centric layout"), "{err}");
-        assert!(
-            !outside.path().join("work").exists(),
-            "provider management data must not be created through legacy .config"
-        );
-        assert!(
-            !root.path().join("work").exists(),
-            "profile home should not be created after rejecting the management root"
-        );
+        assert!(err.contains("unknown aibox root entry"), "{err}");
+        assert!(err.contains(".unexpected"), "{err}");
     }
 
     #[cfg(unix)]
@@ -2032,7 +2007,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let management = root.path().join("work/config");
+        let management = root.path().join("work/provider");
         fs::create_dir_all(&management).unwrap();
         symlink(outside.path(), management.join("codex")).unwrap();
 
@@ -2041,7 +2016,7 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("config management directory is not a real directory"),
+            err.contains("provider management directory is not a real directory"),
             "{err}"
         );
         assert!(
@@ -2056,14 +2031,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn delete_ordinary_profile_rejects_symlinked_config_directory() {
+    fn delete_ordinary_profile_rejects_symlinked_provider_directory() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("work/home")).unwrap();
         fs::create_dir_all(outside.path().join("codex")).unwrap();
-        symlink(outside.path(), root.path().join("work/config")).unwrap();
+        symlink(outside.path(), root.path().join("work/provider")).unwrap();
 
         let err = delete_ordinary_profile(root.path(), "work", true)
             .unwrap_err()
@@ -2076,7 +2051,7 @@ mod tests {
         assert!(root.path().join("work").exists());
         assert!(
             outside.path().join("codex").exists(),
-            "delete must not follow a symlinked config directory and remove outside data"
+            "delete must not follow a symlinked provider directory and remove outside data"
         );
     }
 
@@ -2096,13 +2071,12 @@ mod tests {
     fn profile_layout_rejects_unknown_entries_and_host_home() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("work/home")).unwrap();
-        fs::write(root.path().join("work/.gitconfig"), "legacy\n").unwrap();
+        fs::write(root.path().join("work/unexpected"), "value\n").unwrap();
 
         let err = list_profiles(root.path()).unwrap_err().to_string();
         assert!(err.contains("unknown profile entry"), "{err}");
-        assert!(err.contains("profile-centric layout"), "{err}");
 
-        fs::remove_file(root.path().join("work/.gitconfig")).unwrap();
+        fs::remove_file(root.path().join("work/unexpected")).unwrap();
         fs::create_dir_all(root.path().join("host/home")).unwrap();
         let err = list_profiles(root.path()).unwrap_err().to_string();
         assert!(err.contains("unknown profile entry"), "{err}");
@@ -2129,11 +2103,11 @@ mod tests {
         assert!(err.contains("non-UTF-8 profile entry"), "{err}");
 
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("work/config")).unwrap();
-        fs::create_dir(root.path().join("work/config").join(invalid_name())).unwrap();
+        fs::create_dir_all(root.path().join("work/provider")).unwrap();
+        fs::create_dir(root.path().join("work/provider").join(invalid_name())).unwrap();
         let err = validate_profile_layout(root.path(), "work")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("non-UTF-8 agent config entry"), "{err}");
+        assert!(err.contains("non-UTF-8 agent provider entry"), "{err}");
     }
 }

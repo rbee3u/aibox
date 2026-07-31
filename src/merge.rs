@@ -3,14 +3,14 @@
 //! Objects and tables merge recursively when both sides have that shape;
 //! otherwise the provider value replaces the active value. The top-level
 //! `aibox` namespace is reserved metadata and never enters active
-//! configuration. Its `config.apply.remove` list removes dotted key paths after
+//! configuration. Its `provider.apply.remove` list removes dotted key paths after
 //! the merge.
 
 use anyhow::{bail, Result};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Item, TableLike};
 
-const APPLY_METADATA_PATH: &str = "aibox.config.apply";
+const APPLY_METADATA_PATH: &str = "aibox.provider.apply";
 
 /// Recursively merge when both values are JSON objects; otherwise replace the
 /// base value with the overlay.
@@ -95,13 +95,13 @@ fn extract_toml_remove_paths(doc: &DocumentMut) -> Result<Vec<String>> {
         bail!("aibox metadata must be a table");
     };
 
-    let Some(config) = aibox_table.get("config") else {
+    let Some(provider) = aibox_table.get("provider") else {
         return Ok(Vec::new());
     };
-    let Some(config_table) = config.as_table_like() else {
-        bail!("aibox.config metadata must be a table");
+    let Some(provider_table) = provider.as_table_like() else {
+        bail!("aibox.provider metadata must be a table");
     };
-    let Some(apply) = config_table.get("apply") else {
+    let Some(apply) = provider_table.get("apply") else {
         return Ok(Vec::new());
     };
     let Some(apply_table) = apply.as_table_like() else {
@@ -137,13 +137,13 @@ fn extract_json_remove_paths(value: &JsonValue) -> Result<Vec<String>> {
         bail!("aibox metadata must be a JSON object");
     };
 
-    let Some(config) = aibox_object.get("config") else {
+    let Some(provider) = aibox_object.get("provider") else {
         return Ok(Vec::new());
     };
-    let Some(config_object) = config.as_object() else {
-        bail!("aibox.config metadata must be a JSON object");
+    let Some(provider_object) = provider.as_object() else {
+        bail!("aibox.provider metadata must be a JSON object");
     };
-    let Some(apply) = config_object.get("apply") else {
+    let Some(apply) = provider_object.get("apply") else {
         return Ok(Vec::new());
     };
     let Some(apply_object) = apply.as_object() else {
@@ -314,7 +314,7 @@ model = "common"
 
 [model_providers.openai]
 base_url = "old"
-legacy = true
+existing = true
 "#;
         let overlay = r#"
 model = "provider"
@@ -327,7 +327,7 @@ base_url = "new"
 
         assert!(merged.contains(r#"model = "provider""#));
         assert!(merged.contains(r#"base_url = "new""#));
-        assert!(merged.contains("legacy = true"));
+        assert!(merged.contains("existing = true"));
     }
 
     #[test]
@@ -356,7 +356,7 @@ name = "new"
         assert_eq!(models.get(0).unwrap()["name"].as_str(), Some("new"));
 
         let merged = merge_toml_strings(
-            "service = \"legacy\"\n",
+            "service = \"existing\"\n",
             "service = { url = \"new\", retry = 2 }\n",
         )
         .unwrap();
@@ -374,7 +374,7 @@ model_provider = "custom"
 [model_providers.custom]
 base_url = "old"
 
-[aibox.config.apply]
+[aibox.provider.apply]
 remove = ["stale"]
 "#;
         let overlay = r#"
@@ -384,7 +384,7 @@ model_provider = "custom"
 [model_providers.custom]
 base_url = "new"
 
-[aibox.config.apply]
+[aibox.provider.apply]
 remove = ["model_provider", "model_providers.custom", "missing.path"]
 "#;
 
@@ -401,7 +401,7 @@ remove = ["model_provider", "model_providers.custom", "missing.path"]
         let base = r#"
 model = "active"
 
-[aibox.config.apply]
+[aibox.provider.apply]
 remove = ["model"]
 "#;
         let overlay = r#"
@@ -420,7 +420,7 @@ approval_policy = "never"
         let mut base = json!({
             "model": "active",
             "aibox": {
-                "config": {
+                "provider": {
                     "apply": {
                         "remove": ["model"]
                     }
@@ -442,14 +442,14 @@ approval_policy = "never"
 
     #[test]
     fn toml_apply_metadata_rejects_bad_remove_paths() {
-        let merged = merge_toml_strings("", r#"[aibox.config.apply]"#).unwrap();
+        let merged = merge_toml_strings("", r#"[aibox.provider.apply]"#).unwrap();
         assert!(!merged.contains("[aibox"));
 
-        let err = merge_toml_strings("", "[aibox.config.apply]\nremove = [\"\"]").unwrap_err();
+        let err = merge_toml_strings("", "[aibox.provider.apply]\nremove = [\"\"]").unwrap_err();
         assert!(err.to_string().contains("non-empty dotted key path"));
 
         let err =
-            merge_toml_strings("", "[aibox.config.apply]\nremove = [\"foo..bar\"]").unwrap_err();
+            merge_toml_strings("", "[aibox.provider.apply]\nremove = [\"foo..bar\"]").unwrap_err();
         assert!(err.to_string().contains("non-empty dotted key path"));
     }
 
@@ -458,20 +458,20 @@ approval_policy = "never"
         for (overlay, expected) in [
             ("aibox = true", "aibox metadata must be a table"),
             (
-                "[aibox]\nconfig = true",
-                "aibox.config metadata must be a table",
+                "[aibox]\nprovider = true",
+                "aibox.provider metadata must be a table",
             ),
             (
-                "[aibox.config]\napply = true",
-                "aibox.config.apply metadata must be a table",
+                "[aibox.provider]\napply = true",
+                "aibox.provider.apply metadata must be a table",
             ),
             (
-                "[aibox.config.apply]\nremove = \"model\"",
-                "aibox.config.apply.remove must be an array of strings",
+                "[aibox.provider.apply]\nremove = \"model\"",
+                "aibox.provider.apply.remove must be an array of strings",
             ),
             (
-                "[aibox.config.apply]\nremove = [1]",
-                "aibox.config.apply.remove must be an array of strings",
+                "[aibox.provider.apply]\nremove = [1]",
+                "aibox.provider.apply.remove must be an array of strings",
             ),
         ] {
             let err = merge_toml_strings("", overlay).unwrap_err().to_string();
@@ -488,7 +488,7 @@ approval_policy = "never"
                 "drop": true
             },
             "aibox": {
-                "config": {
+                "provider": {
                     "apply": {
                         "remove": ["stale"]
                     }
@@ -502,7 +502,7 @@ approval_policy = "never"
                 "add": 1
             },
             "aibox": {
-                "config": {
+                "provider": {
                     "apply": {
                         "remove": ["nested.drop", "missing.path"]
                     }
@@ -530,7 +530,7 @@ approval_policy = "never"
             let mut base = json!({});
             let overlay = json!({
                 "aibox": {
-                    "config": {
+                    "provider": {
                         "apply": {
                             "remove": [path]
                         }
@@ -554,20 +554,20 @@ approval_policy = "never"
                 "aibox metadata must be a JSON object",
             ),
             (
-                json!({"aibox": {"config": true}}),
-                "aibox.config metadata must be a JSON object",
+                json!({"aibox": {"provider": true}}),
+                "aibox.provider metadata must be a JSON object",
             ),
             (
-                json!({"aibox": {"config": {"apply": true}}}),
-                "aibox.config.apply metadata must be a JSON object",
+                json!({"aibox": {"provider": {"apply": true}}}),
+                "aibox.provider.apply metadata must be a JSON object",
             ),
             (
-                json!({"aibox": {"config": {"apply": {"remove": "model"}}}}),
-                "aibox.config.apply.remove must be an array of strings",
+                json!({"aibox": {"provider": {"apply": {"remove": "model"}}}}),
+                "aibox.provider.apply.remove must be an array of strings",
             ),
             (
-                json!({"aibox": {"config": {"apply": {"remove": [1]}}}}),
-                "aibox.config.apply.remove must be an array of strings",
+                json!({"aibox": {"provider": {"apply": {"remove": [1]}}}}),
+                "aibox.provider.apply.remove must be an array of strings",
             ),
         ] {
             let mut base = json!({});

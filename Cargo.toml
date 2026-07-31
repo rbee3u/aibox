@@ -10,7 +10,7 @@ readme = "README.md"
 categories = ["command-line-utilities", "development-tools"]
 keywords = ["docker", "sandbox", "claude", "codex", "agent"]
 
-# Single binary; agent-scoped commands select Claude/Codex with `--agent`.
+# Single binary; run and agent-scoped commands select Claude/Codex with `--agent`.
 # Shared logic lives in the library so it can be unit-tested.
 [lib]
 name = "aibox"

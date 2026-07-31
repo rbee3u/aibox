@@ -15,12 +15,12 @@
 pub mod agent;
 pub mod cli;
 mod completion;
-pub mod config;
 pub mod creds;
 pub mod docker;
 pub mod merge;
 pub mod platform;
 pub mod profile;
+pub mod provider;
 pub mod runspec;
 pub mod session;
 mod session_claude;
@@ -126,74 +126,46 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
 /// strings after the pass-through boundary.
 ///
 /// `passthrough` must contain only the arguments after the first `--`; they are
-/// forwarded unchanged for an agent run and rejected for subcommands. The
-/// returned value is the process exit code to expose to the caller.
+/// forwarded unchanged for the `run` command and rejected for other commands.
+/// The returned value is the process exit code to expose to the caller.
 pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
-    let Cli {
-        agent: root_agent,
-        run: run_args,
-        command,
-    } = cli;
-
-    match command {
-        None => run_agent(
-            root_agent.unwrap_or(AgentKind::Codex),
-            &run_args,
-            &passthrough,
-        ),
-        Some(Command::Build(args)) => {
+    match cli.command {
+        Command::Run(args) => {
+            run_agent(args.agent.unwrap_or(AgentKind::Codex), &args, &passthrough)
+        }
+        Command::Build(args) => {
             reject_passthrough("build takes no pass-through args", &passthrough)?;
-            if root_agent.is_some() {
-                anyhow::bail!("build does not accept --agent");
-            }
-            reject_command_run_options("build", &run_args)?;
             run_build(&args)
         }
-        Some(Command::Completion(args)) => {
+        Command::Completion(args) => {
             reject_passthrough("completion takes no pass-through args", &passthrough)?;
-            if root_agent.is_some() {
-                anyhow::bail!("completion does not accept --agent");
-            }
-            reject_command_run_options("completion", &run_args)?;
             completion::dispatch(&args)
         }
-        Some(Command::Profile(args)) => {
+        Command::Profile(args) => {
             reject_passthrough("profile takes no pass-through args", &passthrough)?;
-            if root_agent.is_some() {
-                anyhow::bail!("profile is shared across agents and does not accept --agent");
-            }
-            reject_command_run_options("profile", &run_args)?;
             profile::dispatch(&args.command)
         }
-        Some(Command::Config(args)) => {
-            if root_agent.is_some() {
-                anyhow::bail!("config does not accept root --agent");
-            }
-            reject_run_only_options(&run_args)?;
+        Command::Provider(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
-            run_config_command(agent, args.profile_name(), &args.command, &passthrough)
+            run_provider_command(agent, args.profile_name(), &args.command, &passthrough)
         }
-        Some(Command::Session(args)) => {
-            if root_agent.is_some() {
-                anyhow::bail!("session does not accept root --agent");
-            }
-            reject_run_only_options(&run_args)?;
+        Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
             run_session_command(agent, args.profile_name(), &args, &passthrough)
         }
     }
 }
 
-fn run_config_command(
+fn run_provider_command(
     agent: AgentKind,
     profile_name: &str,
-    command: &cli::ConfigCommand,
+    command: &cli::ProviderCommand,
     passthrough: &[OsString],
 ) -> Result<i32> {
-    reject_passthrough("config/session take no pass-through args", passthrough)?;
-    let root = profile::config_root()?;
+    reject_passthrough("provider/session take no pass-through args", passthrough)?;
+    let root = profile::aibox_root()?;
     let prof = Profile::resolve(agent, &root, profile_name)?;
-    config::dispatch(agent, &prof, command)
+    provider::dispatch(agent, &prof, command)
 }
 
 fn run_session_command(
@@ -202,8 +174,8 @@ fn run_session_command(
     args: &SessionArgs,
     passthrough: &[OsString],
 ) -> Result<i32> {
-    reject_passthrough("config/session take no pass-through args", passthrough)?;
-    let root = profile::config_root()?;
+    reject_passthrough("provider/session take no pass-through args", passthrough)?;
+    let root = profile::aibox_root()?;
     let prof = Profile::resolve(agent, &root, profile_name)?;
     prof.validate_session_home()?;
     match args.command.as_ref() {
@@ -231,45 +203,6 @@ fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()>
     Ok(())
 }
 
-fn reject_run_only_options(run: &RunArgs) -> Result<()> {
-    let used = used_run_only_options(run);
-    if !used.is_empty() {
-        anyhow::bail!(
-            "config/session do not accept run-only options: {}",
-            used.join(", ")
-        );
-    }
-    Ok(())
-}
-
-fn reject_command_run_options(command: &str, run: &RunArgs) -> Result<()> {
-    let used = used_command_run_options(run);
-    if !used.is_empty() {
-        anyhow::bail!("{command} does not accept run options: {}", used.join(", "));
-    }
-    Ok(())
-}
-
-fn used_command_run_options(run: &RunArgs) -> Vec<&'static str> {
-    let mut used = Vec::new();
-    if run.profile.is_some() {
-        used.push("--profile");
-    }
-    used.extend(used_run_only_options(run));
-    used
-}
-
-fn used_run_only_options(run: &RunArgs) -> Vec<&'static str> {
-    let mut used = Vec::new();
-    if run.work.is_some() {
-        used.push("--work");
-    }
-    if !run.mount.is_empty() {
-        used.push("--mount");
-    }
-    used
-}
-
 fn run_build(args: &BuildArgs) -> Result<i32> {
     let image_override = env_override("AIBOX_IMAGE")?;
     let image = image_for(image_override.as_deref())?;
@@ -295,10 +228,12 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
         eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
     }
 
-    let root = profile::config_root()?;
+    let root = profile::aibox_root()?;
     let prof = Profile::resolve(agent, &root, run.profile_name())?;
     if prof.is_host() {
-        anyhow::bail!("profile 'host' is only valid for config/session commands, not Docker runs");
+        anyhow::bail!(
+            "profile 'host' is only valid for provider/session commands, not Docker runs"
+        );
     }
     profile::real_dir_exists(&prof.home_dir, "profile home")?;
 
@@ -488,7 +423,10 @@ printf '\nEND\n' >> "$log"
             let fx = RunFixture::new();
             let _image = EnvGuard::set("AIBOX_IMAGE", image);
 
-            let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+            let err = fx
+                .run(&["aibox", "run"], Vec::new())
+                .unwrap_err()
+                .to_string();
 
             assert!(err.contains(expected), "{image:?}: {err}");
             assert_eq!(
@@ -512,7 +450,10 @@ printf '\nEND\n' >> "$log"
         let image = OsString::from_vec(vec![b'a', b'i', b'b', b'o', b'x', 0xff]);
         let _image = EnvGuard::set("AIBOX_IMAGE", image);
 
-        let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+        let err = fx
+            .run(&["aibox", "run"], Vec::new())
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains("AIBOX_IMAGE is not valid UTF-8"), "{err}");
         assert_eq!(
@@ -549,7 +490,7 @@ printf '\nEND\n' >> "$log"
     #[test]
     fn default_run_uses_codex_shared_profile_home_without_provider_injection() {
         let fx = RunFixture::new();
-        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+        let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
         assert_eq!(code, 0);
 
         let log = fx.log();
@@ -569,8 +510,8 @@ printf '\nEND\n' >> "$log"
             .join("default/home/.claude/statusline.sh")
             .is_file());
         assert!(fx.root.path().join("default/home/.gitconfig").is_file());
-        assert!(fx.root.path().join("default/config/codex").is_dir());
-        assert!(fx.root.path().join("default/config/claude").is_dir());
+        assert!(fx.root.path().join("default/provider/codex").is_dir());
+        assert!(fx.root.path().join("default/provider/claude").is_dir());
         assert!(!fx.root.path().join("default/tracing").exists());
         assert!(!log.contains("<--env-file>"), "{log}");
         assert!(!log.contains("<-c>"), "{log}");
@@ -591,7 +532,7 @@ printf '\nEND\n' >> "$log"
         let configured_root = parent_link.join("aibox-root");
         let _root = EnvGuard::set("AIBOX_ROOT", configured_root.as_os_str());
 
-        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+        let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
 
         assert_eq!(code, 0);
         let log = fx.log();
@@ -614,7 +555,7 @@ printf '\nEND\n' >> "$log"
         let fx = RunFixture::new();
         let _image = EnvGuard::set("AIBOX_IMAGE", "registry.example/aibox:test");
 
-        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+        let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
 
         assert_eq!(code, 0);
         let log = fx.log();
@@ -634,7 +575,7 @@ printf '\nEND\n' >> "$log"
     fn run_preserves_applied_config_without_remounting_or_reapplying_provider_data() {
         let fx = RunFixture::new();
         let profile = Profile::resolve(AgentKind::Codex, fx.root.path(), "default").unwrap();
-        config::create_provider(&profile, "openai").unwrap();
+        provider::create_provider(&profile, "openai").unwrap();
         std::fs::write(
             profile.provider_file("openai", "config.toml"),
             "model = \"provider\"\n",
@@ -645,7 +586,7 @@ printf '\nEND\n' >> "$log"
             r#"{"token":"provider"}"#,
         )
         .unwrap();
-        config::apply_provider(&profile, "openai").unwrap();
+        provider::apply_provider(&profile, "openai").unwrap();
 
         let active_config = "model = \"locally-adjusted\"\n";
         let active_auth = r#"{"token":"locally-adjusted"}"#;
@@ -653,7 +594,7 @@ printf '\nEND\n' >> "$log"
         std::fs::write(profile.active_file("auth.json"), active_auth).unwrap();
         let backups_before = std::fs::read_dir(profile.backups_dir()).unwrap().count();
 
-        let code = fx.run(&["aibox"], Vec::new()).unwrap();
+        let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
 
         assert_eq!(code, 0);
         assert_eq!(
@@ -669,7 +610,7 @@ printf '\nEND\n' >> "$log"
         assert_eq!(
             std::fs::read_dir(profile.backups_dir()).unwrap().count(),
             backups_before,
-            "a run must not perform an implicit config apply or backup"
+            "a run must not perform an implicit provider apply or backup"
         );
         let log = fx.log();
         assert!(
@@ -685,7 +626,7 @@ printf '\nEND\n' >> "$log"
 
         let code = fx
             .run(
-                &["aibox"],
+                &["aibox", "run"],
                 vec![
                     "exec".to_string(),
                     "fix tests".to_string(),
@@ -713,7 +654,7 @@ printf '\nEND\n' >> "$log"
 
         let fx = RunFixture::new();
         let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
-        let cli = Cli::try_parse_from(["aibox"]).unwrap();
+        let cli = Cli::try_parse_from(["aibox", "run"]).unwrap();
 
         let code = run_os(cli, vec![opaque.clone()]).unwrap();
 
@@ -730,7 +671,8 @@ printf '\nEND\n' >> "$log"
     #[test]
     fn claude_run_seeds_statusline_but_not_settings() {
         let fx = RunFixture::new();
-        fx.run(&["aibox", "--agent", "claude"], Vec::new()).unwrap();
+        fx.run(&["aibox", "run", "--agent", "claude"], Vec::new())
+            .unwrap();
 
         let log = fx.log();
         assert!(log.contains(&format!(
@@ -746,8 +688,8 @@ printf '\nEND\n' >> "$log"
             .exists());
         assert!(fx.root.path().join("default/home/.codex").is_dir());
         assert!(fx.root.path().join("default/home/.gitconfig").is_file());
-        assert!(fx.root.path().join("default/config/codex").is_dir());
-        assert!(fx.root.path().join("default/config/claude").is_dir());
+        assert!(fx.root.path().join("default/provider/codex").is_dir());
+        assert!(fx.root.path().join("default/provider/claude").is_dir());
         assert!(!fx
             .root
             .path()
@@ -759,20 +701,20 @@ printf '\nEND\n' >> "$log"
     #[test]
     fn host_profile_is_rejected_for_run_but_allowed_for_session() {
         let fx = RunFixture::new();
-        assert!(Cli::try_parse_from(["aibox", "-p", "host"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "run", "--profile", "host"]).is_err());
 
         let code = fx
-            .run(&["aibox", "session", "-p", "host"], Vec::new())
+            .run(&["aibox", "session", "--profile", "host"], Vec::new())
             .unwrap();
         assert_eq!(code, 0);
     }
 
     #[cfg(unix)]
     #[test]
-    fn config_and_session_reject_passthrough() {
+    fn provider_and_session_reject_passthrough() {
         let fx = RunFixture::new();
         for argv in [
-            &["aibox", "config", "list"][..],
+            &["aibox", "provider", "list"][..],
             &["aibox", "session", "list"][..],
         ] {
             let err = fx
@@ -790,14 +732,14 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn config_command_agent_selects_the_provider_management_tree() {
+    fn provider_command_agent_selects_the_provider_management_tree() {
         let fx = RunFixture::new();
 
         let code = fx
             .run(
                 &[
                     "aibox",
-                    "config",
+                    "provider",
                     "--agent",
                     "claude",
                     "create",
@@ -811,12 +753,12 @@ printf '\nEND\n' >> "$log"
         assert!(fx
             .root
             .path()
-            .join("default/config/claude/anthropic/settings.json")
+            .join("default/provider/claude/anthropic/settings.json")
             .is_file());
         assert!(
             !fx.root
                 .path()
-                .join("default/config/codex/anthropic")
+                .join("default/provider/codex/anthropic")
                 .exists(),
             "a command-level --agent claude must not create a Codex provider"
         );
@@ -850,11 +792,11 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn config_apply_and_delete_route_to_the_selected_profile_without_docker() {
+    fn provider_apply_and_delete_route_to_the_selected_profile_without_docker() {
         let fx = RunFixture::new();
 
         fx.run(
-            &["aibox", "config", "--profile", "work", "create", "openai"],
+            &["aibox", "provider", "--profile", "work", "create", "openai"],
             Vec::new(),
         )
         .unwrap();
@@ -872,7 +814,7 @@ printf '\nEND\n' >> "$log"
 
         let code = fx
             .run(
-                &["aibox", "config", "apply", "openai", "--profile", "work"],
+                &["aibox", "provider", "apply", "openai", "--profile", "work"],
                 Vec::new(),
             )
             .unwrap();
@@ -887,14 +829,14 @@ printf '\nEND\n' >> "$log"
                 .path()
                 .join("default/home/.codex/config.toml")
                 .exists(),
-            "a scoped config command must not fall back to the default profile"
+            "a scoped provider command must not fall back to the default profile"
         );
 
         let code = fx
             .run(
                 &[
                     "aibox",
-                    "config",
+                    "provider",
                     "--profile=work",
                     "delete",
                     "openai",
@@ -913,7 +855,7 @@ printf '\nEND\n' >> "$log"
         assert_eq!(
             fx.log(),
             "",
-            "host-side config management must never invoke Docker"
+            "host-side provider management must never invoke Docker"
         );
     }
 
@@ -958,17 +900,14 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn agent_flag_conflicts_are_rejected_across_command_levels() {
+    fn duplicate_agent_flags_are_rejected_before_docker_is_consulted() {
         let fx = RunFixture::new();
 
         for argv in [
+            &["aibox", "run", "--agent", "claude", "--agent", "codex"][..],
             &[
-                "aibox", "--agent", "claude", "config", "--agent", "codex", "list",
+                "aibox", "provider", "--agent", "claude", "list", "--agent", "codex",
             ][..],
-            &[
-                "aibox", "config", "--agent", "claude", "list", "--agent", "codex",
-            ][..],
-            &["aibox", "--agent", "claude", "session", "--agent", "codex"][..],
             &[
                 "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
             ][..],
@@ -996,7 +935,7 @@ printf '\nEND\n' >> "$log"
             .to_string();
         assert!(err.contains("build takes no pass-through args"), "{err}");
 
-        assert!(Cli::try_parse_from(["aibox", "-p", "work", "build"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "--profile", "work", "build"]).is_err());
 
         let err = fx
             .run(&["aibox", "profile", "list"], vec!["ignored".to_string()])
@@ -1028,7 +967,7 @@ printf '\nEND\n' >> "$log"
     fn invalid_run_mount_does_not_create_profile_home() {
         let fx = RunFixture::new();
         let err = fx
-            .run(&["aibox", "-m", "/no/such/dir:/cache"], Vec::new())
+            .run(&["aibox", "run", "-m", "/no/such/dir:/cache"], Vec::new())
             .unwrap_err()
             .to_string();
 
@@ -1042,7 +981,10 @@ printf '\nEND\n' >> "$log"
         let fx = RunFixture::new();
         let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing");
 
-        let err = fx.run(&["aibox"], Vec::new()).unwrap_err().to_string();
+        let err = fx
+            .run(&["aibox", "run"], Vec::new())
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains("not present locally"), "{err}");
         assert!(
@@ -1059,7 +1001,7 @@ printf '\nEND\n' >> "$log"
         let fx = RunFixture::new();
         let work = fx.root.path().to_str().unwrap();
         let err = fx
-            .run(&["aibox", "-w", work], Vec::new())
+            .run(&["aibox", "run", "-w", work], Vec::new())
             .unwrap_err()
             .to_string();
 
@@ -1069,14 +1011,14 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn run_rejects_mount_that_would_expose_profile_config() {
+    fn run_rejects_mount_that_would_expose_provider_data() {
         let fx = RunFixture::new();
-        let management = fx.root.path().join("default/config");
+        let management = fx.root.path().join("default/provider");
         std::fs::create_dir_all(management.join("codex")).unwrap();
         let mount = format!("{}:/secrets:ro", management.display());
 
         let err = fx
-            .run(&["aibox", "-m", &mount], Vec::new())
+            .run(&["aibox", "run", "-m", &mount], Vec::new())
             .unwrap_err()
             .to_string();
 
@@ -1087,24 +1029,6 @@ printf '\nEND\n' >> "$log"
             "",
             "management mount validation should fail before docker is consulted"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn root_agent_flag_cannot_cross_command_boundaries() {
-        assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "profile", "list"]).is_err());
-
-        assert!(Cli::try_parse_from(["aibox", "--agent", "claude", "build"]).is_err());
-
-        assert!(Cli::try_parse_from([
-            "aibox", "--agent", "claude", "config", "list", "--agent", "codex",
-        ])
-        .is_err());
-
-        assert!(Cli::try_parse_from([
-            "aibox", "--agent", "claude", "session", "delete", "abc", "--agent", "codex",
-        ])
-        .is_err());
     }
 
     #[test]
