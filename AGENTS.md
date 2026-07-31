@@ -1,75 +1,105 @@
 # AGENTS.md
 
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
-container. The container, not the agent process, is the sandbox boundary.
-`README.md` is the concise entry point for evaluation, installation, first use,
-and the core safety model. Advanced user behavior has one canonical home in
-`docs/profiles.md`, `docs/providers.md`, or `docs/sandbox.md`; keep README
-examples, those guides, and clap help aligned without copying full references
-between them.
+container. The container, not the agent process, is the Filesystem Sandbox.
+`CONTEXT.md` defines the canonical domain language; keep code, clap help, and
+user documentation aligned with it. Architectural decisions live in
+`docs/adr/`.
 
-Keep this file limited to project-specific constraints that are hard to infer
-from the code and costly to violate. Prefer existing modules and data flows;
-add an abstraction, configuration layer, or compatibility path only for a
-demonstrated requirement, such as a user request, test, published behavior, or
-observed failure.
+`README.md` is the concise entry point for evaluation, installation, first use,
+and the core safety model. Advanced behavior has one canonical home in
+`docs/tenants.md`, `docs/providers.md`, or `docs/sandbox.md`; keep examples and
+clap help aligned without copying full references between them.
 
 ## Constraints
 
-**Centralize shared agent contracts.** Put agent-specific paths, managed files,
-and invocation behavior in `AgentKind` in `agent.rs`. Keep transcript-format
-parsing in `session_claude.rs` and `session_codex.rs`. The Docker image and
-container home remain shared so agent support does not fork shared
-orchestration.
+**Centralize Coding Agent contracts.** Put agent-specific paths, Provider
+files, and invocation behavior in `AgentKind` in `agent.rs`. Keep transcript
+parsing in `session_claude.rs` and `session_codex.rs`. The Docker image,
+container Home, and orchestration remain shared.
 
 **Preserve the CLI boundary.** Split argv at the first `--` before clap parses
-it, and pass the right side verbatim only to `run`. The `run`, `provider`, and
-`session` commands own separately scoped `--agent`/`--profile` options;
-`build`, `completion`, and `profile` accept neither. Completion must
-mirror these scopes and the `--` boundary; candidate discovery stays host-side
-and must not initialize profiles or start Docker. Keep clap help, README
-examples, and scope-rejection tests aligned.
+it, and pass the right side verbatim only to `run`. `run`, `provider`, and
+`session` own separately scoped `--agent`/`--tenant` options; `component` owns
+only `--tenant`; only `provider` and `session` accept `--host`. `build`,
+`completion`, and `tenant` accept none of them. Completion mirrors these
+scopes, stays read-only, and runs on the host.
 
-**Keep provider application explicit and persistent.** A run consumes the
-active agent files left by `provider apply`; it must not inject or reapply
-provider data. `provider apply` deep-merges `config.toml` or `settings.json` into
-the current active config; Codex `auth.json` is validated and replaced as a
-whole. Changing providers is not an implicit rollback or reset, so previously
-applied keys may persist.
+**Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
+`host` is a valid Managed Tenant name. The Host Tenant is selected only with
+`--host`, cannot Run, and never appears in `tenant list` or deletion. Only
+`tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`.
 
-**Keep management data on the host.** Within `$AIBOX_ROOT`, only an ordinary
-profile's `home` may be used as a bind source; all other data is host-only. The
-special `host` profile lets `provider` and `session` operate on the real host
-agent dirs while metadata stays under `$AIBOX_ROOT`; it has no managed home and
-must be rejected by Docker runs and profile deletion. This prevents management
-state and real host agent data from crossing the container boundary.
+**Keep the direct layout.** A Managed Tenant exists exactly when
+`tenants/<name>` is a real directory. Agent/Tenant metadata lives under
+`<agent>/<name>/`; Host Tenant metadata uses `<agent>/__host/`. Do not add layout
+versions, migration readers, management wrappers, or lock directories. Ignore
+unknown collection entries during listing, but reject explicitly selected
+unsafe paths.
 
-**Validate every bind mount before Docker sees it.** Resolve host sources so
-they cannot become named volumes or escape path checks. Extra mounts may nest
-beneath managed targets, but must not replace `/work` or the shared container
-home.
+**Keep Provider activation explicit and persistent.** A Run consumes native
+Agent Configuration and never injects or reapplies Provider data. Provider
+catalogs and Active Provider state are local to one Tenant and Coding Agent.
+Activation snapshots the base and applied Provider. Reconciliation is a
+three-way merge of applied, source, and working state; conflicts require
+explicit JSON Pointer choices.
 
-**Treat container-writable profile paths as untrusted.** Host-side reads,
-writes, and deletions must reject symlinked or unexpected path entries and
-validate every relevant ancestor. `session list` may return readable rows with
-traversal errors; `session get` and `session delete` must fail on a partial
-view. Transcripts without a typed prompt must still be listed and included in
-delete-all operations.
+**Keep Agent permissions native.** Both built-in Provider templates use native
+Agent Configuration for non-interactive, unrestricted operation. Do not add
+permission or sandbox flags to invocation arguments, or enable the Claude status
+line in its template. Claude Provider `auth.json` is a string map projected into
+`settings.env`; Codex `auth.json` is whole-file ownership. Every Provider auth
+file is mode `0600`.
 
-**Keep Docker runs single-active and cleanup-aware.** Agent runs must go through
-`docker::run`; its child/cidfile registry supports one active run per process.
-Register the cidfile before spawning Docker, register the child immediately
-afterward, and keep cleanup armed until `finish_child` checks for a container
-that outlived the Docker client, or a signal race can orphan the container.
+**Keep Components optional and native.** Tenant initialization does not install
+status lines or toolchains. `component` operates only on Managed Tenants and
+derives state from native Tenant Home files without a registry. Status-line
+installation owns only its script and native configuration keys. Rust and Go
+install through the shared image with only the Tenant Home mounted; preserve
+Cargo and GOPATH user state across SDK replacement.
 
-**Keep the embedded Dockerfile context-free.** It must not depend on local
-build-context files: `docker.rs` passes it to `docker build -f -` with an empty
-context, so dependencies must be fetched during the build.
+**Roll Provider transactions forward.** State-changing Provider commands first
+persist typed pending changes in the Agent/Tenant `.metadata.json`, then apply
+them idempotently and clear the pending record. Provider commands, Runs, and
+status-line installation resume interrupted transactions. Pending records may
+identify only known Agent and Provider files, never arbitrary paths. Do not add
+backup, restore, rollback, or filesystem-lock machinery.
+
+**Use explicit destructive selection.** Tenant, Provider, and Session deletion
+require names/ids or `--all`; an empty list never means all. `--all` and
+explicit selections are mutually exclusive. Explicit deletion rejects an
+Active Provider; Provider `--all` keeps it and deletes the inactive Providers.
+
+**Treat container-writable paths as untrusted.** Host-side reads, writes, and
+deletions reject symlinked or unexpected entries and validate relevant
+ancestors. `session list` may return readable rows with traversal errors;
+`session get` and `session delete` fail on a partial view. Transcripts without a
+typed prompt remain visible and deletable.
+
+**Keep missing scopes quiet.** Provider list and Session list return empty for
+a missing Managed Tenant, Provider status reports inactive, and Component list
+reports every Component as not installed. Read-only commands and completion
+create nothing. `run`, `provider create`, and `component install` may initialize
+a missing Managed Tenant.
+
+**Do not imply cross-process coordination.** Tenant lifecycle and Provider
+transactions recover their own interrupted filesystem work, but aibox provides
+no multi-process locking guarantee. One aibox process still supports only one
+active Run.
+
+**Keep Docker runs cleanup-aware.** Agent Runs and toolchain installers go
+through `docker::run`; its child/cidfile registry supports one active container
+operation per process. Register the cidfile before spawning Docker, register
+the child immediately afterward, and keep cleanup armed until `finish_child`
+checks for a container that outlived the Docker client.
+
+**Keep the embedded Dockerfile context-free.** `docker.rs` passes it to
+`docker build -f -` with an empty context, so dependencies must be fetched
+during the build.
 
 ## Checks
 
-Run checks relevant to the change before handing it off and report any check
-the environment prevents. For Rust changes, run all of these:
+For Rust changes, run all of these:
 
 - `cargo fmt --check`
 - `cargo test`

@@ -104,12 +104,6 @@ impl EnvGuard {
         Self { name, old }
     }
 
-    pub(crate) fn remove(name: &'static str) -> Self {
-        let old = std::env::var_os(name);
-        std::env::remove_var(name);
-        Self { name, old }
-    }
-
     /// Put `dir` first on `$PATH`, so a stub `docker` there wins over a real one.
     pub(crate) fn prepend_path(dir: &Path) -> Self {
         let old = std::env::var_os("PATH");

@@ -39,7 +39,7 @@ impl AgentKind {
         }
     }
 
-    /// Agent state directory relative to the shared profile home.
+    /// Agent state directory relative to the shared Tenant Home.
     pub fn active_dir_name(self) -> &'static str {
         match self {
             AgentKind::Claude => ".claude",
@@ -47,7 +47,7 @@ impl AgentKind {
         }
     }
 
-    /// Primary configuration file managed by provider overlays.
+    /// Primary configuration file materialized from a Provider.
     pub fn main_config_file(self) -> &'static str {
         match self {
             AgentKind::Claude => "settings.json",
@@ -55,19 +55,35 @@ impl AgentKind {
         }
     }
 
-    /// Separately managed authentication file, if the agent uses one.
-    pub fn auth_file(self) -> Option<&'static str> {
+    /// Native authentication file in the Agent Configuration, when separate.
+    pub fn active_auth_file(self) -> Option<&'static str> {
         match self {
             AgentKind::Claude => None,
             AgentKind::Codex => Some("auth.json"),
         }
     }
 
-    /// All active files owned by provider apply and backup operations.
-    pub fn managed_config_files(self) -> &'static [&'static str] {
+    /// Provider credential file. Claude credentials are projected from this
+    /// string map into `settings.json`'s `env` object during materialization.
+    pub fn provider_auth_file(self) -> &'static str {
+        match self {
+            AgentKind::Claude | AgentKind::Codex => "auth.json",
+        }
+    }
+
+    /// Native files comprising the Agent Configuration.
+    pub fn agent_config_files(self) -> &'static [&'static str] {
         match self {
             AgentKind::Claude => &["settings.json"],
             AgentKind::Codex => &["config.toml", "auth.json"],
+        }
+    }
+
+    /// Files comprising one Provider definition.
+    pub fn provider_files(self) -> &'static [&'static str] {
+        match self {
+            AgentKind::Claude => &["settings.json", "auth.json", ".metadata.json"],
+            AgentKind::Codex => &["config.toml", "auth.json", ".metadata.json"],
         }
     }
 
@@ -98,11 +114,12 @@ mod tests {
         assert_eq!(AgentKind::Codex.active_dir_name(), ".codex");
         assert_eq!(AgentKind::Claude.main_config_file(), "settings.json");
         assert_eq!(AgentKind::Codex.main_config_file(), "config.toml");
-        assert_eq!(AgentKind::Codex.auth_file(), Some("auth.json"));
-        assert_eq!(AgentKind::Claude.auth_file(), None);
-        assert_eq!(AgentKind::Claude.managed_config_files(), &["settings.json"]);
+        assert_eq!(AgentKind::Codex.active_auth_file(), Some("auth.json"));
+        assert_eq!(AgentKind::Claude.active_auth_file(), None);
+        assert_eq!(AgentKind::Claude.provider_auth_file(), "auth.json");
+        assert_eq!(AgentKind::Claude.agent_config_files(), &["settings.json"]);
         assert_eq!(
-            AgentKind::Codex.managed_config_files(),
+            AgentKind::Codex.agent_config_files(),
             &["config.toml", "auth.json"]
         );
     }

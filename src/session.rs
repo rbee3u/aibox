@@ -1,4 +1,4 @@
-//! Browse saved chat transcripts directly from a profile home without starting
+//! Browse saved chat transcripts directly from a tenant home without starting
 //! a container. Discovery, id resolution, listing, and deletion are shared;
 //! [`SessionBackend`] isolates the two agents' on-disk formats. Strict discovery
 //! protects `get` and `delete` from partial views, while `list` can report
@@ -40,17 +40,17 @@ fn safe_path(path: &Path) -> String {
 }
 
 /// Resolve a transcript directory only through real directory entries beneath
-/// the profile home. The home is writable by the container, so following an
+/// the tenant home. The home is writable by the container, so following an
 /// agent-planted `.claude`/`.codex` ancestor link here could make host-side
-/// `session delete` remove transcripts outside the profile.
+/// `session delete` remove transcripts outside the tenant.
 pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {
     let mut path = home.to_path_buf();
-    if !crate::profile::real_dir_exists(&path, "profile home")? {
+    if !crate::tenant::real_dir_exists(&path, "tenant home")? {
         return Ok(None);
     }
     for component in components {
         path.push(component);
-        if !crate::profile::real_dir_exists(&path, "session directory")? {
+        if !crate::tenant::real_dir_exists(&path, "session directory")? {
             return Ok(None);
         }
     }
@@ -77,7 +77,7 @@ impl SessionDiscovery {
 
 /// Whether a walked entry is a transcript file we want: a regular `.jsonl` file
 /// whose name passes `keep`. Do not follow a transcript-shaped symlink created
-/// inside the mounted profile home — host-side session browsing must stay inside
+/// inside the mounted tenant home — host-side session browsing must stay inside
 /// the container's transcript tree rather than becoming a path out of the sandbox
 /// boundary. Shared by the strict and tolerant walks so they can't drift on which
 /// files count.
@@ -165,7 +165,7 @@ pub(crate) fn walk_jsonl_tolerant(
 /// line to `f`. Malformed JSON lines are skipped; open and read failures are
 /// returned instead of being misreported as an empty session.
 ///
-/// Streaming on purpose: a profile's transcripts can run to hundreds of MB and
+/// Streaming on purpose: a tenant's transcripts can run to hundreds of MB and
 /// `list` visits every one, so no whole file — nor its parsed lines — is ever
 /// held in memory at once.
 pub(crate) fn for_each_json_line(
@@ -267,7 +267,7 @@ fn test_transcript_home(path: &Path, components: &[&str]) -> Result<PathBuf> {
     for _ in components {
         if !home.pop() {
             bail!(
-                "session transcript has no profile home ancestor: {}",
+                "session transcript has no tenant home ancestor: {}",
                 path.display()
             );
         }
@@ -326,7 +326,7 @@ fn open_session_transcript_at(
 #[cfg(not(unix))]
 fn open_session_transcript(home: &Path, path: &Path) -> Result<fs::File> {
     validate_session_ancestors(home, path)?;
-    crate::profile::open_real_file(path, "session transcript")
+    crate::tenant::open_real_file(path, "session transcript")
 }
 
 #[cfg(unix)]
@@ -350,7 +350,7 @@ fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
     validate_session_ancestors(home, path)?;
-    crate::profile::open_real_file(path, "session transcript")?;
+    crate::tenant::open_real_file(path, "session transcript")?;
     fs::remove_file(path).with_context(|| format!("delete {}", safe_path(path)))
 }
 
@@ -361,7 +361,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
 
     let relative = path.strip_prefix(home).with_context(|| {
         format!(
-            "session transcript {} is outside profile home {}",
+            "session transcript {} is outside tenant home {}",
             safe_path(path),
             safe_path(home)
         )
@@ -371,7 +371,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
         match component {
             Component::Normal(name) => components.push(name.to_os_string()),
             _ => bail!(
-                "session transcript path is not a normalized child of the profile home: {}",
+                "session transcript path is not a normalized child of the tenant home: {}",
                 safe_path(path)
             ),
         }
@@ -381,7 +381,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
         .with_context(|| format!("session transcript path is empty: {}", safe_path(path)))?;
 
     let home_path = std::ffi::CString::new(home.as_os_str().as_bytes())
-        .with_context(|| format!("profile home contains a NUL byte: {}", safe_path(home)))?;
+        .with_context(|| format!("tenant home contains a NUL byte: {}", safe_path(home)))?;
     let home_fd = unsafe {
         libc::open(
             home_path.as_ptr(),
@@ -390,7 +390,7 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
     };
     if home_fd < 0 {
         return Err(io::Error::last_os_error())
-            .with_context(|| format!("open profile home {}", safe_path(home)));
+            .with_context(|| format!("open tenant home {}", safe_path(home)));
     }
     let mut parent = unsafe { OwnedFd::from_raw_fd(home_fd) };
 
@@ -424,24 +424,24 @@ fn os_str_c_string(value: &std::ffi::OsStr) -> Result<std::ffi::CString> {
 fn validate_session_ancestors(home: &Path, path: &Path) -> Result<()> {
     let relative = path.strip_prefix(home).with_context(|| {
         format!(
-            "session transcript {} is outside profile home {}",
+            "session transcript {} is outside tenant home {}",
             safe_path(path),
             safe_path(home)
         )
     })?;
     let mut current = home.to_path_buf();
-    crate::profile::real_dir_exists(&current, "profile home")?;
+    crate::tenant::real_dir_exists(&current, "tenant home")?;
     let mut components = relative.components().peekable();
     while let Some(component) = components.next() {
         let Component::Normal(name) = component else {
             bail!(
-                "session transcript path is not a normalized child of the profile home: {}",
+                "session transcript path is not a normalized child of the tenant home: {}",
                 safe_path(path)
             );
         };
         current.push(name);
         if components.peek().is_some() {
-            crate::profile::real_dir_exists(&current, "session directory")?;
+            crate::tenant::real_dir_exists(&current, "session directory")?;
         }
     }
     Ok(())
@@ -458,7 +458,7 @@ pub(crate) fn ts_of(value: &Value) -> String {
 
 /// One session's list-row data. Every transcript yields a summary — sessions
 /// with no typed prompt (tool/injected-only shells) still list, just with an
-/// empty title — so `list` and no-id `delete` can see and clear them all.
+/// empty title — so `list` and `delete --all` can see and clear them all.
 pub struct SessionSummary {
     /// Full session id (the row shows the first 8 chars).
     pub id: String,
@@ -488,7 +488,7 @@ pub struct Prompt {
 /// [`prompts_in`](Self::prompts_in)) are written once here as provided methods,
 /// so the two backends can't drift out of sync.
 pub trait SessionBackend {
-    /// Path components of the transcript tree beneath the profile home
+    /// Path components of the transcript tree beneath the tenant home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
     /// entries so agent-created symlinks are never followed.
     fn session_dir_components(&self) -> &'static [&'static str];
@@ -499,7 +499,7 @@ pub trait SessionBackend {
     /// `get`/`delete` then refuse to resolve.
     fn keep_transcript_name(&self, name: &str) -> bool;
 
-    /// All transcript files under this profile home (empty if none yet). The
+    /// All transcript files under this tenant home (empty if none yet). The
     /// strict walk: `get`/`delete` use it, and a destructive or single-target
     /// action must not act on a partial view of the tree.
     fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
@@ -649,9 +649,9 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
 /// Dispatch a host-side session action.
 ///
 /// `list` accepts no ids or flags; `get` requires exactly one id; `delete`
-/// accepts ids or selects every transcript when `all` is true or `ids` is
-/// empty. Only `delete` accepts `yes`. The return value is the command exit
-/// code; `list` returns 1 when it can show only a partial result.
+/// requires ids or selects every transcript only when `all` is true. Only
+/// `delete` accepts `yes`. The return value is the command exit code; `list`
+/// returns 1 when it can show only a partial result.
 pub fn dispatch(
     agent: AgentKind,
     home: &Path,
@@ -750,9 +750,9 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
 
 const LIST_TITLE_MAX_CHARS: usize = 64;
 
-/// List this profile's sessions, newest first: `shortid  date  title`. Every
+/// List this tenant's sessions, newest first: `shortid  date  title`. Every
 /// transcript lists (tool/injected-only shells show an empty title) so nothing is
-/// hidden from `list` or no-id `delete`. Columns are `%-8s  %-16s  %s`; titles
+/// hidden from `list` or `delete --all`. Columns are `%-8s  %-16s  %s`; titles
 /// are collapsed to one line and capped at 64 chars.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     list_with_printer(backend, home, crate::print_line)
@@ -797,7 +797,7 @@ fn list_with_printer(
     }
     if rows.is_empty() {
         if !failed {
-            eprintln!(">> no sessions in this profile");
+            eprintln!(">> no sessions in this tenant");
         }
         return Ok(i32::from(failed));
     }
@@ -811,7 +811,7 @@ fn list_with_printer(
     } in rows
     {
         // Escape terminal controls before truncating: ids come from arbitrary
-        // transcript file names inside the container-writable profile home.
+        // transcript file names inside the container-writable tenant home.
         let short_id: String = terminal_safe(&id).chars().take(8).collect();
         let timestamp = fmt_ts(&start_ts);
         if !print(&format!("{short_id:<8}  {timestamp:<16}  {title}"))? {
@@ -849,8 +849,8 @@ fn get_with_printer(
     Ok(0)
 }
 
-/// Delete transcripts, asking once per target unless `yes` is set. Passing no
-/// ids or `--all` selects every transcript for this profile.
+/// Delete explicitly selected transcripts, asking once per target unless `yes`
+/// is set. `--all` selects every transcript; an empty selection is an error.
 fn delete(
     backend: &dyn SessionBackend,
     home: &Path,
@@ -860,7 +860,7 @@ fn delete(
 ) -> Result<i32> {
     let targets = delete_targets(backend, home, ids, all)?;
     if targets.is_empty() {
-        eprintln!(">> no sessions in this profile");
+        eprintln!(">> no sessions in this tenant");
         return Ok(0);
     }
 
@@ -881,8 +881,11 @@ fn delete_targets(
     if all && !ids.is_empty() {
         bail!("--all cannot be combined with session ids");
     }
+    if !all && ids.is_empty() {
+        bail!("provide at least one session id or use --all");
+    }
 
-    if all || ids.is_empty() {
+    if all {
         // Match `list`: bulk deletion includes tool/injected-only transcripts
         // that have no typed prompt.
         let mut targets = backend.files(home)?;
@@ -1489,7 +1492,7 @@ mod tests {
             .to_string();
         assert!(err.contains("discovery failed"), "{err}");
 
-        let err = delete(&backend, dir.path(), &[], false, true)
+        let err = delete(&backend, dir.path(), &[], true, true)
             .unwrap_err()
             .to_string();
         assert!(err.contains("discovery failed"), "{err}");
@@ -1505,7 +1508,7 @@ mod tests {
         std::fs::write(&inside_path, "{\"typed\":\"inside\"}\n").unwrap();
 
         for (candidate, expected) in [
-            (outside_path.clone(), "outside profile home"),
+            (outside_path.clone(), "outside tenant home"),
             (
                 home.path().join("sessions/../inside.jsonl"),
                 "not a normalized child",
@@ -1733,7 +1736,7 @@ mod tests {
 
     #[test]
     fn session_discovery_rejects_a_non_directory_session_path() {
-        // A file where the transcript tree should be is a broken profile, not an
+        // A file where the transcript tree should be is a broken tenant, not an
         // empty one: reporting "no sessions" would hide it.
         let dir = tempfile::tempdir().unwrap();
         let sessions = dir.path().join("sessions");
@@ -1751,7 +1754,7 @@ mod tests {
 
     #[test]
     fn session_discovery_reports_no_files_for_a_missing_tree() {
-        // A profile that has never run an agent has no transcript dir at all;
+        // A tenant that has never run an agent has no transcript dir at all;
         // that is empty, not an error.
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("never-used");
@@ -1809,7 +1812,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn session_discovery_rejects_a_symlinked_profile_home() {
+    fn session_discovery_rejects_a_symlinked_tenant_home() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -1820,10 +1823,7 @@ mod tests {
 
         let err = TestBackend.files(&linked_home).unwrap_err().to_string();
 
-        assert!(
-            err.contains("profile home is not a real directory"),
-            "{err}"
-        );
+        assert!(err.contains("tenant home is not a real directory"), "{err}");
     }
 
     #[cfg(unix)]
@@ -1856,7 +1856,7 @@ mod tests {
     }
 
     #[test]
-    fn list_and_delete_report_an_empty_profile_without_failing() {
+    fn list_and_delete_all_report_an_empty_tenant_without_failing() {
         let dir = tempfile::tempdir().unwrap();
         let missing_home = dir.path().join("missing-home");
 
@@ -1868,28 +1868,31 @@ mod tests {
             })
             .unwrap();
 
-            assert_eq!(code, 0, "an empty profile is not a list failure");
+            assert_eq!(code, 0, "an empty tenant is not a list failure");
             assert!(printed.is_empty(), "no rows to print: {printed:?}");
 
-            let code = delete(&TestBackend, home, &[], false, true).unwrap();
+            let code = delete(&TestBackend, home, &[], true, true).unwrap();
             assert_eq!(code, 0, "deleting nothing is not a failure");
         }
         assert!(
             !missing_home.exists(),
-            "session discovery must not initialize a profile home"
+            "session discovery must not initialize a tenant home"
         );
     }
 
     #[test]
-    fn delete_no_ids_selects_all_sessions_with_yes() {
+    fn delete_empty_selection_is_rejected_without_deleting_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let one = write_session(dir.path(), "11111111");
         let two = write_session(dir.path(), "22222222");
 
-        delete(&TestBackend, dir.path(), &[], false, true).unwrap();
+        let error = delete(&TestBackend, dir.path(), &[], false, true)
+            .unwrap_err()
+            .to_string();
 
-        assert!(!one.exists());
-        assert!(!two.exists());
+        assert!(error.contains("at least one session id"), "{error}");
+        assert!(one.exists());
+        assert!(two.exists());
     }
 
     #[test]
@@ -1936,8 +1939,8 @@ mod tests {
     }
 
     #[test]
-    fn delete_no_ids_includes_sessions_without_typed_prompts() {
-        // No-id delete clears the whole profile — including tool/injected-only
+    fn delete_all_includes_sessions_without_typed_prompts() {
+        // `--all` clears the whole tenant — including tool/injected-only
         // shells that carry no typed prompt. `list` shows those same shells
         // (empty title), so the two stay consistent and all rows are removable.
         let dir = tempfile::tempdir().unwrap();
@@ -1945,7 +1948,7 @@ mod tests {
         let shell = dir.path().join("sessions").join("22222222.jsonl");
         std::fs::write(&shell, "{}\n").unwrap();
 
-        let targets = delete_targets(&TestBackend, dir.path(), &[], false).unwrap();
+        let targets = delete_targets(&TestBackend, dir.path(), &[], true).unwrap();
 
         assert_eq!(targets, vec![a, shell]);
     }
@@ -2085,7 +2088,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_no_ids_orders_targets_by_session_id() {
+    fn delete_all_orders_targets_by_session_id() {
         let dir = tempfile::tempdir().unwrap();
         let z = dir.path().join("z-session.jsonl");
         let a = dir.path().join("a-session.jsonl");
@@ -2093,12 +2096,12 @@ mod tests {
         std::fs::write(&a, "{}\n").unwrap();
         let backend = ExplicitFilesBackend::new(vec![z.clone(), a.clone()]);
 
-        let targets = delete_targets(&backend, dir.path(), &[], false).unwrap();
+        let targets = delete_targets(&backend, dir.path(), &[], true).unwrap();
 
         assert_eq!(
             targets,
             vec![a, z],
-            "no-id delete should prompt in deterministic session-id order"
+            "delete --all should prompt in deterministic session-id order"
         );
     }
 
@@ -2141,6 +2144,8 @@ mod tests {
         assert!(err("get", &["a", "b"], false, false).contains("accepts exactly one id"));
         assert!(err("get", &[], false, true).contains("does not use -y"));
         assert!(err("get", &["a"], true, false).contains("does not use --all"));
+        assert!(err("delete", &[], false, true).contains("at least one session id"));
+        assert!(err("delete", &["a"], true, true).contains("--all cannot be combined"));
     }
 
     #[test]

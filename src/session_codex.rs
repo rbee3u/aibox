@@ -575,7 +575,7 @@ mod tests {
     fn turn_that_is_all_wrapper_yields_no_prompts_but_still_summarizes() {
         // Every user turn is an injected wrapper, so no real prompt survives —
         // but the session still summarizes (empty title, meta ts) so `list` and
-        // no-id `delete` can see and clear it.
+        // `delete --all` can see and clear it.
         let dir = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             dir.path(),

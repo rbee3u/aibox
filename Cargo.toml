@@ -3,7 +3,7 @@ name = "aibox"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Run coding agents (Claude Code, OpenAI Codex) inside a Docker container that is the sandbox boundary"
+description = "Run Codex or Claude Code in a Docker Filesystem Sandbox with persistent Tenants"
 license = "BSD-2-Clause"
 repository = "https://github.com/rbee3u/aibox"
 readme = "README.md"
@@ -31,7 +31,7 @@ rustix = { version = "0.38", features = ["process"] }
 libc = "0.2"
 anyhow = "1"
 walkdir = "2"
-toml_edit = "0.22"
+toml_edit = { version = "0.22", features = ["serde"] }
 
 [profile.release]
 strip = true

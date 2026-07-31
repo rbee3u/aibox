@@ -1,0 +1,825 @@
+//! Tenant resolution, managed Home lifecycle, and focused filesystem safety.
+
+use crate::agent::AgentKind;
+use crate::cli::TenantCommand;
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Component, Path, PathBuf};
+
+/// Collection containing all managed Tenant Homes.
+pub const TENANTS_DIR: &str = "tenants";
+/// Storage key used for Host Tenant metadata outside valid Managed Tenant names.
+pub const HOST_STORAGE_KEY: &str = "__host";
+/// Agent/Tenant metadata file containing Provider state.
+pub const SCOPE_METADATA_FILE: &str = ".metadata.json";
+const CREATING_PREFIX: &str = "$creating-";
+const DELETING_PREFIX: &str = "$deleting-";
+const GITCONFIG: &[u8] = b"[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n";
+
+/// An aibox-managed, runnable Tenant.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ManagedTenant {
+    /// Validated Tenant name.
+    pub name: String,
+    /// Persistent Home mounted into a Run.
+    pub home_dir: PathBuf,
+    root_dir: PathBuf,
+}
+
+/// A persistent Coding Agent state scope.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Tenant {
+    /// An aibox-managed, runnable Tenant.
+    Managed(ManagedTenant),
+    /// The management-only Tenant backed by the real host Home.
+    Host {
+        /// Real host Home containing native Coding Agent state.
+        home_dir: PathBuf,
+        /// Root containing host-only aibox metadata.
+        root_dir: PathBuf,
+    },
+}
+
+/// One Coding Agent selected within a Tenant.
+#[derive(Debug, Clone)]
+pub struct TenantAgent {
+    /// Selected Tenant.
+    pub tenant: Tenant,
+    /// Selected Coding Agent.
+    pub agent: AgentKind,
+    /// Native Coding Agent state directory.
+    pub active_agent_dir: PathBuf,
+    metadata_dir: PathBuf,
+}
+
+impl ManagedTenant {
+    /// Resolve a Managed Tenant without touching the filesystem.
+    pub fn resolve(root: &Path, name: &str) -> Result<Self> {
+        validate_name("tenant", name)?;
+        Ok(Self {
+            name: name.to_string(),
+            home_dir: root.join(TENANTS_DIR).join(name),
+            root_dir: root.to_path_buf(),
+        })
+    }
+
+    /// Select one Coding Agent in this Tenant.
+    pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
+        Tenant::Managed(self.clone()).for_agent(agent)
+    }
+
+    /// Create or repair the complete Tenant Home baseline.
+    pub fn ensure_initialized(&self) -> Result<()> {
+        ensure_real_dir(&self.root_dir, "aibox root")?;
+        let tenants = self.root_dir.join(TENANTS_DIR);
+        ensure_real_dir(&tenants, "Tenant collection")?;
+
+        if real_dir_exists(&self.home_dir, "Tenant Home")? {
+            remove_internal_dir_if_exists(&self.deleting_dir(), "stale Tenant deletion")?;
+            remove_internal_dir_if_exists(&self.creating_dir(), "stale Tenant creation")?;
+            return ensure_home_baseline(&self.home_dir);
+        }
+
+        // A missing authoritative Home makes same-name Agent metadata orphaned.
+        // Complete any old deletion before establishing a fresh identity.
+        remove_internal_dir_if_exists(&self.deleting_dir(), "stale Tenant deletion")?;
+        for agent in [AgentKind::Claude, AgentKind::Codex] {
+            remove_real_dir_if_exists(
+                &self.root_dir.join(agent.tag()).join(&self.name),
+                "orphaned Agent/Tenant metadata",
+            )?;
+        }
+
+        let creating = self.creating_dir();
+        ensure_real_dir(&creating, "Tenant creation staging directory")?;
+        ensure_home_baseline(&creating)?;
+        match fs::rename(&creating, &self.home_dir) {
+            Ok(()) => sync_dir(&tenants),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                remove_internal_dir_if_exists(&creating, "Tenant creation staging directory")?;
+                ensure_home_baseline(&self.home_dir)
+            }
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "publish Tenant Home {} from {}",
+                    self.home_dir.display(),
+                    creating.display()
+                )
+            }),
+        }
+    }
+
+    /// Whether the authoritative Tenant Home currently exists.
+    pub fn exists(&self) -> Result<bool> {
+        if !real_dir_exists(&self.root_dir.join(TENANTS_DIR), "Tenant collection")? {
+            return Ok(false);
+        }
+        real_dir_exists(&self.home_dir, "Tenant Home")
+    }
+
+    fn creating_dir(&self) -> PathBuf {
+        self.root_dir
+            .join(TENANTS_DIR)
+            .join(format!("{CREATING_PREFIX}{}", self.name))
+    }
+
+    fn deleting_dir(&self) -> PathBuf {
+        self.root_dir
+            .join(TENANTS_DIR)
+            .join(format!("{DELETING_PREFIX}{}", self.name))
+    }
+}
+
+impl Tenant {
+    /// Resolve a Managed or Host Tenant without creating data.
+    pub fn resolve(root: &Path, host: bool, tenant: &str) -> Result<Self> {
+        if host {
+            Ok(Self::Host {
+                home_dir: host_home()?,
+                root_dir: root.to_path_buf(),
+            })
+        } else {
+            Ok(Self::Managed(ManagedTenant::resolve(root, tenant)?))
+        }
+    }
+
+    /// Select one Coding Agent in this Tenant.
+    pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
+        let home = self.home_dir().to_path_buf();
+        let metadata_dir = self.root().join(agent.tag()).join(self.storage_key());
+        TenantAgent {
+            tenant: self.clone(),
+            agent,
+            active_agent_dir: home.join(agent.active_dir_name()),
+            metadata_dir,
+        }
+    }
+
+    /// Home containing native Coding Agent state.
+    pub fn home_dir(&self) -> &Path {
+        match self {
+            Self::Managed(tenant) => &tenant.home_dir,
+            Self::Host { home_dir, .. } => home_dir,
+        }
+    }
+
+    /// Human-readable label used in diagnostics.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Managed(tenant) => format!("Managed Tenant '{}'", tenant.name),
+            Self::Host { .. } => "Host Tenant".to_string(),
+        }
+    }
+
+    /// Whether this is the Host Tenant.
+    pub fn is_host(&self) -> bool {
+        matches!(self, Self::Host { .. })
+    }
+
+    /// Validate the real Host Home. A missing Managed Home is an empty scope.
+    pub fn validate_session_home(&self) -> Result<()> {
+        if let Self::Host { home_dir, .. } = self {
+            if !real_dir_exists(home_dir, "Host Home")? {
+                bail!("Host Home does not exist: {}", home_dir.display());
+            }
+        }
+        Ok(())
+    }
+
+    fn root(&self) -> &Path {
+        match self {
+            Self::Managed(tenant) => &tenant.root_dir,
+            Self::Host { root_dir, .. } => root_dir,
+        }
+    }
+
+    fn storage_key(&self) -> &str {
+        match self {
+            Self::Managed(tenant) => &tenant.name,
+            Self::Host { .. } => HOST_STORAGE_KEY,
+        }
+    }
+}
+
+impl TenantAgent {
+    /// Resolve a Tenant and select a Coding Agent without creating data.
+    pub fn resolve(agent: AgentKind, root: &Path, host: bool, tenant: &str) -> Result<Self> {
+        Ok(Tenant::resolve(root, host, tenant)?.for_agent(agent))
+    }
+
+    /// Home containing the selected Agent Configuration and Sessions.
+    pub fn home_dir(&self) -> &Path {
+        self.tenant.home_dir()
+    }
+
+    /// Ensure the Tenant and Agent/Tenant metadata directory exist.
+    pub fn ensure_for_management(&self) -> Result<()> {
+        match &self.tenant {
+            Tenant::Managed(tenant) => tenant.ensure_initialized()?,
+            Tenant::Host { home_dir, .. } => {
+                if !real_dir_exists(home_dir, "Host Home")? {
+                    bail!("Host Home does not exist: {}", home_dir.display());
+                }
+            }
+        }
+        ensure_real_dir(self.tenant.root(), "aibox root")?;
+        ensure_real_dir(
+            &self.tenant.root().join(self.agent.tag()),
+            "Coding Agent metadata collection",
+        )?;
+        ensure_real_dir(&self.metadata_dir, "Agent/Tenant metadata directory")
+    }
+
+    /// Ensure the selected native Agent state directory exists.
+    pub fn ensure_agent_dir(&self) -> Result<()> {
+        match &self.tenant {
+            Tenant::Managed(tenant) => tenant.ensure_initialized()?,
+            Tenant::Host { home_dir, .. } => {
+                if !real_dir_exists(home_dir, "Host Home")? {
+                    bail!("Host Home does not exist: {}", home_dir.display());
+                }
+                ensure_real_dir(&self.active_agent_dir, "Agent state directory")?;
+            }
+        }
+        if !real_dir_exists(&self.active_agent_dir, "Agent state directory")? {
+            bail!(
+                "Agent state directory does not exist: {}",
+                self.active_agent_dir.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Require an existing Home and validate the selected Agent state path.
+    pub fn validate_existing(&self) -> Result<()> {
+        match &self.tenant {
+            Tenant::Managed(tenant) if !tenant.exists()? => {
+                bail!("Managed Tenant '{}' does not exist", tenant.name)
+            }
+            Tenant::Host { home_dir, .. } if !real_dir_exists(home_dir, "Host Home")? => {
+                bail!("Host Home does not exist: {}", home_dir.display())
+            }
+            _ => {}
+        }
+        real_dir_exists(&self.active_agent_dir, "Agent state directory")?;
+        Ok(())
+    }
+
+    /// Native Agent Configuration file path.
+    pub fn active_file(&self, file_name: &str) -> PathBuf {
+        self.active_agent_dir.join(file_name)
+    }
+
+    /// Agent/Tenant metadata directory containing Provider directories.
+    pub fn metadata_dir(&self) -> &Path {
+        &self.metadata_dir
+    }
+
+    /// Active Provider and pending transaction metadata file.
+    pub fn metadata_file(&self) -> PathBuf {
+        self.metadata_dir.join(SCOPE_METADATA_FILE)
+    }
+
+    /// One Tenant- and Agent-local Provider directory.
+    pub fn provider_dir(&self, provider: &str) -> PathBuf {
+        self.metadata_dir.join(provider)
+    }
+
+    /// One file in a Provider definition.
+    pub fn provider_file(&self, provider: &str, file_name: &str) -> PathBuf {
+        self.provider_dir(provider).join(file_name)
+    }
+
+    /// Whether the metadata directory currently exists.
+    pub fn metadata_dir_exists(&self) -> Result<bool> {
+        if matches!(&self.tenant, Tenant::Managed(tenant) if !tenant.exists()?) {
+            return Ok(false);
+        }
+        let collection = self.tenant.root().join(self.agent.tag());
+        if !real_dir_exists(&collection, "Coding Agent metadata collection")? {
+            return Ok(false);
+        }
+        real_dir_exists(&self.metadata_dir, "Agent/Tenant metadata directory")
+    }
+}
+
+/// Execute one parsed Tenant management command.
+pub fn dispatch(command: &TenantCommand) -> Result<i32> {
+    let root = aibox_root()?;
+    match command {
+        TenantCommand::List => {
+            for tenant in list_tenants(&root)? {
+                if !crate::print_line(&tenant)? {
+                    break;
+                }
+            }
+        }
+        TenantCommand::Create { tenant } => {
+            ManagedTenant::resolve(&root, tenant)?.ensure_initialized()?;
+        }
+        TenantCommand::Delete { tenants, all, yes } => delete_tenants(&root, tenants, *all, *yes)?,
+    }
+    Ok(0)
+}
+
+/// List completed Managed Tenant names without creating data.
+pub fn list_tenants(root: &Path) -> Result<Vec<String>> {
+    let collection = root.join(TENANTS_DIR);
+    if !real_dir_exists(&collection, "Tenant collection")? {
+        return Ok(Vec::new());
+    }
+    let entries = match fs::read_dir(&collection) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", collection.display())),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if is_safe_name(&name) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Delete selected Managed Tenants, or all completed Tenants when explicit.
+pub fn delete_tenants(root: &Path, tenants: &[String], all: bool, yes: bool) -> Result<()> {
+    if all && !tenants.is_empty() {
+        bail!("--all cannot be combined with Tenant names");
+    }
+    if !all && tenants.is_empty() {
+        bail!("provide at least one Tenant name or use --all");
+    }
+    let targets = if all {
+        list_tenants(root)?
+    } else {
+        let mut unique = Vec::new();
+        for tenant in tenants {
+            validate_name("tenant", tenant)?;
+            if !unique.contains(tenant) {
+                unique.push(tenant.clone());
+            }
+        }
+        unique
+    };
+    if targets.is_empty() {
+        eprintln!(">> no Managed Tenants");
+        return Ok(());
+    }
+    if !yes {
+        for tenant in &targets {
+            if tenant_has_data(root, tenant)? && !confirm_delete(tenant)? {
+                bail!("aborted");
+            }
+        }
+    }
+    for tenant in targets {
+        delete_one(root, &tenant)?;
+    }
+    Ok(())
+}
+
+fn delete_one(root: &Path, name: &str) -> Result<()> {
+    let tenant = ManagedTenant::resolve(root, name)?;
+    let deleting = tenant.deleting_dir();
+    let tenants = root.join(TENANTS_DIR);
+    let tenants_exist = real_dir_exists(&tenants, "Tenant collection")?;
+    if tenants_exist && tenant.exists()? {
+        remove_internal_dir_if_exists(&deleting, "stale Tenant deletion")?;
+        fs::rename(&tenant.home_dir, &deleting).with_context(|| {
+            format!(
+                "move Tenant Home {} to {} for deletion",
+                tenant.home_dir.display(),
+                deleting.display()
+            )
+        })?;
+        sync_dir(&tenants)?;
+    }
+    if tenants_exist {
+        remove_internal_dir_if_exists(&tenant.creating_dir(), "Tenant creation staging directory")?;
+    }
+    for agent in [AgentKind::Claude, AgentKind::Codex] {
+        let collection = root.join(agent.tag());
+        if real_dir_exists(&collection, "Coding Agent metadata collection")? {
+            remove_real_dir_if_exists(&collection.join(name), "Agent/Tenant metadata directory")?;
+        }
+    }
+    if tenants_exist {
+        remove_internal_dir_if_exists(&deleting, "Tenant deletion staging directory")?;
+        sync_dir(&tenants)?;
+    }
+    Ok(())
+}
+
+fn tenant_has_data(root: &Path, name: &str) -> Result<bool> {
+    let tenant = ManagedTenant::resolve(root, name)?;
+    let collection = root.join(TENANTS_DIR);
+    if real_dir_exists(&collection, "Tenant collection")?
+        && (tenant.exists()?
+            || real_dir_exists(&tenant.creating_dir(), "Tenant creation staging directory")?
+            || real_dir_exists(&tenant.deleting_dir(), "Tenant deletion staging directory")?)
+    {
+        return Ok(true);
+    }
+    for agent in [AgentKind::Claude, AgentKind::Codex] {
+        let collection = root.join(agent.tag());
+        if real_dir_exists(&collection, "Coding Agent metadata collection")?
+            && real_dir_exists(&collection.join(name), "Agent/Tenant metadata directory")?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ensure_home_baseline(home: &Path) -> Result<()> {
+    ensure_real_dir(home, "Tenant Home")?;
+    install_missing_file(
+        &home.join(".gitconfig"),
+        "Tenant gitconfig",
+        GITCONFIG,
+        0o644,
+    )?;
+    for agent in [AgentKind::Claude, AgentKind::Codex] {
+        ensure_agent_state(agent, home)?;
+    }
+    Ok(())
+}
+
+/// Resolve `$AIBOX_ROOT`, defaulting to `$HOME/.aibox`.
+pub fn aibox_root() -> Result<PathBuf> {
+    let root = match std::env::var_os("AIBOX_ROOT") {
+        Some(value) if value.is_empty() => bail!("AIBOX_ROOT is set but empty"),
+        Some(value) => PathBuf::from(value),
+        None => host_home()?.join(".aibox"),
+    };
+    absolutize(&root)
+}
+
+fn host_home() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    if home.is_empty() {
+        bail!("HOME is set but empty");
+    }
+    absolutize(Path::new(&home))
+}
+
+fn absolutize(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                resolved.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    bail!("path escapes its filesystem root: {}", absolute.display());
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// Validate a Tenant or Provider name as a safe ASCII path segment.
+pub fn validate_name(kind: &str, value: &str) -> Result<()> {
+    if is_safe_name(value) {
+        Ok(())
+    } else {
+        bail!("invalid {kind} name '{value}': use only letters, numbers, and '-'")
+    }
+}
+
+/// Whether a user-controlled name is nonempty ASCII alphanumeric or `-`.
+pub fn is_safe_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// Whether a path is a real directory rather than a symlink.
+pub(crate) fn real_dir_exists(path: &Path, kind: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(true),
+        Ok(_) => bail!("{kind} is not a real directory: {}", path.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+}
+
+pub(crate) fn real_file_exists(path: &Path, kind: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => Ok(true),
+        Ok(_) => bail!("{kind} is not a regular file: {}", path.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("inspect {kind} {}", path.display())),
+    }
+}
+
+/// Open an existing regular file without following a final symlink.
+pub(crate) fn open_real_file(path: &Path, kind: &str) -> Result<fs::File> {
+    if !real_file_exists(path, kind)? {
+        bail!("{kind} does not exist: {}", path.display());
+    }
+    let file = open_no_follow(path).with_context(|| format!("open {kind} {}", path.display()))?;
+    if !file.metadata()?.file_type().is_file() {
+        bail!("{kind} is not a regular file: {}", path.display());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+/// Create a directory when absent, rejecting a symlink or non-directory entry.
+pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
+    if real_dir_exists(path, kind)? {
+        return Ok(());
+    }
+    fs::create_dir_all(path).with_context(|| format!("create {kind} {}", path.display()))?;
+    if real_dir_exists(path, kind)? {
+        if let Some(parent) = path.parent() {
+            sync_dir(parent)?;
+        }
+        Ok(())
+    } else {
+        bail!("{kind} disappeared while being created: {}", path.display())
+    }
+}
+
+pub(crate) fn ensure_agent_state(agent: AgentKind, home: &Path) -> Result<()> {
+    let agent_dir = home.join(agent.active_dir_name());
+    ensure_real_dir(&agent_dir, "Agent state directory")
+}
+
+fn install_missing_file(path: &Path, kind: &str, content: &[u8], mode: u32) -> Result<()> {
+    if real_file_exists(path, kind)? {
+        return Ok(());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("create {kind} {}", path.display()))?;
+    if let Err(error) = file.write_all(content) {
+        let _ = fs::remove_file(path);
+        return Err(error).with_context(|| format!("write {kind} {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+    file.sync_all()?;
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn remove_internal_dir_if_exists(path: &Path, kind: &str) -> Result<()> {
+    remove_real_dir_if_exists(path, kind)
+}
+
+fn remove_real_dir_if_exists(path: &Path, kind: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspect {kind} {}", path.display())),
+        Ok(meta) if !meta.file_type().is_dir() => {
+            bail!("{kind} is not a real directory: {}", path.display())
+        }
+        Ok(_) => {
+            fs::remove_dir_all(path)
+                .with_context(|| format!("delete {kind} {}", path.display()))?;
+            if let Some(parent) = path.parent() {
+                sync_dir(parent)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
+    fs::File::open(path)
+        .with_context(|| format!("open directory {} for sync", path.display()))?
+        .sync_all()
+        .with_context(|| format!("sync directory {}", path.display()))
+}
+
+fn confirm_delete(tenant: &str) -> Result<bool> {
+    if !io::stdin().is_terminal() {
+        bail!("refusing to delete Tenant '{tenant}' without --yes in a non-interactive shell");
+    }
+    eprint!("Delete Tenant '{tenant}'? [y/N] ");
+    io::stderr().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
+}
+
+#[cfg(unix)]
+/// Restrict an existing regular file to owner read/write permissions.
+pub fn set_600(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let file = open_real_file(path, "private config file")?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("chmod 600 {}", path.display()))
+}
+
+#[cfg(not(unix))]
+pub fn set_600(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Serializable native file snapshot used by Provider state and transactions.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub(crate) struct FileSnapshot {
+    pub present: bool,
+    #[serde(with = "utf8_bytes")]
+    pub content: Vec<u8>,
+    pub mode: Option<u32>,
+}
+
+mod utf8_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = std::str::from_utf8(bytes).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(String::deserialize(deserializer)?.into_bytes())
+    }
+}
+
+impl FileSnapshot {
+    /// Capture a regular file without following a final symlink.
+    pub fn capture(path: &Path) -> Result<Self> {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self {
+                present: false,
+                content: Vec::new(),
+                mode: None,
+            }),
+            Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
+            Ok(meta) if !meta.file_type().is_file() => {
+                bail!(
+                    "configuration path is not a regular file: {}",
+                    path.display()
+                )
+            }
+            Ok(meta) => {
+                let mut file = open_real_file(path, "configuration file")?;
+                let mut content = Vec::new();
+                use std::io::Read as _;
+                file.read_to_end(&mut content)?;
+                #[cfg(unix)]
+                let mode = {
+                    use std::os::unix::fs::PermissionsExt;
+                    Some(meta.permissions().mode() & 0o7777)
+                };
+                #[cfg(not(unix))]
+                let mode = None;
+                Ok(Self {
+                    present: true,
+                    content,
+                    mode,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_exclude_underscores_and_internal_host_key() {
+        assert!(is_safe_name("work-1"));
+        assert!(!is_safe_name("work_1"));
+        assert!(!is_safe_name(HOST_STORAGE_KEY));
+    }
+
+    #[test]
+    fn initialization_publishes_direct_home_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+        tenant.ensure_initialized().unwrap();
+        assert_eq!(tenant.home_dir, root.path().join("tenants/work"));
+        assert!(tenant.home_dir.join(".gitconfig").is_file());
+        assert!(tenant.home_dir.join(".codex").is_dir());
+        assert!(!tenant.home_dir.join(".claude/statusline.sh").exists());
+        assert_eq!(list_tenants(root.path()).unwrap(), ["work"]);
+    }
+
+    #[test]
+    fn host_and_managed_storage_keys_do_not_collide() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = ManagedTenant::resolve(root.path(), "host").unwrap();
+        assert_eq!(
+            managed.for_agent(AgentKind::Codex).metadata_dir(),
+            root.path().join("codex/host")
+        );
+        let host = Tenant::Host {
+            home_dir: root.path().to_path_buf(),
+            root_dir: root.path().to_path_buf(),
+        };
+        assert_eq!(
+            host.for_agent(AgentKind::Codex).metadata_dir(),
+            root.path().join("codex/__host")
+        );
+    }
+
+    #[test]
+    fn listing_is_read_only_and_ignores_unrecognized_entries() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("unrelated")).unwrap();
+        assert!(list_tenants(&root.path().join("missing"))
+            .unwrap()
+            .is_empty());
+        fs::create_dir(root.path().join(TENANTS_DIR)).unwrap();
+        fs::write(root.path().join("tenants/not-a-dir"), b"x").unwrap();
+        fs::create_dir(root.path().join("tenants/bad_name")).unwrap();
+        assert!(list_tenants(root.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn create_and_delete_are_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+        tenant.ensure_initialized().unwrap();
+        tenant.ensure_initialized().unwrap();
+        delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
+        delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
+        assert!(!tenant.home_dir.exists());
+    }
+
+    #[test]
+    fn deleting_from_an_absent_root_is_idempotent_and_read_only() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("missing");
+
+        delete_tenants(&root, &["work".to_string()], false, true).unwrap();
+        delete_tenants(&root, &["work".to_string()], false, true).unwrap();
+
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tenant_collection_symlinks_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join(TENANTS_DIR)).unwrap();
+
+        assert!(list_tenants(root.path()).is_err());
+        assert!(delete_tenants(root.path(), &["work".to_string()], false, true).is_err());
+        assert!(!outside.path().join("work").exists());
+    }
+}

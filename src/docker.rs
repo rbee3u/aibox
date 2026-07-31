@@ -1,7 +1,8 @@
-//! Building and running the container.
+//! Building and running cleanup-aware containers.
 //!
 //! Image inspection, [`build_image`] (invoked by `aibox build`), and [`run`]
-//! (which spawns `docker run` for the agent) all shell out to the Docker CLI.
+//! (which spawns `docker run` for an Agent or toolchain installer) all shell out
+//! to the Docker CLI.
 //!
 //! ## Why the Dockerfile comes from stdin
 //!
@@ -688,12 +689,13 @@ printf '\nEND\n' >> "$log"
 
     #[test]
     fn run_forwards_run_args_image_and_cmd_in_order() {
-        // The sandbox boundary lives entirely in `run_args` (--cap-drop ALL,
-        // --security-opt no-new-privileges, --user, every bind mount). `run`
-        // must deliver them to `docker run` unchanged, with the image after the
-        // run args and the command after the image. A dropped run_args or a
-        // swapped image/cmd would silently strip the isolation the tool exists
-        // to enforce, so assert the whole assembled line, not just --cidfile.
+        // The Filesystem Sandbox configuration lives in `run_args`
+        // (--cap-drop ALL, --security-opt no-new-privileges, --user, every bind
+        // mount). `run` must deliver them to `docker run` unchanged, with the
+        // image after the run args and the command after the image. A dropped
+        // run_args or a swapped image/cmd would silently strip the isolation
+        // the tool exists to enforce, so assert the whole assembled line, not
+        // just --cidfile.
         let _env_lock = crate::test_env_lock();
         let _run_lock = crate::creds::run_registry_test_lock();
         let dir = tempfile::tempdir().unwrap();

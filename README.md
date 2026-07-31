@@ -1,21 +1,19 @@
 # aibox
 
 **Put AI in a Box.** Run OpenAI Codex or Claude Code with Docker as the
-sandbox boundary, so you can choose fewer agent-level permission prompts
-without giving the agent unrestricted access to your host.
+Filesystem Sandbox while keeping sign-in, settings, Sessions, and toolchains
+persistent in named Tenants.
 
 ## Why aibox
 
-- **One runtime for Codex and Claude.** Codex is the default; switch agents with
-  one flag.
-- **Persistent, isolated profiles.** Credentials, settings, sessions, caches,
-  and optional toolchains survive container runs without sharing between
-  profiles.
-- **Predictable host access.** The agent sees the project, its profile home,
-  and only the extra mounts you explicitly add. On Linux, generated project
-  files keep your uid and gid.
-- **Host-side management.** Inspect sessions and prepare provider configuration
-  without starting Docker or exposing management data to a container.
+- **One runtime for Codex and Claude.** Codex is the default; select Claude
+  with `--agent claude`.
+- **Persistent identities.** Each Managed Tenant has one isolated Home shared
+  by both Coding Agents across Runs.
+- **Explicit host access.** A Run sees its Workspace, Tenant Home, and only the
+  Extra Mounts supplied on that command.
+- **Native configuration.** Runs use the Coding Agent's real configuration
+  files. Providers are activated explicitly and never reapplied by a Run.
 
 ## Quick Start
 
@@ -30,19 +28,15 @@ cargo install --locked --path .
 aibox build
 ```
 
-The first image build downloads the development runtimes and pinned agent CLI
-versions, so it can take a while. Normal runs never build the image
-automatically.
-
-From a project directory, start Codex or Claude and follow the agent's sign-in
-flow:
+From a Workspace directory, start Codex or Claude and follow the Coding
+Agent's sign-in flow:
 
 ```sh
 aibox run
 aibox run --agent claude
 ```
 
-Pass a prompt or any agent-specific arguments after `--`:
+Pass prompts or native Coding Agent arguments after the hard `--` boundary:
 
 ```sh
 aibox run -- "inspect this repository and run the tests"
@@ -50,91 +44,118 @@ aibox run -- exec "fix the failing tests"
 aibox run --agent claude -- "review the current changes"
 ```
 
-The first `--` is a hard boundary. aibox parses options on the left and
-forwards everything on the right unchanged to the selected agent. Use
+aibox parses only the left side and forwards the right side unchanged. Use
 `aibox --help` and `aibox <command> --help` for the complete CLI reference.
 
-## How It Works
+## Filesystem Boundary
 
-Each run creates a container with three possible kinds of host access:
+Each Run creates a disposable container with these possible bind mounts:
 
 | Host source | Container path | Access |
 | --- | --- | --- |
-| Current directory or `--work <dir>` | `/work` | Read-write |
-| Selected profile home | `/home/aibox` | Read-write |
-| Each `--mount host:container[:ro]` | Explicit target | Read-write or `:ro` |
+| Current directory or `--workspace <dir>` | `/workspace` | Read-write |
+| Selected Tenant Home | `/home/aibox` | Read-write |
+| Each `--mount host:container[:ro]` | Explicit path | Read-write or `:ro` |
 
-The profile home is what makes agent sign-in, settings, sessions, and caches
-persistent. The default profile is `default`; select another with
-`aibox run --profile work`.
+The Filesystem Sandbox is not a complete authority boundary. Networking is
+enabled; credentials can authorize remote actions; writable mounts can be
+changed or deleted; and aibox adds no CPU or memory limits. The default Provider
+templates disable agent-level approval prompts because Docker is the Filesystem
+Sandbox. Review or edit native Agent Configuration before activation when a
+more restrictive policy is required.
 
-The container is a filesystem boundary, not a complete authority boundary:
+See [Sandbox and Mounts](docs/sandbox.md) for mount validation and container
+cleanup behavior.
 
-- Networking is enabled.
-- The project and profile mounts are writable.
-- Credentials can authorize remote actions outside the mounted filesystem.
-- Extra mounts expand host access, and aibox adds no CPU or memory limits.
+## Tenants
 
-See [Sandbox and Mounts](docs/sandbox.md) for the complete boundary and cleanup
-model.
-
-## Common Workflows
-
-### Separate Work Environments
-
-Use profiles to keep agent state and development toolchains apart:
+The Managed Tenant `default` is initialized by the first successful Run. Use a
+different Tenant when work should not share credentials, settings, or Sessions:
 
 ```sh
-aibox profile create work
-aibox run --profile work
-aibox profile list
+aibox tenant create work
+aibox run --tenant work
+aibox tenant list
+aibox tenant delete work
 ```
 
-Profiles are also created on the first run. See
-[Profiles](docs/profiles.md) before using the special `host` profile or
-deleting profile data.
+A Managed Tenant named `host` is ordinary and runnable. The real host Home is
+the separate Host Tenant, selected only by `--host` on Provider and Session
+commands. Read [Tenants](docs/tenants.md) before deleting data or sharing
+toolchains.
 
-### Configure an API Provider
+## Components
 
-Provider overlays let you prepare and explicitly apply agent configuration:
+Install optional status lines or Tenant-local toolchains without changing the
+Tenant baseline:
+
+```sh
+aibox component list
+aibox component install claude-statusline
+aibox component install codex-statusline
+aibox component install rust
+aibox component install go@1.25.6 --tenant work
+```
+
+Omitting a Rust or Go version installs the current stable release. Toolchain
+installation uses the shared Docker image and requires `aibox build`; status
+lines are merged directly into native Agent Configuration. See
+[Tenant Components](docs/tenants.md#tenant-components) for replacement and
+Provider interaction semantics.
+
+## Providers
+
+A Provider belongs to exactly one Tenant and one Coding Agent. Create its
+connection settings, activate it, then inspect later source or working changes:
 
 ```sh
 aibox provider create custom
 aibox provider edit custom
 aibox provider edit custom --auth
-aibox provider apply custom
+aibox provider activate custom
+aibox provider status
+aibox provider diff
 ```
 
-New templates contain placeholder credentials and configure the selected
-agent for unrestricted operation inside the container. Replace the
-placeholders before applying. Apply is persistent and cumulative, not a clean
-provider switch. See [Providers](docs/providers.md) for Claude examples, merge
-semantics, backups, and restore steps.
+The Coding Agent or user may continue editing native Agent Configuration after
+activation. `provider reconcile` three-way merges those working changes with
+Provider source changes. `provider deactivate` restores the exact
+pre-activation configuration. A Run does not mutate or reapply Provider
+configuration.
 
-### Browse Saved Prompts
+State-changing Provider commands are resumable: an interrupted operation is
+recorded and completed by the next Provider command, or by the next Run for that
+Managed Tenant. There is no Provider backup or restore command.
 
-Session commands run on the host and do not need Docker:
+Provider main configuration is displayed by `provider get`; credential output
+requires `provider get --auth`. Read [Providers](docs/providers.md) for conflict
+resolution, Host Tenant usage, credentials, and failure recovery.
+
+## Sessions
+
+Session browsing is host-side and does not start Docker:
 
 ```sh
 aibox session
 aibox session get 3f2a
+aibox session --host --agent claude list
 ```
 
-Use `aibox session --help` for selection and deletion options. Transcript
-deletion has no backup.
+Session deletion requires explicit ids or `--all` and is irreversible.
 
-### Mount Extra Files
+## Extra Mounts
 
-Expose reference material read-only while working in another project:
+Expose reference material read-only while working in another Workspace:
 
 ```sh
 aibox run -w ../other-project -m ../reference:/reference:ro
 ```
 
-Read the [mount rules](docs/sandbox.md#mount-rules) before exposing credentials
-or another profile.
+Every Extra Mount is an explicit authority grant. Read the
+[mount rules](docs/sandbox.md#mount-rules) before exposing credentials or
+another Tenant Home.
 
-### Enable Shell Completion
+## Shell Completion
 
 ```sh
 # Bash
@@ -149,14 +170,14 @@ Add the matching command to your shell startup file.
 
 ## Learn More
 
-- [Profiles](docs/profiles.md): persistent state, the `host` profile,
-  deletion, and profile-local toolchains.
-- [Providers](docs/providers.md): Codex and Claude overlays, cumulative apply,
-  secrets, backups, and restore.
-- [Sandbox and Mounts](docs/sandbox.md): mount validation, network and
-  credential boundaries, cleanup, and custom images.
+- [Tenants](docs/tenants.md): persistent state, Host Tenant, layout, deletion,
+  and Components.
+- [Providers](docs/providers.md): activation, reconciliation, secrets, and
+  resumable transactions.
+- [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
+  cleanup, and custom images.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
-  agent CLI versions.
+  Coding Agent versions.
 
 ## License
 

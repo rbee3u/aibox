@@ -1,16 +1,17 @@
 //! Command-line surface plus the argv pre-split that keeps pass-through agent
-//! args away from clap.
+//! arguments away from clap.
 
 use crate::agent::AgentKind;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use crate::component::ComponentSpec;
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 
-/// Parsed aibox command line, excluding agent arguments after `--`.
+/// Parsed aibox command line, excluding Coding Agent arguments after `--`.
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
-    about = "Run coding agents inside a Docker container that is the sandbox boundary",
+    about = "Run coding agents inside a Docker Filesystem Sandbox",
     subcommand_required = true,
     arg_required_else_help = true,
     version
@@ -22,12 +23,9 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Parse the unsplit process command line, printing clap errors before
-    /// exiting.
+    /// Parse the process command line, printing clap errors before exiting.
     ///
-    /// Use this only when agent pass-through arguments cannot be present.
-    /// Production callers must collect argv, call [`split_passthrough`], and
-    /// pass its left side to [`Self::parse_from`], as the aibox binary does.
+    /// Production callers must split argv with [`split_passthrough`] first.
     pub fn parse() -> Self {
         Self::parse_from(std::env::args_os())
     }
@@ -45,154 +43,94 @@ impl Cli {
     }
 
     /// Parse arguments without exiting on an error.
-    ///
-    /// This also rejects repeated `--agent` or `--profile` options within one
-    /// command scope, including forms clap would otherwise accept.
     pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
-        reject_duplicate_scoped_options(&args)?;
+        reject_duplicate_selection_options(&args)?;
         <Self as Parser>::try_parse_from(args)
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Scope {
-    Root,
-    Run,
-    Provider,
-    Session,
-    OtherCommand,
-}
-
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-enum ScopedOption {
-    Agent,
-    Profile,
-}
-
-#[derive(Default)]
-struct SeenScopedOptions {
-    options: BTreeSet<(Scope, ScopedOption)>,
-}
-
-impl ScopedOption {
-    fn display(self) -> &'static str {
-        match self {
-            ScopedOption::Agent => "--agent",
-            ScopedOption::Profile => "--profile",
-        }
+fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
+    let command = args.get(1).and_then(|value| value.to_str());
+    if !matches!(command, Some("run" | "component" | "provider" | "session")) {
+        return Ok(());
     }
-}
-
-impl SeenScopedOptions {
-    fn record(&mut self, scope: Scope, option: ScopedOption) -> Result<(), clap::Error> {
-        if matches!(scope, Scope::Root | Scope::OtherCommand) {
-            return Ok(());
-        }
-        if self.options.insert((scope, option)) {
-            Ok(())
-        } else {
-            Err(duplicate_scoped_option_error(option.display()))
-        }
-    }
-}
-
-fn scoped_option(token: &str) -> Option<(ScopedOption, bool)> {
-    match token {
-        "--agent" => Some((ScopedOption::Agent, true)),
-        "--profile" => Some((ScopedOption::Profile, true)),
-        _ if token.starts_with("--agent=") => Some((ScopedOption::Agent, false)),
-        _ if token.starts_with("--profile=") => Some((ScopedOption::Profile, false)),
-        _ => None,
-    }
-}
-
-fn duplicate_scoped_option_error(option: &str) -> clap::Error {
-    clap::Error::raw(
-        clap::error::ErrorKind::ArgumentConflict,
-        format!("{option} must be provided only once in a command scope"),
-    )
-    .with_cmd(&Cli::command())
-}
-
-fn reject_duplicate_scoped_options(args: &[OsString]) -> Result<(), clap::Error> {
-    let mut scope = Scope::Root;
-    let mut seen = SeenScopedOptions::default();
-    let mut skip_next_value = false;
-
-    for arg in args.iter().skip(1) {
-        if skip_next_value {
-            skip_next_value = false;
-            continue;
-        }
-        if arg == OsStr::new("--") {
+    let mut seen = BTreeSet::new();
+    let mut index = 2;
+    while index < args.len() {
+        if args[index] == "--" {
             break;
         }
-
-        let Some(token) = arg.to_str() else {
+        let Some(token) = args[index].to_str() else {
+            index += 1;
             continue;
         };
-
-        if let Some(next_scope) = subcommand_scope(scope, token) {
-            scope = next_scope;
-            continue;
+        let (name, takes_next) = match token {
+            "--agent" => (Some("--agent"), true),
+            "--tenant" => (Some("--tenant"), true),
+            "--host" => (Some("--host"), false),
+            value if value.starts_with("--agent=") => (Some("--agent"), false),
+            value if value.starts_with("--tenant=") => (Some("--tenant"), false),
+            _ => (None, false),
+        };
+        if let Some(name) = name {
+            if !seen.insert(name) {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    format!("{name} must be provided only once in a command scope"),
+                ));
+            }
         }
-
-        if let Some((option, takes_value)) = scoped_option(token) {
-            seen.record(scope, option)?;
-            skip_next_value = takes_value;
-        } else if takes_value(token) {
-            skip_next_value = true;
-        }
+        index += usize::from(takes_next) + 1;
     }
-
     Ok(())
 }
 
-fn subcommand_scope(current: Scope, token: &str) -> Option<Scope> {
-    if current != Scope::Root || token.starts_with('-') {
-        return None;
-    }
-
-    match token {
-        "run" => Some(Scope::Run),
-        "provider" => Some(Scope::Provider),
-        "session" => Some(Scope::Session),
-        "build" | "profile" | "completion" => Some(Scope::OtherCommand),
-        _ => None,
-    }
+/// Top-level commands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Run a Coding Agent inside the aibox container.
+    ///
+    /// Pass arguments verbatim after `--`, for example:
+    /// `aibox run -- "fix the build"`.
+    Run(RunArgs),
+    /// Build the aibox Docker image.
+    Build(BuildArgs),
+    /// Generate a shell completion registration script.
+    Completion(CompletionArgs),
+    /// Manage aibox-managed Tenants.
+    Tenant(TenantArgs),
+    /// Manage optional components in a Managed Tenant.
+    Component(ComponentArgs),
+    /// Manage Tenant-local Providers and Agent Configuration.
+    Provider(ProviderArgs),
+    /// Browse saved Sessions on the host without starting Docker.
+    Session(SessionArgs),
 }
 
-fn takes_value(token: &str) -> bool {
-    matches!(
-        token,
-        "--work" | "-w" | "--mount" | "-m" | "--agent" | "--profile"
-    )
-}
-
-/// Options for launching an agent in Docker.
+/// Options for launching a Coding Agent in Docker.
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Agent to run. Omit for Codex.
+    /// Coding Agent to run. Omit for Codex.
     #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
 
-    /// Ordinary profile name (default: `default`).
+    /// Managed Tenant name (default: `default`).
     #[arg(
-        id = "run-profile",
-        long = "profile",
-        value_name = "PROFILE",
-        value_parser = parse_ordinary_profile
+        id = "run-tenant",
+        long = "tenant",
+        value_name = "TENANT",
+        value_parser = parse_tenant
     )]
-    pub profile: Option<String>,
+    pub tenant: Option<String>,
 
-    /// Project dir mounted at /work (default: current dir).
+    /// Workspace mounted at /workspace (default: current directory).
     #[arg(short, long)]
-    pub work: Option<String>,
+    pub workspace: Option<String>,
 
     /// Extra bind mount, Docker syntax `host:container[:ro]` (repeatable).
     #[arg(short, long)]
@@ -200,36 +138,16 @@ pub struct RunArgs {
 }
 
 impl RunArgs {
-    /// Selected ordinary profile, defaulting to `default`.
-    pub fn profile_name(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default")
+    /// Selected Managed Tenant, defaulting to `default`.
+    pub fn tenant_name(&self) -> &str {
+        self.tenant.as_deref().unwrap_or("default")
     }
-}
-
-/// Top-level commands.
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Run a coding agent inside the aibox container.
-    ///
-    /// Pass arguments straight to the agent after `--`, for example:
-    /// `aibox run -- "fix the build"`.
-    Run(RunArgs),
-    /// Build the aibox Docker image.
-    Build(BuildArgs),
-    /// Generate a shell completion registration script.
-    Completion(CompletionArgs),
-    /// Manage shared profile homes.
-    Profile(ProfileArgs),
-    /// Manage provider configuration overlays.
-    Provider(ProviderArgs),
-    /// Browse this profile's saved chat transcripts (host-side; no container).
-    Session(SessionArgs),
 }
 
 /// Options for `aibox build`.
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Disable the Docker build cache and pull a fresh Debian base image.
+    /// Disable Docker's build cache and pull a fresh Debian base image.
     #[arg(short, long)]
     pub force: bool,
 }
@@ -253,31 +171,36 @@ pub enum CompletionShell {
     Fish,
 }
 
-/// Arguments for profile management.
+/// Arguments for Managed Tenant management.
 #[derive(Debug, Args)]
-pub struct ProfileArgs {
-    /// Profile operation to perform.
+pub struct TenantArgs {
+    /// Managed Tenant operation to perform.
     #[command(subcommand)]
-    pub command: ProfileCommand,
+    pub command: TenantCommand,
 }
 
-/// Profile-management operations.
+/// Managed Tenant management operations.
 #[derive(Debug, Subcommand)]
-pub enum ProfileCommand {
-    /// List ordinary profiles and the built-in `host` profile.
+pub enum TenantCommand {
+    /// List Managed Tenants.
     List,
-    /// Create or initialize an ordinary profile.
+    /// Create or repair a Managed Tenant.
     Create {
-        /// Profile to create.
-        #[arg(value_parser = parse_ordinary_profile)]
-        profile: String,
+        /// Managed Tenant to create.
+        #[arg(value_parser = parse_tenant)]
+        tenant: String,
     },
-    /// Delete one or more ordinary profiles.
+    /// Delete one or more Managed Tenants.
     Delete {
-        /// Profile name. Accepts many; none means all.
-        #[arg(value_name = "PROFILE", value_parser = parse_ordinary_profile)]
-        profiles: Vec<String>,
-        /// Delete all profiles explicitly.
+        /// Managed Tenant names to delete.
+        #[arg(
+            value_name = "TENANT",
+            value_parser = parse_tenant,
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        tenants: Vec<String>,
+        /// Delete every Managed Tenant.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
@@ -286,138 +209,207 @@ pub enum ProfileCommand {
     },
 }
 
-/// Agent-scoped arguments for provider configuration management.
+/// Managed Tenant Component arguments.
+#[derive(Debug, Args)]
+pub struct ComponentArgs {
+    /// Managed Tenant whose Components to inspect or install (default: `default`).
+    #[arg(
+        id = "component-tenant",
+        long = "tenant",
+        value_name = "TENANT",
+        value_parser = parse_tenant,
+        global = true
+    )]
+    pub tenant: Option<String>,
+
+    /// Component operation to perform.
+    #[command(subcommand)]
+    pub command: ComponentCommand,
+}
+
+impl ComponentArgs {
+    /// Selected Managed Tenant, defaulting to `default`.
+    pub fn tenant_name(&self) -> &str {
+        self.tenant.as_deref().unwrap_or("default")
+    }
+}
+
+/// Managed Tenant Component operations.
+#[derive(Debug, Subcommand)]
+pub enum ComponentCommand {
+    /// List available Components and their state in the selected Tenant.
+    List,
+    /// Install or replace one Component in the selected Tenant.
+    Install {
+        /// Component name, optionally followed by a stable toolchain version.
+        #[arg(value_name = "COMPONENT[@X.Y.Z]")]
+        component: ComponentSpec,
+    },
+}
+
+/// Mutually exclusive selection of a Managed Tenant or the Host Tenant.
+#[derive(Debug, Args)]
+pub struct TenantSelection {
+    /// Managed Tenant name (default: `default`).
+    #[arg(
+        long = "tenant",
+        value_name = "TENANT",
+        value_parser = parse_tenant,
+        global = true,
+        conflicts_with = "host"
+    )]
+    pub tenant: Option<String>,
+
+    /// Operate on the real host Coding Agent state.
+    #[arg(long, global = true, conflicts_with = "tenant")]
+    pub host: bool,
+}
+
+impl TenantSelection {
+    /// Selected Managed Tenant name when the Host Tenant was not requested.
+    pub fn tenant_name(&self) -> &str {
+        self.tenant.as_deref().unwrap_or("default")
+    }
+}
+
+/// Agent- and Tenant-scoped Provider management arguments.
 #[derive(Debug, Args)]
 pub struct ProviderArgs {
-    /// Agent whose provider configuration to manage. Omit for Codex.
-    #[arg(
-        id = "provider-agent",
-        long = "agent",
-        value_name = "AGENT",
-        value_enum,
-        global = true
-    )]
+    /// Coding Agent whose Provider catalog and configuration to manage.
+    #[arg(long = "agent", value_name = "AGENT", value_enum, global = true)]
     pub agent: Option<AgentKind>,
 
-    /// Profile name. Use `host` to manage the real host agent configuration.
-    #[arg(
-        id = "provider-profile",
-        long = "profile",
-        value_name = "PROFILE",
-        value_parser = parse_profile,
-        global = true
-    )]
-    pub profile: Option<String>,
+    /// Tenant whose Provider catalog and Agent Configuration to manage.
+    #[command(flatten)]
+    pub tenant: TenantSelection,
 
     /// Provider operation to perform.
     #[command(subcommand)]
     pub command: ProviderCommand,
 }
 
-impl ProviderArgs {
-    /// Selected profile, defaulting to `default`.
-    pub fn profile_name(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default")
-    }
-}
-
 /// Provider configuration operations.
 #[derive(Debug, Subcommand)]
 pub enum ProviderCommand {
-    /// List providers, marking the last applied one with `*`.
+    /// List Providers in the selected Tenant and Coding Agent.
     List,
-    /// Print a provider's managed configuration files.
+    /// Print one Provider file.
     Get {
         /// Provider to print.
         #[arg(value_parser = parse_provider)]
         provider: String,
+        /// Print the credential file instead of the main configuration.
+        #[arg(long)]
+        auth: bool,
     },
-    /// Create a provider from the built-in template.
+    /// Create a Provider from the built-in connection template.
     Create {
         /// Provider to create.
         #[arg(value_parser = parse_provider)]
         provider: String,
     },
-    /// Merge a provider into the active agent configuration.
-    Apply {
-        /// Provider to apply.
-        #[arg(value_parser = parse_provider)]
-        provider: String,
-    },
-    /// Open a provider file in `$VISUAL` or `$EDITOR`.
+    /// Open a Provider file in `$VISUAL` or `$EDITOR`.
     Edit {
         /// Provider to edit.
         #[arg(value_parser = parse_provider)]
         provider: String,
-        /// Edit the auth file. Codex only.
+        /// Edit the credential file instead of the main configuration.
         #[arg(long)]
         auth: bool,
     },
-    /// Delete one or more providers.
+    /// Delete one or more inactive Providers.
     Delete {
-        /// Provider name. Accepts many; none means all.
-        #[arg(value_name = "PROVIDER", value_parser = parse_provider)]
+        /// Provider names to delete.
+        #[arg(
+            value_name = "PROVIDER",
+            value_parser = parse_provider,
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
         providers: Vec<String>,
-        /// Delete all providers explicitly.
+        /// Delete every inactive Provider.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
     },
+    /// Materialize a Provider into the selected Agent Configuration.
+    Activate {
+        /// Provider to activate.
+        #[arg(value_parser = parse_provider)]
+        provider: String,
+        /// Irreversibly discard Agent Configuration changes since activation.
+        #[arg(long)]
+        discard_config_changes: bool,
+    },
+    /// Restore the pre-activation Agent Configuration and clear activation.
+    Deactivate {
+        /// Irreversibly discard Agent Configuration changes since activation.
+        #[arg(long)]
+        discard_config_changes: bool,
+    },
+    /// Classify divergence between applied, source, and working configuration.
+    Status,
+    /// Show applied-to-working and applied-to-source changes.
+    Diff,
+    /// Reconcile Provider source and working Agent Configuration.
+    Reconcile(ReconcileArgs),
 }
 
-/// Agent-scoped arguments for host-side session browsing.
+/// Conflict-resolution options for `provider reconcile`.
+#[derive(Debug, Args)]
+pub struct ReconcileArgs {
+    /// Resolve a conflicting JSON Pointer with the Provider source value.
+    #[arg(long = "take-provider", value_name = "JSON_POINTER")]
+    pub take_provider: Vec<String>,
+    /// Resolve a conflicting JSON Pointer with the Agent Configuration value.
+    #[arg(long = "take-config", value_name = "JSON_POINTER")]
+    pub take_config: Vec<String>,
+    /// Resolve every conflict with Provider source values.
+    #[arg(long, conflicts_with = "take_config_all")]
+    pub take_provider_all: bool,
+    /// Resolve every conflict with Agent Configuration values.
+    #[arg(long, conflicts_with = "take_provider_all")]
+    pub take_config_all: bool,
+}
+
+/// Agent- and Tenant-scoped Session browsing arguments.
 #[derive(Debug, Args)]
 pub struct SessionArgs {
-    /// Agent whose sessions to browse. Omit for Codex.
-    #[arg(
-        id = "session-agent",
-        long = "agent",
-        value_name = "AGENT",
-        value_enum,
-        global = true
-    )]
+    /// Coding Agent whose Sessions to browse. Omit for Codex.
+    #[arg(long = "agent", value_name = "AGENT", value_enum, global = true)]
     pub agent: Option<AgentKind>,
 
-    /// Profile name. Use `host` to browse real host sessions.
-    #[arg(
-        id = "session-profile",
-        long = "profile",
-        value_name = "PROFILE",
-        value_parser = parse_profile,
-        global = true
-    )]
-    pub profile: Option<String>,
+    /// Tenant whose Sessions to browse.
+    #[command(flatten)]
+    pub tenant: TenantSelection,
 
-    /// Session operation, or `None` for the default list operation.
+    /// Session operation, or no operation for `list`.
     #[command(subcommand)]
     pub command: Option<SessionCommand>,
 }
 
-impl SessionArgs {
-    /// Selected profile, defaulting to `default`.
-    pub fn profile_name(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default")
-    }
-}
-
-/// Saved-session operations.
+/// Saved Session operations.
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
-    /// List sessions, newest first.
+    /// List Sessions, newest first.
     List,
-    /// Print the prompts you typed in one session.
+    /// Print the prompts typed in one Session.
     Get {
-        /// Full session id or unique prefix.
+        /// Full Session id or unique prefix.
         id: String,
     },
-    /// Delete one or more session transcripts.
+    /// Delete one or more Session transcripts.
     Delete {
-        /// Full session id or unique prefix. Accepts many; none means all.
-        #[arg(value_name = "ID")]
+        /// Full Session ids or unique prefixes.
+        #[arg(
+            value_name = "ID",
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
         ids: Vec<String>,
-        /// Delete all sessions explicitly.
+        /// Delete every Session transcript.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
@@ -426,31 +418,24 @@ pub enum SessionCommand {
     },
 }
 
-fn parse_profile(value: &str) -> Result<String, String> {
-    crate::profile::validate_name("profile", value)
-        .map(|()| value.to_string())
-        .map_err(|error| error.to_string())
-}
-
-fn parse_ordinary_profile(value: &str) -> Result<String, String> {
-    crate::profile::validate_ordinary_profile_name(value)
+fn parse_tenant(value: &str) -> Result<String, String> {
+    crate::tenant::validate_name("tenant", value)
         .map(|()| value.to_string())
         .map_err(|error| error.to_string())
 }
 
 fn parse_provider(value: &str) -> Result<String, String> {
-    crate::profile::validate_name("provider", value)
+    crate::tenant::validate_name("provider", value)
         .map(|()| value.to_string())
         .map_err(|error| error.to_string())
 }
 
-/// Split argv at the first `--`: everything before is parsed by clap, everything
-/// after is pass-through for the agent. The `--` itself is dropped.
+/// Split argv at the first `--`. The boundary itself is dropped.
 pub fn split_passthrough<T: AsRef<OsStr>>(argv: Vec<T>) -> (Vec<T>, Vec<T>) {
     match argv.iter().position(|arg| arg.as_ref() == OsStr::new("--")) {
-        Some(i) => {
+        Some(index) => {
             let mut left = argv;
-            let right = left.split_off(i + 1);
+            let right = left.split_off(index + 1);
             left.pop();
             (left, right)
         }
@@ -463,715 +448,89 @@ mod tests {
     use super::*;
     use clap::error::ErrorKind;
 
-    fn v(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
-    }
-
-    fn help(args: &[&str]) -> String {
-        let err = Cli::try_parse_from(args).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
-        err.to_string()
+    #[test]
+    fn passthrough_uses_the_first_boundary() {
+        let args = ["aibox", "run", "--tenant", "work", "--", "exec", "--"]
+            .map(String::from)
+            .to_vec();
+        let (left, right) = split_passthrough(args);
+        assert_eq!(left, ["aibox", "run", "--tenant", "work"]);
+        assert_eq!(right, ["exec", "--"]);
     }
 
     #[test]
-    fn split_honors_the_first_boundary_and_preserves_unbounded_argv() {
-        let (left, right) = split_passthrough(v(&[
+    fn host_tenant_is_distinct_from_managed_tenant_named_host() {
+        let cli = Cli::try_parse_from(["aibox", "provider", "--tenant", "host", "list"]).unwrap();
+        let Command::Provider(args) = cli.command else {
+            panic!("expected provider command");
+        };
+        assert_eq!(args.tenant.tenant.as_deref(), Some("host"));
+        assert!(!args.tenant.host);
+
+        let cli = Cli::try_parse_from(["aibox", "provider", "--host", "list"]).unwrap();
+        let Command::Provider(args) = cli.command else {
+            panic!("expected provider command");
+        };
+        assert!(args.tenant.host);
+        assert!(args.tenant.tenant.is_none());
+    }
+
+    #[test]
+    fn tenant_selectors_conflict() {
+        let error =
+            Cli::try_parse_from(["aibox", "session", "--host", "--tenant", "default", "list"])
+                .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn destructive_commands_require_explicit_selections() {
+        for args in [
+            vec!["aibox", "tenant", "delete"],
+            vec!["aibox", "provider", "delete"],
+            vec!["aibox", "session", "delete"],
+        ] {
+            let error = Cli::try_parse_from(args).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        }
+    }
+
+    #[test]
+    fn removed_provider_apply_is_rejected() {
+        assert!(Cli::try_parse_from(["aibox", "provider", "apply", "custom"]).is_err());
+    }
+
+    #[test]
+    fn run_rejects_host_selector() {
+        assert!(Cli::try_parse_from(["aibox", "run", "--host"]).is_err());
+        let cli = Cli::try_parse_from(["aibox", "run", "--tenant", "host"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.tenant_name(), "host");
+    }
+
+    #[test]
+    fn component_scope_is_managed_tenant_only() {
+        let cli = Cli::try_parse_from([
             "aibox",
-            "run",
-            "--profile",
+            "component",
+            "install",
+            "rust@1.90.0",
+            "--tenant",
             "work",
-            "--",
-            "exec",
-            "fix",
-            "--",
-            "tests",
-        ]));
-        assert_eq!(left, v(&["aibox", "run", "--profile", "work"]));
-        assert_eq!(right, v(&["exec", "fix", "--", "tests"]));
-
-        let argv = v(&["aibox", "prompt"]);
-        let (left, right) = split_passthrough(argv.clone());
-        assert_eq!(left, argv);
-        assert!(right.is_empty());
-
-        let (left, right) = split_passthrough(v(&["aibox", "--"]));
-        assert_eq!(left, v(&["aibox"]));
-        assert!(right.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn split_preserves_non_utf8_passthrough_arguments() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
-        let (left, right) = split_passthrough(vec![
-            OsString::from("aibox"),
-            OsString::from("run"),
-            OsString::from("--"),
-            opaque.clone(),
-        ]);
-
-        assert_eq!(left, [OsString::from("aibox"), OsString::from("run")]);
-        assert_eq!(right, [opaque]);
-    }
-
-    #[test]
-    fn parses_default_codex_run() {
-        let cli = Cli::try_parse_from(["aibox", "run"]).unwrap();
-        match cli.command {
-            Command::Run(args) => {
-                assert_eq!(args.agent, None);
-                assert_eq!(args.profile_name(), "default");
-                assert_eq!(args.work, None);
-                assert!(args.mount.is_empty());
-            }
-            _ => panic!("expected run"),
-        }
-    }
-
-    #[test]
-    fn bare_command_displays_help_as_an_error() {
-        let error = Cli::try_parse_from(["aibox"]).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-        );
-        assert_ne!(error.exit_code(), 0);
-        assert!(error.to_string().contains("Usage: aibox <COMMAND>"));
-    }
-
-    #[test]
-    fn parses_claude_run_and_passthrough() {
-        let (left, right) =
-            split_passthrough(v(&["aibox", "run", "--agent", "claude", "--", "fix"]));
-        let cli = Cli::try_parse_from(left).unwrap();
-        match cli.command {
-            Command::Run(args) => assert_eq!(args.agent, Some(AgentKind::Claude)),
-            _ => panic!("expected run"),
-        }
-        assert_eq!(right, v(&["fix"]));
-    }
-
-    #[test]
-    fn parses_provider_commands() {
-        let cli =
-            Cli::try_parse_from(["aibox", "provider", "--profile", "host", "apply", "openai"])
-                .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::Apply { provider },
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(profile.as_deref(), Some("host"));
-                assert_eq!(provider, "openai");
-            }
-            _ => panic!("expected provider apply"),
-        }
-
-        let cli = Cli::try_parse_from([
-            "aibox", "provider", "--agent", "claude", "edit", "openai", "--auth",
         ])
         .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::Edit { provider, auth },
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(*profile, None);
-                assert_eq!(provider, "openai");
-                assert!(*auth);
-            }
-            _ => panic!("expected provider edit"),
-        }
+        let Command::Component(args) = cli.command else {
+            panic!("expected component command");
+        };
+        assert_eq!(args.tenant_name(), "work");
+        let ComponentCommand::Install { component } = args.command else {
+            panic!("expected component install");
+        };
+        assert_eq!(component.to_string(), "rust@1.90.0");
 
-        let cli = Cli::try_parse_from(["aibox", "provider", "list", "--agent", "claude"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::List,
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(*profile, None);
-            }
-            _ => panic!("expected provider list"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "get", "openai", "--agent", "claude"])
-            .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::Get { provider },
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(*profile, None);
-                assert_eq!(provider, "openai");
-            }
-            _ => panic!("expected provider get"),
-        }
-
-        let cli = Cli::try_parse_from([
-            "aibox",
-            "provider",
-            "create",
-            "openai",
-            "--agent",
-            "codex",
-            "--profile",
-            "host",
-        ])
-        .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::Create { provider },
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Codex));
-                assert_eq!(profile.as_deref(), Some("host"));
-                assert_eq!(provider, "openai");
-            }
-            _ => panic!("expected provider create"),
-        }
-    }
-
-    #[test]
-    fn parses_session_delete() {
-        let cli = Cli::try_parse_from([
-            "aibox",
-            "session",
-            "--agent",
-            "claude",
-            "--profile",
-            "host",
-            "delete",
-            "-y",
-            "abc",
-        ])
-        .unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                agent,
-                profile,
-                command: Some(SessionCommand::Delete { ids, all, yes }),
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(profile.as_deref(), Some("host"));
-                assert_eq!(ids, &["abc".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected session"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "session", "delete", "abc", "--agent", "claude"])
-            .unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                agent,
-                profile,
-                command: Some(SessionCommand::Delete { ids, all, yes }),
-            }) => {
-                assert_eq!(*agent, Some(AgentKind::Claude));
-                assert_eq!(*profile, None);
-                assert_eq!(ids, &["abc".to_string()]);
-                assert!(!*all);
-                assert!(!*yes);
-            }
-            _ => panic!("expected session"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "session", "delete", "abc", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                agent,
-                profile,
-                command: Some(SessionCommand::Delete { ids, all, yes }),
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*profile, None);
-                assert_eq!(ids, &["abc".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected session"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "session", "delete", "--all", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                command: Some(SessionCommand::Delete { ids, all, yes, .. }),
-                ..
-            }) => {
-                assert!(ids.is_empty());
-                assert!(*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected session"),
-        }
-    }
-
-    #[test]
-    fn parses_session_options_before_their_positionals() {
-        let cli = Cli::try_parse_from(["aibox", "session", "delete", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                agent,
-                profile,
-                command: Some(SessionCommand::Delete { ids, all, yes }),
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*profile, None);
-                assert!(ids.is_empty());
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected session"),
-        }
-
-        assert!(Cli::try_parse_from(["aibox", "session", "--yes", "delete", "abc"]).is_err());
-
-        let cli = Cli::try_parse_from(["aibox", "session"]).unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs {
-                agent,
-                profile,
-                command: None,
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*profile, None);
-            }
-            _ => panic!("expected session"),
-        }
-    }
-
-    #[test]
-    fn parses_provider_options_before_their_positionals() {
-        let cli = Cli::try_parse_from(["aibox", "provider", "delete", "--yes", "openai"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command:
-                    ProviderCommand::Delete {
-                        providers,
-                        all,
-                        yes,
-                    },
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*profile, None);
-                assert_eq!(providers, &["openai".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected provider delete"),
-        }
-
-        let cli = Cli::try_parse_from([
-            "aibox",
-            "provider",
-            "delete",
-            "openai",
-            "anthropic",
-            "--yes",
-        ])
-        .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                command:
-                    ProviderCommand::Delete {
-                        providers,
-                        all,
-                        yes,
-                        ..
-                    },
-                ..
-            }) => {
-                assert_eq!(providers, &["openai".to_string(), "anthropic".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected provider delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "delete", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                command:
-                    ProviderCommand::Delete {
-                        providers,
-                        all,
-                        yes,
-                        ..
-                    },
-                ..
-            }) => {
-                assert!(providers.is_empty());
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected provider delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "delete", "--all", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                command:
-                    ProviderCommand::Delete {
-                        providers,
-                        all,
-                        yes,
-                        ..
-                    },
-                ..
-            }) => {
-                assert!(providers.is_empty());
-                assert!(*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected provider delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "edit", "--auth", "openai"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs {
-                agent,
-                profile,
-                command: ProviderCommand::Edit { provider, auth },
-            }) => {
-                assert_eq!(*agent, None);
-                assert_eq!(*profile, None);
-                assert_eq!(provider, "openai");
-                assert!(*auth);
-            }
-            _ => panic!("expected provider edit"),
-        }
-    }
-
-    #[test]
-    fn parses_profile_options_before_their_positionals() {
-        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--yes", "default"]).unwrap();
-        match &cli.command {
-            Command::Profile(ProfileArgs {
-                command:
-                    ProfileCommand::Delete {
-                        profiles, all, yes, ..
-                    },
-            }) => {
-                assert_eq!(profiles, &["default".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected profile delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "default", "work", "--yes"])
-            .unwrap();
-        match &cli.command {
-            Command::Profile(ProfileArgs {
-                command:
-                    ProfileCommand::Delete {
-                        profiles, all, yes, ..
-                    },
-            }) => {
-                assert_eq!(profiles, &["default".to_string(), "work".to_string()]);
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected profile delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Profile(ProfileArgs {
-                command:
-                    ProfileCommand::Delete {
-                        profiles, all, yes, ..
-                    },
-            }) => {
-                assert!(profiles.is_empty());
-                assert!(!*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected profile delete"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "--all", "--yes"]).unwrap();
-        match &cli.command {
-            Command::Profile(ProfileArgs {
-                command:
-                    ProfileCommand::Delete {
-                        profiles, all, yes, ..
-                    },
-            }) => {
-                assert!(profiles.is_empty());
-                assert!(*all);
-                assert!(*yes);
-            }
-            _ => panic!("expected profile delete"),
-        }
-    }
-
-    #[test]
-    fn command_scoped_profile_option_can_cross_provider_and_session_boundaries() {
-        let cli = Cli::try_parse_from(["aibox", "session", "--profile", "host", "list"]).unwrap();
-        match &cli.command {
-            Command::Session(SessionArgs { profile, .. }) => {
-                assert_eq!(profile.as_deref(), Some("host"));
-            }
-            _ => panic!("expected session"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "--profile", "host", "list"]).unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs { profile, .. }) => {
-                assert_eq!(profile.as_deref(), Some("host"));
-            }
-            _ => panic!("expected provider"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "get", "--profile", "host", "openai"])
-            .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs { profile, .. }) => {
-                assert_eq!(profile.as_deref(), Some("host"));
-            }
-            _ => panic!("expected provider"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "provider", "get", "openai", "--profile", "host"])
-            .unwrap();
-        match &cli.command {
-            Command::Provider(ProviderArgs { profile, .. }) => {
-                assert_eq!(profile.as_deref(), Some("host"));
-            }
-            _ => panic!("expected provider"),
-        }
-    }
-
-    #[test]
-    fn root_rejects_run_options() {
-        assert_eq!(
-            Cli::try_parse_from(["aibox", "--agent", "claude"])
-                .unwrap_err()
-                .kind(),
-            ErrorKind::UnknownArgument
-        );
-
-        for argv in [
-            &["aibox", "--agent", "claude", "provider", "list"][..],
-            &["aibox", "--profile", "work", "provider", "list"][..],
-            &["aibox", "--work", ".", "provider", "list"][..],
-            &["aibox", "--mount", "/tmp:/tmp", "provider", "list"][..],
-            &["aibox", "--agent", "claude", "build"][..],
-            &["aibox", "--profile", "work", "build"][..],
-            &["aibox", "--agent", "claude", "profile", "list"][..],
-            &["aibox", "--profile", "work", "profile", "list"][..],
-            &["aibox", "--agent", "claude", "completion", "zsh"][..],
-            &["aibox", "--profile", "work", "completion", "zsh"][..],
-        ] {
-            assert!(
-                Cli::try_parse_from(argv).is_err(),
-                "{argv:?} should reject run options at the root"
-            );
-        }
-
-        assert!(Cli::try_parse_from(["aibox", "--exec"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "--force", "build"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "profile", "--agent", "claude", "list"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "completion", "zsh", "--agent", "claude"]).is_err());
-
-        let (left, passthrough) = split_passthrough(v(&["aibox", "--", "fix"]));
-        assert!(Cli::try_parse_from(left).is_err());
-        assert_eq!(passthrough, v(&["fix"]));
-    }
-
-    #[test]
-    fn scoped_options_reject_duplicates() {
-        for argv in [
-            &["aibox", "run", "--agent", "claude", "--agent", "claude"][..],
-            &["aibox", "run", "--profile", "work", "--profile", "work"][..],
-            &["aibox", "run", "--profile=work", "--profile=work"][..],
-            &[
-                "aibox", "run", "--agent", "codex", "--work", "provider", "--agent", "codex",
-            ][..],
-            &[
-                "aibox", "provider", "--agent", "claude", "get", "openai", "--agent", "claude",
-            ][..],
-            &[
-                "aibox",
-                "provider",
-                "--agent=claude",
-                "get",
-                "openai",
-                "--agent",
-                "claude",
-            ][..],
-            &[
-                "aibox",
-                "provider",
-                "--profile",
-                "host",
-                "get",
-                "openai",
-                "--profile",
-                "host",
-            ][..],
-            &[
-                "aibox", "session", "--agent", "claude", "list", "--agent", "claude",
-            ][..],
-            &[
-                "aibox",
-                "session",
-                "--profile",
-                "host",
-                "list",
-                "--profile",
-                "host",
-            ][..],
-        ] {
-            assert!(
-                Cli::try_parse_from(argv).is_err(),
-                "{argv:?} should reject duplicate scoped options"
-            );
-        }
-    }
-
-    #[test]
-    fn help_shows_only_options_for_the_current_scope() {
-        let root = help(&["aibox", "--help"]);
-        assert!(root.contains("run"), "{root}");
-        assert!(!root.contains("--profile"), "{root}");
-        assert!(!root.contains("--agent"), "{root}");
-        assert!(!root.contains("--work"), "{root}");
-        assert!(!root.contains("--mount"), "{root}");
-
-        let run = help(&["aibox", "run", "--help"]);
-        assert!(run.contains("--profile"), "{run}");
-        assert!(run.contains("--agent"), "{run}");
-        assert!(run.contains("--work"), "{run}");
-        assert!(run.contains("--mount"), "{run}");
-
-        let build = help(&["aibox", "build", "--help"]);
-        assert!(!build.contains("--profile"), "{build}");
-        assert!(!build.contains("--agent"), "{build}");
-
-        let profile = help(&["aibox", "profile", "--help"]);
-        assert!(!profile.contains("--profile"), "{profile}");
-        assert!(!profile.contains("--agent"), "{profile}");
-
-        let completion = help(&["aibox", "completion", "--help"]);
-        assert!(!completion.contains("--profile"), "{completion}");
-        assert!(!completion.contains("--agent"), "{completion}");
-        assert!(completion.contains("bash"), "{completion}");
-        assert!(completion.contains("zsh"), "{completion}");
-        assert!(completion.contains("fish"), "{completion}");
-
-        let provider_get = help(&["aibox", "provider", "get", "--help"]);
-        assert!(provider_get.contains("--profile"), "{provider_get}");
-        assert!(provider_get.contains("--agent"), "{provider_get}");
-
-        let session_delete = help(&["aibox", "session", "delete", "--help"]);
-        assert!(session_delete.contains("--profile"), "{session_delete}");
-        assert!(session_delete.contains("--agent"), "{session_delete}");
-    }
-
-    #[test]
-    fn parses_profile_commands() {
-        let cli = Cli::try_parse_from(["aibox", "profile", "list"]).unwrap();
-        match cli.command {
-            Command::Profile(ProfileArgs {
-                command: ProfileCommand::List,
-            }) => {}
-            _ => panic!("expected profile list"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "profile", "create", "work"]).unwrap();
-        match cli.command {
-            Command::Profile(ProfileArgs {
-                command: ProfileCommand::Create { profile },
-            }) => assert_eq!(profile, "work"),
-            _ => panic!("expected profile create"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "profile", "delete", "default", "--yes"]).unwrap();
-        match cli.command {
-            Command::Profile(ProfileArgs {
-                command:
-                    ProfileCommand::Delete {
-                        profiles, all, yes, ..
-                    },
-            }) => {
-                assert_eq!(profiles, &["default".to_string()]);
-                assert!(!all);
-                assert!(yes);
-            }
-            _ => panic!("expected profile delete"),
-        }
-    }
-
-    #[test]
-    fn parses_build_commands() {
-        let cli = Cli::try_parse_from(["aibox", "build"]).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { force }) => assert!(!force),
-            _ => panic!("expected build"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { force }) => assert!(force),
-            _ => panic!("expected build"),
-        }
-
-        let cli = Cli::try_parse_from(["aibox", "build", "-f"]).unwrap();
-        match cli.command {
-            Command::Build(BuildArgs { force }) => assert!(force),
-            _ => panic!("expected build"),
-        }
-
-        assert!(Cli::try_parse_from(["aibox", "build", "--agent", "claude"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "build", "--force", "--agent", "claude"]).is_err());
-    }
-
-    #[test]
-    fn parses_completion_commands() {
-        for (name, expected) in [
-            ("bash", CompletionShell::Bash),
-            ("zsh", CompletionShell::Zsh),
-            ("fish", CompletionShell::Fish),
-        ] {
-            let cli = Cli::try_parse_from(["aibox", "completion", name]).unwrap();
-            match cli.command {
-                Command::Completion(CompletionArgs { shell }) => assert_eq!(shell, expected),
-                _ => panic!("expected completion"),
-            }
-        }
-
-        assert!(Cli::try_parse_from(["aibox", "completion"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "completion", "powershell"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "completion", "nu"]).is_err());
-    }
-
-    #[test]
-    fn invalid_names_are_rejected_by_parser() {
-        assert!(Cli::try_parse_from(["aibox", "run", "--profile", "bad.name"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "run", "--profile", "host"]).is_err());
-        assert!(
-            Cli::try_parse_from(["aibox", "provider", "--profile", "bad.name", "list"]).is_err()
-        );
-        assert!(Cli::try_parse_from(["aibox", "provider", "get", "bad.name"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "profile", "create", "bad.name"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "profile", "create", "host"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "profile", "delete", "host"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "component", "--host", "list"]).is_err());
+        assert!(Cli::try_parse_from(["aibox", "component", "--agent", "codex", "list"]).is_err());
     }
 }

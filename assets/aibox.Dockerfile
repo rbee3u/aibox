@@ -15,8 +15,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # empty. Used by the Node layer below to pick the right arch tarball.
 ARG TARGETARCH
 
-# Create the runtime identity before installing tools so every profile-backed
-# path below can derive from one stable home. Build layers remain root-owned;
+# Create the runtime identity before installing tools so every Tenant Home
+# path can derive from one stable home. Build layers remain root-owned;
 # the final USER directive switches only the running container.
 RUN groupadd --gid 1000 aibox \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
@@ -89,7 +89,7 @@ RUN set -eux; \
 # Pinned by default so cached builds stay stable. Change NODE_VERSION here when
 # you intentionally want to upgrade Node.
 # Installed under /usr/local so Node and the global agent CLIs are image-owned
-# rather than persisted in a profile; upgrade them by rebuilding the image.
+# rather than persisted as Agent State; upgrade them by rebuilding the image.
 ARG NODE_VERSION=v24.4.0
 RUN set -eux; \
     version="${NODE_VERSION}"; \
@@ -105,12 +105,12 @@ RUN set -eux; \
     node --version; \
     npm --version
 
-# Rust is installed on demand with rustup into the mounted profile home. Keep
+# Rust is installed on demand with rustup into the mounted Tenant Home. Keep
 # its binaries available in non-login shells without making Rust image-owned.
 ENV PATH=$HOME/.cargo/bin:$PATH
 
-# Go is installed on demand from an official archive into the mounted profile
-# home. Keep the SDK, installed commands, and module/build caches profile-local.
+# Go is installed on demand from an official archive into the mounted Tenant
+# Home. Keep the SDK, installed commands, and module/build caches Tenant-local.
 ENV GOROOT=$HOME/.goroot
 ENV GOPATH=$HOME/.gopath
 ENV PATH=$GOROOT/bin:$PATH
@@ -118,7 +118,7 @@ ENV PATH=$GOPATH/bin:$PATH
 
 # --- Agent CLIs --------------------------------------------------------------
 # Both CLIs live in the same immutable image. Upgrade by changing the pinned
-# versions and rebuilding, not by self-updating inside a profile.
+# versions and rebuilding, not by self-updating inside a Tenant Home.
 ARG CODEX_VERSION=0.146.0
 ARG CLAUDE_CODE_VERSION=2.1.220
 RUN set -eux; \
@@ -138,7 +138,7 @@ ENV DISABLE_AUTOUPDATER=1
 # can go through a shell, so mirror the image PATH there too.
 RUN printf "export PATH=%s\n" "$PATH" > /etc/profile.d/aibox-path.sh
 
-WORKDIR /work
+WORKDIR /workspace
 USER aibox
 
 # No ENTRYPOINT: the Rust wrapper passes either `codex ...` or `claude ...`.

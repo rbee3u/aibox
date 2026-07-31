@@ -1,17 +1,17 @@
-# Sandbox and Mounts
+# Filesystem Sandbox and Mounts
 
-aibox treats the Docker container as the agent's filesystem sandbox. It limits
-which host paths enter the container while leaving the agent free to work
-inside those mounts.
+aibox treats the Docker container as the Coding Agent's Filesystem Sandbox. It
+limits which host paths enter the container while leaving the agent free to
+work inside those mounts.
 
-This is not a complete security boundary. Networking remains enabled,
-credentials can authorize remote effects, and Docker still relies on the host
-daemon and platform.
+This Filesystem Sandbox is not a complete security boundary. Networking remains
+enabled, credentials can authorize remote effects, and Docker still relies on
+the host daemon and platform.
 
-## Run in Another Project
+## Run in Another Workspace
 
-The current directory is mounted at `/work` by default. Select another existing
-directory with `--work`:
+The current directory is the default Workspace and is mounted at `/workspace`.
+Select another existing directory with `--workspace`:
 
 ```sh
 aibox run -w ../other-project
@@ -36,15 +36,15 @@ The accepted form is `host:container[:ro]`:
 - Mounts are writable by default; `:ro` is the only accepted mode.
 - Host paths containing `:` are rejected because Docker's short `-v` syntax
   cannot represent them safely.
-- Extra mounts may be nested beneath `/work` or `/home/aibox`, but may not
+- Extra mounts may be nested beneath `/workspace` or `/home/aibox`, but may not
   replace either managed mount or one of its ancestors.
 
-Within `$AIBOX_ROOT`, only a path beneath an ordinary profile's `home` may be a
-bind source. Provider snapshots, backups, reserved management data, and the
-special `host` profile stay host-only.
+Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
+a bind source. Provider catalogs, Agent/Tenant metadata, internal lifecycle
+staging directories, and Host Tenant metadata stay host-only.
 
-Mounting another ordinary profile home is allowed, but doing so exposes its
-agent credentials and persistent state. Treat every extra mount as an explicit
+Mounting another Tenant Home is allowed, but doing so exposes its Coding
+Agent credentials and persistent state. Treat every Extra Mount as an explicit
 authority grant.
 
 ## Runtime Boundary
@@ -53,26 +53,34 @@ Each Docker run:
 
 - drops all Linux capabilities;
 - enables `no-new-privileges`;
-- mounts the selected profile home at `/home/aibox`;
-- mounts the selected project at `/work`;
+- mounts the selected Tenant Home at `/home/aibox`;
+- mounts the selected Workspace at `/workspace`;
 - adds only the extra mounts supplied on the command line.
 
-On Linux, the container runs with the invoking uid and gid so project files
+Rust and Go Component installation also uses a disposable, cleanup-aware
+container, but mounts only the selected Tenant Home at `/home/aibox`; it does
+not mount a Workspace or accept Extra Mounts. The installer retains normal
+network access to official toolchain distribution services.
+
+On Linux, the container runs with the invoking uid and gid so Workspace files
 retain host ownership. aibox also maps `host.docker.internal` to Docker's host
 gateway. Docker Desktop provides the host integration on macOS.
 
-The following remain outside the filesystem boundary:
+The following remain outside the Filesystem Sandbox:
 
 - Container networking is enabled.
 - Credentials may authorize changes to repositories, APIs, cloud accounts, or
   other remote systems.
 - aibox adds no CPU, memory, or process-count limits.
-- Writable project, profile, and extra mounts can be modified or deleted by
-  the agent.
+- Writable Workspace, Tenant Home, and Extra Mounts can be modified or
+  deleted by the Coding Agent.
 
-Provider templates may disable the selected agent's own permission prompts.
-That makes Docker the primary local boundary; it does not reduce the authority
-of mounted credentials or network services.
+The default Codex Provider sets `approval_policy = "never"` and
+`sandbox_mode = "danger-full-access"`; Docker remains its Filesystem Sandbox.
+The default Claude Provider uses `bypassPermissions` and suppresses its
+dangerous-mode prompt. Native Agent settings may grant authority beyond the
+Filesystem Sandbox, especially through mounted credentials or network services,
+and remain the user's responsibility.
 
 ## Cleanup
 
@@ -85,7 +93,7 @@ active container through Docker. SIGKILL, a wrapper crash, Docker failure, or a
 host failure cannot guarantee cleanup. After such an event, inspect Docker for
 a leftover container before starting sensitive work.
 
-One aibox process supports one active agent run at a time.
+One aibox process supports one active Run at a time.
 
 ## Building the Shared Image
 
@@ -103,7 +111,7 @@ installed packages and pinned agent versions.
 
 The image includes common Unix development and diagnostic tools, Python with
 pip/venv/uv, and Node.js with npm. Rust and Go are installed on demand into a
-persistent profile; see [Profile-Local Toolchains](profiles.md#profile-local-toolchains).
+persistent Managed Tenant; see [Tenant Components](tenants.md#tenant-components).
 
 ## Custom Images
 
@@ -120,8 +128,11 @@ image must:
 
 - provide the selected `codex` or `claude` executable on `PATH`;
 - use `/home/aibox` as `HOME`;
-- support `/work` as its working directory;
+- support `/workspace` as its working directory;
 - avoid an incompatible `ENTRYPOINT`.
+
+Using that image for Rust or Go Component installation additionally requires
+Bash, curl, Python 3 with `tomllib`, `dpkg`, tar, and SHA-256 utilities.
 
 On Linux, aibox overrides the image user with the invoking host uid and gid.
 Executables and required image files must therefore be readable and executable

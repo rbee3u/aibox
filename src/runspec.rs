@@ -1,5 +1,5 @@
-//! Resolve bind mounts, enforce the host/container boundary, and assemble the
-//! `docker run` arguments shared by both agents.
+//! Resolve bind mounts, enforce the Filesystem Sandbox mount boundary, and
+//! assemble the `docker run` arguments shared by both agents.
 
 use crate::agent::AgentKind;
 use crate::platform;
@@ -25,14 +25,14 @@ pub fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the work directory to an existing absolute UTF-8 path.
+/// Resolve the Workspace to an existing absolute UTF-8 path.
 ///
 /// Relative input is anchored to the process working directory.
-pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
-    let cwd = std::env::current_dir().context("get current dir for /work")?;
-    let path = match work {
-        Some(work) => {
-            let path = Path::new(work);
+pub fn resolve_workspace(workspace: Option<&str>) -> Result<String> {
+    let cwd = std::env::current_dir().context("get current dir for /workspace")?;
+    let path = match workspace {
+        Some(workspace) => {
+            let path = Path::new(workspace);
             if path.is_absolute() {
                 path.to_path_buf()
             } else {
@@ -42,14 +42,14 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
         None => cwd,
     };
     if !path.is_dir() {
-        bail!("work dir is not a directory: {}", path.display());
+        bail!("workspace is not a directory: {}", path.display());
     }
     let path = std::fs::canonicalize(&path)
-        .with_context(|| format!("resolve work dir {}", path.display()))?;
-    reject_colon_in_bind_source("work dir", &path)?;
+        .with_context(|| format!("resolve workspace {}", path.display()))?;
+    reject_colon_in_bind_source("workspace", &path)?;
     Ok(path
         .to_str()
-        .context("work dir path is not valid UTF-8")?
+        .context("workspace path is not valid UTF-8")?
         .to_string())
 }
 
@@ -57,7 +57,7 @@ pub fn resolve_work_dir(work: Option<&str>) -> Result<String> {
 ///
 /// Sources must exist; relative sources are anchored to the process working
 /// directory. Targets must be absolute, and the only accepted mode is `ro`.
-/// This function does not enforce managed-target or aibox-root boundaries;
+/// This function does not enforce managed mount-target or aibox-root boundaries;
 /// callers must subsequently use [`validate_extra_mount_targets`] and
 /// [`validate_aibox_mount_sources`].
 pub fn resolve_mounts(mounts: &[String]) -> Result<Vec<String>> {
@@ -111,7 +111,7 @@ fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
     }
 }
 
-/// Reject extra mounts that replace `/work`, the agent home, or an ancestor of
+/// Reject extra mounts that replace `/workspace`, the agent home, or an ancestor of
 /// either managed target.
 ///
 /// `mounts` must contain the resolved specifications returned by
@@ -120,7 +120,7 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
     for mount in mounts {
         let target = bind_target(mount)?;
         let target = normalize_container_target(target)?;
-        if shadows_managed_target(&target, "/work")
+        if shadows_managed_target(&target, "/workspace")
             || shadows_managed_target(&target, agent.container_home())
         {
             bail!(
@@ -135,26 +135,26 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
 ///
 /// Sources unrelated to `aibox_root` are allowed. Its ancestors are rejected
 /// because mounting one would expose the root indirectly. Sources inside the
-/// root must resolve beneath an ordinary profile's `home` subtree; profile
-/// roots, management data, tracing data, and the host profile are rejected.
+/// root must resolve beneath a completed Managed Tenant Home. Agent metadata,
+/// internal staging directories, and Host Tenant metadata are rejected.
 /// Sources are resolved before comparison, so a symlink cannot disguise an
 /// aibox-internal target as an unrelated path.
 ///
-/// `work_dir` and `extra_mounts` must be the resolved values returned by
-/// [`resolve_work_dir`] and [`resolve_mounts`].
+/// `workspace` and `extra_mounts` must be the resolved values returned by
+/// [`resolve_workspace`] and [`resolve_mounts`].
 pub fn validate_aibox_mount_sources(
-    work_dir: &str,
+    workspace: &str,
     extra_mounts: &[String],
     aibox_root: &Path,
 ) -> Result<()> {
     let resolved_root = canonicalize_existing_prefix(aibox_root)
         .with_context(|| format!("resolve aibox root {}", aibox_root.display()))?;
-    let work_source = canonicalize_existing_prefix(Path::new(work_dir))
-        .with_context(|| format!("resolve work dir {work_dir}"))?;
+    let workspace_source = canonicalize_existing_prefix(Path::new(workspace))
+        .with_context(|| format!("resolve workspace {workspace}"))?;
     reject_aibox_internal_source(
-        "work dir",
-        Path::new(work_dir),
-        &work_source,
+        "workspace",
+        Path::new(workspace),
+        &workspace_source,
         &resolved_root,
         aibox_root,
     )?;
@@ -193,28 +193,28 @@ fn reject_aibox_internal_source(
         return Ok(());
     };
     let mut components = relative.components();
-    let Some(Component::Normal(profile_name)) = components.next() else {
-        bail!(
-            "{kind} would expose aibox internal data: {}",
-            display_path.display()
-        );
-    };
-    let Some(profile_name) = profile_name.to_str() else {
-        bail!(
-            "{kind} would expose aibox internal data: {}",
-            display_path.display()
-        );
-    };
-    let is_home = matches!(
-        components.next(),
-        Some(Component::Normal(name)) if name == crate::profile::PROFILE_HOME_DIR
-    );
-    if !is_home
-        || crate::profile::validate_ordinary_profile_name(profile_name).is_err()
-        || crate::profile::validate_profile_layout(aibox_root, profile_name).is_err()
+    if !matches!(components.next(), Some(Component::Normal(name)) if name == crate::tenant::TENANTS_DIR)
     {
         bail!(
-            "{kind} would expose aibox internal data: {}; only ordinary profile home trees may be mounted from {}",
+            "{kind} would expose aibox internal data: {}",
+            display_path.display()
+        );
+    }
+    let Some(Component::Normal(tenant_name)) = components.next() else {
+        bail!(
+            "{kind} would expose aibox internal data: {}",
+            display_path.display()
+        );
+    };
+    let Some(tenant_name) = tenant_name.to_str() else {
+        bail!(
+            "{kind} would expose aibox internal data: {}",
+            display_path.display()
+        );
+    };
+    if crate::tenant::validate_name("tenant", tenant_name).is_err() {
+        bail!(
+            "{kind} would expose aibox internal data: {}; only Managed Tenant Home trees may be mounted from {}",
             display_path.display(),
             aibox_root.display()
         );
@@ -317,13 +317,13 @@ fn normalize_path_components(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Seed runtime state required by an agent because the profile mount shadows
+/// Seed runtime state required by an agent because the tenant mount shadows
 /// the image's home directory.
 ///
-/// `home_dir` must be an already validated profile home; creation protects the
+/// `home_dir` must be an already validated tenant home; creation protects the
 /// final state-directory entry but does not recursively validate ancestors.
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
-    crate::profile::ensure_agent_state(agent, home_dir)
+    crate::tenant::ensure_agent_state(agent, home_dir)
 }
 
 /// Agent command and any agent-specific additions to `docker run`.
@@ -334,28 +334,54 @@ pub struct Invocation {
     pub agent_cmd: Vec<OsString>,
 }
 
-/// Assemble Docker arguments for the managed home, work tree, and extra mounts.
+/// Assemble Docker arguments for the Tenant Home, Workspace, and Extra Mounts.
 ///
-/// Callers must resolve `work_dir` and `extra_mounts` with
-/// [`resolve_work_dir`] and [`resolve_mounts`], then apply
+/// Callers must resolve `workspace` and `extra_mounts` with
+/// [`resolve_workspace`] and [`resolve_mounts`], then apply
 /// [`validate_extra_mount_targets`] and [`validate_aibox_mount_sources`].
 /// `home_dir` must also pass [`reject_colon_in_bind_source`]. This function is
 /// only a pure argument builder and repeats none of those checks.
 pub fn assemble_run_args(
     agent: AgentKind,
-    work_dir: &str,
+    workspace: &str,
     home_dir: &Path,
     extra_mounts: &[String],
     extra_run_args: &[String],
 ) -> Vec<String> {
-    let mut args: Vec<String> = vec!["--rm".into()];
+    let mut args = base_container_args(true);
 
-    if platform::has_tty() {
-        args.push("-it".into());
-    } else {
-        args.push("-i".into());
+    args.push("-v".into());
+    args.push(format!("{}:{}", home_dir.display(), agent.container_home()));
+    args.push("-v".into());
+    args.push(format!("{workspace}:/workspace"));
+    args.extend(["-w".into(), "/workspace".into()]);
+    for mount in extra_mounts {
+        args.push("-v".into());
+        args.push(mount.clone());
     }
+    args.extend(extra_run_args.iter().cloned());
+    args
+}
 
+/// Assemble Docker arguments for a non-interactive task that may write only
+/// to one Managed Tenant Home.
+pub fn assemble_component_run_args(home_dir: &Path) -> Vec<String> {
+    let mut args = base_container_args(false);
+    args.push("-v".into());
+    args.push(format!(
+        "{}:{}",
+        home_dir.display(),
+        AgentKind::Codex.container_home()
+    ));
+    args.extend(["-w".into(), AgentKind::Codex.container_home().into()]);
+    args
+}
+
+fn base_container_args(interactive: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec!["--rm".into()];
+    if interactive {
+        args.push(if platform::has_tty() { "-it" } else { "-i" }.into());
+    }
     args.extend(["--security-opt".into(), "no-new-privileges".into()]);
     args.extend(["--cap-drop".into(), "ALL".into()]);
 
@@ -366,17 +392,6 @@ pub fn assemble_run_args(
         args.push("--add-host".into());
         args.push("host.docker.internal:host-gateway".into());
     }
-
-    args.push("-v".into());
-    args.push(format!("{}:{}", home_dir.display(), agent.container_home()));
-    args.push("-v".into());
-    args.push(format!("{work_dir}:/work"));
-    args.extend(["-w".into(), "/work".into()]);
-    for mount in extra_mounts {
-        args.push("-v".into());
-        args.push(mount.clone());
-    }
-    args.extend(extra_run_args.iter().cloned());
     args
 }
 
@@ -387,8 +402,8 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn resolve_work_dir_none_uses_cwd() {
-        let got = resolve_work_dir(None).unwrap();
+    fn resolve_workspace_none_uses_cwd() {
+        let got = resolve_workspace(None).unwrap();
         assert_eq!(
             got,
             std::fs::canonicalize(std::env::current_dir().unwrap())
@@ -398,10 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_work_dir_absolutizes_relative_paths() {
+    fn resolve_workspace_absolutizes_relative_paths() {
         let cwd = std::env::current_dir().unwrap();
 
-        let got = resolve_work_dir(Some("src")).unwrap();
+        let got = resolve_workspace(Some("src")).unwrap();
 
         assert_eq!(
             got,
@@ -412,17 +427,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_work_dir_rejects_missing_and_non_directory_paths() {
+    fn resolve_workspace_rejects_missing_and_non_directory_paths() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("file");
         let missing = dir.path().join("missing");
         fs::write(&file, "not a directory\n").unwrap();
 
         for path in [&file, &missing] {
-            let error = resolve_work_dir(Some(path.to_str().unwrap()))
+            let error = resolve_workspace(Some(path.to_str().unwrap()))
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("work dir is not a directory"), "{error}");
+            assert!(error.contains("workspace is not a directory"), "{error}");
             assert!(
                 error.contains(&path.display().to_string()),
                 "the rejected path should be identifiable: {error}"
@@ -467,7 +482,7 @@ mod tests {
         let canonical_target = fs::canonicalize(&target).unwrap();
 
         assert_eq!(
-            resolve_work_dir(Some(link.to_str().unwrap())).unwrap(),
+            resolve_workspace(Some(link.to_str().unwrap())).unwrap(),
             canonical_target.to_string_lossy()
         );
         assert_eq!(
@@ -500,10 +515,10 @@ mod tests {
     #[test]
     fn extra_mounts_must_not_replace_managed_targets() {
         for target in [
-            "/work",
-            "/work/",
-            "/work/.",
-            "/tmp/../work",
+            "/workspace",
+            "/workspace/",
+            "/workspace/.",
+            "/tmp/../workspace",
             "/",
             "/home",
             "/home/aibox",
@@ -521,9 +536,9 @@ mod tests {
         validate_extra_mount_targets(
             AgentKind::Codex,
             &[
-                "/host:/workspace:ro".to_string(),
-                "/host:/work-cache:ro".to_string(),
-                "/host:/work/.cache:ro".to_string(),
+                "/host:/legacy-work:ro".to_string(),
+                "/host:/workspace-cache:ro".to_string(),
+                "/host:/workspace/.cache:ro".to_string(),
                 "/host:/home/aibox-cache:ro".to_string(),
                 "/host:/home/aibox2:ro".to_string(),
                 "/host:/home/aibox/.cache:ro".to_string(),
@@ -533,26 +548,27 @@ mod tests {
     }
 
     #[test]
-    fn aibox_mount_sources_only_allow_ordinary_profile_home_trees() {
+    fn aibox_mount_sources_only_allow_managed_tenant_home_trees() {
         let root = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("default/home");
-        let home_child = profile_home.join("projects/demo");
-        let profile_provider = root.path().join("default/provider");
-        let tracing = root.path().join("default/tracing");
-        let host = root.path().join("host/provider");
+        crate::tenant::ManagedTenant::resolve(root.path(), "default")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let tenant_home = root.path().join("tenants/default");
+        let home_child = tenant_home.join("projects/demo");
+        let codex_metadata = root.path().join("codex/default");
+        let host_metadata = root.path().join("claude/__host");
         fs::create_dir_all(&home_child).unwrap();
-        fs::create_dir_all(profile_provider.join("codex")).unwrap();
-        fs::create_dir(&tracing).unwrap();
-        fs::create_dir_all(&host).unwrap();
+        fs::create_dir_all(&codex_metadata).unwrap();
+        fs::create_dir_all(&host_metadata).unwrap();
 
         for rejected in [
             root.path(),
-            &root.path().join("default"),
-            &profile_provider,
-            &profile_provider.join("codex"),
-            &tracing,
-            &root.path().join("host"),
-            &host,
+            &root.path().join("tenants"),
+            &codex_metadata,
+            &root.path().join("codex"),
+            &root.path().join("claude"),
+            &host_metadata,
             root.path().parent().unwrap(),
         ] {
             let err = validate_aibox_mount_sources(rejected.to_str().unwrap(), &[], root.path())
@@ -561,7 +577,7 @@ mod tests {
             assert!(err.contains("aibox internal data"), "{rejected:?}: {err}");
         }
 
-        validate_aibox_mount_sources(profile_home.to_str().unwrap(), &[], root.path()).unwrap();
+        validate_aibox_mount_sources(tenant_home.to_str().unwrap(), &[], root.path()).unwrap();
         validate_aibox_mount_sources(home_child.to_str().unwrap(), &[], root.path()).unwrap();
     }
 
@@ -572,9 +588,14 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let links = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("default/provider/codex")).unwrap();
+        crate::tenant::ManagedTenant::resolve(root.path(), "default")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let metadata = root.path().join("codex/default");
+        fs::create_dir_all(&metadata).unwrap();
         let linked_provider = links.path().join("provider");
-        symlink(root.path().join("default/provider"), &linked_provider).unwrap();
+        symlink(&metadata, &linked_provider).unwrap();
 
         let err = validate_aibox_mount_sources(linked_provider.to_str().unwrap(), &[], root.path())
             .unwrap_err()
@@ -585,21 +606,17 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn aibox_mount_check_rejects_home_from_an_unsafe_profile_layout() {
-        use std::os::unix::fs::symlink;
-
+    fn aibox_mount_check_rejects_invalid_tenant_collection_entries() {
         let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("work/home");
-        fs::create_dir_all(&profile_home).unwrap();
-        symlink(outside.path(), root.path().join("work/provider")).unwrap();
+        let invalid_home = root.path().join("tenants/bad_name");
+        fs::create_dir_all(&invalid_home).unwrap();
 
-        let err = validate_aibox_mount_sources(profile_home.to_str().unwrap(), &[], root.path())
+        let err = validate_aibox_mount_sources(invalid_home.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
         assert!(
-            err.contains("only ordinary profile home trees may be mounted"),
+            err.contains("only Managed Tenant Home trees may be mounted"),
             "{err}"
         );
     }
@@ -607,23 +624,26 @@ mod tests {
     #[test]
     fn aibox_mount_check_normalizes_dotdot_sources() {
         let root = tempfile::tempdir().unwrap();
-        let profile_home = root.path().join("default/home");
-        let management = root.path().join("default/provider");
-        fs::create_dir_all(&profile_home).unwrap();
-        fs::create_dir(&management).unwrap();
+        crate::tenant::ManagedTenant::resolve(root.path(), "default")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let tenant_home = root.path().join("tenants/default");
+        let metadata = root.path().join("codex/default");
+        fs::create_dir_all(&metadata).unwrap();
 
-        let work = profile_home.join("..");
-        let err = validate_aibox_mount_sources(work.to_str().unwrap(), &[], root.path())
+        let workspace = tenant_home.join("..");
+        let err = validate_aibox_mount_sources(workspace.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot work path that resolves to the profile root must fail: {err}"
+            "a dotdot Workspace path that resolves to the tenant root must fail: {err}"
         );
 
-        let mount_source = profile_home.join("../provider");
+        let mount_source = tenant_home.join("../../codex/default");
         let err = validate_aibox_mount_sources(
-            profile_home.to_str().unwrap(),
+            tenant_home.to_str().unwrap(),
             &[format!("{}:/secrets:ro", mount_source.display())],
             root.path(),
         )
@@ -631,7 +651,7 @@ mod tests {
         .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into provider must be rejected: {err}"
+            "a dotdot mount source that resolves into Provider metadata must be rejected: {err}"
         );
     }
 
@@ -662,12 +682,15 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_profile_home_children_are_valid_extra_mount_sources() {
+    fn tenant_home_children_are_valid_extra_mount_sources() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let home_child = root.path().join("work/home/projects/demo");
+        crate::tenant::ManagedTenant::resolve(root.path(), "work")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let home_child = root.path().join("tenants/work/projects/demo");
         fs::create_dir_all(&home_child).unwrap();
-        fs::create_dir_all(root.path().join("work/provider/codex")).unwrap();
 
         validate_aibox_mount_sources(
             outside.path().to_str().unwrap(),
@@ -681,8 +704,8 @@ mod tests {
     fn assemble_run_args_keeps_sandbox_flags_and_mount_order() {
         let args = assemble_run_args(
             AgentKind::Codex,
-            "/abs/work",
-            Path::new("/abs/profile"),
+            "/abs/workspace",
+            Path::new("/abs/tenant"),
             &["/abs/cache:/cache:ro".to_string()],
             &["--network=none".to_string()],
         );
@@ -694,16 +717,16 @@ mod tests {
         );
         assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
         assert!(contains_pair(&args, "--cap-drop", "ALL"));
-        assert!(contains_pair(&args, "-v", "/abs/profile:/home/aibox"));
-        assert!(contains_pair(&args, "-v", "/abs/work:/work"));
+        assert!(contains_pair(&args, "-v", "/abs/tenant:/home/aibox"));
+        assert!(contains_pair(&args, "-v", "/abs/workspace:/workspace"));
         assert!(contains_pair(&args, "-v", "/abs/cache:/cache:ro"));
-        assert!(contains_pair(&args, "-w", "/work"));
+        assert!(contains_pair(&args, "-w", "/workspace"));
         assert!(
-            crate::testutil::pair_pos(&args, "-v", "/abs/profile:/home/aibox")
-                < crate::testutil::pair_pos(&args, "-v", "/abs/work:/work")
+            crate::testutil::pair_pos(&args, "-v", "/abs/tenant:/home/aibox")
+                < crate::testutil::pair_pos(&args, "-v", "/abs/workspace:/workspace")
         );
         assert!(
-            crate::testutil::pair_pos(&args, "-v", "/abs/work:/work")
+            crate::testutil::pair_pos(&args, "-v", "/abs/workspace:/workspace")
                 < crate::testutil::pair_pos(&args, "-v", "/abs/cache:/cache:ro")
         );
         assert_eq!(args.last().map(String::as_str), Some("--network=none"));
@@ -724,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_home_creates_agent_state_and_claude_statusline() {
+    fn seed_home_creates_only_the_selected_agent_state_directory() {
         let home = tempfile::tempdir().unwrap();
         seed_home(AgentKind::Codex, home.path()).unwrap();
         assert!(home.path().join(".codex").is_dir());
@@ -732,11 +755,19 @@ mod tests {
 
         let home = tempfile::tempdir().unwrap();
         seed_home(AgentKind::Claude, home.path()).unwrap();
-        let statusline = home.path().join(".claude/statusline.sh");
-        assert!(statusline.is_file());
-        assert!(fs::read_to_string(statusline)
-            .unwrap()
-            .contains("context_window"));
+        assert!(home.path().join(".claude").is_dir());
+        assert!(!home.path().join(".claude/statusline.sh").exists());
+    }
+
+    #[test]
+    fn component_run_args_mount_only_the_tenant_home() {
+        let args = assemble_component_run_args(Path::new("/abs/tenant"));
+        assert_eq!(args.first().map(String::as_str), Some("--rm"));
+        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
+        assert!(contains_pair(&args, "--cap-drop", "ALL"));
+        assert!(contains_pair(&args, "-v", "/abs/tenant:/home/aibox"));
+        assert!(contains_pair(&args, "-w", "/home/aibox"));
+        assert!(!args.iter().any(|arg| arg.contains("/workspace")));
     }
 
     #[test]
@@ -744,7 +775,7 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let colon_dir = parent.path().join("a:b");
         fs::create_dir(&colon_dir).unwrap();
-        let err = resolve_work_dir(Some(colon_dir.to_str().unwrap()))
+        let err = resolve_workspace(Some(colon_dir.to_str().unwrap()))
             .unwrap_err()
             .to_string();
         assert!(err.contains("contains ':'"));
@@ -769,7 +800,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn resolve_work_dir_rejects_a_symlink_to_a_non_utf8_bind_source() {
+    fn resolve_workspace_rejects_a_symlink_to_a_non_utf8_bind_source() {
         use std::os::unix::ffi::OsStringExt;
         use std::os::unix::fs::symlink;
 
@@ -781,7 +812,7 @@ mod tests {
         fs::create_dir(&opaque_dir).unwrap();
         symlink(&opaque_dir, &link).unwrap();
 
-        let err = resolve_work_dir(Some(link.to_str().unwrap()))
+        let err = resolve_workspace(Some(link.to_str().unwrap()))
             .unwrap_err()
             .to_string();
 
