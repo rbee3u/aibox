@@ -1,7 +1,7 @@
 //! Dynamic shell completion registration and read-only host-side discovery.
 
 use crate::agent::AgentKind;
-use crate::cli::{Cli, CompletionArgs, CompletionShell};
+use crate::cli::{Cli, CompletionArgs, CompletionShell, SelectionOption};
 use crate::tenant::{self, TenantAgent};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, ValueHint};
@@ -83,7 +83,7 @@ enum TopCommand {
     Run,
     Tenant,
     Component,
-    Provider,
+    Profile,
     Session,
     Other,
 }
@@ -139,14 +139,14 @@ impl CompletionContext {
             Some("run") => TopCommand::Run,
             Some("tenant") => TopCommand::Tenant,
             Some("component") => TopCommand::Component,
-            Some("provider") => TopCommand::Provider,
+            Some("profile") => TopCommand::Profile,
             Some("session") => TopCommand::Session,
             Some("build" | "completion") => TopCommand::Other,
             _ => TopCommand::Root,
         };
         let scoped = matches!(
             context.top,
-            TopCommand::Run | TopCommand::Component | TopCommand::Provider | TopCommand::Session
+            TopCommand::Run | TopCommand::Component | TopCommand::Profile | TopCommand::Session
         );
         let mut option_parts = BTreeSet::new();
         if scoped {
@@ -176,18 +176,7 @@ impl CompletionContext {
                 index += 1;
                 continue;
             }
-            let (kind, inline) = if token == "--agent" {
-                (Some("agent"), None)
-            } else if token == "--tenant" {
-                (Some("tenant"), None)
-            } else if let Some(value) = token.strip_prefix("--agent=") {
-                (Some("agent"), Some(value))
-            } else if let Some(value) = token.strip_prefix("--tenant=") {
-                (Some("tenant"), Some(value))
-            } else {
-                (None, None)
-            };
-            let Some(kind) = kind else {
+            let Some((option, inline)) = SelectionOption::parse(token) else {
                 index += 1;
                 continue;
             };
@@ -204,8 +193,8 @@ impl CompletionContext {
                     break;
                 }
             };
-            match kind {
-                "agent" => {
+            match option {
+                SelectionOption::Agent => {
                     if seen_agent || self.top == TopCommand::Component {
                         self.selection_valid = false;
                     }
@@ -219,7 +208,7 @@ impl CompletionContext {
                         }
                     };
                 }
-                "tenant" => {
+                SelectionOption::Tenant => {
                     if seen_tenant || seen_host {
                         self.selection_valid = false;
                     }
@@ -230,7 +219,6 @@ impl CompletionContext {
                         self.tenant = value.to_string();
                     }
                 }
-                _ => unreachable!(),
             }
             index += 1;
         }
@@ -239,8 +227,8 @@ impl CompletionContext {
     fn capture_positionals(&mut self, values: &[&str], option_parts: &BTreeSet<usize>) {
         let leaves: &[&str] = match self.top {
             TopCommand::Tenant => &["list", "create", "delete"],
-            TopCommand::Component => &["list", "install"],
-            TopCommand::Provider => &[
+            TopCommand::Component => &["list", "install", "remove"],
+            TopCommand::Profile => &[
                 "list",
                 "get",
                 "create",
@@ -280,141 +268,137 @@ enum TenantCandidates {
 }
 
 fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) -> clap::Command {
-    let tenant_delete = context.clone();
-    let provider_get = context.clone();
-    let provider_edit = context.clone();
-    let provider_activate = context.clone();
-    let provider_delete = context.clone();
-    let session_get = context.clone();
-    let session_delete = context;
-    let workspace_dir = current_dir.clone();
-    let mount_dir = current_dir;
+    let command = add_run_completers(Cli::command(), current_dir);
+    let command = add_tenant_completers(command, context.clone());
+    let command = add_component_completers(command);
+    let command = add_profile_completers(command, context.clone());
+    add_session_completers(command, context)
+}
 
-    Cli::command()
-        .mut_subcommand("run", move |command| {
-            command
-                .mut_arg("run-tenant", |arg| {
+fn add_run_completers(command: clap::Command, current_dir: Option<PathBuf>) -> clap::Command {
+    let workspace_dir = current_dir.clone();
+    command.mut_subcommand("run", move |command| {
+        command
+            .mut_arg("run-tenant", add_tenant_value_completer)
+            .mut_arg("workspace", move |arg| {
+                arg.value_hint(ValueHint::DirPath)
+                    .add(ArgValueCompleter::new(move |current: &OsStr| {
+                        complete_workspace(current, workspace_dir.as_deref())
+                    }))
+            })
+            .mut_arg("mount", move |arg| {
+                arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
+                    move |current: &OsStr| complete_mount(current, current_dir.as_deref()),
+                ))
+            })
+    })
+}
+
+fn add_tenant_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+    command.mut_subcommand("tenant", move |command| {
+        command
+            .mut_subcommand("create", |command| {
+                command.mut_arg("tenant", |arg| arg.value_hint(ValueHint::Other))
+            })
+            .mut_subcommand("delete", move |command| {
+                command.mut_arg("tenants", move |arg| {
                     arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
                         move |current: &OsStr| {
-                            complete_tenants(TenantCandidates::Select, current, &BTreeSet::new())
+                            if context.all {
+                                Vec::new()
+                            } else {
+                                complete_tenants(
+                                    TenantCandidates::Existing,
+                                    current,
+                                    &context.positionals,
+                                )
+                            }
                         },
                     ))
                 })
-                .mut_arg("workspace", move |arg| {
-                    arg.value_hint(ValueHint::DirPath)
-                        .add(ArgValueCompleter::new(move |current: &OsStr| {
-                            complete_workspace(current, workspace_dir.as_deref())
-                        }))
+            })
+    })
+}
+
+fn add_component_completers(command: clap::Command) -> clap::Command {
+    command.mut_subcommand("component", move |command| {
+        command
+            .mut_arg("component-tenant", add_tenant_value_completer)
+            .mut_subcommand("install", |command| {
+                command.mut_arg("component", |arg| {
+                    arg.value_hint(ValueHint::Other)
+                        .add(ArgValueCompleter::new(complete_components))
                 })
-                .mut_arg("mount", move |arg| {
-                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                        move |current: &OsStr| complete_mount(current, mount_dir.as_deref()),
-                    ))
+            })
+            .mut_subcommand("remove", |command| {
+                command.mut_arg("component", |arg| {
+                    arg.value_hint(ValueHint::Other)
+                        .add(ArgValueCompleter::new(complete_components))
                 })
-        })
-        .mut_subcommand("tenant", move |command| {
-            command
-                .mut_subcommand("create", |command| {
-                    command.mut_arg("tenant", |arg| arg.value_hint(ValueHint::Other))
-                })
-                .mut_subcommand("delete", move |command| {
-                    command.mut_arg("tenants", move |arg| {
-                        let context = tenant_delete.clone();
-                        arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                            move |current: &OsStr| {
-                                if context.all {
-                                    Vec::new()
-                                } else {
-                                    complete_tenants(
-                                        TenantCandidates::Existing,
-                                        current,
-                                        &context.positionals,
-                                    )
-                                }
-                            },
-                        ))
-                    })
-                })
-        })
-        .mut_subcommand("component", move |command| {
-            command
-                .mut_arg("component-tenant", move |arg| {
-                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                        move |current: &OsStr| {
-                            complete_tenants(TenantCandidates::Select, current, &BTreeSet::new())
-                        },
-                    ))
-                })
-                .mut_subcommand("install", |command| {
-                    command.mut_arg("component", |arg| {
-                        arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                            move |current: &OsStr| complete_components(current),
-                        ))
-                    })
-                })
-        })
-        .mut_subcommand("provider", move |command| {
-            command
-                .mut_arg("tenant", |arg| {
-                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                        move |current: &OsStr| {
-                            complete_tenants(TenantCandidates::Select, current, &BTreeSet::new())
-                        },
-                    ))
-                })
-                .mut_subcommand("create", |command| {
-                    command.mut_arg("provider", |arg| arg.value_hint(ValueHint::Other))
-                })
-                .mut_subcommand("get", move |command| {
-                    add_provider_completer(command, provider_get, false)
-                })
-                .mut_subcommand("edit", move |command| {
-                    add_provider_completer(command, provider_edit, false)
-                })
-                .mut_subcommand("activate", move |command| {
-                    add_provider_completer(command, provider_activate, false)
-                })
-                .mut_subcommand("delete", move |command| {
-                    add_provider_completer(command, provider_delete, true)
-                })
-        })
-        .mut_subcommand("session", move |command| {
-            command
-                .mut_arg("tenant", |arg| {
-                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
-                        move |current: &OsStr| {
-                            complete_tenants(TenantCandidates::Select, current, &BTreeSet::new())
-                        },
-                    ))
-                })
-                .mut_subcommand("get", move |command| {
-                    add_session_completer(command, session_get, false)
-                })
-                .mut_subcommand("delete", move |command| {
-                    add_session_completer(command, session_delete, true)
-                })
-        })
+            })
+    })
+}
+
+fn add_profile_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+    let get = context.clone();
+    let edit = context.clone();
+    let activate = context.clone();
+    command.mut_subcommand("profile", move |command| {
+        command
+            .mut_arg("tenant", add_tenant_value_completer)
+            .mut_subcommand("create", |command| {
+                command.mut_arg("profile", |arg| arg.value_hint(ValueHint::Other))
+            })
+            .mut_subcommand("get", move |command| {
+                add_profile_completer(command, get, false)
+            })
+            .mut_subcommand("edit", move |command| {
+                add_profile_completer(command, edit, false)
+            })
+            .mut_subcommand("activate", move |command| {
+                add_profile_completer(command, activate, false)
+            })
+            .mut_subcommand("delete", move |command| {
+                add_profile_completer(command, context, true)
+            })
+    })
+}
+
+fn add_session_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+    let get = context.clone();
+    command.mut_subcommand("session", move |command| {
+        command
+            .mut_arg("tenant", add_tenant_value_completer)
+            .mut_subcommand("get", move |command| {
+                add_session_completer(command, get, false)
+            })
+            .mut_subcommand("delete", move |command| {
+                add_session_completer(command, context, true)
+            })
+    })
+}
+
+fn add_tenant_value_completer(arg: clap::Arg) -> clap::Arg {
+    arg.value_hint(ValueHint::Other)
+        .add(ArgValueCompleter::new(move |current: &OsStr| {
+            complete_tenants(TenantCandidates::Select, current, &BTreeSet::new())
+        }))
 }
 
 fn complete_components(current: &OsStr) -> Vec<CompletionCandidate> {
     filter_candidates(
-        [
-            "claude-statusline".to_string(),
-            "codex-statusline".to_string(),
-            "rust".to_string(),
-            "go".to_string(),
-        ],
+        crate::component::ComponentKind::ALL.map(|kind| kind.name().to_string()),
         current,
         &BTreeSet::new(),
     )
 }
 
-fn add_provider_completer(
+fn add_profile_completer(
     command: clap::Command,
     context: CompletionContext,
     repeatable: bool,
 ) -> clap::Command {
-    let id = if repeatable { "providers" } else { "provider" };
+    let id = if repeatable { "profiles" } else { "profile" };
     command.mut_arg(id, move |arg| {
         arg.value_hint(ValueHint::Other)
             .add(ArgValueCompleter::new(move |current: &OsStr| {
@@ -426,7 +410,7 @@ fn add_provider_completer(
                     } else {
                         &BTreeSet::new()
                     };
-                    complete_providers(&context, current, excluded)
+                    complete_profiles(&context, current, excluded)
                 }
             }))
     })
@@ -480,7 +464,7 @@ fn selected_at(root: &Path, context: &CompletionContext) -> Result<TenantAgent> 
     TenantAgent::resolve(context.agent, root, context.host, &context.tenant)
 }
 
-fn complete_providers(
+fn complete_profiles(
     context: &CompletionContext,
     current: &OsStr,
     excluded: &BTreeSet<String>,
@@ -490,7 +474,7 @@ fn complete_providers(
     }
     let values = (|| -> Result<Vec<String>> {
         let root = tenant::aibox_root()?;
-        crate::provider::list_providers(&selected_at(&root, context)?)
+        crate::profile::list_profiles(&selected_at(&root, context)?)
     })()
     .unwrap_or_default();
     filter_candidates(values, current, excluded)
@@ -575,6 +559,13 @@ mod tests {
         values.iter().map(OsString::from).collect()
     }
 
+    fn candidate_values(candidates: &[CompletionCandidate]) -> Vec<String> {
+        candidates
+            .iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
     fn context_stops_at_agent_passthrough_boundary() {
         let context = CompletionContext::from_words(&words(&[
@@ -585,13 +576,52 @@ mod tests {
 
     #[test]
     fn host_and_tenant_are_distinct_and_conflicting() {
-        let host = CompletionContext::from_words(&words(&["aibox", "provider", "--host", "list"]));
+        let host = CompletionContext::from_words(&words(&["aibox", "profile", "--host", "list"]));
         assert!(host.host);
         assert!(host.selection_valid);
         let bad = CompletionContext::from_words(&words(&[
-            "aibox", "provider", "--host", "--tenant", "host", "list",
+            "aibox", "profile", "--host", "--tenant", "host", "list",
         ]));
         assert!(!bad.selection_valid);
+    }
+
+    #[test]
+    fn selection_context_rejects_the_same_invalid_scopes_as_clap() {
+        for args in [
+            &["aibox", "run", "--host"][..],
+            &["aibox", "component", "--agent", "claude", "list"][..],
+            &["aibox", "profile", "--agent", "unknown", "list"][..],
+            &[
+                "aibox",
+                "session",
+                "--tenant",
+                "one",
+                "--tenant=two",
+                "list",
+            ][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "clap accepted {args:?}");
+            let context = CompletionContext::from_words(&words(args));
+            assert!(
+                !context.selection_valid,
+                "completion accepted an invalid command scope: {args:?}"
+            );
+            assert!(
+                complete_profiles(&context, OsStr::new(""), &BTreeSet::new()).is_empty(),
+                "invalid selection must not discover host-side candidates: {args:?}"
+            );
+        }
+
+        let inline = CompletionContext::from_words(&words(&[
+            "aibox",
+            "profile",
+            "--agent=claude",
+            "--tenant=work",
+            "list",
+        ]));
+        assert!(inline.selection_valid);
+        assert_eq!(inline.agent, AgentKind::Claude);
+        assert_eq!(inline.tenant, "work");
     }
 
     #[test]
@@ -611,8 +641,25 @@ mod tests {
         let host = CompletionContext::from_words(&words(&["aibox", "component", "--host", "list"]));
         assert!(!host.selection_valid);
         let values = complete_components(OsStr::new("co"));
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0].get_value(), "codex-statusline");
+        assert_eq!(candidate_values(&values), ["codex-statusline"]);
+    }
+
+    #[test]
+    fn candidate_filtering_is_sorted_unique_and_never_completes_mount_targets() {
+        let excluded = BTreeSet::from(["alpha".to_string()]);
+        let values = filter_candidates(
+            ["alpine", "alpha", "alpine", "beta"].map(str::to_string),
+            OsStr::new("al"),
+            &excluded,
+        );
+        assert_eq!(candidate_values(&values), ["alpine"]);
+
+        assert!(complete_mount(OsStr::new("src:/container"), None).is_empty());
+        let values = without_colon(vec![
+            CompletionCandidate::new("safe-path"),
+            CompletionCandidate::new("unsafe:path"),
+        ]);
+        assert_eq!(candidate_values(&values), ["safe-path"]);
     }
 
     #[test]
@@ -627,18 +674,65 @@ mod tests {
     }
 
     #[test]
-    fn provider_candidates_are_tenant_local() {
+    fn profile_candidates_are_tenant_local() {
         let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
         let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
         let selected = tenant.for_agent(AgentKind::Codex);
-        crate::provider::create_provider(&selected, "custom").unwrap();
+        crate::profile::create_profile(&selected, "custom").unwrap();
+        crate::profile::create_profile(&selected, "second").unwrap();
         let context = CompletionContext::from_words(&words(&[
-            "aibox", "provider", "--tenant", "work", "activate", "",
+            "aibox", "profile", "--tenant", "work", "activate", "",
         ]));
-        let values = complete_providers(&context, OsStr::new(""), &BTreeSet::new());
-        assert_eq!(values[0].get_value(), "custom");
+        let values = complete_profiles(&context, OsStr::new(""), &BTreeSet::new());
+        assert_eq!(candidate_values(&values), ["custom", "second"]);
+
+        let deleting = CompletionContext::from_words(&words(&[
+            "aibox", "profile", "--tenant", "work", "delete", "custom", "",
+        ]));
+        assert_eq!(deleting.positionals, BTreeSet::from(["custom".to_string()]));
+        let values = complete_profiles(&deleting, OsStr::new(""), &deleting.positionals);
+        assert_eq!(candidate_values(&values), ["second"]);
+    }
+
+    #[test]
+    fn session_candidates_follow_the_selected_tenant_and_agent() {
+        let root = tempfile::tempdir().unwrap();
+        let work = ManagedTenant::resolve(root.path(), "work").unwrap();
+        let other = ManagedTenant::resolve(root.path(), "other").unwrap();
+        work.ensure_initialized().unwrap();
+        other.ensure_initialized().unwrap();
+        let codex_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let other_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        crate::testutil::write_jsonl(
+            &work.home_dir,
+            &format!(".codex/sessions/2026/08/04/rollout-now-{codex_id}.jsonl"),
+            &["{}"],
+        );
+        crate::testutil::write_jsonl(
+            &other.home_dir,
+            &format!(".codex/sessions/2026/08/04/rollout-now-{other_id}.jsonl"),
+            &["{}"],
+        );
+        crate::testutil::write_jsonl(
+            &work.home_dir,
+            ".claude/projects/work/claude-session.jsonl",
+            &["{}"],
+        );
+
+        let codex = CompletionContext::from_words(&words(&[
+            "aibox", "session", "--tenant", "work", "list",
+        ]));
+        assert_eq!(session_values_at(root.path(), &codex).unwrap(), [codex_id]);
+
+        let claude = CompletionContext::from_words(&words(&[
+            "aibox", "session", "--agent", "claude", "--tenant", "work", "list",
+        ]));
+        assert_eq!(
+            session_values_at(root.path(), &claude).unwrap(),
+            ["claude-session"]
+        );
     }
 }

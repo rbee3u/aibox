@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
+# Runs in the shared image with only the Tenant Home mounted. Preserve Cargo
+# user state while installing or replacing the selected stable rustup toolchain.
 set -euo pipefail
 
-target=${1:-}
-if [[ -z $target ]]; then
+version=${1:-}
+if [[ -z $version ]]; then
     manifest=$(mktemp)
     trap 'rm -f "$manifest"' EXIT
     curl -fsSL https://static.rust-lang.org/dist/channel-rust-stable.toml -o "$manifest"
-    target=$(python3 - "$manifest" <<'PY'
+    version=$(python3 - "$manifest" <<'PY'
 import pathlib
 import sys
 import tomllib
@@ -17,8 +19,8 @@ PY
     )
 fi
 
-if [[ ! $target =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "invalid stable Rust version: $target" >&2
+if [[ ! $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "invalid stable Rust version: $version" >&2
     exit 2
 fi
 
@@ -32,7 +34,7 @@ if [[ ! -x $rustup ]]; then
     sh "$bootstrap" -y --no-modify-path --profile minimal --default-toolchain none
 fi
 
-old=$(
+current_toolchain=$(
     python3 - "$RUSTUP_HOME/settings.toml" <<'PY'
 import pathlib
 import sys
@@ -43,14 +45,16 @@ if path.is_file():
     print(tomllib.loads(path.read_text()).get("default_toolchain", ""))
 PY
 )
-if [[ ${old%%-*} == "$target" && -x $CARGO_HOME/bin/rustc ]]; then
-    echo "Rust $target is already installed; skipping"
+if [[ ${current_toolchain%%-*} == "$version" ]] \
+    && "$rustup" run "$current_toolchain" rustc --version >/dev/null 2>&1; then
+    echo "Rust $version is already installed; skipping"
     exit 0
 fi
-if [[ -n $old ]] && "$rustup" toolchain list | sed 's/ (.*//' | grep -Fxq "$old"; then
-    "$rustup" toolchain uninstall "$old"
+if [[ -n $current_toolchain ]] \
+    && "$rustup" toolchain list | sed 's/ (.*//' | grep -Fxq "$current_toolchain"; then
+    "$rustup" toolchain uninstall "$current_toolchain"
 fi
 
-"$rustup" toolchain install "$target" --profile minimal
-"$rustup" default "$target"
+"$rustup" toolchain install "$version" --profile minimal
+"$rustup" default "$version"
 "$CARGO_HOME/bin/rustc" --version

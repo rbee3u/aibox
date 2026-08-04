@@ -12,7 +12,7 @@
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
-use crate::session::SessionBackend;
+use crate::session::{PromptRecord, SessionBackend};
 use serde_json::Value;
 use std::path::Path;
 
@@ -38,11 +38,21 @@ impl SessionBackend for Claude {
     /// A real prompt is a non-meta `type:user` turn with human text, identified
     /// by `promptSource:typed` or `userType:external`. Tool results have no text
     /// blocks. Feeds shared title selection and `get` paths.
-    fn typed_text(&self, value: &Value) -> Option<String> {
-        if value.get("type").and_then(Value::as_str) != Some("user") || !is_typed(value) {
-            return None;
+    fn prompt_record(&self, value: &Value) -> PromptRecord {
+        if value.get("type").and_then(Value::as_str) != Some("user") {
+            return PromptRecord::NotTyped;
         }
-        content_text(value)
+        if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+            return PromptRecord::NotTyped;
+        }
+        match value.get("promptSource").and_then(Value::as_str) {
+            Some("typed") => content_record(value),
+            Some(_) => PromptRecord::NotTyped,
+            None if value.get("userType").and_then(Value::as_str) == Some("external") => {
+                content_record(value)
+            }
+            None => PromptRecord::UnsupportedUserLike,
+        }
     }
 
     /// Any line bearing a non-empty top-level `timestamp` is a candidate; the
@@ -69,54 +79,43 @@ impl SessionBackend for Claude {
     }
 }
 
-fn is_typed(value: &Value) -> bool {
-    match value.get("promptSource").and_then(Value::as_str) {
-        Some("typed") => true,
-        Some(_) => false,
-        None => {
-            value.get("userType").and_then(Value::as_str) == Some("external")
-                && value.get("isMeta").and_then(Value::as_bool) != Some(true)
-        }
-    }
-}
-
 /// Pull a user turn's text out of its `message.content` — Claude nests the turn
 /// under a `message` object (`{"role":"user","content":…}`), not at the top level.
 /// The content is typically a plain string; some turns use an array of blocks,
-/// so we join their non-empty `text` fields with newlines and ignore blocks
-/// without text. Returns `None` if `message.content` is absent or empty.
-fn content_text(value: &Value) -> Option<String> {
+/// so we join supported text blocks, ignore known non-text blocks, and flag
+/// unknown shapes without hiding text that was still readable.
+fn content_record(value: &Value) -> PromptRecord {
     match value
         .get("message")
         .and_then(|message| message.get("content"))
     {
-        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+        Some(Value::String(text)) if !text.is_empty() => PromptRecord::Typed(text.clone()),
         Some(Value::Array(items)) => {
-            let parts: Vec<String> = items
-                .iter()
-                .filter_map(content_block_text)
-                .map(str::to_string)
-                .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
+            if items.is_empty() {
+                return PromptRecord::UnsupportedUserLike;
             }
+            let mut parts = Vec::new();
+            let mut unsupported = false;
+            for item in items {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("text") => match item.get("text").and_then(Value::as_str) {
+                        Some(text) if !text.is_empty() => parts.push(text.to_string()),
+                        _ => unsupported = true,
+                    },
+                    Some("image" | "document" | "tool_result") => {}
+                    _ => unsupported = true,
+                }
+            }
+            PromptRecord::from_text_parts(&parts, unsupported)
         }
-        _ => None,
+        _ => PromptRecord::UnsupportedUserLike,
     }
-}
-
-fn content_block_text(item: &Value) -> Option<&str> {
-    item.get("text")
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::write_jsonl;
+    use crate::testutil::{only, write_jsonl};
 
     #[test]
     fn files_discovers_jsonl_transcripts_under_projects() {
@@ -262,9 +261,26 @@ mod tests {
         let prompts = Claude.prompts(&path).unwrap();
         let summary = Claude.summarize(&path).unwrap();
 
-        assert_eq!(prompts.len(), 1);
-        assert_eq!(prompts[0].text, "real prompt");
+        assert_eq!(only(&prompts).text, "real prompt");
         assert_eq!(summary.title, "real prompt");
+    }
+
+    #[test]
+    fn unknown_user_shape_is_diagnostic_but_known_non_prompt_is_not() {
+        let unknown = serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": "unknown"}
+        });
+        let tool = serde_json::json!({
+            "type": "user",
+            "promptSource": "tool",
+            "message": {"role": "user", "content": "tool output"}
+        });
+        assert_eq!(
+            Claude.prompt_record(&unknown),
+            PromptRecord::UnsupportedUserLike
+        );
+        assert_eq!(Claude.prompt_record(&tool), PromptRecord::NotTyped);
     }
 
     #[test]
@@ -283,8 +299,7 @@ mod tests {
         let prompts = Claude.prompts(&path).unwrap();
         let summary = Claude.summarize(&path).unwrap();
 
-        assert_eq!(prompts.len(), 1);
-        assert_eq!(prompts[0].text, "current real prompt");
+        assert_eq!(only(&prompts).text, "current real prompt");
         assert_eq!(summary.title, "current real prompt");
     }
 
@@ -317,9 +332,9 @@ mod tests {
             ],
         );
         let ps = Claude.prompts(&path).unwrap();
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "line1\nline2 caf\u{e9}");
-        assert_eq!(ps[0].timestamp, "2026-07-14T09:00:00Z");
+        let prompt = only(&ps);
+        assert_eq!(prompt.text, "line1\nline2 caf\u{e9}");
+        assert_eq!(prompt.timestamp, "2026-07-14T09:00:00Z");
     }
 
     #[test]
@@ -328,7 +343,7 @@ mod tests {
             r#"{"message":{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}}"#,
         )
         .unwrap();
-        assert_eq!(content_text(&v).as_deref(), Some("a\nb"));
+        assert_eq!(content_record(&v), PromptRecord::Typed("a\nb".to_string()));
 
         for content in [
             serde_json::json!([]),
@@ -337,11 +352,32 @@ mod tests {
         ] {
             let value = serde_json::json!({"message": {"content": content}});
             assert_eq!(
-                content_text(&value),
-                None,
+                content_record(&value),
+                PromptRecord::UnsupportedUserLike,
                 "unsupported or empty content must not become a typed prompt: {value}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_content_blocks_are_diagnostic_without_hiding_readable_text() {
+        let partial = serde_json::json!({
+            "message": {
+                "content": [
+                    {"type": "text", "text": "visible ask"},
+                    {"type": "future_block", "text": "do not trust this shape"}
+                ]
+            }
+        });
+        assert_eq!(
+            content_record(&partial),
+            PromptRecord::TypedWithUnsupported("visible ask".to_string())
+        );
+
+        let unknown = serde_json::json!({
+            "message": {"content": [{"type": "future_block", "text": "hidden"}]}
+        });
+        assert_eq!(content_record(&unknown), PromptRecord::UnsupportedUserLike);
     }
 
     #[test]
@@ -357,9 +393,9 @@ mod tests {
 
         let prompts = Claude.prompts(&path).unwrap();
 
-        assert_eq!(prompts.len(), 1);
+        let prompt = only(&prompts);
         assert_eq!(
-            prompts[0].text, "what is this",
+            prompt.text, "what is this",
             "the image block contributes no text; only the typed text block remains"
         );
     }

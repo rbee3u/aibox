@@ -14,8 +14,8 @@ pub fn is_linux() -> bool {
 }
 
 /// Host uid/gid, for `docker run --user uid:gid` on Linux so files created in
-/// `/workspace` stay owned by the invoking user. Only meaningful on Linux; callers
-/// gate on [`is_linux`] first.
+/// `/workspace` stay owned by the invoking user. Only meaningful on Linux;
+/// callers gate on [`is_linux`] first.
 #[cfg(unix)]
 pub fn uid_gid() -> (u32, u32) {
     use rustix::process::{getgid, getuid};

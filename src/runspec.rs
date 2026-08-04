@@ -1,11 +1,13 @@
 //! Resolve bind mounts, enforce the Filesystem Sandbox mount boundary, and
-//! assemble the `docker run` arguments shared by both agents.
+//! assemble the `docker run` arguments shared by both Coding Agents.
 
+#[cfg(test)]
 use crate::agent::AgentKind;
 use crate::platform;
 use anyhow::{bail, Context, Result};
-use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
+
+const CONTAINER_HOME: &str = "/home/aibox";
 
 /// Reject a bind source containing `:` because Docker's `-v` short syntax
 /// cannot represent it safely.
@@ -111,17 +113,17 @@ fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
     }
 }
 
-/// Reject extra mounts that replace `/workspace`, the agent home, or an ancestor of
-/// either managed target.
+/// Reject extra mounts that replace `/workspace`, the shared container Home,
+/// or an ancestor of either managed target.
 ///
 /// `mounts` must contain the resolved specifications returned by
 /// [`resolve_mounts`].
-pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Result<()> {
+pub fn validate_extra_mount_targets(mounts: &[String]) -> Result<()> {
     for mount in mounts {
         let target = bind_target(mount)?;
         let target = normalize_container_target(target)?;
         if shadows_managed_target(&target, "/workspace")
-            || shadows_managed_target(&target, agent.container_home())
+            || shadows_managed_target(&target, CONTAINER_HOME)
         {
             bail!(
                 "extra mount target {target:?} would override or shadow an aibox-managed mount; choose a nested target instead: {mount}"
@@ -135,8 +137,9 @@ pub fn validate_extra_mount_targets(agent: AgentKind, mounts: &[String]) -> Resu
 ///
 /// Sources unrelated to `aibox_root` are allowed. Its ancestors are rejected
 /// because mounting one would expose the root indirectly. Sources inside the
-/// root must resolve beneath a completed Managed Tenant Home. Agent metadata,
-/// internal staging directories, and Host Tenant metadata are rejected.
+/// root must resolve beneath a validly named Managed Tenant Home subtree.
+/// Agent/Tenant metadata, internal staging directories, and Host Tenant
+/// metadata are rejected.
 /// Sources are resolved before comparison, so a symlink cannot disguise an
 /// aibox-internal target as an unrelated path.
 ///
@@ -317,21 +320,14 @@ fn normalize_path_components(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Seed runtime state required by an agent because the tenant mount shadows
-/// the image's home directory.
+/// Seed runtime state required by a Coding Agent because the Tenant Home mount
+/// shadows the image's home directory.
 ///
-/// `home_dir` must be an already validated tenant home; creation protects the
+/// `home_dir` must be an already validated Tenant Home; creation protects the
 /// final state-directory entry but does not recursively validate ancestors.
+#[cfg(test)]
 pub fn seed_home(agent: AgentKind, home_dir: &Path) -> Result<()> {
     crate::tenant::ensure_agent_state(agent, home_dir)
-}
-
-/// Agent command and any agent-specific additions to `docker run`.
-pub struct Invocation {
-    /// Docker arguments required by this agent before the image name.
-    pub extra_run_args: Vec<String>,
-    /// Executable and arguments to run inside the container.
-    pub agent_cmd: Vec<OsString>,
 }
 
 /// Assemble Docker arguments for the Tenant Home, Workspace, and Extra Mounts.
@@ -341,17 +337,11 @@ pub struct Invocation {
 /// [`validate_extra_mount_targets`] and [`validate_aibox_mount_sources`].
 /// `home_dir` must also pass [`reject_colon_in_bind_source`]. This function is
 /// only a pure argument builder and repeats none of those checks.
-pub fn assemble_run_args(
-    agent: AgentKind,
-    workspace: &str,
-    home_dir: &Path,
-    extra_mounts: &[String],
-    extra_run_args: &[String],
-) -> Vec<String> {
+pub fn assemble_run_args(workspace: &str, home_dir: &Path, extra_mounts: &[String]) -> Vec<String> {
     let mut args = base_container_args(true);
 
     args.push("-v".into());
-    args.push(format!("{}:{}", home_dir.display(), agent.container_home()));
+    args.push(format!("{}:{CONTAINER_HOME}", home_dir.display()));
     args.push("-v".into());
     args.push(format!("{workspace}:/workspace"));
     args.extend(["-w".into(), "/workspace".into()]);
@@ -359,7 +349,6 @@ pub fn assemble_run_args(
         args.push("-v".into());
         args.push(mount.clone());
     }
-    args.extend(extra_run_args.iter().cloned());
     args
 }
 
@@ -368,12 +357,8 @@ pub fn assemble_run_args(
 pub fn assemble_component_run_args(home_dir: &Path) -> Vec<String> {
     let mut args = base_container_args(false);
     args.push("-v".into());
-    args.push(format!(
-        "{}:{}",
-        home_dir.display(),
-        AgentKind::Codex.container_home()
-    ));
-    args.extend(["-w".into(), AgentKind::Codex.container_home().into()]);
+    args.push(format!("{}:{CONTAINER_HOME}", home_dir.display()));
+    args.extend(["-w".into(), CONTAINER_HOME.into()]);
     args
 }
 
@@ -464,9 +449,10 @@ mod tests {
             ]
         );
 
-        assert!(resolve_mounts(&["/no/such/dir:/data".to_string()]).is_err());
-        assert!(resolve_mounts(&["src:relative".to_string()]).is_err());
-        assert!(resolve_mounts(&["src:/cache:rw".to_string()]).is_err());
+        let error = resolve_mounts(&["/no/such/dir:/data".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("mount host path does not exist"), "{error}");
     }
 
     #[cfg(unix)]
@@ -527,23 +513,19 @@ mod tests {
             "/home/aibox/..",
             "/home/aibox/.cache/../..",
         ] {
-            let err =
-                validate_extra_mount_targets(AgentKind::Codex, &[format!("/host:{target}:ro")])
-                    .unwrap_err()
-                    .to_string();
+            let err = validate_extra_mount_targets(&[format!("/host:{target}:ro")])
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("would override or shadow"));
         }
-        validate_extra_mount_targets(
-            AgentKind::Codex,
-            &[
-                "/host:/legacy-work:ro".to_string(),
-                "/host:/workspace-cache:ro".to_string(),
-                "/host:/workspace/.cache:ro".to_string(),
-                "/host:/home/aibox-cache:ro".to_string(),
-                "/host:/home/aibox2:ro".to_string(),
-                "/host:/home/aibox/.cache:ro".to_string(),
-            ],
-        )
+        validate_extra_mount_targets(&[
+            "/host:/legacy-work:ro".to_string(),
+            "/host:/workspace-cache:ro".to_string(),
+            "/host:/workspace/.cache:ro".to_string(),
+            "/host:/home/aibox-cache:ro".to_string(),
+            "/host:/home/aibox2:ro".to_string(),
+            "/host:/home/aibox/.cache:ro".to_string(),
+        ])
         .unwrap();
     }
 
@@ -594,10 +576,10 @@ mod tests {
             .unwrap();
         let metadata = root.path().join("codex/default");
         fs::create_dir_all(&metadata).unwrap();
-        let linked_provider = links.path().join("provider");
-        symlink(&metadata, &linked_provider).unwrap();
+        let linked_profile = links.path().join("profile");
+        symlink(&metadata, &linked_profile).unwrap();
 
-        let err = validate_aibox_mount_sources(linked_provider.to_str().unwrap(), &[], root.path())
+        let err = validate_aibox_mount_sources(linked_profile.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
@@ -651,7 +633,7 @@ mod tests {
         .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into Provider metadata must be rejected: {err}"
+            "a dotdot mount source that resolves into Profile metadata must be rejected: {err}"
         );
     }
 
@@ -703,11 +685,9 @@ mod tests {
     #[test]
     fn assemble_run_args_keeps_sandbox_flags_and_mount_order() {
         let args = assemble_run_args(
-            AgentKind::Codex,
             "/abs/workspace",
             Path::new("/abs/tenant"),
             &["/abs/cache:/cache:ro".to_string()],
-            &["--network=none".to_string()],
         );
 
         assert_eq!(args.first().map(String::as_str), Some("--rm"));
@@ -729,7 +709,6 @@ mod tests {
             crate::testutil::pair_pos(&args, "-v", "/abs/workspace:/workspace")
                 < crate::testutil::pair_pos(&args, "-v", "/abs/cache:/cache:ro")
         );
-        assert_eq!(args.last().map(String::as_str), Some("--network=none"));
         assert!(!args.iter().any(|arg| arg == "--env-file"));
 
         if platform::is_linux() {

@@ -1,8 +1,8 @@
 //! Building and running cleanup-aware containers.
 //!
 //! Image inspection, [`build_image`] (invoked by `aibox build`), and [`run`]
-//! (which spawns `docker run` for an Agent or toolchain installer) all shell out
-//! to the Docker CLI.
+//! (which spawns `docker run` for a Coding Agent or toolchain installer) all
+//! shell out to the Docker CLI.
 //!
 //! ## Why the Dockerfile comes from stdin
 //!
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 /// Local image tag used when no image override is supplied.
 pub const IMAGE: &str = "aibox:latest";
 
-/// Shared development-runtime Dockerfile with both agent CLIs installed.
+/// Shared development-runtime Dockerfile with both Coding Agent CLIs installed.
 pub const DOCKERFILE: &str = include_str!("../assets/aibox.Dockerfile");
 
 const CONTAINER_CREATE_WAIT: Duration = Duration::from_secs(1);
@@ -32,6 +32,7 @@ pub enum BuildCache {
     /// Keep Docker's cache enabled.
     Cached,
     /// Re-run every layer, but do not pull the `FROM` image.
+    #[cfg(test)]
     NoCache,
     /// Re-run every layer and pull a fresh `FROM` image.
     NoCachePull,
@@ -41,6 +42,7 @@ impl BuildCache {
     fn docker_args(self) -> &'static [&'static str] {
         match self {
             BuildCache::Cached => &[],
+            #[cfg(test)]
             BuildCache::NoCache => &["--no-cache"],
             BuildCache::NoCachePull => &["--no-cache", "--pull"],
         }
@@ -138,9 +140,10 @@ fn image_ref_for_exact_ls(image: &str) -> String {
 ///
 /// `after_container_created` runs at most once, after Docker has written a
 /// container id and before this function waits for the container to exit. It is
-/// not called if the Docker child exits before creating a container. If a
-/// successful Docker child leaves a live or uninspectable container behind,
-/// aibox attempts to kill it and returns a non-zero exit code.
+/// not called if the Docker child exits before creating a container. If the
+/// Docker child leaves a live or uninspectable container behind, aibox attempts
+/// to kill it. A zero child exit becomes non-zero; an existing failure code is
+/// preserved.
 ///
 /// This function uses a process-wide child/cidfile registry and must not be
 /// called concurrently.
@@ -506,7 +509,7 @@ printf '\nEND\n' >> "$log"
     }
 
     #[test]
-    fn embedded_dockerfiles_do_not_require_build_context() {
+    fn embedded_dockerfile_does_not_require_build_context() {
         for line in DOCKERFILE.lines() {
             let trimmed = line.trim_start();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -517,9 +520,9 @@ printf '\nEND\n' >> "$log"
                 .next()
                 .unwrap_or_default()
                 .to_ascii_uppercase();
-            assert_ne!(
-                instruction, "COPY",
-                "aibox Dockerfile must stay build-context-free: {line:?}"
+            assert!(
+                !matches!(instruction.as_str(), "COPY" | "ADD"),
+                "aibox Dockerfile must not read from a build context: {line:?}"
             );
         }
     }
@@ -821,6 +824,7 @@ printf '\nEND\n' >> "$log"
 
     #[test]
     fn wait_failure_keeps_registered_run_cleanup_armed() {
+        let _env_lock = crate::test_env_lock();
         let _run_lock = crate::creds::run_registry_test_lock();
         let cid_dir = tempfile::tempdir().unwrap();
         crate::creds::set_cidfile(&cid_dir.path().join("cid")).unwrap();
@@ -971,6 +975,7 @@ printf '\nEND\n' >> "$log"
 
     #[test]
     fn exit_code_maps_child_exit_and_signal_statuses() {
+        let _env_lock = crate::test_env_lock();
         let exited = Command::new("sh").args(["-c", "exit 37"]).status().unwrap();
         assert_eq!(exit_code(exited), 37);
 

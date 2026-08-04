@@ -13,7 +13,7 @@ persistent in named Tenants.
 - **Explicit host access.** A Run sees its Workspace, Tenant Home, and only the
   Extra Mounts supplied on that command.
 - **Native configuration.** Runs use the Coding Agent's real configuration
-  files. Providers are activated explicitly and never reapplied by a Run.
+  files. Agent Profiles are activated explicitly and never reapplied by a Run.
 
 ## Quick Start
 
@@ -59,18 +59,20 @@ Each Run creates a disposable container with these possible bind mounts:
 
 The Filesystem Sandbox is not a complete authority boundary. Networking is
 enabled; credentials can authorize remote actions; writable mounts can be
-changed or deleted; and aibox adds no CPU or memory limits. The default Provider
-templates disable agent-level approval prompts because Docker is the Filesystem
-Sandbox. Review or edit native Agent Configuration before activation when a
-more restrictive policy is required.
+changed or deleted; and aibox adds no CPU or memory limits. The built-in Agent
+Profile templates created by `profile create` disable Coding Agent approval
+prompts because Docker is the Filesystem Sandbox. Agent Profiles are never
+created or activated automatically. Review or edit native Agent Configuration
+before activation when a more restrictive policy is required.
 
 See [Sandbox and Mounts](docs/sandbox.md) for mount validation and container
 cleanup behavior.
 
 ## Tenants
 
-The Managed Tenant `default` is initialized by the first successful Run. Use a
-different Tenant when work should not share credentials, settings, or Sessions:
+The Managed Tenant `default` is initialized by the first validated Run attempt,
+even if Docker later fails or the Coding Agent exits nonzero. Use a different
+Tenant when work should not share credentials, settings, or Sessions:
 
 ```sh
 aibox tenant create work
@@ -80,7 +82,7 @@ aibox tenant delete work
 ```
 
 A Managed Tenant named `host` is ordinary and runnable. The real host Home is
-the separate Host Tenant, selected only by `--host` on Provider and Session
+the separate Host Tenant, selected only by `--host` on `profile` and `session`
 commands. Read [Tenants](docs/tenants.md) before deleting data or sharing
 toolchains.
 
@@ -95,41 +97,38 @@ aibox component install claude-statusline
 aibox component install codex-statusline
 aibox component install rust
 aibox component install go@1.25.6 --tenant work
+aibox component remove rust --tenant work --yes
 ```
 
 Omitting a Rust or Go version installs the current stable release. Toolchain
 installation uses the shared Docker image and requires `aibox build`; status
-lines are merged directly into native Agent Configuration. See
+lines own protected native Agent Configuration paths independently of Agent
+Profiles. See
 [Tenant Components](docs/tenants.md#tenant-components) for replacement and
-Provider interaction semantics.
+Agent Profile interaction semantics.
 
-## Providers
+## Agent Profiles
 
-A Provider belongs to exactly one Tenant and one Coding Agent. Create its
-connection settings, activate it, then inspect later source or working changes:
+An Agent Profile belongs to exactly one Tenant and one Coding Agent. Create its
+native settings and credentials, activate it, then inspect later source or
+working changes:
 
 ```sh
-aibox provider create custom
-aibox provider edit custom
-aibox provider edit custom --auth
-aibox provider activate custom
-aibox provider status
-aibox provider diff
+aibox profile create custom
+aibox profile edit custom
+aibox profile edit custom --auth
+aibox profile activate custom
+aibox profile status
+aibox profile diff
+aibox profile diff --show-values
 ```
 
 The Coding Agent or user may continue editing native Agent Configuration after
-activation. `provider reconcile` three-way merges those working changes with
-Provider source changes. `provider deactivate` restores the exact
-pre-activation configuration. A Run does not mutate or reapply Provider
-configuration.
-
-State-changing Provider commands are resumable: an interrupted operation is
-recorded and completed by the next Provider command, or by the next Run for that
-Managed Tenant. There is no Provider backup or restore command.
-
-Provider main configuration is displayed by `provider get`; credential output
-requires `provider get --auth`. Read [Providers](docs/providers.md) for conflict
-resolution, Host Tenant usage, credentials, and failure recovery.
+activation. `profile reconcile` three-way merges those working changes with
+Agent Profile source changes, while a Run continues with native Agent
+Configuration unchanged. Read [Agent Profiles](docs/profiles.md) for switching
+and deactivation, conflict resolution, credentials, Host Tenant usage, and
+interrupted-operation recovery.
 
 ## Sessions
 
@@ -142,6 +141,9 @@ aibox session --host --agent claude list
 ```
 
 Session deletion requires explicit ids or `--all` and is irreversible.
+Session discovery and the typed-prompt view are best-effort, but destructive
+operations refuse an incomplete filesystem view. See
+[Sessions](docs/tenants.md#sessions) for parsing warnings and traversal safety.
 
 ## Extra Mounts
 
@@ -168,16 +170,30 @@ aibox completion fish | source
 
 Add the matching command to your shell startup file.
 
+Completion evaluates command-aware candidates on demand, including existing
+Managed Tenants, Agent Profiles, Sessions, and the fixed Component catalog.
+Discovery is host-side and read-only: it does not create a missing Managed
+Tenant or resume an interrupted Agent Profile transaction.
+
 ## Learn More
 
-- [Tenants](docs/tenants.md): persistent state, Host Tenant, layout, deletion,
-  and Components.
-- [Providers](docs/providers.md): activation, reconciliation, secrets, and
+- [Domain Language](CONTEXT.md): the canonical terms used by code, help, and
+  documentation.
+- [Tenants](docs/tenants.md): persistent state, Host Tenant, layout, Sessions,
+  deletion, and Components.
+- [Agent Profiles](docs/profiles.md): activation, reconciliation, secrets, and
   resumable transactions.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
   cleanup, and custom images.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
   Coding Agent versions.
+
+## Development
+
+Before changing behavior, read the repository constraints in
+[AGENTS.md](AGENTS.md), the relevant domain definitions in
+[CONTEXT.md](CONTEXT.md), and the decisions in [docs/adr](docs/adr/). AGENTS.md
+also lists the required Rust checks.
 
 ## License
 

@@ -1,28 +1,29 @@
-//! Optional Managed Tenant Components.
+//! Optional capabilities derived from native state in a Managed Tenant Home.
+//!
+//! Status-line Components own a narrow set of Agent Configuration paths;
+//! toolchains own their Tenant-local SDK directories. There is no Component
+//! registry, so inspection must distinguish healthy, partial, modified, and
+//! unmanaged native state before installation or removal.
 
 use crate::agent::AgentKind;
+use crate::agent_config::Pointer;
 use crate::cli::{ComponentArgs, ComponentCommand};
-use crate::tenant::{self, FileSnapshot, ManagedTenant};
+use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::str::FromStr;
 
 const CLAUDE_STATUSLINE: &[u8] = include_bytes!("../assets/claude-statusline.sh");
+const CLAUDE_STATUSLINE_SCRIPT: &str = "statusline.sh";
+const CODEX_STATUSLINE_ITEMS: [&str; 3] = ["model-with-reasoning", "current-dir", "git-branch"];
 const RUST_INSTALLER: &str = include_str!("../assets/install-rust.sh");
 const GO_INSTALLER: &str = include_str!("../assets/install-go.sh");
 const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
-
-const COMPONENTS: [ComponentKind; 4] = [
-    ComponentKind::ClaudeStatusline,
-    ComponentKind::CodexStatusline,
-    ComponentKind::Rust,
-    ComponentKind::Go,
-];
 
 /// One optional capability that aibox can install into a Managed Tenant Home.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +39,13 @@ pub enum ComponentKind {
 }
 
 impl ComponentKind {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::ClaudeStatusline,
+        Self::CodexStatusline,
+        Self::Rust,
+        Self::Go,
+    ];
+
     /// Stable CLI name.
     pub fn name(self) -> &'static str {
         match self {
@@ -63,25 +71,26 @@ pub enum ComponentStatus {
     },
     /// Some status-line state exists but differs from the current definition.
     Modified,
+    /// Recognizable aibox-owned state exists but is only partially installed
+    /// or is not healthy enough to run.
+    Incomplete,
     /// Toolchain state exists but aibox must not take ownership of it.
     Unmanaged,
     /// No Component-owned state exists.
     NotInstalled,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Inspection {
-    Public(ComponentStatus),
-    Repairable,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatuslinePartState {
+    Absent,
+    Current,
+    Modified,
 }
 
-impl Inspection {
-    fn status(&self) -> ComponentStatus {
-        match self {
-            Self::Public(status) => status.clone(),
-            Self::Repairable => ComponentStatus::Unmanaged,
-        }
-    }
+#[derive(Clone, Copy)]
+struct RemovalOptions {
+    discard_changes: bool,
+    skip_confirmation: bool,
 }
 
 /// A Component name and optional stable toolchain version.
@@ -110,18 +119,26 @@ impl FromStr for ComponentSpec {
         let (name, version) = value
             .split_once('@')
             .map_or((value, None), |(name, version)| (name, Some(version)));
-        let kind = match name {
-            "claude-statusline" => ComponentKind::ClaudeStatusline,
-            "codex-statusline" => ComponentKind::CodexStatusline,
-            "rust" => ComponentKind::Rust,
-            "go" => ComponentKind::Go,
-            _ => return Err(format!("unknown Component {name:?}")),
-        };
+        let kind = name.parse::<ComponentKind>()?;
         if version.is_some() && !kind.supports_version() {
             return Err(format!("{} does not accept a version", kind.name()));
         }
         let version = version.map(validate_stable_version).transpose()?;
         Ok(Self { kind, version })
+    }
+}
+
+impl FromStr for ComponentKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "claude-statusline" => Ok(Self::ClaudeStatusline),
+            "codex-statusline" => Ok(Self::CodexStatusline),
+            "rust" => Ok(Self::Rust),
+            "go" => Ok(Self::Go),
+            _ => Err(format!("unknown Component {value:?}")),
+        }
     }
 }
 
@@ -146,6 +163,11 @@ pub fn dispatch(args: &ComponentArgs) -> Result<i32> {
     match &args.command {
         ComponentCommand::List => list(args.tenant_name()),
         ComponentCommand::Install { component } => install(args.tenant_name(), component),
+        ComponentCommand::Remove {
+            component,
+            discard_changes,
+            yes,
+        } => remove(args.tenant_name(), *component, *discard_changes, *yes),
     }
 }
 
@@ -153,9 +175,9 @@ fn list(tenant_name: &str) -> Result<i32> {
     let root = tenant::aibox_root()?;
     let tenant = ManagedTenant::resolve(&root, tenant_name)?;
     let exists = tenant.exists()?;
-    for kind in COMPONENTS {
+    for kind in ComponentKind::ALL {
         let status = if exists {
-            inspect(kind, &tenant.home_dir)?.status()
+            inspect(kind, &tenant.home_dir)?
         } else {
             ComponentStatus::NotInstalled
         };
@@ -176,6 +198,120 @@ fn install(tenant_name: &str, component: &ComponentSpec) -> Result<i32> {
     }
 }
 
+fn remove(tenant_name: &str, kind: ComponentKind, discard_changes: bool, yes: bool) -> Result<i32> {
+    let root = tenant::aibox_root()?;
+    let tenant = ManagedTenant::resolve(&root, tenant_name)?;
+    if !tenant.exists()? {
+        return Ok(0);
+    }
+    remove_from_tenant(
+        &tenant,
+        kind,
+        RemovalOptions {
+            discard_changes,
+            skip_confirmation: yes,
+        },
+    )
+}
+
+fn remove_from_tenant(
+    tenant: &ManagedTenant,
+    kind: ComponentKind,
+    options: RemovalOptions,
+) -> Result<i32> {
+    let status = inspect(kind, &tenant.home_dir)?;
+    if status == ComponentStatus::NotInstalled {
+        return Ok(0);
+    }
+    if matches!(
+        status,
+        ComponentStatus::Modified | ComponentStatus::Unmanaged
+    ) && !options.discard_changes
+    {
+        bail!(
+            "{} is {}; use --discard-changes to remove it",
+            kind.name(),
+            status_label(&status)
+        );
+    }
+    if !options.skip_confirmation && !confirm_remove(kind)? {
+        bail!("aborted");
+    }
+    match kind {
+        ComponentKind::ClaudeStatusline => remove_claude_statusline(tenant)?,
+        ComponentKind::CodexStatusline => remove_codex_statusline(tenant)?,
+        ComponentKind::Rust => remove_rust(&tenant.home_dir)?,
+        ComponentKind::Go => {
+            tenant::remove_real_dir_if_exists(&tenant.home_dir.join(".goroot"), "Go root")?;
+        }
+    }
+    Ok(0)
+}
+
+fn status_label(status: &ComponentStatus) -> &'static str {
+    match status {
+        ComponentStatus::Installed { .. } => "installed",
+        ComponentStatus::Modified => "modified",
+        ComponentStatus::Incomplete => "incomplete",
+        ComponentStatus::Unmanaged => "unmanaged",
+        ComponentStatus::NotInstalled => "not installed",
+    }
+}
+
+fn statusline_status_from_parts(
+    first: StatuslinePartState,
+    second: StatuslinePartState,
+) -> ComponentStatus {
+    match (first, second) {
+        (StatuslinePartState::Absent, StatuslinePartState::Absent) => ComponentStatus::NotInstalled,
+        (StatuslinePartState::Current, StatuslinePartState::Current) => {
+            ComponentStatus::Installed { version: None }
+        }
+        (StatuslinePartState::Current, StatuslinePartState::Absent)
+        | (StatuslinePartState::Absent, StatuslinePartState::Current) => {
+            ComponentStatus::Incomplete
+        }
+        _ => ComponentStatus::Modified,
+    }
+}
+
+/// Component-owned logical Agent Configuration paths that Agent Profile
+/// operations must preserve for this scope.
+pub(crate) fn protected_config_paths(selected: &TenantAgent) -> Result<Vec<Pointer>> {
+    let Tenant::Managed(tenant) = &selected.tenant else {
+        return Ok(Vec::new());
+    };
+    if !tenant.exists()? {
+        return Ok(Vec::new());
+    }
+    let kind = statusline_component(selected.agent);
+    if inspect(kind, &tenant.home_dir)? == ComponentStatus::NotInstalled {
+        return Ok(Vec::new());
+    }
+    component_owned_paths(kind)
+        .iter()
+        .map(|path| Pointer::parse(path))
+        .collect()
+}
+
+fn statusline_component(agent: AgentKind) -> ComponentKind {
+    match agent {
+        AgentKind::Claude => ComponentKind::ClaudeStatusline,
+        AgentKind::Codex => ComponentKind::CodexStatusline,
+    }
+}
+
+fn component_owned_paths(kind: ComponentKind) -> &'static [&'static str] {
+    match kind {
+        ComponentKind::ClaudeStatusline => &["/config/statusLine"],
+        ComponentKind::CodexStatusline => &[
+            "/config/tui/status_line",
+            "/config/tui/status_line_use_colors",
+        ],
+        ComponentKind::Rust | ComponentKind::Go => &[],
+    }
+}
+
 fn format_status(kind: ComponentKind, status: &ComponentStatus) -> String {
     match status {
         ComponentStatus::Installed {
@@ -185,12 +321,13 @@ fn format_status(kind: ComponentKind, status: &ComponentStatus) -> String {
             format!("{} installed", kind.name())
         }
         ComponentStatus::Modified => format!("{} modified", kind.name()),
+        ComponentStatus::Incomplete => format!("{} incomplete", kind.name()),
         ComponentStatus::Unmanaged => format!("{} unmanaged", kind.name()),
         ComponentStatus::NotInstalled => format!("{} not-installed", kind.name()),
     }
 }
 
-fn inspect(kind: ComponentKind, home: &Path) -> Result<Inspection> {
+fn inspect(kind: ComponentKind, home: &Path) -> Result<ComponentStatus> {
     match kind {
         ComponentKind::ClaudeStatusline => inspect_claude_statusline(home),
         ComponentKind::CodexStatusline => inspect_codex_statusline(home),
@@ -199,66 +336,63 @@ fn inspect(kind: ComponentKind, home: &Path) -> Result<Inspection> {
     }
 }
 
-fn inspect_claude_statusline(home: &Path) -> Result<Inspection> {
-    let dir = home.join(AgentKind::Claude.active_dir_name());
+fn inspect_claude_statusline(home: &Path) -> Result<ComponentStatus> {
+    let dir = home.join(AgentKind::Claude.state_dir_name());
     if !tenant::real_dir_exists(&dir, "Claude state directory")? {
-        return public(ComponentStatus::NotInstalled);
+        return Ok(ComponentStatus::NotInstalled);
     }
-    let script = capture_limited(&dir.join("statusline.sh"), "Claude status-line script")?;
+    let script = capture_limited(
+        &dir.join(CLAUDE_STATUSLINE_SCRIPT),
+        "Claude status-line script",
+    )?;
     let settings = capture_limited(
         &dir.join(AgentKind::Claude.main_config_file()),
         "Claude settings",
     )?;
-    let (setting_present, setting_matches) = claude_statusline_setting(&settings)?;
-    let script_present = script.present;
-    if !script_present && !setting_present {
-        return public(ComponentStatus::NotInstalled);
-    }
-    if script_present
-        && script.content == CLAUDE_STATUSLINE
-        && executable_mode_is_current(script.mode)
-        && setting_matches
-    {
-        public(ComponentStatus::Installed { version: None })
+    Ok(statusline_status_from_parts(
+        claude_statusline_script_state(&script),
+        claude_statusline_setting_state(&settings)?,
+    ))
+}
+
+fn claude_statusline_script_state(script: &FileSnapshot) -> StatuslinePartState {
+    if !script.present {
+        StatuslinePartState::Absent
+    } else if script.content == CLAUDE_STATUSLINE && executable_mode_is_current(script.mode) {
+        StatuslinePartState::Current
     } else {
-        public(ComponentStatus::Modified)
+        StatuslinePartState::Modified
     }
 }
 
-fn claude_statusline_setting(settings: &FileSnapshot) -> Result<(bool, bool)> {
+fn claude_statusline_setting_state(settings: &FileSnapshot) -> Result<StatuslinePartState> {
     let object = parse_json_config(settings, "Claude settings")?;
     let expected = json!({
         "type": "command",
         "command": "bash ~/.claude/statusline.sh"
     });
     Ok(match object.get("statusLine") {
-        Some(value) => (true, value == &expected),
-        None => (false, false),
+        Some(value) if value == &expected => StatuslinePartState::Current,
+        Some(_) => StatuslinePartState::Modified,
+        None => StatuslinePartState::Absent,
     })
 }
 
-fn inspect_codex_statusline(home: &Path) -> Result<Inspection> {
-    let dir = home.join(AgentKind::Codex.active_dir_name());
+fn inspect_codex_statusline(home: &Path) -> Result<ComponentStatus> {
+    let dir = home.join(AgentKind::Codex.state_dir_name());
     if !tenant::real_dir_exists(&dir, "Codex state directory")? {
-        return public(ComponentStatus::NotInstalled);
+        return Ok(ComponentStatus::NotInstalled);
     }
     let config = capture_limited(
         &dir.join(AgentKind::Codex.main_config_file()),
         "Codex configuration",
     )?;
-    let (present, matches) = codex_statusline_setting(&config)?;
-    if !present {
-        public(ComponentStatus::NotInstalled)
-    } else if matches {
-        public(ComponentStatus::Installed { version: None })
-    } else {
-        public(ComponentStatus::Modified)
-    }
+    codex_statusline_setting(&config)
 }
 
-fn codex_statusline_setting(config: &FileSnapshot) -> Result<(bool, bool)> {
+fn codex_statusline_setting(config: &FileSnapshot) -> Result<ComponentStatus> {
     if !config.present || config.content.iter().all(u8::is_ascii_whitespace) {
-        return Ok((false, false));
+        return Ok(ComponentStatus::NotInstalled);
     }
     let content =
         std::str::from_utf8(&config.content).context("Codex configuration is not UTF-8")?;
@@ -266,38 +400,45 @@ fn codex_statusline_setting(config: &FileSnapshot) -> Result<(bool, bool)> {
         .parse::<toml_edit::DocumentMut>()
         .context("parse Codex configuration")?;
     let Some(tui) = document.get("tui").and_then(toml_edit::Item::as_table_like) else {
-        return Ok((document.get("tui").is_some(), false));
+        return Ok(ComponentStatus::NotInstalled);
     };
-    let status_line = tui.get("status_line");
-    let colors = tui.get("status_line_use_colors");
-    let present = status_line.is_some() || colors.is_some();
-    let line_matches = status_line
-        .and_then(toml_edit::Item::as_array)
-        .is_some_and(|array| {
-            let actual: Option<Vec<_>> = array.iter().map(toml_edit::Value::as_str).collect();
-            actual.as_deref() == Some(&["model-with-reasoning", "current-dir", "git-branch"])
-        });
-    let colors_match = colors.and_then(toml_edit::Item::as_bool) == Some(true);
-    Ok((present, line_matches && colors_match))
+    let status_line = match tui.get("status_line") {
+        None => StatuslinePartState::Absent,
+        Some(item)
+            if item.as_array().is_some_and(|array| {
+                let actual: Option<Vec<_>> = array.iter().map(toml_edit::Value::as_str).collect();
+                actual.as_deref() == Some(CODEX_STATUSLINE_ITEMS.as_slice())
+            }) =>
+        {
+            StatuslinePartState::Current
+        }
+        Some(_) => StatuslinePartState::Modified,
+    };
+    let colors = match tui.get("status_line_use_colors") {
+        None => StatuslinePartState::Absent,
+        Some(item) if item.as_bool() == Some(true) => StatuslinePartState::Current,
+        Some(_) => StatuslinePartState::Modified,
+    };
+    Ok(statusline_status_from_parts(status_line, colors))
 }
 
-fn inspect_rust(home: &Path) -> Result<Inspection> {
+fn inspect_rust(home: &Path) -> Result<ComponentStatus> {
     let rustup_home = home.join(".rustup");
     if !tenant::real_dir_exists(&rustup_home, "Rustup Home")? {
-        return public(ComponentStatus::NotInstalled);
+        return Ok(ComponentStatus::NotInstalled);
     }
     let settings = capture_limited(&rustup_home.join("settings.toml"), "rustup settings")?;
     if !settings.present {
-        return public(ComponentStatus::Unmanaged);
+        return Ok(ComponentStatus::Incomplete);
     }
     let content =
         std::str::from_utf8(&settings.content).context("rustup settings are not UTF-8")?;
     let value: Value = toml_edit::de::from_str(content).context("parse rustup settings")?;
     let Some(toolchain) = value.get("default_toolchain").and_then(Value::as_str) else {
-        return public(ComponentStatus::Unmanaged);
+        return Ok(ComponentStatus::Unmanaged);
     };
     let Some(version) = stable_version_prefix(toolchain) else {
-        return public(ComponentStatus::Unmanaged);
+        return Ok(ComponentStatus::Unmanaged);
     };
 
     let cargo_home = home.join(".cargo");
@@ -305,7 +446,7 @@ fn inspect_rust(home: &Path) -> Result<Inspection> {
     let cargo_bin_exists =
         cargo_exists && tenant::real_dir_exists(&cargo_home.join("bin"), "Cargo binary directory")?;
     let rustup_exists = cargo_bin_exists
-        && tenant::real_file_exists(&cargo_home.join("bin/rustup"), "rustup executable")?;
+        && executable_file_exists(&cargo_home.join("bin/rustup"), "rustup executable")?;
 
     let toolchains = rustup_home.join("toolchains");
     let toolchains_exist = tenant::real_dir_exists(&toolchains, "Rust toolchain collection")?;
@@ -315,25 +456,25 @@ fn inspect_rust(home: &Path) -> Result<Inspection> {
     let toolchain_bin_exists = toolchain_exists
         && tenant::real_dir_exists(&toolchain_dir.join("bin"), "Rust binary directory")?;
     let rustc_exists = toolchain_bin_exists
-        && tenant::real_file_exists(&toolchain_dir.join("bin/rustc"), "rustc executable")?;
+        && executable_file_exists(&toolchain_dir.join("bin/rustc"), "rustc executable")?;
     let complete = rustup_exists && rustc_exists;
     if complete {
-        public(ComponentStatus::Installed {
+        Ok(ComponentStatus::Installed {
             version: Some(version),
         })
     } else {
-        Ok(Inspection::Repairable)
+        Ok(ComponentStatus::Incomplete)
     }
 }
 
-fn inspect_go(home: &Path) -> Result<Inspection> {
+fn inspect_go(home: &Path) -> Result<ComponentStatus> {
     let goroot = home.join(".goroot");
     if !tenant::real_dir_exists(&goroot, "Go root")? {
-        return public(ComponentStatus::NotInstalled);
+        return Ok(ComponentStatus::NotInstalled);
     }
     let version_file = capture_limited(&goroot.join("VERSION"), "Go version file")?;
     if !version_file.present {
-        return public(ComponentStatus::Unmanaged);
+        return Ok(ComponentStatus::Incomplete);
     }
     let content = std::str::from_utf8(&version_file.content).context("Go VERSION is not UTF-8")?;
     let Some(version) = content
@@ -342,37 +483,33 @@ fn inspect_go(home: &Path) -> Result<Inspection> {
         .and_then(|line| line.strip_prefix("go"))
         .and_then(|version| validate_stable_version(version).ok())
     else {
-        return public(ComponentStatus::Unmanaged);
+        return Ok(ComponentStatus::Unmanaged);
     };
     if tenant::real_dir_exists(&goroot.join("bin"), "Go binary directory")?
-        && tenant::real_file_exists(&goroot.join("bin/go"), "Go executable")?
+        && executable_file_exists(&goroot.join("bin/go"), "Go executable")?
     {
-        public(ComponentStatus::Installed {
+        Ok(ComponentStatus::Installed {
             version: Some(version),
         })
     } else {
-        Ok(Inspection::Repairable)
+        Ok(ComponentStatus::Incomplete)
     }
-}
-
-fn public(status: ComponentStatus) -> Result<Inspection> {
-    Ok(Inspection::Public(status))
 }
 
 fn stable_version_prefix(toolchain: &str) -> Option<String> {
     let version = toolchain.split('-').next()?;
-    validate_stable_version(version).ok()
+    let version = validate_stable_version(version).ok()?;
+    let suffix = toolchain.strip_prefix(&version)?;
+    matches!(
+        suffix,
+        "" | "-x86_64-unknown-linux-gnu" | "-aarch64-unknown-linux-gnu"
+    )
+    .then_some(version)
 }
 
 fn capture_limited(path: &Path, label: &str) -> Result<FileSnapshot> {
-    let snapshot = FileSnapshot::capture(path).with_context(|| format!("inspect {label}"))?;
-    if snapshot.content.len() > MAX_CONFIG_BYTES {
-        bail!(
-            "{label} exceeds {MAX_CONFIG_BYTES} bytes: {}",
-            path.display()
-        );
-    }
-    Ok(snapshot)
+    FileSnapshot::capture_with_limit(path, MAX_CONFIG_BYTES as u64)
+        .with_context(|| format!("inspect {label}"))
 }
 
 fn parse_json_config(snapshot: &FileSnapshot, label: &str) -> Result<Map<String, Value>> {
@@ -388,16 +525,13 @@ fn parse_json_config(snapshot: &FileSnapshot, label: &str) -> Result<Map<String,
 }
 
 fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
-    tenant.ensure_initialized()?;
-    let selected = tenant.for_agent(AgentKind::Claude);
-    crate::provider::recover_pending(&selected)?;
-    selected.ensure_agent_dir()?;
+    let selected = prepare_statusline_install(tenant, AgentKind::Claude)?;
 
-    let script_path = selected.active_file("statusline.sh");
-    let settings_path = selected.active_file(AgentKind::Claude.main_config_file());
+    let script_path = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
+    let settings_path = selected.state_file(AgentKind::Claude.main_config_file());
     let script = capture_limited(&script_path, "Claude status-line script")?;
     let settings = capture_limited(&settings_path, "Claude settings")?;
-    let (_, setting_matches) = claude_statusline_setting(&settings)?;
+    let setting_state = claude_statusline_setting_state(&settings)?;
     let mut object = parse_json_config(&settings, "Claude settings")?;
     object.insert(
         "statusLine".to_string(),
@@ -411,10 +545,10 @@ fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
         serde_json::to_string_pretty(&Value::Object(object))?
     );
 
-    if script.content != CLAUDE_STATUSLINE || !executable_mode_is_current(script.mode) {
+    if claude_statusline_script_state(&script) != StatuslinePartState::Current {
         write_atomic(&script_path, CLAUDE_STATUSLINE, Some(0o755))?;
     }
-    if !setting_matches {
+    if setting_state != StatuslinePartState::Current {
         write_atomic(
             &settings_path,
             content.as_bytes(),
@@ -425,14 +559,14 @@ fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
 }
 
 fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
-    tenant.ensure_initialized()?;
-    let selected = tenant.for_agent(AgentKind::Codex);
-    crate::provider::recover_pending(&selected)?;
-    selected.ensure_agent_dir()?;
+    let selected = prepare_statusline_install(tenant, AgentKind::Codex)?;
 
-    let path = selected.active_file(AgentKind::Codex.main_config_file());
+    let path = selected.state_file(AgentKind::Codex.main_config_file());
     let config = capture_limited(&path, "Codex configuration")?;
-    let (_, setting_matches) = codex_statusline_setting(&config)?;
+    let setting_matches = matches!(
+        codex_statusline_setting(&config)?,
+        ComponentStatus::Installed { version: None }
+    );
     let content =
         std::str::from_utf8(&config.content).context("Codex configuration is not UTF-8")?;
     let mut document = if content.trim().is_empty() {
@@ -442,14 +576,20 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
             .parse::<toml_edit::DocumentMut>()
             .context("parse Codex configuration")?
     };
-    if document.get("tui").is_none_or(|item| !item.is_table_like()) {
+    if document
+        .get("tui")
+        .is_some_and(|item| !item.is_table_like())
+    {
+        bail!("Codex tui configuration is not a table; refusing to replace unowned configuration");
+    }
+    if document.get("tui").is_none() {
         document["tui"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
     let tui = document["tui"]
         .as_table_like_mut()
         .context("Codex tui configuration must be a table")?;
     let mut status_line = toml_edit::Array::new();
-    for item in ["model-with-reasoning", "current-dir", "git-branch"] {
+    for item in CODEX_STATUSLINE_ITEMS {
         status_line.push(item);
     }
     tui.insert("status_line", toml_edit::value(status_line));
@@ -461,15 +601,27 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
     Ok(0)
 }
 
+fn prepare_statusline_install(tenant: &ManagedTenant, agent: AgentKind) -> Result<TenantAgent> {
+    tenant.ensure_initialized()?;
+    let selected = tenant.for_agent(agent);
+    crate::profile::recover_pending(&selected)?;
+    crate::profile::ensure_component_paths_available(
+        &selected,
+        component_owned_paths(statusline_component(agent)),
+    )?;
+    selected.ensure_agent_state_dir()?;
+    Ok(selected)
+}
+
 fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Result<i32> {
     let existing = if tenant.exists()? {
         inspect(component.kind, &tenant.home_dir)?
     } else {
-        Inspection::Public(ComponentStatus::NotInstalled)
+        ComponentStatus::NotInstalled
     };
     if let Some(requested) = &component.version {
         if matches!(
-            existing.status(),
+            existing,
             ComponentStatus::Installed { version: Some(ref current) } if current == requested
         ) {
             eprintln!(
@@ -479,7 +631,7 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
             return Ok(0);
         }
     }
-    if matches!(existing, Inspection::Public(ComponentStatus::Unmanaged)) {
+    if existing == ComponentStatus::Unmanaged {
         bail!(
             "{} has unmanaged toolchain state; remove or normalize it before installation",
             component.kind.name()
@@ -513,6 +665,108 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
         OsString::from(component.version.as_deref().unwrap_or("")),
     ];
     crate::docker::run(&run_args, &image, &command, || {})
+}
+
+fn remove_claude_statusline(tenant: &ManagedTenant) -> Result<()> {
+    let selected = tenant.for_agent(AgentKind::Claude);
+    crate::profile::recover_pending(&selected)?;
+    let script = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
+    tenant::remove_real_file_if_exists(&script, "Claude status-line script")?;
+
+    let settings_path = selected.state_file(AgentKind::Claude.main_config_file());
+    let settings = capture_limited(&settings_path, "Claude settings")?;
+    if settings.present {
+        let mut object = parse_json_config(&settings, "Claude settings")?;
+        if object.remove("statusLine").is_some() {
+            let content = format!(
+                "{}\n",
+                serde_json::to_string_pretty(&Value::Object(object))?
+            );
+            write_atomic(&settings_path, content.as_bytes(), settings.mode)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_codex_statusline(tenant: &ManagedTenant) -> Result<()> {
+    let selected = tenant.for_agent(AgentKind::Codex);
+    crate::profile::recover_pending(&selected)?;
+    let path = selected.state_file(AgentKind::Codex.main_config_file());
+    let config = capture_limited(&path, "Codex configuration")?;
+    if !config.present || config.content.iter().all(u8::is_ascii_whitespace) {
+        return Ok(());
+    }
+    let content =
+        std::str::from_utf8(&config.content).context("Codex configuration is not UTF-8")?;
+    let mut document = content
+        .parse::<toml_edit::DocumentMut>()
+        .context("parse Codex configuration")?;
+    let mut changed = false;
+    if let Some(tui) = document
+        .get_mut("tui")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        changed |= tui.remove("status_line").is_some();
+        changed |= tui.remove("status_line_use_colors").is_some();
+    }
+    if changed {
+        write_atomic(&path, document.to_string().as_bytes(), config.mode)?;
+    }
+    Ok(())
+}
+
+fn remove_rust(home: &Path) -> Result<()> {
+    tenant::real_dir_exists(home, "Tenant Home")?;
+    let rustup = home.join(".rustup");
+    let rustup_exists = tenant::real_dir_exists(&rustup, "Rustup Home")?;
+    let cargo = home.join(".cargo");
+    let cargo_exists = tenant::real_dir_exists(&cargo, "Cargo Home")?;
+    let bin = cargo.join("bin");
+    let bin_exists = cargo_exists && tenant::real_dir_exists(&bin, "Cargo binary directory")?;
+    let proxies = [
+        "rustup",
+        "rustc",
+        "cargo",
+        "rustdoc",
+        "rustfmt",
+        "cargo-fmt",
+        "clippy-driver",
+        "cargo-clippy",
+    ];
+    if bin_exists {
+        for proxy in proxies {
+            tenant::real_file_exists(&bin.join(proxy), "rustup proxy")?;
+        }
+    }
+
+    // Remove the cross-directory proxies first. If removal is interrupted,
+    // `.rustup` remains as recognizable incomplete Component state and a
+    // repeated command can finish the operation. Removing `.rustup` first
+    // could leave only proxies, which inspection intentionally does not claim
+    // as aibox-owned state because they may belong to a manual Rust install.
+    if bin_exists {
+        for proxy in proxies {
+            tenant::remove_real_file_if_exists(&bin.join(proxy), "rustup proxy")?;
+        }
+    }
+    if rustup_exists {
+        tenant::remove_real_dir_if_exists(&rustup, "Rustup Home")?;
+    }
+    Ok(())
+}
+
+fn confirm_remove(kind: ComponentKind) -> Result<bool> {
+    if !io::stdin().is_terminal() {
+        bail!(
+            "refusing to remove Component '{}' without --yes in a non-interactive shell",
+            kind.name()
+        );
+    }
+    eprint!("Remove Component '{}'? [y/N] ", kind.name());
+    io::stderr().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
 }
 
 fn write_atomic(path: &Path, content: &[u8], mode: Option<u32>) -> Result<()> {
@@ -560,6 +814,21 @@ fn executable_mode_is_current(_mode: Option<u32>) -> bool {
     true
 }
 
+fn executable_file_exists(path: &Path, label: &str) -> Result<bool> {
+    if !tenant::real_file_exists(path, label)? {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(fs::symlink_metadata(path)?.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +840,28 @@ mod tests {
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
         (root, tenant)
+    }
+
+    fn remove_confirmed(tenant: &ManagedTenant, kind: ComponentKind) -> Result<i32> {
+        remove_from_tenant(
+            tenant,
+            kind,
+            RemovalOptions {
+                discard_changes: false,
+                skip_confirmation: true,
+            },
+        )
+    }
+
+    fn remove_discarding(tenant: &ManagedTenant, kind: ComponentKind) -> Result<i32> {
+        remove_from_tenant(
+            tenant,
+            kind,
+            RemovalOptions {
+                discard_changes: true,
+                skip_confirmation: true,
+            },
+        )
     }
 
     fn write_rust_state(home: &Path, toolchain: &str, complete: bool) {
@@ -587,6 +878,17 @@ mod tests {
             let rustc = rustup.join("toolchains").join(toolchain).join("bin");
             fs::create_dir_all(&rustc).unwrap();
             fs::write(rustc.join("rustc"), "rustc").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    home.join(".cargo/bin/rustup"),
+                    fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+                fs::set_permissions(rustc.join("rustc"), fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
         }
     }
 
@@ -601,34 +903,42 @@ mod tests {
         if complete {
             fs::create_dir_all(goroot.join("bin")).unwrap();
             fs::write(goroot.join("bin/go"), "go").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(goroot.join("bin/go"), fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
         }
     }
 
     #[test]
-    fn parses_component_specs() {
-        assert_eq!(
-            "claude-statusline".parse::<ComponentSpec>().unwrap(),
-            ComponentSpec {
-                kind: ComponentKind::ClaudeStatusline,
-                version: None,
-            }
-        );
-        assert_eq!(
-            "go@1.25.6".parse::<ComponentSpec>().unwrap(),
-            ComponentSpec {
-                kind: ComponentKind::Go,
-                version: Some("1.25.6".to_string()),
-            }
-        );
-        for invalid in [
-            "statusline",
-            "rust@stable",
-            "rust@1.90",
-            "rust@01.90.0",
-            "go@1.25.6@extra",
-            "codex-statusline@1.0.0",
+    fn component_specs_accept_supported_shapes_and_explain_rejections() {
+        for (input, kind, version) in [
+            ("claude-statusline", ComponentKind::ClaudeStatusline, None),
+            ("rust", ComponentKind::Rust, None),
+            ("go@1.25.6", ComponentKind::Go, Some("1.25.6")),
         ] {
-            assert!(invalid.parse::<ComponentSpec>().is_err(), "{invalid}");
+            assert_eq!(
+                input.parse::<ComponentSpec>().unwrap(),
+                ComponentSpec {
+                    kind,
+                    version: version.map(str::to_string),
+                },
+                "{input}"
+            );
+        }
+
+        for (input, expected) in [
+            ("statusline", "unknown Component"),
+            ("rust@stable", "expected X.Y.Z"),
+            ("rust@1.90", "expected X.Y.Z"),
+            ("rust@01.90.0", "expected X.Y.Z"),
+            ("go@1.25.6@extra", "expected X.Y.Z"),
+            ("codex-statusline@1.0.0", "does not accept a version"),
+        ] {
+            let error = input.parse::<ComponentSpec>().unwrap_err();
+            assert!(error.contains(expected), "{input:?}: {error}");
         }
     }
 
@@ -670,18 +980,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
             ComponentStatus::Modified
         );
 
         install_claude_statusline(&tenant).unwrap();
 
         assert_eq!(
-            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
             ComponentStatus::Installed { version: None }
         );
         assert_eq!(
@@ -737,25 +1043,437 @@ mod tests {
         assert!(content.contains("model = \"custom\""), "{content}");
         assert!(content.contains("animations = false"), "{content}");
         assert_eq!(
-            inspect(ComponentKind::CodexStatusline, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
             ComponentStatus::Installed { version: None }
         );
     }
 
     #[test]
-    fn statusline_install_does_not_rewrite_active_provider_metadata() {
+    fn codex_statusline_install_rejects_an_unowned_non_table_tui() {
+        let (_root, tenant) = initialized_tenant();
+        let config = tenant.home_dir.join(".codex/config.toml");
+        let original = "model = \"custom\"\ntui = \"keep\"\n";
+        fs::write(&config, original).unwrap();
+
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::NotInstalled
+        );
+        let error = install_codex_statusline(&tenant).unwrap_err().to_string();
+        assert!(error.contains("refusing to replace unowned"), "{error}");
+        assert_eq!(fs::read_to_string(config).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_statusline_installations_are_incomplete() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_root, tenant) = initialized_tenant();
+        let claude_script = tenant.home_dir.join(".claude/statusline.sh");
+        fs::write(&claude_script, CLAUDE_STATUSLINE).unwrap();
+        fs::set_permissions(&claude_script, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Incomplete
+        );
+
+        fs::write(
+            tenant.home_dir.join(".codex/config.toml"),
+            "[tui]\nstatus_line_use_colors = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Incomplete
+        );
+    }
+
+    #[test]
+    fn profile_and_statusline_double_ownership_is_rejected_both_ways() {
         let (_root, tenant) = initialized_tenant();
         let selected = tenant.for_agent(AgentKind::Codex);
-        crate::provider::create_provider(&selected, "custom").unwrap();
-        crate::provider::activate_provider(&selected, "custom", false).unwrap();
+
+        install_codex_statusline(&tenant).unwrap();
+        crate::profile::create_profile(&selected, "overlap").unwrap();
+        fs::write(
+            selected.profile_file("overlap", "config.toml"),
+            "[tui]\nstatus_line = [\"profile\"]\n",
+        )
+        .unwrap();
+        let error = crate::profile::activate_profile(&selected, "overlap", false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Component path /config/tui/status_line"),
+            "{error}"
+        );
+
+        remove_confirmed(&tenant, ComponentKind::CodexStatusline).unwrap();
+        crate::profile::activate_profile(&selected, "overlap", false).unwrap();
+        let error = install_codex_statusline(&tenant).unwrap_err().to_string();
+        assert!(error.contains("Active Agent Profile 'overlap'"), "{error}");
+    }
+
+    #[test]
+    fn statusline_survives_profile_reconcile_switch_and_deactivate() {
+        let (_root, tenant) = initialized_tenant();
+        let selected = tenant.for_agent(AgentKind::Codex);
+        for (name, model) in [("one", "one"), ("two", "two")] {
+            crate::profile::create_profile(&selected, name).unwrap();
+            fs::write(
+                selected.profile_file(name, "config.toml"),
+                format!("model = \"{model}\"\n"),
+            )
+            .unwrap();
+        }
+
+        crate::profile::activate_profile(&selected, "one", false).unwrap();
+        install_codex_statusline(&tenant).unwrap();
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Installed { version: None }
+        );
+        let config = selected.state_file("config.toml");
+        let mut working = fs::read_to_string(&config).unwrap();
+        working.push_str("working_only = true\n");
+        fs::write(&config, working).unwrap();
+        crate::profile::reconcile_profile(
+            &selected,
+            &crate::cli::ReconcileArgs {
+                take_profile: Vec::new(),
+                take_config: Vec::new(),
+                take_profile_all: false,
+                take_config_all: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(selected.profile_file("one", "config.toml"))
+                .unwrap()
+                .contains("working_only")
+        );
+        assert!(
+            !fs::read_to_string(selected.profile_file("one", "config.toml"))
+                .unwrap()
+                .contains("status_line")
+        );
+
+        crate::profile::activate_profile(&selected, "two", false).unwrap();
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Installed { version: None }
+        );
+        crate::profile::deactivate_profile(&selected, false).unwrap();
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Installed { version: None }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_deactivation_with_a_component_restores_the_base_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_root, tenant) = initialized_tenant();
+        let selected = tenant.for_agent(AgentKind::Codex);
+        let config = selected.state_file("config.toml");
+        fs::write(&config, "model = \"base\"\n").unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
+        install_codex_statusline(&tenant).unwrap();
+
+        crate::profile::create_profile(&selected, "custom").unwrap();
+        fs::write(
+            selected.profile_file("custom", "config.toml"),
+            "model = \"profile\"\n",
+        )
+        .unwrap();
+        crate::profile::activate_profile(&selected, "custom", false).unwrap();
+        assert_eq!(
+            fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        crate::profile::deactivate_profile(&selected, false).unwrap();
+
+        assert_eq!(
+            fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(
+            inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Installed { version: None }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absent_component_configuration_stays_absent_after_profile_deactivation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_root, tenant) = initialized_tenant();
+        let selected = tenant.for_agent(AgentKind::Claude);
+        let script = selected.state_file("statusline.sh");
+        let settings = selected.state_file("settings.json");
+        fs::write(&script, CLAUDE_STATUSLINE).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Incomplete
+        );
+
+        crate::profile::create_profile(&selected, "custom").unwrap();
+        crate::profile::activate_profile(&selected, "custom", false).unwrap();
+        assert!(settings.is_file());
+
+        crate::profile::deactivate_profile(&selected, false).unwrap();
+
+        assert!(!settings.exists());
+        assert!(script.is_file());
+        assert_eq!(
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Incomplete
+        );
+    }
+
+    #[test]
+    fn component_remove_is_guarded_selective_and_idempotent() {
+        let (_root, tenant) = initialized_tenant();
+        let claude = tenant.home_dir.join(".claude");
+        fs::write(claude.join("settings.json"), "{\"keep\":true}\n").unwrap();
+        install_claude_statusline(&tenant).unwrap();
+
+        if !io::stdin().is_terminal() {
+            let error = remove_from_tenant(
+                &tenant,
+                ComponentKind::ClaudeStatusline,
+                RemovalOptions {
+                    discard_changes: false,
+                    skip_confirmation: false,
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("without --yes"), "{error}");
+            assert_eq!(
+                inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
+                ComponentStatus::Installed { version: None },
+                "refusing non-interactive removal must preserve the Component"
+            );
+        }
+
+        remove_confirmed(&tenant, ComponentKind::ClaudeStatusline).unwrap();
+        remove_confirmed(&tenant, ComponentKind::ClaudeStatusline).unwrap();
+        assert!(!claude.join("statusline.sh").exists());
+        let settings: Value =
+            serde_json::from_slice(&fs::read(claude.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["keep"], true);
+        assert!(settings.get("statusLine").is_none());
+
+        fs::write(claude.join("statusline.sh"), "custom\n").unwrap();
+        assert_eq!(
+            inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
+            ComponentStatus::Modified
+        );
+        let error = remove_confirmed(&tenant, ComponentKind::ClaudeStatusline)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is modified"), "{error}");
+        assert!(error.contains("--discard-changes"), "{error}");
+        remove_discarding(&tenant, ComponentKind::ClaudeStatusline).unwrap();
+    }
+
+    #[test]
+    fn codex_statusline_discard_removes_only_component_owned_keys() {
+        let (_root, tenant) = initialized_tenant();
+        let config = tenant.home_dir.join(".codex/config.toml");
+        fs::write(
+            &config,
+            "# keep this comment\nmodel = \"custom\"\n\n[tui]\nanimations = false\n",
+        )
+        .unwrap();
+        install_codex_statusline(&tenant).unwrap();
+        let mut document = fs::read_to_string(&config)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        let mut customized = toml_edit::Array::new();
+        customized.push("user-customized");
+        document["tui"]["status_line"] = toml_edit::value(customized);
+        fs::write(&config, document.to_string()).unwrap();
+
+        let error = remove_confirmed(&tenant, ComponentKind::CodexStatusline)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("modified"), "{error}");
+
+        remove_discarding(&tenant, ComponentKind::CodexStatusline).unwrap();
+
+        let content = fs::read_to_string(&config).unwrap();
+        assert!(content.contains("# keep this comment"), "{content}");
+        let document = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(document["model"].as_str(), Some("custom"));
+        let tui = document["tui"].as_table_like().unwrap();
+        assert_eq!(
+            tui.get("animations").and_then(toml_edit::Item::as_bool),
+            Some(false)
+        );
+        assert!(tui.get("status_line").is_none());
+        assert!(tui.get("status_line_use_colors").is_none());
+    }
+
+    #[test]
+    fn unowned_toolchain_paths_are_not_claimed_or_removed() {
+        let (_root, tenant) = initialized_tenant();
+        let manual_rust = tenant.home_dir.join(".cargo/bin/rustc");
+        let manual_go = tenant.home_dir.join(".gopath/bin/custom-go-tool");
+        fs::create_dir_all(manual_rust.parent().unwrap()).unwrap();
+        fs::create_dir_all(manual_go.parent().unwrap()).unwrap();
+        fs::write(&manual_rust, b"manual rust").unwrap();
+        fs::write(&manual_go, b"manual go").unwrap();
+
+        assert_eq!(
+            inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
+            ComponentStatus::NotInstalled
+        );
+        assert_eq!(
+            inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
+            ComponentStatus::NotInstalled
+        );
+
+        remove_confirmed(&tenant, ComponentKind::Rust).unwrap();
+        remove_confirmed(&tenant, ComponentKind::Go).unwrap();
+        assert_eq!(fs::read(&manual_rust).unwrap(), b"manual rust");
+        assert_eq!(fs::read(&manual_go).unwrap(), b"manual go");
+    }
+
+    #[test]
+    fn toolchain_remove_preserves_user_caches_and_unrelated_commands() {
+        let (_root, tenant) = initialized_tenant();
+        let cargo_bin = tenant.home_dir.join(".cargo/bin");
+        fs::create_dir_all(&cargo_bin).unwrap();
+        fs::write(cargo_bin.join("custom-command"), "keep").unwrap();
+        fs::write(cargo_bin.join("cargo"), "proxy").unwrap();
+        fs::create_dir_all(tenant.home_dir.join(".rustup")).unwrap();
+        fs::write(
+            tenant.home_dir.join(".rustup/settings.toml"),
+            "default_toolchain = \"nightly-x86_64-unknown-linux-gnu\"\n",
+        )
+        .unwrap();
+        let error = remove_confirmed(&tenant, ComponentKind::Rust)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is unmanaged"), "{error}");
+        assert!(error.contains("--discard-changes"), "{error}");
+        remove_discarding(&tenant, ComponentKind::Rust).unwrap();
+        assert!(!tenant.home_dir.join(".rustup").exists());
+        assert!(!cargo_bin.join("cargo").exists());
+        assert_eq!(
+            fs::read_to_string(cargo_bin.join("custom-command")).unwrap(),
+            "keep"
+        );
+
+        fs::create_dir_all(tenant.home_dir.join(".goroot")).unwrap();
+        fs::create_dir_all(tenant.home_dir.join(".gopath")).unwrap();
+        fs::write(tenant.home_dir.join(".gopath/keep"), "keep").unwrap();
+        remove_confirmed(&tenant, ComponentKind::Go).unwrap();
+        assert!(!tenant.home_dir.join(".goroot").exists());
+        assert_eq!(
+            fs::read_to_string(tenant.home_dir.join(".gopath/keep")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_remove_rejects_a_symlinked_cargo_ancestor_before_deleting_anything() {
+        use std::os::unix::fs::symlink;
+
+        let (_root, tenant) = initialized_tenant();
+        fs::create_dir(tenant.home_dir.join(".rustup")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("bin")).unwrap();
+        let outside_proxy = outside.path().join("bin/rustup");
+        fs::write(&outside_proxy, "keep").unwrap();
+        symlink(outside.path(), tenant.home_dir.join(".cargo")).unwrap();
+
+        let error = remove_confirmed(&tenant, ComponentKind::Rust)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("Cargo Home is not a real directory"),
+            "{error}"
+        );
+        assert!(tenant.home_dir.join(".rustup").is_dir());
+        assert_eq!(fs::read_to_string(outside_proxy).unwrap(), "keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_remove_prevalidates_every_proxy_before_removing_anything() {
+        use std::os::unix::fs::symlink;
+
+        let (_root, tenant) = initialized_tenant();
+        let rustup_home = tenant.home_dir.join(".rustup");
+        let cargo_bin = tenant.home_dir.join(".cargo/bin");
+        fs::create_dir(&rustup_home).unwrap();
+        fs::create_dir_all(&cargo_bin).unwrap();
+        let rustup_proxy = cargo_bin.join("rustup");
+        fs::write(&rustup_proxy, "keep proxy").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_rustc = outside.path().join("rustc");
+        fs::write(&outside_rustc, "outside").unwrap();
+        symlink(&outside_rustc, cargo_bin.join("rustc")).unwrap();
+
+        let error = remove_confirmed(&tenant, ComponentKind::Rust)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("rustup proxy is not a regular file"),
+            "{error}"
+        );
+        assert!(rustup_home.is_dir());
+        assert_eq!(fs::read_to_string(rustup_proxy).unwrap(), "keep proxy");
+        assert_eq!(fs::read_to_string(outside_rustc).unwrap(), "outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn go_remove_rejects_a_symlinked_sdk_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let (_root, tenant) = initialized_tenant();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("VERSION"), b"go1.25.6\n").unwrap();
+        fs::write(outside.path().join("keep"), b"outside sdk").unwrap();
+        symlink(outside.path(), tenant.home_dir.join(".goroot")).unwrap();
+
+        let error = remove_discarding(&tenant, ComponentKind::Go)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Go root is not a real directory"), "{error}");
+        assert_eq!(
+            fs::read(outside.path().join("keep")).unwrap(),
+            b"outside sdk"
+        );
+    }
+
+    #[test]
+    fn statusline_install_does_not_rewrite_active_profile_metadata() {
+        let (_root, tenant) = initialized_tenant();
+        let selected = tenant.for_agent(AgentKind::Codex);
+        crate::profile::create_profile(&selected, "custom").unwrap();
+        crate::profile::activate_profile(&selected, "custom", false).unwrap();
         let metadata = fs::read(selected.metadata_file()).unwrap();
 
         install_codex_statusline(&tenant).unwrap();
 
         assert_eq!(fs::read(selected.metadata_file()).unwrap(), metadata);
-        let config = fs::read_to_string(selected.active_file("config.toml")).unwrap();
+        let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
         assert!(config.contains("status_line ="), "{config}");
     }
 
@@ -763,15 +1481,11 @@ mod tests {
     fn toolchain_statuses_are_derived_from_native_files() {
         let (_root, tenant) = initialized_tenant();
         assert_eq!(
-            inspect(ComponentKind::Rust, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
             ComponentStatus::NotInstalled
         );
         assert_eq!(
-            inspect(ComponentKind::Go, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
             ComponentStatus::NotInstalled
         );
 
@@ -779,21 +1493,44 @@ mod tests {
         write_rust_state(&tenant.home_dir, toolchain, true);
         write_go_state(&tenant.home_dir, "go1.25.6", true);
         assert_eq!(
-            inspect(ComponentKind::Rust, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
             ComponentStatus::Installed {
                 version: Some("1.90.0".to_string())
             }
         );
         assert_eq!(
-            inspect(ComponentKind::Go, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
             ComponentStatus::Installed {
                 version: Some("1.25.6".to_string())
             }
         );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                tenant
+                    .home_dir
+                    .join(".rustup/toolchains")
+                    .join(toolchain)
+                    .join("bin/rustc"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+            fs::set_permissions(
+                tenant.home_dir.join(".goroot/bin/go"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+            assert_eq!(
+                inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
+                ComponentStatus::Incomplete
+            );
+            assert_eq!(
+                inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
+                ComponentStatus::Incomplete
+            );
+        }
 
         fs::write(
             tenant.home_dir.join(".rustup/settings.toml"),
@@ -802,31 +1539,33 @@ mod tests {
         .unwrap();
         fs::write(tenant.home_dir.join(".goroot/VERSION"), "go1.26rc1\n").unwrap();
         assert_eq!(
-            inspect(ComponentKind::Rust, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
             ComponentStatus::Unmanaged
         );
         assert_eq!(
-            inspect(ComponentKind::Go, &tenant.home_dir)
-                .unwrap()
-                .status(),
+            inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
+            ComponentStatus::Unmanaged
+        );
+
+        write_rust_state(&tenant.home_dir, "1.90.0-custom", true);
+        assert_eq!(
+            inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
             ComponentStatus::Unmanaged
         );
     }
 
     #[test]
-    fn incomplete_stable_toolchains_are_repairable_but_list_as_unmanaged() {
+    fn incomplete_stable_toolchains_are_reported_as_incomplete() {
         let (_root, tenant) = initialized_tenant();
         write_rust_state(&tenant.home_dir, "1.90.0-x86_64-unknown-linux-gnu", false);
         write_go_state(&tenant.home_dir, "go1.25.6", false);
         assert_eq!(
             inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
-            Inspection::Repairable
+            ComponentStatus::Incomplete
         );
         assert_eq!(
             inspect(ComponentKind::Go, &tenant.home_dir).unwrap(),
-            Inspection::Repairable
+            ComponentStatus::Incomplete
         );
     }
 
@@ -993,7 +1732,11 @@ esac
             String::from_utf8_lossy(&same.stderr)
         );
         assert!(String::from_utf8_lossy(&same.stdout).contains("already installed"));
-        assert_eq!(fs::read_to_string(&log).unwrap(), first_log);
+        let same_log = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            same_log,
+            format!("{first_log}run 1.90.0-x86_64-unknown-linux-gnu rustc --version\n")
+        );
 
         let switch = run_installer(
             &format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR")),

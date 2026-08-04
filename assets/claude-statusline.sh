@@ -3,8 +3,7 @@
 # `jq` provides the payload fields; the Git branch is best-effort.
 input=$(cat)
 
-# One jq pass, one field per line. Keep this compatible with macOS' default
-# Bash 3.2, where mapfile/readarray is unavailable.
+# Extract every displayed field with one jq invocation.
 fields=()
 while IFS= read -r field; do
     fields+=("$field")

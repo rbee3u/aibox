@@ -1,31 +1,25 @@
-//! Run coding agents in a Docker Filesystem Sandbox, with host-side Provider
-//! configuration management.
+//! CLI application entry point for `aibox`.
 //!
-//! The binary pre-splits pass-through arguments at `--`, parses the left side
-//! into [`cli::Cli`], and calls [`run_os`]. Provider and session operations stay
-//! on the host; only a Run or toolchain Component installation starts Docker.
-//! Runs consume native Agent Configuration and never mount Provider source.
-//!
-//! Most users should use the `aibox` binary. The library exposes the same
-//! orchestration components so command assembly and host-side operations can be
-//! tested or embedded without invoking the binary entry point.
+//! The crate deliberately exposes only [`main_entry`]; command parsing and
+//! orchestration remain private implementation details rather than an
+//! embedding API.
 
 #![warn(missing_docs)]
 
-pub mod agent;
+mod agent;
 mod agent_config;
-pub mod cli;
+mod cli;
 mod completion;
-pub mod component;
-pub mod creds;
-pub mod docker;
-pub mod platform;
-pub mod provider;
-pub mod runspec;
-pub mod session;
+mod component;
+mod creds;
+mod docker;
+mod platform;
+mod profile;
+mod runspec;
+mod session;
 mod session_claude;
 mod session_codex;
-pub mod tenant;
+mod tenant;
 #[cfg(test)]
 mod testutil;
 
@@ -41,6 +35,7 @@ use anyhow::{Context, Result};
 use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
 use std::ffi::OsString;
+use std::process::ExitCode;
 use tenant::{ManagedTenant, Tenant, TenantAgent};
 
 pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
@@ -54,14 +49,18 @@ pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
     }
 }
 
-/// Handle an environment-activated shell completion request before normal
-/// argument splitting and parsing.
-///
-/// This returns immediately for ordinary invocations and exits the process
-/// after writing completion output for requests made by a generated shell
-/// registration script.
-pub fn handle_completion() {
+/// Run the `aibox` command-line application and return its process status.
+pub fn main_entry() -> ExitCode {
     completion::handle_env();
+    let (left, passthrough) = cli::split_passthrough(std::env::args_os().collect());
+    let cli = Cli::parse_from(left);
+    match run_os(cli, &passthrough) {
+        Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        Err(error) => {
+            eprintln!("!! {error:#}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn image_for(image_override: Option<&str>) -> Result<String> {
@@ -119,8 +118,10 @@ fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
 ///
 /// Use [`run_os`] when arguments collected from the operating system must be
 /// forwarded without requiring UTF-8.
-pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
-    run_os(cli, passthrough.into_iter().map(OsString::from).collect())
+#[cfg(test)]
+fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
+    let passthrough: Vec<_> = passthrough.into_iter().map(OsString::from).collect();
+    run_os(cli, &passthrough)
 }
 
 /// Execute one parsed aibox command, preserving opaque operating-system
@@ -129,38 +130,36 @@ pub fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
 /// `passthrough` must contain only the arguments after the first `--`; they are
 /// forwarded unchanged for the `run` command and rejected for other commands.
 /// The returned value is the process exit code to expose to the caller.
-pub fn run_os(cli: Cli, passthrough: Vec<OsString>) -> Result<i32> {
+fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
     match cli.command {
-        Command::Run(args) => {
-            run_agent(args.agent.unwrap_or(AgentKind::Codex), &args, &passthrough)
-        }
+        Command::Run(args) => run_agent(args.agent.unwrap_or(AgentKind::Codex), &args, passthrough),
         Command::Build(args) => {
-            reject_passthrough("build takes no pass-through args", &passthrough)?;
+            reject_passthrough("build takes no pass-through args", passthrough)?;
             run_build(&args)
         }
         Command::Completion(args) => {
-            reject_passthrough("completion takes no pass-through args", &passthrough)?;
+            reject_passthrough("completion takes no pass-through args", passthrough)?;
             completion::dispatch(&args)
         }
         Command::Tenant(args) => {
-            reject_passthrough("tenant takes no pass-through args", &passthrough)?;
+            reject_passthrough("tenant takes no pass-through args", passthrough)?;
             tenant::dispatch(&args.command)
         }
         Command::Component(args) => {
-            reject_passthrough("component takes no pass-through args", &passthrough)?;
+            reject_passthrough("component takes no pass-through args", passthrough)?;
             component::dispatch(&args)
         }
-        Command::Provider(args) => {
+        Command::Profile(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
-            reject_passthrough("provider takes no pass-through args", &passthrough)?;
+            reject_passthrough("profile takes no pass-through args", passthrough)?;
             let root = tenant::aibox_root()?;
             let selected =
                 TenantAgent::resolve(agent, &root, args.tenant.host, args.tenant.tenant_name())?;
-            provider::dispatch(&selected, &args.command)
+            profile::dispatch(&selected, &args.command)
         }
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
-            run_session_command(agent, &args, &passthrough)
+            run_session_command(agent, &args, passthrough)
         }
     }
 }
@@ -175,22 +174,7 @@ fn run_session_command(
     let tenant = Tenant::resolve(&root, args.tenant.host, args.tenant.tenant_name())?;
     tenant.validate_session_home()?;
     let selected = tenant.for_agent(agent);
-    match args.command.as_ref() {
-        None | Some(cli::SessionCommand::List) => {
-            session::dispatch(agent, selected.home_dir(), "list", &[], false, false)
-        }
-        Some(cli::SessionCommand::Get { id, .. }) => session::dispatch(
-            agent,
-            selected.home_dir(),
-            "get",
-            std::slice::from_ref(id),
-            false,
-            false,
-        ),
-        Some(cli::SessionCommand::Delete { ids, all, yes, .. }) => {
-            session::dispatch(agent, selected.home_dir(), "delete", ids, *all, *yes)
-        }
-    }
+    session::dispatch(agent, selected.home_dir(), args.command.as_ref())
 }
 
 fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()> {
@@ -231,7 +215,7 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
 
     let workspace = runspec::resolve_workspace(run.workspace.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
-    runspec::validate_extra_mount_targets(agent, &mounts)?;
+    runspec::validate_extra_mount_targets(&mounts)?;
     runspec::validate_aibox_mount_sources(&workspace, &mounts, &root)?;
 
     if !docker::image_exists(&image)? {
@@ -239,31 +223,24 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
     }
 
     tenant.ensure_initialized()?;
-    provider::recover_pending(&selected)?;
-    match provider::has_divergence(&selected) {
+    profile::recover_pending(&selected)?;
+    match profile::has_divergence(&selected) {
         Ok(true) => eprintln!(
-            "!! Active Provider has source or working changes; continuing without reapplying it"
+            "!! Active Agent Profile has source or working changes; continuing without reapplying it"
         ),
         Ok(false) => {}
         Err(error) => eprintln!(
-            "!! could not inspect Active Provider state; continuing with native Agent Configuration: {error:#}"
+            "!! could not inspect Active Agent Profile state; continuing with native Agent Configuration: {error:#}"
         ),
     }
     let home_dir = std::fs::canonicalize(&tenant.home_dir)
         .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
     runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;
 
-    let invocation = agent.build_invocation(passthrough);
+    let agent_command = agent.build_command(passthrough);
+    let run_args = runspec::assemble_run_args(&workspace, &home_dir, &mounts);
 
-    let run_args = runspec::assemble_run_args(
-        agent,
-        &workspace,
-        &home_dir,
-        &mounts,
-        &invocation.extra_run_args,
-    );
-
-    docker::run(&run_args, &image, &invocation.agent_cmd, || {})
+    docker::run(&run_args, &image, &agent_command, || {})
 }
 
 #[cfg(test)]
@@ -317,7 +294,7 @@ if [ "$1" = "run" ]; then
         fi
     done
     printf 'fake-container\n' > "$cid"
-    exit 0
+    exit "${AIBOX_FAKE_DOCKER_RUN_STATUS:-0}"
 fi
 
 exit 99
@@ -490,16 +467,14 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn default_run_uses_codex_managed_tenant_home_without_provider_injection() {
+    fn default_run_uses_codex_managed_tenant_home_without_profile_injection() {
         let fx = RunFixture::new();
         let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
         assert_eq!(code, 0);
 
         let log = fx.log();
-        assert!(log.contains(&format!(
-            "<{}:/home/aibox>",
-            fx.root.path().join("tenants/default").display()
-        )));
+        let expected_home = std::fs::canonicalize(fx.root.path().join("tenants/default")).unwrap();
+        assert!(log.contains(&format!("<{}:/home/aibox>", expected_home.display())));
         assert!(log.contains("<aibox:latest> <codex>"), "{log}");
         assert!(
             !log.contains("<--dangerously-bypass-approvals-and-sandbox>"),
@@ -516,6 +491,59 @@ printf '\nEND\n' >> "$log"
         assert!(!fx.root.path().join("claude/default").exists());
         assert!(!log.contains("<--env-file>"), "{log}");
         assert!(!log.contains("<-c>"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_agent_exit_still_leaves_the_validated_tenant_initialized() {
+        let fx = RunFixture::new();
+        let _status = EnvGuard::set("AIBOX_FAKE_DOCKER_RUN_STATUS", "23");
+
+        let code = fx
+            .run(&["aibox", "run", "--tenant", "failed-run"], Vec::new())
+            .unwrap();
+
+        assert_eq!(code, 23);
+        assert!(fx.root.path().join("tenants/failed-run/.codex").is_dir());
+        assert!(fx.log().contains("ARGS: <run>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_recovers_a_pending_profile_transaction_before_starting_the_agent() {
+        let fx = RunFixture::new();
+        let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
+        tenant.ensure_initialized().unwrap();
+        let selected = tenant.for_agent(AgentKind::Codex);
+        selected.ensure_for_management().unwrap();
+        let stale = selected.profile_dir("stale");
+        std::fs::create_dir(&stale).unwrap();
+        std::fs::write(stale.join("keep"), b"partial transaction").unwrap();
+        std::fs::write(
+            selected.metadata_file(),
+            r#"{
+  "active_profile": null,
+  "pending": {
+    "changes": [{
+      "kind": "profile-directory",
+      "profile": "stale",
+      "present": false
+    }],
+    "active_profile": null
+  }
+}
+"#,
+        )
+        .unwrap();
+        tenant::set_600(&selected.metadata_file()).unwrap();
+
+        let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(!stale.exists());
+        let metadata = std::fs::read_to_string(selected.metadata_file()).unwrap();
+        assert!(!metadata.contains("\"pending\""), "{metadata}");
+        assert!(fx.log().contains("ARGS: <run>"));
     }
 
     #[cfg(unix)]
@@ -537,11 +565,9 @@ printf '\nEND\n' >> "$log"
 
         assert_eq!(code, 0);
         let log = fx.log();
+        let expected_home = std::fs::canonicalize(real_root.join("tenants/default")).unwrap();
         assert!(
-            log.contains(&format!(
-                "<{}:/home/aibox>",
-                real_root.join("tenants/default").display()
-            )),
+            log.contains(&format!("<{}:/home/aibox>", expected_home.display())),
             "Docker must receive a resolved bind source: {log}"
         );
         assert!(
@@ -573,51 +599,51 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn run_preserves_working_config_without_remounting_or_reapplying_provider_data() {
+    fn run_preserves_working_config_without_remounting_or_reapplying_profile_data() {
         let fx = RunFixture::new();
         let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
         let selected = tenant.for_agent(AgentKind::Codex);
-        provider::create_provider(&selected, "openai").unwrap();
+        profile::create_profile(&selected, "openai").unwrap();
         std::fs::write(
-            selected.provider_file("openai", "config.toml"),
-            "model = \"provider\"\n",
+            selected.profile_file("openai", "config.toml"),
+            "model = \"profile\"\n",
         )
         .unwrap();
         std::fs::write(
-            selected.provider_file("openai", "auth.json"),
-            r#"{"token":"provider"}"#,
+            selected.profile_file("openai", "auth.json"),
+            r#"{"token":"profile"}"#,
         )
         .unwrap();
-        provider::activate_provider(&selected, "openai", false).unwrap();
+        profile::activate_profile(&selected, "openai", false).unwrap();
 
-        let active_config = "model = \"locally-adjusted\"\n";
-        let active_auth = r#"{"token":"locally-adjusted"}"#;
-        std::fs::write(selected.active_file("config.toml"), active_config).unwrap();
-        std::fs::write(selected.active_file("auth.json"), active_auth).unwrap();
+        let working_config = "model = \"locally-adjusted\"\n";
+        let working_auth = r#"{"token":"locally-adjusted"}"#;
+        std::fs::write(selected.state_file("config.toml"), working_config).unwrap();
+        std::fs::write(selected.state_file("auth.json"), working_auth).unwrap();
         let metadata_before = std::fs::read(selected.metadata_file()).unwrap();
 
         let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
 
         assert_eq!(code, 0);
         assert_eq!(
-            std::fs::read_to_string(selected.active_file("config.toml")).unwrap(),
-            active_config,
-            "a Run must consume native Agent Configuration without injecting Provider source"
+            std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
+            working_config,
+            "a Run must consume native Agent Configuration without injecting Profile source"
         );
         assert_eq!(
-            std::fs::read_to_string(selected.active_file("auth.json")).unwrap(),
-            active_auth,
-            "a run must not replace persisted auth from provider metadata"
+            std::fs::read_to_string(selected.state_file("auth.json")).unwrap(),
+            working_auth,
+            "a run must not replace persisted auth from profile metadata"
         );
         assert_eq!(
             std::fs::read(selected.metadata_file()).unwrap(),
             metadata_before,
-            "a Run must not activate or reconcile Provider configuration"
+            "a Run must not activate or reconcile Profile configuration"
         );
         let log = fx.log();
         assert!(
             !log.contains(&selected.metadata_dir().display().to_string()),
-            "provider metadata must stay host-only and never enter docker arguments: {log}"
+            "profile metadata must stay host-only and never enter docker arguments: {log}"
         );
     }
 
@@ -658,7 +684,7 @@ printf '\nEND\n' >> "$log"
         let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
         let cli = Cli::try_parse_from(["aibox", "run"]).unwrap();
 
-        let code = run_os(cli, vec![opaque.clone()]).unwrap();
+        let code = run_os(cli, std::slice::from_ref(&opaque)).unwrap();
 
         assert_eq!(code, 0);
         let log = std::fs::read(&fx.docker_log).unwrap();
@@ -677,10 +703,8 @@ printf '\nEND\n' >> "$log"
             .unwrap();
 
         let log = fx.log();
-        assert!(log.contains(&format!(
-            "<{}:/home/aibox>",
-            fx.root.path().join("tenants/default").display()
-        )));
+        let expected_home = std::fs::canonicalize(fx.root.path().join("tenants/default")).unwrap();
+        assert!(log.contains(&format!("<{}:/home/aibox>", expected_home.display())));
         assert!(log.contains("<aibox:latest> <claude>"), "{log}");
         assert!(!log.contains("<--dangerously-skip-permissions>"), "{log}");
         assert!(!fx
@@ -715,36 +739,63 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn management_commands_reject_passthrough() {
+    fn non_run_commands_reject_passthrough_before_docker() {
         let fx = RunFixture::new();
-        for argv in [
-            &["aibox", "component", "list"][..],
-            &["aibox", "provider", "list"][..],
-            &["aibox", "session", "list"][..],
+        for (argv, expected) in [
+            (&["aibox", "component", "list"][..], "applies only to a run"),
+            (&["aibox", "profile", "list"][..], "applies only to a run"),
+            (&["aibox", "session", "list"][..], "applies only to a run"),
+            (&["aibox", "build"][..], "build takes no pass-through args"),
+            (
+                &["aibox", "tenant", "list"][..],
+                "tenant takes no pass-through args",
+            ),
+            (
+                &["aibox", "completion", "zsh"][..],
+                "completion takes no pass-through args",
+            ),
         ] {
             let err = fx
                 .run(argv, vec!["ignored".to_string()])
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("applies only to a run"), "{argv:?}: {err}");
+            assert!(err.contains(expected), "{argv:?}: {err}");
         }
         assert_eq!(
             fx.log(),
             "",
-            "rejected management commands must not consult Docker"
+            "rejected non-Run commands must not consult Docker"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn provider_command_agent_selects_the_agent_tenant_catalog() {
+    fn read_only_commands_keep_a_missing_managed_tenant_quiet_and_absent() {
+        let fx = RunFixture::new();
+
+        for argv in [
+            &["aibox", "profile", "--tenant", "missing", "list"][..],
+            &["aibox", "session", "--tenant", "missing", "list"][..],
+            &["aibox", "component", "--tenant", "missing", "list"][..],
+        ] {
+            assert_eq!(fx.run(argv, Vec::new()).unwrap(), 0, "{argv:?}");
+        }
+
+        assert!(!fx.root.path().join("tenants/missing").exists());
+        assert!(!fx.root.path().join("codex/missing").exists());
+        assert_eq!(fx.log(), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_command_agent_selects_the_agent_tenant_catalog() {
         let fx = RunFixture::new();
 
         let code = fx
             .run(
                 &[
                     "aibox",
-                    "provider",
+                    "profile",
                     "--agent",
                     "claude",
                     "create",
@@ -762,7 +813,7 @@ printf '\nEND\n' >> "$log"
             .is_file());
         assert!(
             !fx.root.path().join("codex/default/anthropic").exists(),
-            "a command-level --agent claude must not create a Codex provider"
+            "a command-level --agent claude must not create a Codex profile"
         );
     }
 
@@ -794,11 +845,11 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn provider_activate_and_delete_route_to_the_selected_tenant_without_docker() {
+    fn profile_activate_and_delete_route_to_the_selected_tenant_without_docker() {
         let fx = RunFixture::new();
 
         fx.run(
-            &["aibox", "provider", "--tenant", "work", "create", "openai"],
+            &["aibox", "profile", "--tenant", "work", "create", "openai"],
             Vec::new(),
         )
         .unwrap();
@@ -806,28 +857,26 @@ printf '\nEND\n' >> "$log"
             .unwrap()
             .for_agent(AgentKind::Codex);
         std::fs::write(
-            selected.provider_file("openai", "config.toml"),
+            selected.profile_file("openai", "config.toml"),
             "model = \"selected-tenant\"\n",
         )
         .unwrap();
         std::fs::write(
-            selected.provider_file("openai", "auth.json"),
+            selected.profile_file("openai", "auth.json"),
             r#"{"token":"selected-tenant"}"#,
         )
         .unwrap();
 
         let code = fx
             .run(
-                &[
-                    "aibox", "provider", "activate", "openai", "--tenant", "work",
-                ],
+                &["aibox", "profile", "activate", "openai", "--tenant", "work"],
                 Vec::new(),
             )
             .unwrap();
 
         assert_eq!(code, 0);
         assert_eq!(
-            std::fs::read_to_string(selected.active_file("config.toml")).unwrap(),
+            std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
             "model = \"selected-tenant\"\n"
         );
         assert!(
@@ -835,14 +884,14 @@ printf '\nEND\n' >> "$log"
                 .path()
                 .join("tenants/default/.codex/config.toml")
                 .exists(),
-            "a scoped provider command must not fall back to the default tenant"
+            "a scoped profile command must not fall back to the default tenant"
         );
 
         let error = fx
             .run(
                 &[
                     "aibox",
-                    "provider",
+                    "profile",
                     "--tenant=work",
                     "delete",
                     "openai",
@@ -854,7 +903,7 @@ printf '\nEND\n' >> "$log"
 
         assert!(error.to_string().contains("is active"));
         fx.run(
-            &["aibox", "provider", "--tenant=work", "deactivate"],
+            &["aibox", "profile", "--tenant=work", "deactivate"],
             Vec::new(),
         )
         .unwrap();
@@ -862,7 +911,7 @@ printf '\nEND\n' >> "$log"
             .run(
                 &[
                     "aibox",
-                    "provider",
+                    "profile",
                     "--tenant=work",
                     "delete",
                     "openai",
@@ -873,15 +922,15 @@ printf '\nEND\n' >> "$log"
             .unwrap();
 
         assert_eq!(code, 0);
-        assert!(!selected.provider_dir("openai").exists());
+        assert!(!selected.profile_dir("openai").exists());
         assert!(
-            !selected.active_file("config.toml").exists(),
+            !selected.state_file("config.toml").exists(),
             "deactivation restores the exact pre-activation Agent Configuration"
         );
         assert_eq!(
             fx.log(),
             "",
-            "host-side provider management must never invoke Docker"
+            "host-side profile management must never invoke Docker"
         );
     }
 
@@ -929,7 +978,7 @@ printf '\nEND\n' >> "$log"
         for argv in [
             &["aibox", "run", "--agent", "claude", "--agent", "codex"][..],
             &[
-                "aibox", "provider", "--agent", "claude", "list", "--agent", "codex",
+                "aibox", "profile", "--agent", "claude", "list", "--agent", "codex",
             ][..],
             &[
                 "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
@@ -944,44 +993,6 @@ printf '\nEND\n' >> "$log"
             fx.log(),
             "",
             "agent-selector errors should be resolved before docker is consulted"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn build_tenant_and_completion_reject_passthrough_and_run_options() {
-        let fx = RunFixture::new();
-
-        let err = fx
-            .run(&["aibox", "build"], vec!["ignored".to_string()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("build takes no pass-through args"), "{err}");
-
-        assert!(Cli::try_parse_from(["aibox", "--tenant", "work", "build"]).is_err());
-
-        let err = fx
-            .run(&["aibox", "tenant", "list"], vec!["ignored".to_string()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("tenant takes no pass-through args"), "{err}");
-
-        assert!(Cli::try_parse_from(["aibox", "-m", "src:/src", "tenant", "list"]).is_err());
-
-        let err = fx
-            .run(&["aibox", "completion", "zsh"], vec!["ignored".to_string()])
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("completion takes no pass-through args"),
-            "{err}"
-        );
-
-        assert!(Cli::try_parse_from(["aibox", "--workspace", ".", "completion", "zsh"]).is_err());
-        assert_eq!(
-            fx.log(),
-            "",
-            "command-surface errors should be resolved before docker is consulted"
         );
     }
 
@@ -1034,7 +1045,7 @@ printf '\nEND\n' >> "$log"
 
     #[cfg(unix)]
     #[test]
-    fn run_rejects_mount_that_would_expose_provider_data() {
+    fn run_rejects_mount_that_would_expose_profile_data() {
         let fx = RunFixture::new();
         let metadata = fx.root.path().join("codex/default");
         std::fs::create_dir_all(&metadata).unwrap();
@@ -1050,7 +1061,7 @@ printf '\nEND\n' >> "$log"
         assert_eq!(
             fx.log(),
             "",
-            "Provider metadata mount validation should fail before docker is consulted"
+            "Profile metadata mount validation should fail before docker is consulted"
         );
     }
 

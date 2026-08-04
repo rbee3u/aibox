@@ -34,6 +34,16 @@ pub(crate) fn pair_pos(args: &[String], a: &str, b: &str) -> Option<usize> {
     args.windows(2).position(|w| w[0] == a && w[1] == b)
 }
 
+/// Return the only item in a slice, with a useful failure when a scenario
+/// unexpectedly produces zero or multiple results.
+#[track_caller]
+pub(crate) fn only<T>(items: &[T]) -> &T {
+    let [item] = items else {
+        panic!("expected exactly one item, got {}", items.len());
+    };
+    item
+}
+
 /// Write a JSONL transcript fixture at `dir/rel`, one `lines` entry per line,
 /// creating parent directories. Shared by both session backends' tests.
 pub(crate) fn write_jsonl(dir: &Path, rel: &str, lines: &[&str]) -> PathBuf {

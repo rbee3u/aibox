@@ -29,15 +29,15 @@
 //! **not** proxy — killing it verifiably orphans the container. So the watcher
 //! also signals the *container* through the daemon: a `docker kill --signal`
 //! with the id from `--cidfile` (registered via [`set_cidfile`]), escalating to a
-//! plain `docker kill` (SIGKILL) if the agent hasn't exited shortly after —
-//! the agent is the container's PID 1, and PID 1 ignores signals it has no
-//! handler installed for, so waiting on the graceful signal alone could wait
-//! forever.
+//! plain `docker kill` (SIGKILL) if the container process has not exited
+//! shortly after. That process is PID 1, which ignores signals for which it has
+//! no handler, so waiting on the graceful signal alone could wait forever.
 //!
 //! ## Process model
 //!
-//! The child pid, cidfile, and run state form one process-wide registry. The
-//! aibox CLI starts at most one agent run, so this module intentionally does not
+//! The child pid, cidfile, and run state form one process-wide registry. One
+//! aibox process starts at most one container operation, whether a Coding Agent
+//! Run or a toolchain installation, so this module intentionally does not
 //! support concurrent `docker run` children.
 
 use anyhow::{Context, Result};
@@ -100,8 +100,8 @@ pub(crate) fn run_registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// The pid of the running `docker run` child, or 0 when none. The watcher
-/// forwards the fatal signal to it: with no TTY the docker CLI proxies the
-/// signal to the agent (graceful shutdown); with one it at least exits.
+/// forwards the fatal signal to it: with no TTY the Docker CLI proxies the
+/// signal to the container process; with one it at least exits.
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
 
 /// The `--cidfile` path of the running `docker run`, if any. The watcher reads
@@ -285,13 +285,11 @@ fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutc
     // spawned has exited, making a post-wait `read_to_end` block forever.
     // Capture into a regular temporary file instead: reading a snapshot of a
     // regular file reaches EOF even while an inherited writer is still open.
-    let output = match tempfile::NamedTempFile::new() {
-        Ok(output) => output,
-        Err(_) => return CommandOutcome::Unfinished,
+    let Ok(output) = tempfile::NamedTempFile::new() else {
+        return CommandOutcome::Unfinished;
     };
-    let child_stdout = match output.reopen() {
-        Ok(file) => file,
-        Err(_) => return CommandOutcome::Unfinished,
+    let Ok(child_stdout) = output.reopen() else {
+        return CommandOutcome::Unfinished;
     };
     let spawned = Command::new(program)
         .args(args)
@@ -446,9 +444,9 @@ fn stop_active_run(sig: i32) {
 
 /// Stop one container through the daemon: deliver `sig` to its PID 1 (what
 /// `--sig-proxy` would have done, had the CLI not had a TTY), then escalate to a
-/// plain `docker kill` (SIGKILL) if it lingers — an agent without a handler for
-/// the signal never exits on it as PID 1. The 10s grace mirrors `docker stop`'s
-/// default.
+/// plain `docker kill` (SIGKILL) if it lingers. A container process without a
+/// handler for the signal never exits on it as PID 1. The 10s grace mirrors
+/// `docker stop`'s default.
 ///
 /// On the signal path, the main thread normally stays blocked in `child.wait()`
 /// while the watcher performs this escalation; that is why the watcher stops
@@ -650,6 +648,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
+        // The helper inherits the parent environment. Keep it from observing a
+        // parallel test's temporary PATH or Docker fixture variables.
+        let _env_lock = crate::test_env_lock();
         let scratch = stable_tempdir();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
@@ -741,6 +742,9 @@ mod tests {
     fn fatal_signal_stops_the_container() {
         use std::os::unix::process::ExitStatusExt;
 
+        // Each helper inherits most of this process's environment. Serialize
+        // it with tests that temporarily install Docker stubs.
+        let _env_lock = crate::test_env_lock();
         for sig in [
             signal_hook::consts::SIGINT,
             signal_hook::consts::SIGTERM,
@@ -1080,12 +1084,9 @@ esac
         let path = dir.path().join("cid");
         *cidfile().lock().unwrap() = Some(path.clone());
 
-        let writer = std::thread::spawn({
-            let path = path.clone();
-            move || {
-                std::thread::sleep(Duration::from_millis(50));
-                std::fs::write(path, "abc123\n").unwrap();
-            }
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::write(path, "abc123\n").unwrap();
         });
 
         let got = wait_current_cid(Duration::from_secs(1));
@@ -1319,8 +1320,19 @@ esac
 
         {
             let _state = EnvGuard::set("AIBOX_FAKE_DOCKER_STATE", "missing");
+            // `container_state` intentionally treats a scheduling timeout as
+            // Unknown. Under a heavily parallel test run, allow a fresh
+            // bounded attempt so this test asserts the completed-query
+            // contract instead of the host scheduler's timing.
+            let mut state = ContainerState::Unknown;
+            for _ in 0..3 {
+                state = container_state("gone-container");
+                if state == ContainerState::Stopped {
+                    break;
+                }
+            }
             assert_eq!(
-                container_state("gone-container"),
+                state,
                 ContainerState::Stopped,
                 "an exact empty container list confirms that the id is gone"
             );

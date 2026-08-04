@@ -16,7 +16,7 @@
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
 
-use crate::session::{self, SessionBackend};
+use crate::session::{self, PromptRecord, SessionBackend};
 use serde_json::Value;
 use std::path::Path;
 
@@ -131,9 +131,9 @@ impl SessionBackend for Codex {
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
-    /// `user_turn_text`. Feeds shared summary and `get` paths.
-    fn typed_text(&self, value: &Value) -> Option<String> {
-        user_turn_text(value)
+    /// [`user_turn_record`]. Feeds shared summary and `get` paths.
+    fn prompt_record(&self, value: &Value) -> PromptRecord {
+        user_turn_record(value)
     }
 
     /// The `session_meta` carries the session start timestamp. Look for it by
@@ -179,47 +179,45 @@ fn is_uuid(value: &str) -> bool {
         })
 }
 
-/// If `value` is a `response_item` user message, join its content items' text
-/// with newlines, dropping injected wrapper items. Returns `None` when `value`
-/// isn't a user turn or nothing real survives filtering.
-fn user_turn_text(value: &Value) -> Option<String> {
+/// Classify a `response_item` user message after joining its text items and
+/// dropping injected wrappers. Non-user records and turns with no surviving
+/// content are `NotTyped`; unsupported user-like shapes remain diagnosable.
+fn user_turn_record(value: &Value) -> PromptRecord {
     if value.get("type").and_then(Value::as_str) != Some("response_item") {
-        return None;
+        return PromptRecord::NotTyped;
     }
-    let payload = value.get("payload")?;
+    let Some(payload) = value.get("payload") else {
+        return PromptRecord::NotTyped;
+    };
     if payload.get("role").and_then(Value::as_str) != Some("user") {
-        return None;
+        return PromptRecord::NotTyped;
     }
-    let items = payload.get("content").and_then(Value::as_array)?;
+    let Some(items) = payload.get("content").and_then(Value::as_array) else {
+        return PromptRecord::UnsupportedUserLike;
+    };
     let mut parts = Vec::new();
+    let mut unsupported = false;
     for item in items {
-        if let Some(text) = real_content_item_text(item) {
-            parts.push(text);
+        match item.get("type").and_then(Value::as_str) {
+            Some("input_text" | "text") => match item.get("text").and_then(Value::as_str) {
+                Some(text) => {
+                    if let Some(text) = real_text_fragment(text) {
+                        parts.push(text);
+                    }
+                }
+                None => unsupported = true,
+            },
+            Some("output_text" | "input_image" | "tool_result") => {}
+            _ => unsupported = true,
         }
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
-}
-
-fn real_content_item_text(item: &Value) -> Option<String> {
-    if !matches!(
-        item.get("type").and_then(Value::as_str),
-        Some("input_text" | "text")
-    ) {
-        return None;
-    }
-    item.get("text")
-        .and_then(Value::as_str)
-        .and_then(real_text_fragment)
+    PromptRecord::from_text_parts(&parts, unsupported)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::write_jsonl;
+    use crate::testutil::{only, write_jsonl};
 
     #[test]
     fn files_keep_only_rollout_jsonl_transcripts() {
@@ -289,30 +287,21 @@ mod tests {
     }
 
     #[test]
-    fn id_is_trailing_uuid() {
-        let p = Path::new(
-            "/h/.codex/sessions/2026/07/14/rollout-2026-07-14T02-16-00-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
-        );
-        assert_eq!(Codex.id_of(p), "3f2a1b6c-1111-2222-3333-444455556666");
-    }
-
-    #[test]
-    fn id_of_short_stem_falls_back_to_the_whole_stem() {
-        assert_eq!(
-            Codex.id_of(Path::new("/h/.codex/sessions/rollout-short.jsonl")),
-            "rollout-short"
-        );
-        assert_eq!(Codex.id_of(Path::new("/h/.codex/sessions/x.jsonl")), "x");
-    }
-
-    #[test]
-    fn id_of_long_non_uuid_stem_falls_back_to_the_whole_stem() {
-        let stem = "rollout-this-name-is-longer-than-a-uuid-but-has-no-session-id";
-
-        assert_eq!(
-            Codex.id_of(Path::new(&format!("/h/.codex/sessions/{stem}.jsonl"))),
-            stem
-        );
+    fn id_uses_a_trailing_uuid_and_otherwise_preserves_the_stem() {
+        for (path, expected) in [
+            (
+                "/h/.codex/sessions/2026/07/14/rollout-2026-07-14T02-16-00-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
+                "3f2a1b6c-1111-2222-3333-444455556666",
+            ),
+            (
+                "/h/.codex/sessions/rollout-this-name-is-longer-than-a-uuid-but-has-no-session-id.jsonl",
+                "rollout-this-name-is-longer-than-a-uuid-but-has-no-session-id",
+            ),
+            ("/h/.codex/sessions/rollout-short.jsonl", "rollout-short"),
+            ("/h/.codex/sessions/x.jsonl", "x"),
+        ] {
+            assert_eq!(Codex.id_of(Path::new(path)), expected, "{path}");
+        }
     }
 
     #[test]
@@ -411,8 +400,7 @@ mod tests {
             ],
         );
         let ps = Codex.prompts(&path).unwrap();
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "the real ask");
+        assert_eq!(only(&ps).text, "the real ask");
     }
 
     #[test]
@@ -430,8 +418,7 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         let summary = Codex.summarize(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(only(&ps).text, "real ask");
         assert_eq!(summary.title, "real ask");
     }
 
@@ -450,8 +437,7 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         let summary = Codex.summarize(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "real ask after shell");
+        assert_eq!(only(&ps).text, "real ask after shell");
         assert_eq!(summary.title, "real ask after shell");
     }
 
@@ -468,9 +454,9 @@ mod tests {
 
         let ps = Codex.prompts(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "plain text prompt\ntyped prompt");
-        assert_eq!(ps[0].timestamp, "2026-07-14T02:16:00Z");
+        let prompt = only(&ps);
+        assert_eq!(prompt.text, "plain text prompt\ntyped prompt");
+        assert_eq!(prompt.timestamp, "2026-07-14T02:16:00Z");
     }
 
     #[test]
@@ -487,9 +473,38 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         let summary = Codex.summarize(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(only(&ps).text, "real ask");
         assert_eq!(summary.title, "real ask");
+    }
+
+    #[test]
+    fn unknown_user_record_shape_is_diagnostic() {
+        let unknown = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "role": "user",
+                "content": [{"type": "future_input", "value": "ask"}]
+            }
+        });
+        assert_eq!(
+            Codex.prompt_record(&unknown),
+            PromptRecord::UnsupportedUserLike
+        );
+
+        let partially_supported = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "visible ask"},
+                    {"type": "future_input", "value": "unreadable suffix"}
+                ]
+            }
+        });
+        assert_eq!(
+            Codex.prompt_record(&partially_supported),
+            PromptRecord::TypedWithUnsupported("visible ask".to_string())
+        );
     }
 
     #[test]
@@ -508,8 +523,7 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         let summary = Codex.summarize(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "real ask");
+        assert_eq!(only(&ps).text, "real ask");
         assert_eq!(summary.title, "real ask");
     }
 
@@ -530,8 +544,7 @@ mod tests {
         let ps = Codex.prompts(&path).unwrap();
         let summary = Codex.summarize(&path).unwrap();
 
-        assert_eq!(ps.len(), 1);
-        assert_eq!(ps[0].text, "first real ask");
+        assert_eq!(only(&ps).text, "first real ask");
         assert_eq!(summary.title, "first real ask");
     }
 

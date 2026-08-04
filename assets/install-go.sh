@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Runs in the shared image with only the Tenant Home mounted. Verify the
+# official archive before replacing .goroot, and leave .gopath untouched.
 set -euo pipefail
 
 requested=${1:-}
@@ -33,18 +35,29 @@ release = next(
 ) if requested else next((item for item in releases if item.get("stable")), None)
 if release is None:
     raise SystemExit("requested stable Go version was not found")
-file = next(
-    (item for item in release["files"] if item["os"] == "linux" and item["arch"] == arch and item["kind"] == "archive"),
+archive_file = next(
+    (
+        item
+        for item in release["files"]
+        if item["os"] == "linux"
+        and item["arch"] == arch
+        and item["kind"] == "archive"
+    ),
     None,
 )
-if file is None:
+if archive_file is None:
     raise SystemExit("no official Go archive for this architecture")
-print(release["version"].removeprefix("go"), file["filename"], file["sha256"])
+print(
+    release["version"].removeprefix("go"),
+    archive_file["filename"],
+    archive_file["sha256"],
+)
 PY
 )
 
-if [[ -x $HOME/.goroot/bin/go && -f $HOME/.goroot/VERSION ]] \
-    && [[ $(head -n 1 "$HOME/.goroot/VERSION") == "go$version" ]]; then
+if [[ -x $HOME/.goroot/bin/go \
+    && -f $HOME/.goroot/VERSION \
+    && $(head -n 1 "$HOME/.goroot/VERSION") == "go$version" ]]; then
     echo "Go $version is already installed; skipping"
     exit 0
 fi

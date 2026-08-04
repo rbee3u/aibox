@@ -1,14 +1,16 @@
-//! Browse saved chat transcripts directly from a tenant home without starting
-//! a container. Discovery, id resolution, listing, and deletion are shared;
-//! [`SessionBackend`] isolates the two agents' on-disk formats. Strict discovery
-//! protects `get` and `delete` from partial views, while `list` can report
-//! traversal errors alongside readable sessions.
+//! Browse saved Sessions directly from a Tenant Home without starting a
+//! container. Discovery, id resolution, listing, and deletion are shared;
+//! [`SessionBackend`] isolates the two Coding Agents' Transcript formats.
+//! Strict discovery protects `get` and `delete` from partial views, while
+//! `list` can report traversal errors alongside readable Sessions.
 
 use crate::agent::AgentKind;
+use crate::cli::SessionCommand;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 #[cfg(unix)]
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -39,10 +41,10 @@ fn safe_path(path: &Path) -> String {
     terminal_safe(&path.to_string_lossy())
 }
 
-/// Resolve a transcript directory only through real directory entries beneath
-/// the tenant home. The home is writable by the container, so following an
-/// agent-planted `.claude`/`.codex` ancestor link here could make host-side
-/// `session delete` remove transcripts outside the tenant.
+/// Resolve a Transcript directory only through real directory entries beneath
+/// the Tenant Home. The Home is writable by the container, so following a
+/// `.claude`/`.codex` ancestor symlink planted by a Coding Agent could make
+/// host-side `session delete` remove Transcripts outside the Tenant.
 pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {
     let mut path = home.to_path_buf();
     if !crate::tenant::real_dir_exists(&path, "tenant home")? {
@@ -59,28 +61,19 @@ pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Op
 
 /// Transcript discovery for `session list`: usable files plus non-fatal walk
 /// errors that should be reported without hiding every readable transcript.
-pub struct SessionDiscovery {
+#[derive(Default)]
+pub(crate) struct SessionDiscovery {
     /// Transcript files that were discovered safely.
     pub files: Vec<PathBuf>,
     /// Non-fatal traversal failures to report alongside partial list results.
     pub errors: Vec<String>,
 }
 
-impl SessionDiscovery {
-    fn from_files(files: Vec<PathBuf>) -> Self {
-        SessionDiscovery {
-            files,
-            errors: Vec::new(),
-        }
-    }
-}
-
-/// Whether a walked entry is a transcript file we want: a regular `.jsonl` file
-/// whose name passes `keep`. Do not follow a transcript-shaped symlink created
-/// inside the mounted tenant home — host-side session browsing must stay inside
-/// the container's transcript tree rather than becoming a path out of the sandbox
-/// boundary. Shared by the strict and tolerant walks so they can't drift on which
-/// files count.
+/// Whether a walked entry is a Transcript we want: a regular `.jsonl` file
+/// whose name passes `keep`. Do not follow a Transcript-shaped symlink created
+/// inside the mounted Tenant Home: host-side Session access must stay beneath
+/// the selected Home. Shared by the strict and tolerant walks so they cannot
+/// drift on which files count.
 fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {
     entry.file_type().is_file() && has_wanted_transcript_name(entry.path(), keep)
 }
@@ -98,14 +91,8 @@ fn has_wanted_transcript_name(path: &Path, keep: &impl Fn(&str) -> bool) -> bool
 /// by both backends' `files()`; they differ only in the base dir and the filter
 /// (Claude keeps all, Codex keeps `rollout-` names).
 pub(crate) fn walk_jsonl(base: &Path, keep: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>> {
-    match std::fs::symlink_metadata(base) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => bail!("session path is not a directory: {}", safe_path(base)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("inspect session directory {}", safe_path(base)));
-        }
+    if !session_dir_exists(base)? {
+        return Ok(Vec::new());
     }
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(base) {
@@ -131,18 +118,10 @@ pub(crate) fn walk_jsonl_tolerant(
     base: &Path,
     keep: impl Fn(&str) -> bool,
 ) -> Result<SessionDiscovery> {
-    match std::fs::symlink_metadata(base) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => bail!("session path is not a directory: {}", safe_path(base)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SessionDiscovery::from_files(Vec::new()));
-        }
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("inspect session directory {}", safe_path(base)));
-        }
+    if !session_dir_exists(base)? {
+        return Ok(SessionDiscovery::default());
     }
-    let mut out = SessionDiscovery::from_files(Vec::new());
+    let mut out = SessionDiscovery::default();
     for entry in walkdir::WalkDir::new(base) {
         let entry = match entry {
             Ok(entry) => entry,
@@ -161,21 +140,18 @@ pub(crate) fn walk_jsonl_tolerant(
     Ok(out)
 }
 
-/// Read a transcript line by line, parsing each as JSON and feeding each parsed
-/// line to `f`. Malformed JSON lines are skipped; open and read failures are
-/// returned instead of being misreported as an empty session.
-///
-/// Streaming on purpose: a tenant's transcripts can run to hundreds of MB and
-/// `list` visits every one, so no whole file — nor its parsed lines — is ever
-/// held in memory at once.
-pub(crate) fn for_each_json_line(
-    home: &Path,
-    path: &Path,
-    visit: impl FnMut(&Value),
-) -> Result<()> {
-    for_each_json_line_with_limit(home, path, MAX_TRANSCRIPT_LINE_BYTES, visit)
+fn session_dir_exists(base: &Path) -> Result<bool> {
+    match fs::symlink_metadata(base) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
+        Ok(_) => bail!("session path is not a directory: {}", safe_path(base)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("inspect session directory {}", safe_path(base)))
+        }
+    }
 }
 
+#[cfg(test)]
 fn for_each_json_line_with_limit(
     home: &Path,
     path: &Path,
@@ -186,26 +162,34 @@ fn for_each_json_line_with_limit(
         visit(value);
         Ok(true)
     })
+    .map(|_| ())
 }
 
 fn try_for_each_json_line(
     home: &Path,
     path: &Path,
     visit: impl FnMut(&Value) -> Result<bool>,
-) -> Result<()> {
+) -> Result<usize> {
     try_for_each_json_line_with_limit(home, path, MAX_TRANSCRIPT_LINE_BYTES, visit)
 }
 
+/// Stream parsed JSONL records to `visit`, returning the number of malformed
+/// records skipped. Open, size-limit, and read failures remain errors.
+///
+/// A Tenant's Transcripts can be hundreds of megabytes and `session list`
+/// visits every one, so neither a complete file nor all parsed records are held
+/// in memory.
 fn try_for_each_json_line_with_limit(
     home: &Path,
     path: &Path,
     max_line_bytes: u64,
     mut visit: impl FnMut(&Value) -> Result<bool>,
-) -> Result<()> {
+) -> Result<usize> {
     let file = open_session_transcript(home, path)?;
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
     let mut line_number = 0_u64;
+    let mut malformed_lines = 0;
     loop {
         line.clear();
         let read = (&mut reader)
@@ -216,7 +200,7 @@ fn try_for_each_json_line_with_limit(
             .take(max_line_bytes.saturating_add(2))
             .read_line(&mut line);
         match read {
-            Ok(0) => return Ok(()),
+            Ok(0) => return Ok(malformed_lines),
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("read session transcript {}", safe_path(path)));
@@ -235,10 +219,10 @@ fn try_for_each_json_line_with_limit(
                 line_number += 1;
             }
         }
-        if let Ok(value) = serde_json::from_str::<Value>(&line) {
-            if !visit(&value)? {
-                return Ok(());
-            }
+        match serde_json::from_str::<Value>(&line) {
+            Ok(value) if !visit(&value)? => return Ok(malformed_lines),
+            Ok(_) => {}
+            Err(_) => malformed_lines += 1,
         }
     }
 }
@@ -456,10 +440,70 @@ pub(crate) fn ts_of(value: &Value) -> String {
         .to_string()
 }
 
-/// One session's list-row data. Every transcript yields a summary — sessions
-/// with no typed prompt (tool/injected-only shells) still list, just with an
-/// empty title — so `list` and `delete --all` can see and clear them all.
-pub struct SessionSummary {
+/// Classification of one parsed transcript record for the typed-prompt view.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum PromptRecord {
+    /// A prompt that the user actually typed.
+    Typed(String),
+    /// A readable typed prompt whose record also contains unsupported content.
+    TypedWithUnsupported(String),
+    /// A recognized non-prompt record, including injected and tool records.
+    NotTyped,
+    /// A user-like record whose shape is unsupported or malformed.
+    UnsupportedUserLike,
+}
+
+impl PromptRecord {
+    pub(crate) fn from_text_parts(parts: &[String], unsupported: bool) -> Self {
+        if parts.is_empty() {
+            if unsupported {
+                Self::UnsupportedUserLike
+            } else {
+                Self::NotTyped
+            }
+        } else {
+            let text = parts.join("\n");
+            if unsupported {
+                Self::TypedWithUnsupported(text)
+            } else {
+                Self::Typed(text)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TranscriptDiagnostics {
+    malformed_lines: usize,
+    unsupported_user_records: usize,
+}
+
+impl TranscriptDiagnostics {
+    fn observe_prompt_record(&mut self, record: PromptRecord) -> Option<String> {
+        match record {
+            PromptRecord::Typed(text) => Some(text),
+            PromptRecord::TypedWithUnsupported(text) => {
+                self.unsupported_user_records += 1;
+                Some(text)
+            }
+            PromptRecord::UnsupportedUserLike => {
+                self.unsupported_user_records += 1;
+                None
+            }
+            PromptRecord::NotTyped => None,
+        }
+    }
+
+    fn has_warnings(self) -> bool {
+        self.malformed_lines != 0 || self.unsupported_user_records != 0
+    }
+}
+
+/// One Session's list-row data.
+///
+/// Every Transcript yields a summary, so Sessions with no typed prompt remain
+/// visible and deletable.
+pub(crate) struct SessionSummary {
     /// Full session id (the row shows the first 8 chars).
     pub id: String,
     /// Session start timestamp (ISO-8601), or empty if none was found.
@@ -467,18 +511,19 @@ pub struct SessionSummary {
     /// The agent-generated title when available, otherwise the first typed
     /// prompt, or empty for a tool/injected-only session.
     pub title: String,
+    diagnostics: TranscriptDiagnostics,
 }
 
 /// One typed prompt from a session, for `get`.
-pub struct Prompt {
+pub(crate) struct Prompt {
     /// The turn's timestamp (ISO-8601), or empty.
     pub timestamp: String,
-    /// The full prompt text (all content joined; injected wrappers already
-    /// filtered by the backend).
+    /// The full prompt text (all supported text content joined; injected
+    /// wrappers already filtered by the backend).
     pub text: String,
 }
 
-/// The per-agent on-disk transcript format. The two impls
+/// A Coding Agent's on-disk Transcript format. The two implementations
 /// (`session_claude::Claude`, `session_codex::Codex`) diverge only in the
 /// required methods below — *where* the transcript tree lives, which file
 /// names count, *where* each field lives on a line, and which lines count as
@@ -487,7 +532,7 @@ pub struct Prompt {
 /// [`summarize_in`](Self::summarize_in) /
 /// [`prompts_in`](Self::prompts_in)) are written once here as provided methods,
 /// so the two backends can't drift out of sync.
-pub trait SessionBackend {
+pub(crate) trait SessionBackend {
     /// Path components of the transcript tree beneath the tenant home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
     /// entries so agent-created symlinks are never followed.
@@ -513,7 +558,7 @@ pub trait SessionBackend {
     /// child path does not hide every readable session.
     fn list_files(&self, home: &Path) -> Result<SessionDiscovery> {
         let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
-            return Ok(SessionDiscovery::from_files(Vec::new()));
+            return Ok(SessionDiscovery::default());
         };
         walk_jsonl_tolerant(&base, |name| self.keep_transcript_name(name))
     }
@@ -521,15 +566,16 @@ pub trait SessionBackend {
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
 
-    /// `Some(text)` iff `v` is a prompt the user actually typed — with any
-    /// injected/wrapper turns already filtered out. `None` for every other line.
-    /// This is the heart of the divergence: Claude keys off `promptSource:typed`,
-    /// Codex off a wrapper-filtered `response_item` user message.
-    fn typed_text(&self, v: &Value) -> Option<String>;
+    /// Classify one line for the typed-prompt view, filtering injected/wrapper
+    /// turns while distinguishing recognized non-prompts from unsupported
+    /// user-like records. This is the heart of the divergence: Claude keys off
+    /// `promptSource:typed`, Codex off a wrapper-filtered `response_item` user
+    /// message.
+    fn prompt_record(&self, v: &Value) -> PromptRecord;
 
     /// The session start timestamp from one parsed line; the first `Some` is
-    /// retained. Claude answers for any line bearing a top-level `timestamp`;
-    /// Codex answers for a `session_meta` timestamp.
+    /// retained. Claude answers for any line bearing a non-empty top-level
+    /// `timestamp`; Codex answers for a `session_meta` timestamp.
     fn start_ts_of(&self, v: &Value) -> Option<String>;
 
     /// Lower-confidence timestamp candidate used only when
@@ -550,33 +596,38 @@ pub trait SessionBackend {
     /// session with no typed prompt just gets an empty title (unless a backend's
     /// `title_of` finds something else, like Claude's `ai-title`), so tool/
     /// injected-only shells still list and can be cleared. One streaming pass
-    /// with O(1) state; the per-agent answers come from the methods above.
+    /// with O(1) state; the Coding Agent-specific answers come from the methods
+    /// above.
     /// `home` anchors no-follow traversal of every path component.
     fn summarize_in(&self, home: &Path, path: &Path) -> Result<SessionSummary> {
         let mut start_ts: Option<String> = None;
         let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
-        for_each_json_line(home, path, |value| {
+        let mut diagnostics = TranscriptDiagnostics::default();
+        diagnostics.malformed_lines = try_for_each_json_line(home, path, |value| {
             if start_ts.is_none() {
                 start_ts = self.start_ts_of(value);
             }
             if fallback_start_ts.is_none() {
                 fallback_start_ts = self.fallback_start_ts_of(value);
             }
+            let typed = diagnostics.observe_prompt_record(self.prompt_record(value));
             if first_typed.is_none() {
-                first_typed = self.typed_text(value);
+                first_typed = typed;
             }
             if let Some(candidate) = self.title_of(value) {
                 if !candidate.is_empty() {
                     title = Some(candidate);
                 }
             }
+            Ok(true)
         })?;
         Ok(SessionSummary {
             id: self.id_of(path),
             start_ts: start_ts.or(fallback_start_ts).unwrap_or_default(),
             title: title.or(first_typed).unwrap_or_default(),
+            diagnostics,
         })
     }
 
@@ -594,6 +645,7 @@ pub trait SessionBackend {
     ///
     /// Call [`Self::for_each_prompt_in`] when prompts should be processed with
     /// bounded memory, as the CLI `get` path does.
+    #[cfg(test)]
     fn prompts_in(&self, home: &Path, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
         self.for_each_prompt_in(home, path, &mut |prompt| {
@@ -611,10 +663,11 @@ pub trait SessionBackend {
         home: &Path,
         path: &Path,
         visit: &mut dyn FnMut(Prompt) -> Result<bool>,
-    ) -> Result<usize> {
+    ) -> Result<(usize, TranscriptDiagnostics)> {
         let mut count = 0;
-        try_for_each_json_line(home, path, |value| {
-            if let Some(text) = self.typed_text(value) {
+        let mut diagnostics = TranscriptDiagnostics::default();
+        diagnostics.malformed_lines = try_for_each_json_line(home, path, |value| {
+            if let Some(text) = diagnostics.observe_prompt_record(self.prompt_record(value)) {
                 count += 1;
                 return visit(Prompt {
                     timestamp: ts_of(value),
@@ -623,7 +676,7 @@ pub trait SessionBackend {
             }
             Ok(true)
         })?;
-        Ok(count)
+        Ok((count, diagnostics))
     }
 
     #[cfg(test)]
@@ -639,7 +692,7 @@ pub trait SessionBackend {
 
 /// Resolve `AgentKind` to its backend. The one bridge between the enum and the
 /// session trait objects.
-pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
+pub(crate) fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     match agent {
         AgentKind::Claude => Box::new(crate::session_claude::Claude),
         AgentKind::Codex => Box::new(crate::session_codex::Codex),
@@ -648,54 +701,21 @@ pub fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
 
 /// Dispatch a host-side session action.
 ///
-/// `list` accepts no ids or flags; `get` requires exactly one id; `delete`
-/// requires ids or selects every transcript only when `all` is true. Only
-/// `delete` accepts `yes`. The return value is the command exit code; `list`
-/// returns 1 when it can show only a partial result.
-pub fn dispatch(
+/// The return value is the command exit code; `list` returns 1 when it can show
+/// only a partial result.
+pub(crate) fn dispatch(
     agent: AgentKind,
     home: &Path,
-    action: &str,
-    ids: &[String],
-    all: bool,
-    yes: bool,
+    command: Option<&SessionCommand>,
 ) -> Result<i32> {
     let backend = backend_for(agent);
-    match action {
-        "list" => {
-            reject_yes("list", yes)?;
-            reject_all("list", all)?;
-            if !ids.is_empty() {
-                bail!("session list does not accept ids");
-            }
-            list(backend.as_ref(), home)
+    match command {
+        None | Some(SessionCommand::List) => list(backend.as_ref(), home),
+        Some(SessionCommand::Get { id }) => get(backend.as_ref(), home, id),
+        Some(SessionCommand::Delete { ids, all, yes }) => {
+            delete(backend.as_ref(), home, ids, *all, *yes)
         }
-        "get" => {
-            reject_yes("get", yes)?;
-            reject_all("get", all)?;
-            match ids {
-                [id] => get(backend.as_ref(), home, id),
-                [] => bail!("need a session id (or unique prefix)"),
-                _ => bail!("session get accepts exactly one id"),
-            }
-        }
-        "delete" => delete(backend.as_ref(), home, ids, all, yes),
-        other => bail!("unknown session action: {other} (use list|get|delete)"),
     }
-}
-
-fn reject_yes(action: &str, yes: bool) -> Result<()> {
-    if yes {
-        bail!("session {action} does not use -y/--yes");
-    }
-    Ok(())
-}
-
-fn reject_all(action: &str, all: bool) -> Result<()> {
-    if all {
-        bail!("session {action} does not use --all");
-    }
-    Ok(())
 }
 
 /// Resolve a full id or unique prefix to exactly one transcript path. A single
@@ -737,11 +757,13 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
                 terminal_safe(query)
             );
             for candidate in &candidates {
-                message.push_str(&format!(
+                write!(
+                    &mut message,
                     "\n     {}  {}",
                     terminal_safe(&backend.id_of(candidate)),
                     safe_path(candidate)
-                ));
+                )
+                .expect("writing to a String cannot fail");
             }
             bail!(message)
         }
@@ -750,10 +772,11 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
 
 const LIST_TITLE_MAX_CHARS: usize = 64;
 
-/// List this tenant's sessions, newest first: `shortid  date  title`. Every
-/// transcript lists (tool/injected-only shells show an empty title) so nothing is
-/// hidden from `list` or `delete --all`. Columns are `%-8s  %-16s  %s`; titles
-/// are collapsed to one line and capped at 64 chars.
+/// List this Tenant's Sessions, newest first: `shortid  date  title`.
+///
+/// Every Transcript lists (tool/injected-only shells show an empty title), so
+/// nothing is hidden from `list` or `delete --all`. Columns are
+/// `%-8s  %-16s  %s`; titles are collapsed to one line and capped at 64 chars.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     list_with_printer(backend, home, crate::print_line)
 }
@@ -778,6 +801,9 @@ fn list_with_printer(
     for file in discovery.files {
         match backend.summarize_in(home, &file) {
             Ok(summary) => {
+                if report_transcript_diagnostics(&file, summary.diagnostics) {
+                    failed = true;
+                }
                 let title = list_title(&summary.title);
                 rows.push(Row {
                     start_ts: summary.start_ts,
@@ -837,7 +863,7 @@ fn get_with_printer(
     let sid = backend.id_of(&path);
     eprintln!(">> session {}", terminal_safe(&sid));
     let mut index = 0;
-    let prompt_count = backend.for_each_prompt_in(home, &path, &mut |prompt| {
+    let (prompt_count, diagnostics) = backend.for_each_prompt_in(home, &path, &mut |prompt| {
         index += 1;
         let timestamp = fmt_ts(&prompt.timestamp);
         let text = terminal_safe_prompt(&prompt.text);
@@ -846,7 +872,25 @@ fn get_with_printer(
     if prompt_count == 0 {
         print("(no typed prompts in this session)")?;
     }
-    Ok(0)
+    Ok(i32::from(report_transcript_diagnostics(&path, diagnostics)))
+}
+
+fn report_transcript_diagnostics(path: &Path, diagnostics: TranscriptDiagnostics) -> bool {
+    if diagnostics.malformed_lines != 0 {
+        eprintln!(
+            "!! {}: skipped {} malformed JSONL record(s)",
+            safe_path(path),
+            diagnostics.malformed_lines
+        );
+    }
+    if diagnostics.unsupported_user_records != 0 {
+        eprintln!(
+            "!! {}: skipped {} malformed or unsupported user-like record(s)",
+            safe_path(path),
+            diagnostics.unsupported_user_records
+        );
+    }
+    diagnostics.has_warnings()
 }
 
 /// Delete explicitly selected transcripts, asking once per target unless `yes`
@@ -998,8 +1042,17 @@ mod tests {
                 .to_string()
         }
 
-        fn typed_text(&self, v: &Value) -> Option<String> {
-            v.get("typed").and_then(Value::as_str).map(str::to_string)
+        fn prompt_record(&self, v: &Value) -> PromptRecord {
+            if v.get("unsupported").and_then(Value::as_bool) == Some(true) {
+                return PromptRecord::UnsupportedUserLike;
+            }
+            match v.get("typed").and_then(Value::as_str) {
+                Some(text) if v.get("partial").and_then(Value::as_bool) == Some(true) => {
+                    PromptRecord::TypedWithUnsupported(text.to_string())
+                }
+                Some(text) => PromptRecord::Typed(text.to_string()),
+                None => PromptRecord::NotTyped,
+            }
         }
 
         fn start_ts_of(&self, v: &Value) -> Option<String> {
@@ -1061,6 +1114,90 @@ mod tests {
 
             assert_eq!(visits, 1, "delimiter {delimiter:?}");
         }
+    }
+
+    #[test]
+    fn malformed_and_unsupported_records_keep_rows_and_prompts_but_return_nonzero() {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "diagnostic");
+        std::fs::write(
+            &path,
+            "not-json\n{\"unsupported\":true}\n{\"typed\":\"visible\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+        )
+        .unwrap();
+
+        let mut rows = Vec::new();
+        let list_code = list_with_printer(&TestBackend, home.path(), |line| {
+            rows.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(list_code, 1);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains("visible"), "{:?}", rows);
+
+        let mut prompts = Vec::new();
+        let get_code = get_with_printer(&TestBackend, home.path(), "diagnostic", |line| {
+            prompts.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(get_code, 1);
+        assert!(prompts.iter().any(|line| line.contains("visible")));
+
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let targets = delete_targets(&TestBackend, home.path(), &[], true).unwrap();
+        delete_targets_with_input(&TestBackend, home.path(), targets, true, &mut input).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn partially_supported_prompts_stay_visible_but_return_nonzero() {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "partial");
+        std::fs::write(&path, "{\"typed\":\"visible\",\"partial\":true}\n").unwrap();
+
+        let mut rows = Vec::new();
+        assert_eq!(
+            list_with_printer(&TestBackend, home.path(), |line| {
+                rows.push(line.to_string());
+                Ok(true)
+            })
+            .unwrap(),
+            1
+        );
+        assert!(rows[0].contains("visible"), "{rows:?}");
+
+        let mut prompts = Vec::new();
+        assert_eq!(
+            get_with_printer(&TestBackend, home.path(), "partial", |line| {
+                prompts.push(line.to_string());
+                Ok(true)
+            })
+            .unwrap(),
+            1
+        );
+        assert!(prompts.iter().any(|line| line.contains("visible")));
+    }
+
+    #[test]
+    fn recognized_non_prompt_records_are_a_clean_empty_prompt_view() {
+        let home = tempfile::tempdir().unwrap();
+        write_session(home.path(), "empty");
+        assert_eq!(
+            list_with_printer(&TestBackend, home.path(), |_| Ok(true)).unwrap(),
+            0
+        );
+        let mut output = Vec::new();
+        assert_eq!(
+            get_with_printer(&TestBackend, home.path(), "empty", |line| {
+                output.push(line.to_string());
+                Ok(true)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(output, ["(no typed prompts in this session)"]);
     }
 
     #[test]
@@ -1151,8 +1288,12 @@ mod tests {
                 .to_string()
         }
 
-        fn typed_text(&self, v: &Value) -> Option<String> {
-            v.get("typed").and_then(Value::as_str).map(str::to_string)
+        fn prompt_record(&self, v: &Value) -> PromptRecord {
+            v.get("typed")
+                .and_then(Value::as_str)
+                .map_or(PromptRecord::NotTyped, |text| {
+                    PromptRecord::Typed(text.to_string())
+                })
         }
 
         fn start_ts_of(&self, v: &Value) -> Option<String> {
@@ -1161,13 +1302,13 @@ mod tests {
     }
 
     #[test]
-    fn fmt_ts_positional() {
+    fn timestamps_are_formatted_to_minutes_and_missing_values_stay_empty() {
         assert_eq!(fmt_ts("2026-07-14T02:16:33.123Z"), "2026-07-14 02:16");
         assert_eq!(fmt_ts(""), "");
     }
 
     #[test]
-    fn collapse_ws_runs() {
+    fn list_whitespace_normalization_removes_control_runs_but_preserves_spaces() {
         assert_eq!(collapse_ws("a\n\nb\tc"), "a b c");
         assert_eq!(collapse_ws("a\rb\u{7f}c\u{00a0}d"), "a b c d");
         assert_eq!(collapse_ws("a  b"), "a  b");
@@ -1594,8 +1735,7 @@ mod tests {
         let transcript = write_session(home.path(), "11111111");
         let targets =
             delete_targets(&TestBackend, home.path(), &["1111".to_string()], false).unwrap();
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0], transcript);
+        assert_eq!(crate::testutil::only(&targets), &transcript);
 
         std::fs::remove_file(&transcript).unwrap();
         let outside_transcript = outside.path().join("outside.jsonl");
@@ -1953,6 +2093,24 @@ mod tests {
         assert_eq!(targets, vec![a, shell]);
     }
 
+    #[test]
+    fn deletion_is_format_independent_for_malformed_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let malformed = write_session(dir.path(), "11111111");
+        std::fs::write(&malformed, b"not-json\n{still-not-json\n").unwrap();
+
+        delete(
+            &TestBackend,
+            dir.path(),
+            &["11111111".to_string()],
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!malformed.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn non_utf8_transcript_names_still_pass_discovery_filters() {
@@ -2103,49 +2261,6 @@ mod tests {
             vec![a, z],
             "delete --all should prompt in deterministic session-id order"
         );
-    }
-
-    #[test]
-    fn dispatch_rejects_rm_alias() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir
-            .path()
-            .join(".claude/projects/p/11111111-2222-3333-4444-555555555555.jsonl");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"timestamp":"2026-07-14T02:16:00Z"}"#).unwrap();
-        let ids = vec!["1111".to_string()];
-
-        let err = dispatch(AgentKind::Claude, dir.path(), "rm", &ids, false, true)
-            .expect_err("session rm should be rejected");
-
-        assert!(err.to_string().contains("unknown session action: rm"));
-        assert!(
-            path.exists(),
-            "rejected session rm must not delete transcripts"
-        );
-    }
-
-    #[test]
-    fn dispatch_rejects_bad_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let err = |action: &str, ids: &[&str], all: bool, yes: bool| -> String {
-            let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
-            dispatch(AgentKind::Claude, home, action, &ids, all, yes)
-                .unwrap_err()
-                .to_string()
-        };
-
-        assert!(err("frobnicate", &[], false, false).contains("unknown session action"));
-        assert!(err("list", &["3f2a"], false, false).contains("does not accept ids"));
-        assert!(err("list", &[], false, true).contains("does not use -y"));
-        assert!(err("list", &[], true, false).contains("does not use --all"));
-        assert!(err("get", &[], false, false).contains("need a session id"));
-        assert!(err("get", &["a", "b"], false, false).contains("accepts exactly one id"));
-        assert!(err("get", &[], false, true).contains("does not use -y"));
-        assert!(err("get", &["a"], true, false).contains("does not use --all"));
-        assert!(err("delete", &[], false, true).contains("at least one session id"));
-        assert!(err("delete", &["a"], true, true).contains("--all cannot be combined"));
     }
 
     #[test]

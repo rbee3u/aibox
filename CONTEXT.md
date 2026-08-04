@@ -10,11 +10,13 @@ Coding Agents while keeping host access and configuration ownership explicit.
 **Coding Agent**:
 An external coding assistant that aibox can run or manage, currently OpenAI
 Codex or Claude Code.
-_Avoid_: Agent process, Provider
+_Avoid_: Agent process, Agent Profile
 
 **Run**:
-A bounded invocation of a Coding Agent using a Managed Tenant and a Workspace.
-_Avoid_: Session, execution profile
+A transient invocation of a Coding Agent using a Managed Tenant and a
+Workspace. It is not persistent history and has no identity relationship to a
+Session.
+_Avoid_: Session, Run History, execution profile
 
 **Workspace**:
 The host directory selected as the Coding Agent's working area for a Run.
@@ -33,8 +35,9 @@ _Avoid_: Shared path, implicit mount
 ### Persistent identity
 
 **Tenant**:
-A persistent identity that scopes Coding Agent state, Providers, and Sessions.
-Every Tenant is either a Managed Tenant or the Host Tenant.
+A persistent identity that scopes Coding Agent state, Agent Profiles, Tenant
+Components, and Sessions. Every Tenant is either a Managed Tenant or the Host
+Tenant.
 _Avoid_: Namespace, Target, profile, environment
 
 **Managed Tenant**:
@@ -53,7 +56,8 @@ _Avoid_: Namespace Home, profile home
 
 **Tenant Component**:
 An optional capability installed into one Managed Tenant's Tenant Home, such
-as a Coding Agent status line or a Tenant-local toolchain.
+as a Coding Agent status line or a Tenant-local toolchain. A Tenant Component
+owns its native state independently of any Agent Profile.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration and history
@@ -63,24 +67,26 @@ The native configuration files read and directly modified by a Coding Agent,
 its TUI, or the user.
 _Avoid_: Active config, generated config
 
-**Provider**:
-A named reusable set of owned connection configuration and credentials
-belonging to exactly one Tenant and one Coding Agent.
-_Avoid_: Global Provider, permission profile, preset
+**Agent Profile**:
+A named set of owned native Agent Configuration and credentials belonging to
+exactly one Tenant and one Coding Agent.
+_Avoid_: Global Agent Profile, permission profile, preset
 
-**Active Provider**:
-The Provider currently materialized into one Tenant's Agent Configuration and
-tracked for later comparison or deactivation.
-_Avoid_: Last-applied Provider, selected Provider
+**Active Agent Profile**:
+The zero or one Agent Profile currently materialized in one Tenant and Coding
+Agent scope and tracked for later comparison or deactivation.
+_Avoid_: Last-applied Agent Profile, selected Agent Profile
 
 **Reconciliation**:
-The three-way resolution of changes to Provider source and working Agent
-Configuration since activation.
+The three-way resolution of changes to Agent Profile source and working Agent
+Configuration since activation. Working-only changes become Agent Profile
+source ownership unless they belong to a Tenant Component.
 _Avoid_: Reapply, reset, sync
 
 **Session**:
-One interaction record created by a Coding Agent. A Session may exist without a
-recognized typed prompt.
+One interaction record created by a Coding Agent and discovered independently
+of Runs. Its typed-prompt view is best-effort, and a Session may exist without
+a recognized typed prompt.
 _Avoid_: Run, transcript file
 
 **Transcript**:

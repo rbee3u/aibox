@@ -7,11 +7,41 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SelectionOption {
+    Agent,
+    Tenant,
+}
+
+impl SelectionOption {
+    pub(crate) fn parse(token: &str) -> Option<(Self, Option<&str>)> {
+        match token {
+            "--agent" => Some((Self::Agent, None)),
+            "--tenant" => Some((Self::Tenant, None)),
+            token => token
+                .strip_prefix("--agent=")
+                .map(|value| (Self::Agent, Some(value)))
+                .or_else(|| {
+                    token
+                        .strip_prefix("--tenant=")
+                        .map(|value| (Self::Tenant, Some(value)))
+                }),
+        }
+    }
+
+    fn long_name(self) -> &'static str {
+        match self {
+            Self::Agent => "--agent",
+            Self::Tenant => "--tenant",
+        }
+    }
+}
+
 /// Parsed aibox command line, excluding Coding Agent arguments after `--`.
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
-    about = "Run coding agents inside a Docker Filesystem Sandbox",
+    about = "Run Coding Agents inside a Docker Filesystem Sandbox",
     subcommand_required = true,
     arg_required_else_help = true,
     version
@@ -23,13 +53,6 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Parse the process command line, printing clap errors before exiting.
-    ///
-    /// Production callers must split argv with [`split_passthrough`] first.
-    pub fn parse() -> Self {
-        Self::parse_from(std::env::args_os())
-    }
-
     /// Parse a pre-split argument iterator, printing clap errors before exiting.
     pub fn parse_from<I, T>(itr: I) -> Self
     where
@@ -56,7 +79,7 @@ impl Cli {
 
 fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
     let command = args.get(1).and_then(|value| value.to_str());
-    if !matches!(command, Some("run" | "component" | "provider" | "session")) {
+    if !matches!(command, Some("run" | "component" | "profile" | "session")) {
         return Ok(());
     }
     let mut seen = BTreeSet::new();
@@ -70,12 +93,11 @@ fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Err
             continue;
         };
         let (name, takes_next) = match token {
-            "--agent" => (Some("--agent"), true),
-            "--tenant" => (Some("--tenant"), true),
             "--host" => (Some("--host"), false),
-            value if value.starts_with("--agent=") => (Some("--agent"), false),
-            value if value.starts_with("--tenant=") => (Some("--tenant"), false),
-            _ => (None, false),
+            token => match SelectionOption::parse(token) {
+                Some((option, inline_value)) => (Some(option.long_name()), inline_value.is_none()),
+                None => (None, false),
+            },
         };
         if let Some(name) = name {
             if !seen.insert(name) {
@@ -106,8 +128,8 @@ pub enum Command {
     Tenant(TenantArgs),
     /// Manage optional components in a Managed Tenant.
     Component(ComponentArgs),
-    /// Manage Tenant-local Providers and Agent Configuration.
-    Provider(ProviderArgs),
+    /// Manage Tenant-local Agent Profiles and Agent Configuration.
+    Profile(ProfileArgs),
     /// Browse saved Sessions on the host without starting Docker.
     Session(SessionArgs),
 }
@@ -119,7 +141,7 @@ pub struct RunArgs {
     #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
 
-    /// Managed Tenant name (default: `default`).
+    /// Managed Tenant lowercase DNS label (default: `default`).
     #[arg(
         id = "run-tenant",
         long = "tenant",
@@ -186,13 +208,13 @@ pub enum TenantCommand {
     List,
     /// Create or repair a Managed Tenant.
     Create {
-        /// Managed Tenant to create.
+        /// Managed Tenant lowercase DNS label to create.
         #[arg(value_parser = parse_tenant)]
         tenant: String,
     },
     /// Delete one or more Managed Tenants.
     Delete {
-        /// Managed Tenant names to delete.
+        /// Managed Tenant lowercase DNS labels to delete.
         #[arg(
             value_name = "TENANT",
             value_parser = parse_tenant,
@@ -212,7 +234,8 @@ pub enum TenantCommand {
 /// Managed Tenant Component arguments.
 #[derive(Debug, Args)]
 pub struct ComponentArgs {
-    /// Managed Tenant whose Components to inspect or install (default: `default`).
+    /// Managed Tenant lowercase DNS label whose Components to manage (default:
+    /// `default`).
     #[arg(
         id = "component-tenant",
         long = "tenant",
@@ -245,12 +268,24 @@ pub enum ComponentCommand {
         #[arg(value_name = "COMPONENT[@X.Y.Z]")]
         component: ComponentSpec,
     },
+    /// Remove one Component from the selected Tenant.
+    Remove {
+        /// Component to remove.
+        #[arg(value_name = "COMPONENT")]
+        component: crate::component::ComponentKind,
+        /// Remove modified or unmanaged Component state.
+        #[arg(long)]
+        discard_changes: bool,
+        /// Skip the removal confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 /// Mutually exclusive selection of a Managed Tenant or the Host Tenant.
 #[derive(Debug, Args)]
 pub struct TenantSelection {
-    /// Managed Tenant name (default: `default`).
+    /// Managed Tenant lowercase DNS label (default: `default`).
     #[arg(
         long = "tenant",
         value_name = "TENANT",
@@ -272,73 +307,73 @@ impl TenantSelection {
     }
 }
 
-/// Agent- and Tenant-scoped Provider management arguments.
+/// Agent- and Tenant-scoped Agent Profile management arguments.
 #[derive(Debug, Args)]
-pub struct ProviderArgs {
-    /// Coding Agent whose Provider catalog and configuration to manage.
+pub struct ProfileArgs {
+    /// Coding Agent whose Agent Profile catalog and configuration to manage.
     #[arg(long = "agent", value_name = "AGENT", value_enum, global = true)]
     pub agent: Option<AgentKind>,
 
-    /// Tenant whose Provider catalog and Agent Configuration to manage.
+    /// Tenant whose Agent Profile catalog and Agent Configuration to manage.
     #[command(flatten)]
     pub tenant: TenantSelection,
 
-    /// Provider operation to perform.
+    /// Agent Profile operation to perform.
     #[command(subcommand)]
-    pub command: ProviderCommand,
+    pub command: ProfileCommand,
 }
 
-/// Provider configuration operations.
+/// Agent Profile configuration operations.
 #[derive(Debug, Subcommand)]
-pub enum ProviderCommand {
-    /// List Providers in the selected Tenant and Coding Agent.
+pub enum ProfileCommand {
+    /// List Agent Profiles in the selected Tenant and Coding Agent.
     List,
-    /// Print one Provider file.
+    /// Print one Agent Profile file.
     Get {
-        /// Provider to print.
-        #[arg(value_parser = parse_provider)]
-        provider: String,
+        /// Agent Profile lowercase DNS label to print.
+        #[arg(value_parser = parse_profile)]
+        profile: String,
         /// Print the credential file instead of the main configuration.
         #[arg(long)]
         auth: bool,
     },
-    /// Create a Provider from the built-in connection template.
+    /// Create an Agent Profile from the built-in native template.
     Create {
-        /// Provider to create.
-        #[arg(value_parser = parse_provider)]
-        provider: String,
+        /// Agent Profile lowercase DNS label to create.
+        #[arg(value_parser = parse_profile)]
+        profile: String,
     },
-    /// Open a Provider file in `$VISUAL` or `$EDITOR`.
+    /// Open an Agent Profile file in `$VISUAL` or `$EDITOR`.
     Edit {
-        /// Provider to edit.
-        #[arg(value_parser = parse_provider)]
-        provider: String,
+        /// Agent Profile lowercase DNS label to edit.
+        #[arg(value_parser = parse_profile)]
+        profile: String,
         /// Edit the credential file instead of the main configuration.
         #[arg(long)]
         auth: bool,
     },
-    /// Delete one or more inactive Providers.
+    /// Delete one or more inactive Agent Profiles.
     Delete {
-        /// Provider names to delete.
+        /// Agent Profile lowercase DNS labels to delete.
         #[arg(
-            value_name = "PROVIDER",
-            value_parser = parse_provider,
+            value_name = "PROFILE",
+            value_parser = parse_profile,
             required_unless_present = "all",
             conflicts_with = "all"
         )]
-        providers: Vec<String>,
-        /// Delete every inactive Provider.
+        profiles: Vec<String>,
+        /// Delete every inactive Agent Profile.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
     },
-    /// Materialize a Provider into the selected Agent Configuration.
+    /// Materialize an Agent Profile into the selected Agent Configuration.
     Activate {
-        /// Provider to activate.
-        #[arg(value_parser = parse_provider)]
-        provider: String,
+        /// Agent Profile lowercase DNS label to activate.
+        #[arg(value_parser = parse_profile)]
+        profile: String,
         /// Irreversibly discard Agent Configuration changes since activation.
         #[arg(long)]
         discard_config_changes: bool,
@@ -352,25 +387,33 @@ pub enum ProviderCommand {
     /// Classify divergence between applied, source, and working configuration.
     Status,
     /// Show applied-to-working and applied-to-source changes.
-    Diff,
-    /// Reconcile Provider source and working Agent Configuration.
+    Diff(ProfileDiffArgs),
+    /// Reconcile Agent Profile source and working Agent Configuration.
     Reconcile(ReconcileArgs),
 }
 
-/// Conflict-resolution options for `provider reconcile`.
+/// Output options for `profile diff`.
+#[derive(Debug, Args)]
+pub struct ProfileDiffArgs {
+    /// Show old and new values outside credential paths.
+    #[arg(long)]
+    pub show_values: bool,
+}
+
+/// Conflict-resolution options for `profile reconcile`.
 #[derive(Debug, Args)]
 pub struct ReconcileArgs {
-    /// Resolve a conflicting JSON Pointer with the Provider source value.
-    #[arg(long = "take-provider", value_name = "JSON_POINTER")]
-    pub take_provider: Vec<String>,
+    /// Resolve a conflicting JSON Pointer with the Agent Profile source value.
+    #[arg(long = "take-profile", value_name = "JSON_POINTER")]
+    pub take_profile: Vec<String>,
     /// Resolve a conflicting JSON Pointer with the Agent Configuration value.
     #[arg(long = "take-config", value_name = "JSON_POINTER")]
     pub take_config: Vec<String>,
-    /// Resolve every conflict with Provider source values.
+    /// Resolve every conflict with Agent Profile source values.
     #[arg(long, conflicts_with = "take_config_all")]
-    pub take_provider_all: bool,
+    pub take_profile_all: bool,
     /// Resolve every conflict with Agent Configuration values.
-    #[arg(long, conflicts_with = "take_provider_all")]
+    #[arg(long, conflicts_with = "take_profile_all")]
     pub take_config_all: bool,
 }
 
@@ -424,8 +467,8 @@ fn parse_tenant(value: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
-fn parse_provider(value: &str) -> Result<String, String> {
-    crate::tenant::validate_name("provider", value)
+fn parse_profile(value: &str) -> Result<String, String> {
+    crate::tenant::validate_name("profile", value)
         .map(|()| value.to_string())
         .map_err(|error| error.to_string())
 }
@@ -448,6 +491,12 @@ mod tests {
     use super::*;
     use clap::error::ErrorKind;
 
+    #[track_caller]
+    fn assert_parse_error(args: &[&str], expected: ErrorKind) {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.kind(), expected, "{args:?}: {error}");
+    }
+
     #[test]
     fn passthrough_uses_the_first_boundary() {
         let args = ["aibox", "run", "--tenant", "work", "--", "exec", "--"]
@@ -460,16 +509,16 @@ mod tests {
 
     #[test]
     fn host_tenant_is_distinct_from_managed_tenant_named_host() {
-        let cli = Cli::try_parse_from(["aibox", "provider", "--tenant", "host", "list"]).unwrap();
-        let Command::Provider(args) = cli.command else {
-            panic!("expected provider command");
+        let cli = Cli::try_parse_from(["aibox", "profile", "--tenant", "host", "list"]).unwrap();
+        let Command::Profile(args) = cli.command else {
+            panic!("expected profile command");
         };
         assert_eq!(args.tenant.tenant.as_deref(), Some("host"));
         assert!(!args.tenant.host);
 
-        let cli = Cli::try_parse_from(["aibox", "provider", "--host", "list"]).unwrap();
-        let Command::Provider(args) = cli.command else {
-            panic!("expected provider command");
+        let cli = Cli::try_parse_from(["aibox", "profile", "--host", "list"]).unwrap();
+        let Command::Profile(args) = cli.command else {
+            panic!("expected profile command");
         };
         assert!(args.tenant.host);
         assert!(args.tenant.tenant.is_none());
@@ -487,7 +536,7 @@ mod tests {
     fn destructive_commands_require_explicit_selections() {
         for args in [
             vec!["aibox", "tenant", "delete"],
-            vec!["aibox", "provider", "delete"],
+            vec!["aibox", "profile", "delete"],
             vec!["aibox", "session", "delete"],
         ] {
             let error = Cli::try_parse_from(args).unwrap_err();
@@ -496,13 +545,124 @@ mod tests {
     }
 
     #[test]
-    fn removed_provider_apply_is_rejected() {
-        assert!(Cli::try_parse_from(["aibox", "provider", "apply", "custom"]).is_err());
+    fn destructive_all_selection_conflicts_with_explicit_targets() {
+        for args in [
+            &["aibox", "tenant", "delete", "work", "--all"][..],
+            &["aibox", "profile", "delete", "custom", "--all"][..],
+            &["aibox", "session", "delete", "session-id", "--all"][..],
+        ] {
+            let error = Cli::try_parse_from(args).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn selection_and_run_options_are_scoped_to_their_own_commands() {
+        for args in [
+            &["aibox", "build", "--agent", "codex"][..],
+            &["aibox", "completion", "zsh", "--tenant", "work"][..],
+            &["aibox", "tenant", "list", "--host"][..],
+            &["aibox", "component", "list", "--agent", "claude"][..],
+            &["aibox", "profile", "list", "--workspace", "."][..],
+            &["aibox", "session", "list", "--mount", ".:/data"][..],
+        ] {
+            assert_parse_error(args, ErrorKind::UnknownArgument);
+        }
+
+        Cli::try_parse_from(["aibox", "run", "--agent", "claude", "--tenant", "work"]).unwrap();
+        Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude", "--host"]).unwrap();
+        Cli::try_parse_from([
+            "aibox", "session", "--tenant", "work", "list", "--agent", "claude",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["aibox", "component", "list", "--tenant", "work"]).unwrap();
+    }
+
+    #[test]
+    fn duplicate_selection_detection_accepts_agent_passthrough_lookalikes() {
+        for args in [
+            &["aibox", "run", "--tenant", "one", "--tenant=two"][..],
+            &["aibox", "profile", "--host", "list", "--host"][..],
+            &[
+                "aibox",
+                "session",
+                "--agent=claude",
+                "list",
+                "--agent",
+                "codex",
+            ][..],
+        ] {
+            let error = Cli::try_parse_from(args).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{args:?}");
+        }
+
+        let args = [
+            "aibox",
+            "run",
+            "--tenant",
+            "work",
+            "--",
+            "--tenant",
+            "agent-value",
+        ];
+        let (aibox_args, passthrough) = split_passthrough(args.to_vec());
+        Cli::try_parse_from(aibox_args).unwrap();
+        assert_eq!(passthrough, ["--tenant", "agent-value"]);
+    }
+
+    #[test]
+    fn removed_profile_apply_is_rejected() {
+        assert_parse_error(
+            &["aibox", "profile", "apply", "custom"],
+            ErrorKind::InvalidSubcommand,
+        );
+        assert_parse_error(&["aibox", "provider", "list"], ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn profile_diff_values_are_explicit_and_reconcile_uses_profile_wording() {
+        let cli = Cli::try_parse_from(["aibox", "profile", "diff", "--show-values"]).unwrap();
+        let Command::Profile(args) = cli.command else {
+            panic!("expected profile command");
+        };
+        let ProfileCommand::Diff(args) = args.command else {
+            panic!("expected profile diff");
+        };
+        assert!(args.show_values);
+
+        Cli::try_parse_from([
+            "aibox",
+            "profile",
+            "reconcile",
+            "--take-profile",
+            "/config/model",
+        ])
+        .unwrap();
+        assert_parse_error(
+            &[
+                "aibox",
+                "profile",
+                "reconcile",
+                "--take-provider",
+                "/config/model",
+            ],
+            ErrorKind::UnknownArgument,
+        );
+
+        let error = Cli::try_parse_from([
+            "aibox",
+            "profile",
+            "reconcile",
+            "--take-profile-all",
+            "--take-config-all",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
     fn run_rejects_host_selector() {
-        assert!(Cli::try_parse_from(["aibox", "run", "--host"]).is_err());
+        assert_parse_error(&["aibox", "run", "--host"], ErrorKind::UnknownArgument);
         let cli = Cli::try_parse_from(["aibox", "run", "--tenant", "host"]).unwrap();
         let Command::Run(args) = cli.command else {
             panic!("expected run command");
@@ -530,7 +690,38 @@ mod tests {
         };
         assert_eq!(component.to_string(), "rust@1.90.0");
 
-        assert!(Cli::try_parse_from(["aibox", "component", "--host", "list"]).is_err());
-        assert!(Cli::try_parse_from(["aibox", "component", "--agent", "codex", "list"]).is_err());
+        assert_parse_error(
+            &["aibox", "component", "--host", "list"],
+            ErrorKind::UnknownArgument,
+        );
+        assert_parse_error(
+            &["aibox", "component", "--agent", "codex", "list"],
+            ErrorKind::UnknownArgument,
+        );
+
+        let cli = Cli::try_parse_from([
+            "aibox",
+            "component",
+            "remove",
+            "rust",
+            "--discard-changes",
+            "--yes",
+        ])
+        .unwrap();
+        let Command::Component(args) = cli.command else {
+            panic!("expected component command");
+        };
+        assert!(matches!(
+            args.command,
+            ComponentCommand::Remove {
+                component: crate::component::ComponentKind::Rust,
+                discard_changes: true,
+                yes: true,
+            }
+        ));
+        assert_parse_error(
+            &["aibox", "component", "remove", "rust@1.90.0"],
+            ErrorKind::ValueValidation,
+        );
     }
 }

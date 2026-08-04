@@ -89,7 +89,7 @@ RUN set -eux; \
 # Pinned by default so cached builds stay stable. Change NODE_VERSION here when
 # you intentionally want to upgrade Node.
 # Installed under /usr/local so Node and the global agent CLIs are image-owned
-# rather than persisted as Agent State; upgrade them by rebuilding the image.
+# rather than persisted in a Tenant Home; upgrade them by rebuilding the image.
 ARG NODE_VERSION=v24.4.0
 RUN set -eux; \
     version="${NODE_VERSION}"; \
