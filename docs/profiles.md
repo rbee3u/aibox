@@ -78,6 +78,14 @@ base_url = "https://example.com/v1"
 requires_openai_auth = true
 ```
 
+Its built-in `auth.json` credential source is:
+
+```json
+{
+  "OPENAI_API_KEY": "sk-example"
+}
+```
+
 This disables Codex approval prompts and its agent sandbox because Docker is
 the Filesystem Sandbox. The template may be activated unchanged. aibox
 validates its syntax and ownership but does not probe whether the configured
@@ -101,11 +109,22 @@ The built-in Claude template is:
 }
 ```
 
+Its built-in `auth.json` credential source is:
+
+```json
+{
+  "ANTHROPIC_AUTH_TOKEN": "sk-example"
+}
+```
+
 This enables Claude's bypass-permissions mode and suppresses its dangerous-mode
 prompt. The gateway-specific `…5[1m]` and Fable aliases are intentional. The
 template may be activated unchanged; aibox does not probe endpoint or model
 availability. It does not enable the status line. Neither built-in template
-contains credentials.
+contains a usable credential: replace the `sk-example` placeholder in
+`auth.json` before running the Coding Agent. During Claude activation, the
+placeholder (or its replacement) is materialized as
+`settings.json.env.ANTHROPIC_AUTH_TOKEN`.
 
 ## Agent Configuration and Activation
 

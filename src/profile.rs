@@ -123,7 +123,12 @@ pub fn create_profile(selected: &TenantAgent, profile: &str) -> Result<()> {
             present: true,
         },
         profile_file_change(profile, selected.agent.main_config_file(), main, 0o600),
-        profile_file_change(profile, selected.agent.profile_auth_file(), "{}\n", 0o600),
+        profile_file_change(
+            profile,
+            selected.agent.profile_auth_file(),
+            selected.agent.profile_auth_template(),
+            0o600,
+        ),
         profile_file_change(
             profile,
             PROFILE_METADATA_FILE,
@@ -1377,6 +1382,10 @@ base_url = "https://example.com/v1"
 requires_openai_auth = true
 "#
         );
+        assert_eq!(
+            fs::read_to_string(codex.profile_file("custom", "auth.json")).unwrap(),
+            "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"
+        );
     }
 
     #[test]
@@ -1403,6 +1412,18 @@ requires_openai_auth = true
 }
 "#
         );
+        assert_eq!(
+            fs::read_to_string(claude.profile_file("custom", "auth.json")).unwrap(),
+            "{\n  \"ANTHROPIC_AUTH_TOKEN\": \"sk-example\"\n}\n"
+        );
+
+        activate_profile(&claude, "custom", false).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(claude.state_file("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-example");
+        assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], "https://example.com");
+        assert!(!claude.state_file("auth.json").exists());
     }
 
     #[test]
@@ -1605,6 +1626,7 @@ printf 'model = "edited"\n' > "$1"
         let root = tempfile::tempdir().unwrap();
         let selected = selected(root.path(), AgentKind::Codex);
         create_profile(&selected, "custom").unwrap();
+        fs::write(selected.profile_file("custom", "auth.json"), b"{}\n").unwrap();
         assert_eq!(
             fs::read_to_string(selected.profile_file("custom", "auth.json")).unwrap(),
             "{}\n"
@@ -1628,6 +1650,7 @@ printf 'model = "edited"\n' > "$1"
         fs::write(&auth, original).unwrap();
         fs::set_permissions(&auth, fs::Permissions::from_mode(0o400)).unwrap();
         create_profile(&selected, "custom").unwrap();
+        fs::write(selected.profile_file("custom", "auth.json"), b"{}\n").unwrap();
 
         activate_profile(&selected, "custom", false).unwrap();
 
@@ -2013,7 +2036,12 @@ printf 'model = "edited"\n' > "$1"
                     AgentKind::Codex.profile_template(),
                     0o600,
                 ),
-                profile_file_change("custom", "auth.json", "{}\n", 0o600),
+                profile_file_change(
+                    "custom",
+                    "auth.json",
+                    AgentKind::Codex.profile_auth_template(),
+                    0o600,
+                ),
                 profile_file_change(
                     "custom",
                     PROFILE_METADATA_FILE,

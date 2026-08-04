@@ -18,6 +18,11 @@ base_url = "https://example.com/v1"
 requires_openai_auth = true
 "#;
 
+const DEFAULT_CODEX_AUTH: &str = r#"{
+  "OPENAI_API_KEY": "sk-example"
+}
+"#;
+
 const DEFAULT_CLAUDE_PROFILE: &str = r#"{
   "env": {
     "ANTHROPIC_BASE_URL": "https://example.com",
@@ -30,6 +35,11 @@ const DEFAULT_CLAUDE_PROFILE: &str = r#"{
     "defaultMode": "bypassPermissions"
   },
   "skipDangerousModePermissionPrompt": true
+}
+"#;
+
+const DEFAULT_CLAUDE_AUTH: &str = r#"{
+  "ANTHROPIC_AUTH_TOKEN": "sk-example"
 }
 "#;
 
@@ -114,6 +124,14 @@ impl AgentKind {
         }
     }
 
+    /// Built-in credential source used by `profile create`.
+    pub const fn profile_auth_template(self) -> &'static str {
+        match self {
+            Self::Claude => DEFAULT_CLAUDE_AUTH,
+            Self::Codex => DEFAULT_CODEX_AUTH,
+        }
+    }
+
     /// Build the Coding Agent command without adding Agent Profile data.
     pub fn build_command(self, passthrough: &[OsString]) -> Vec<OsString> {
         let mut command = vec![OsString::from(self.tag())];
@@ -128,7 +146,7 @@ mod tests {
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
-        for (agent, tag, state_dir, main, native_auth, agent_files, profile_files) in [
+        for (agent, tag, state_dir, main, native_auth, agent_files, profile_files, auth) in [
             (
                 AgentKind::Claude,
                 "claude",
@@ -137,6 +155,7 @@ mod tests {
                 None,
                 &["settings.json"][..],
                 &["settings.json", "auth.json", ".metadata.json"][..],
+                "{\n  \"ANTHROPIC_AUTH_TOKEN\": \"sk-example\"\n}\n",
             ),
             (
                 AgentKind::Codex,
@@ -146,6 +165,7 @@ mod tests {
                 Some("auth.json"),
                 &["config.toml", "auth.json"][..],
                 &["config.toml", "auth.json", ".metadata.json"][..],
+                "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n",
             ),
         ] {
             assert_eq!(agent.tag(), tag, "{agent:?}");
@@ -155,6 +175,7 @@ mod tests {
             assert_eq!(agent.profile_auth_file(), "auth.json", "{agent:?}");
             assert_eq!(agent.agent_config_files(), agent_files, "{agent:?}");
             assert_eq!(agent.profile_files(), profile_files, "{agent:?}");
+            assert_eq!(agent.profile_auth_template(), auth, "{agent:?}");
         }
     }
 
