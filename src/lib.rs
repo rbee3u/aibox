@@ -21,6 +21,7 @@ mod session_codex;
 mod tenant;
 #[cfg(test)]
 mod testutil;
+mod traffic;
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -159,6 +160,10 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
             run_session_command(agent, &args, passthrough)
+        }
+        Command::Traffic(args) => {
+            reject_passthrough("traffic takes no pass-through args", passthrough)?;
+            traffic::dispatch(&args)
         }
     }
 }

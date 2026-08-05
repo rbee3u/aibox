@@ -6,6 +6,7 @@ use crate::component::ComponentSpec;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
+use std::net::SocketAddr;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SelectionOption {
@@ -132,6 +133,35 @@ pub enum Command {
     Profile(ProfileArgs),
     /// Browse saved Sessions on the host without starting Docker.
     Session(SessionArgs),
+    /// Record and inspect HTTP/SSE traffic through a local host-side proxy.
+    Traffic(TrafficArgs),
+}
+
+/// Options for the host-side Traffic Proxy.
+#[derive(Debug, Args)]
+pub struct TrafficArgs {
+    /// IP address and port to listen on.
+    #[arg(
+        long,
+        value_name = "IP:PORT",
+        default_value = "127.0.0.1:9923",
+        value_parser = parse_traffic_listen
+    )]
+    pub listen: SocketAddr,
+
+    /// Allow the proxy listener to accept non-loopback connections.
+    #[arg(long)]
+    pub allow_remote: bool,
+}
+
+fn parse_traffic_listen(value: &str) -> Result<SocketAddr, String> {
+    let address: SocketAddr = value.parse().map_err(|_| {
+        "expected an IP address and nonzero port, for example 127.0.0.1:9923".to_string()
+    })?;
+    if address.port() == 0 {
+        return Err("Traffic Proxy port must not be 0".to_string());
+    }
+    Ok(address)
 }
 
 /// Options for launching a Coding Agent in Docker.
@@ -649,5 +679,39 @@ mod tests {
             &["aibox", "component", "remove", "rust@1.90.0"],
             ErrorKind::ValueValidation,
         );
+    }
+
+    #[test]
+    fn traffic_has_only_host_listener_options() {
+        let cli = Cli::try_parse_from(["aibox", "traffic"]).unwrap();
+        let Command::Traffic(args) = cli.command else {
+            panic!("expected traffic command");
+        };
+        assert_eq!(args.listen, "127.0.0.1:9923".parse().unwrap());
+        assert!(!args.allow_remote);
+
+        let cli = Cli::try_parse_from([
+            "aibox",
+            "traffic",
+            "--listen",
+            "[::1]:8080",
+            "--allow-remote",
+        ])
+        .unwrap();
+        let Command::Traffic(args) = cli.command else {
+            panic!("expected traffic command");
+        };
+        assert_eq!(args.listen, "[::1]:8080".parse().unwrap());
+        assert!(args.allow_remote);
+
+        for args in [
+            &["aibox", "traffic", "--listen", "127.0.0.1:0"][..],
+            &["aibox", "traffic", "--listen", "localhost:9923"][..],
+            &["aibox", "traffic", "--agent", "codex"][..],
+            &["aibox", "traffic", "--tenant", "work"][..],
+            &["aibox", "traffic", "--host"][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "accepted {args:?}");
+        }
     }
 }

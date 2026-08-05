@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="aibox-csrf" content="__AIBOX_CSRF__">
+  <title>aibox Traffic</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c2330'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-family='sans-serif' font-size='15' font-weight='700' fill='white'%3Eai%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/_aibox/traffic/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="mark">ai</span><strong>aibox Traffic</strong><span class="subtitle">temporary HTTP/SSE inspector</span></div>
+    <div class="toolbar"><span id="total">0 records</span><button id="refresh">Refresh</button><button id="delete-selected" disabled>Delete selected</button><button id="delete-all" class="danger">Delete all</button></div>
+  </header>
+  <main>
+    <aside>
+      <div class="list-tools"><label><input id="select-page" type="checkbox"> Select page</label><span id="page-label"></span></div>
+      <div id="records" class="records"><div class="empty">No traffic recorded yet.</div></div>
+      <nav><button id="prev" disabled>Previous</button><button id="next" disabled>Next</button></nav>
+    </aside>
+    <section id="detail" class="detail empty-detail">
+      <div class="empty-state"><h1>Select a request</h1><p>Requests appear newest first. Bodies are loaded only when selected.</p></div>
+    </section>
+  </main>
+  <script src="/_aibox/traffic/app.js" defer></script>
+</body>
+</html>

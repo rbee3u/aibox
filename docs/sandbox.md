@@ -111,6 +111,99 @@ failure; an existing failure status is preserved.
 One aibox process supports one active container operation at a time: either a
 Run or a Rust/Go Component installation.
 
+## Traffic Proxy
+
+`aibox traffic` is an independent foreground HTTP intermediary for temporary
+model API debugging. It does not start Docker and may run in a separate process
+alongside a Coding Agent Run:
+
+```sh
+aibox traffic
+aibox traffic --listen 127.0.0.1:8080
+aibox traffic --listen 0.0.0.0:9923 --allow-remote
+```
+
+The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
+`IP:PORT` with a nonzero port, and every non-loopback address requires
+`--allow-remote`. When a specific external or IPv6 address is selected, aibox
+also binds `127.0.0.1` on the same port for management; wildcard IPv4 already
+covers it. The viewer is always `http://127.0.0.1:<port>/` and rejects
+non-loopback peers, non-loopback Host values, cross-origin and cross-site
+requests, and invalid per-start CSRF tokens. It sends no CORS permission.
+
+Docker Desktop provides `host.docker.internal`. aibox also maps that name to
+the host gateway for Linux Runs, where the host listener commonly needs
+`0.0.0.0` plus `--allow-remote`. For example:
+
+```toml
+base_url = "http://host.docker.internal:9923/https://hezubus.ai/v1"
+```
+
+The proxy removes the first slash and parses the remainder as the complete
+upstream URL. Thus a request to
+`/https://hezubus.ai/v1/responses?tag=a&tag=` forwards the same method, path,
+repeated query values, headers, and body to
+`https://hezubus.ai/v1/responses?tag=a&tag=`. Only `http` and `https` targets
+are accepted. Redirects are returned without following them; requests are not
+retried. System HTTP proxies, cookies, Referer synthesis, and automatic body
+decompression are disabled. Host and hop-by-hop headers are rebuilt or
+removed. CONNECT receives 405, and Upgrade/WebSocket receives 426. HTTP
+trailers are not recorded or forwarded. Invalid targets return 400,
+non-public targets 403, connection timeouts 504, other upstream failures 502,
+and recording failures 507. Upstream 3xx/4xx/5xx statuses are returned without
+being reclassified as proxy failures.
+
+Before connecting, aibox resolves the target and requires every candidate to
+be a public address, except that `198.18.0.0/15` is accepted for host-side
+Fake-IP DNS proxies. Loopback, private, link-local, CGNAT, ULA, multicast,
+unspecified, documentation, other reserved, and metadata destinations are
+rejected; accepted addresses are pinned to the actual connection. TLS uses the
+host's normal trusted CA roots. The only upstream timeout is a 30-second
+connection timeout, so long-running SSE responses have no total or idle
+timeout.
+
+Request and response chunks are written to disk before they are forwarded.
+This preserves ordinary HTTP bodies, binary data, and SSE event bytes without
+parsing, truncation, redaction, or whole-message buffering. Disk latency
+therefore applies backpressure. A recording error aborts forwarding and returns
+507. Client disconnect, upstream stream failure, SIGINT, and SIGTERM cancel the
+remaining attempt and retain bytes already written.
+
+Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
+
+```text
+<UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
+  request.json
+  request.body
+  response.json
+  response.body
+  result.json
+```
+
+The collection and Record directories are mode `0700`; files are `0600`.
+Metadata stores incoming and upstream URLs, base64 lossless header values,
+status, HTTP version, byte counts, timings, outcome, and error details. Body
+files contain the exact application-visible bytes. A missing `result.json`
+from another process lifetime appears as interrupted/incomplete. Unknown or
+structurally incomplete collection entries are ignored with warnings; selected
+reads and deletion revalidate real paths and reject symlinks or unexpected
+types.
+
+There is no size limit, retention policy, redaction, database, or cross-process
+lock. Authorization values, API keys, prompts, tool data, and model output are
+stored in full and remain after the proxy exits. Use the viewer's selected
+delete or separately confirmed **Delete all** action when debugging ends. An
+active Record cannot be deleted; delete-all uses the confirmed current
+non-active count and returns a conflict if that count changes.
+
+Claude Messages and OpenAI Responses streaming are HTTP SSE and work through
+this path. WebSocket transport is outside v1; if native Codex configuration
+manually sets `supports_websockets = true` for the selected custom provider,
+set it to `false` while using Traffic. Agent Profile fixed fields are unchanged.
+See [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
+[OpenAI Responses streaming](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl),
+and [Docker host networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/).
+
 ## Building the Shared Image
 
 Build the bundled image after installing aibox:

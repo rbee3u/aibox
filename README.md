@@ -151,6 +151,42 @@ Every Extra Mount is an explicit authority grant. Read the
 [mount rules](docs/sandbox.md#mount-rules) before exposing credentials or
 another Tenant Home.
 
+## Traffic Debugging
+
+Start the temporary host-side HTTP/SSE recorder in the foreground, then open
+the viewer at `http://127.0.0.1:9923/`:
+
+```sh
+aibox traffic
+```
+
+Point a model provider at the proxy by placing its complete upstream base URL
+after the local address. For Codex inside an aibox container:
+
+```toml
+[model_providers.hezubus]
+name = "hezubus"
+base_url = "http://host.docker.internal:9923/https://hezubus.ai/v1"
+wire_api = "responses"
+```
+
+For Claude, set the native configuration for the selected Tenant:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://host.docker.internal:9923/https://api.anthropic.com"
+  }
+}
+```
+
+Docker Desktop supplies `host.docker.internal`. Native Linux Docker usually
+needs `aibox traffic --listen 0.0.0.0:9923 --allow-remote`; the management page
+remains loopback-only. Traffic Records contain unredacted authorization
+headers, prompts, and responses. See
+[Traffic Proxy](docs/sandbox.md#traffic-proxy) before use and delete Records
+from its viewer afterward.
+
 ## Shell Completion
 
 ```sh
@@ -178,7 +214,7 @@ Tenant or modify Agent Configuration.
 - [Agent Profiles](docs/profiles.md): fixed fields, one-time application,
   credentials, and filesystem behavior.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
-  cleanup, and custom images.
+  cleanup, Traffic Proxy behavior, and custom images.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
   Coding Agent versions.
 

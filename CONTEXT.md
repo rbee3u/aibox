@@ -32,6 +32,18 @@ An explicit grant that exposes an additional host path inside the Filesystem
 Sandbox for a Run.
 _Avoid_: Shared path, implicit mount
 
+**Traffic Proxy**:
+A temporary host-side HTTP intermediary that records application-visible
+request and response data while forwarding one upstream attempt. It is global
+to aibox and independent of every Tenant and Coding Agent.
+_Avoid_: Router, Routing service, packet capture
+
+**Traffic Record**:
+The raw observable request, response, and timing data from one Traffic Proxy
+attempt. A Traffic Record may be incomplete after cancellation, recording
+failure, or process interruption.
+_Avoid_: Session, Transcript, Run History
+
 ### Persistent identity
 
 **Tenant**:

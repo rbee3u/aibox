@@ -22,8 +22,9 @@ image, container Home, and orchestration remain shared.
 it, and pass the right side verbatim only to `run`. `run`, `profile`, and
 `session` own separately scoped `--agent`/`--tenant` options; `component` owns
 only `--tenant`; only `profile` and `session` accept `--host`. `build`,
-`completion`, and `tenant` accept none of them. Completion mirrors these
-scopes, stays read-only, and runs on the host.
+`completion`, and `tenant` accept none of them. `traffic` owns only `--listen`
+and `--allow-remote`; it does not accept selectors or pass-through arguments.
+Completion mirrors these scopes, stays read-only, and runs on the host.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only with
@@ -98,6 +99,25 @@ guarantee. Profile Application atomically replaces each changed file but is not
 atomic across files; rerunning it converges. One aibox process supports only one
 active container operation: a Run or toolchain installation.
 
+**Keep Traffic host-side and raw.** The Traffic Proxy is global rather than
+Tenant-owned, never starts Docker, and records raw application-visible header
+values and body bytes under the flat `$AIBOX_ROOT/traffic/<record>/` layout.
+Management routes remain loopback-only even when proxy traffic is allowed on a
+non-loopback listener. Apart from the `198.18.0.0/15` host-side Fake-IP DNS
+exception, do not add private-upstream access, redaction, body limits,
+retention, WebSocket, CONNECT, or multi-process coordination.
+
+**Keep routine Traffic tests socket-free.** Default tests must not bind TCP or
+Unix sockets: exercise Axum routers as in-memory Tower services and drive body
+streams with deterministic synchronization. Keep real-socket Reqwest transport
+checks explicit and ignored, and run them only in a network-permitted host or
+CI environment. Test the embedded UI in layers: Rust route/API/security tests,
+`node --check assets/traffic.js` plus Node tests for extracted pure JavaScript,
+then optional headless Chromium/Playwright interaction and screenshots in a
+development image or CI. Desktop Browser access is never required for routine
+changes. A headless browser must use the same container's loopback listener;
+do not publish or weaken the loopback-only management interface for testing.
+
 **Keep Run transient and the crate CLI-only.** Do not add Run History or a
 Run-to-Session mapping. A validated Run attempt may initialize its Tenant before
 Docker startup fails or the Coding Agent returns nonzero. Expose only the
@@ -126,3 +146,7 @@ For Rust changes, run all of these:
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+
+For embedded Traffic UI changes, also run:
+
+- `node --check assets/traffic.js`

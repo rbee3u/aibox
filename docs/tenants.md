@@ -65,6 +65,13 @@ $AIBOX_ROOT/
         auth.json
     __host/
       ...
+  traffic/
+    <UTC-time>-<upstream-host>-<uuid-v7>/
+      request.json
+      request.body
+      response.json
+      response.body
+      result.json
   tenants/
     <tenant>/                      # complete Managed Tenant Home
       .gitconfig
@@ -91,6 +98,12 @@ is mode `0600`; the baseline `.gitconfig` is mode `0644`. Native configuration,
 credential, and Component entries in the tree above appear on demand.
 Transcript entries appear only after the corresponding Coding Agent creates
 Sessions.
+
+`traffic/` is a flat, global collection rather than Tenant data. Every Traffic
+Record is a direct child so total-count and deletion scans use one directory
+level; there is deliberately no `YYYY/MM/DD` partition. Tenant creation and
+deletion never create or remove Traffic Records. See
+[Traffic Proxy](sandbox.md#traffic-proxy) for the data and cleanup contract.
 
 Managed Tenant and Agent Profile names are 1–63 character lowercase DNS labels:
 only `[a-z0-9-]` is accepted, and the first and last character must be a letter

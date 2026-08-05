@@ -85,6 +85,7 @@ enum TopCommand {
     Component,
     Profile,
     Session,
+    Traffic,
     Other,
 }
 
@@ -141,6 +142,7 @@ impl CompletionContext {
             Some("component") => TopCommand::Component,
             Some("profile") => TopCommand::Profile,
             Some("session") => TopCommand::Session,
+            Some("traffic") => TopCommand::Traffic,
             Some("build" | "completion") => TopCommand::Other,
             _ => TopCommand::Root,
         };
