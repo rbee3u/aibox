@@ -94,7 +94,7 @@ struct RunFixture {
 impl RunFixture {
     fn new() -> Self {
         let env_lock = test_env_lock();
-        let run_lock = crate::creds::run_registry_test_lock();
+        let run_lock = crate::docker::run_registry_test_lock();
         let root = tempfile::tempdir().unwrap();
         let host_home = tempfile::tempdir().unwrap();
         let docker_dir = tempfile::tempdir().unwrap();

@@ -10,7 +10,6 @@ mod agent;
 mod cli;
 mod completion;
 mod component;
-mod creds;
 mod docker;
 mod platform;
 mod profile;

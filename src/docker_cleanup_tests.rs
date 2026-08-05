@@ -65,7 +65,7 @@ fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
     let scratch = stable_tempdir();
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
-        .arg("creds::tests::ignored_hup_helper_process")
+        .arg("docker::cleanup_tests::ignored_hup_helper_process")
         .env(IGNORED_HUP_HELPER_DIR, scratch.path())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -114,7 +114,7 @@ fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) 
 
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
-        .arg("creds::tests::signal_helper_process")
+        .arg("docker::cleanup_tests::signal_helper_process")
         .env(SIGNAL_HELPER_DIR, scratch.path())
         .env("PATH", &fake_docker)
         .env("AIBOX_FAKE_DOCKER_LOG", scratch.path().join("docker.log"))

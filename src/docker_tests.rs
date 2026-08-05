@@ -344,7 +344,7 @@ fn cidfile_has_id_requires_a_non_empty_container_id() {
 #[test]
 fn run_spawn_failure_does_not_call_container_created_callback() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     let callback_marker = dir.path().join("callback");
     let _path = EnvGuard::set("PATH", dir.path().as_os_str());
@@ -372,7 +372,7 @@ fn run_forwards_run_args_image_and_cmd_in_order() {
     // the tool exists to enforce, so assert the whole assembled line, not
     // just --cidfile.
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let run_log = dir.path().join("run.log");
@@ -406,7 +406,7 @@ fn run_forwards_run_args_image_and_cmd_in_order() {
 #[test]
 fn run_callback_waits_until_cidfile_has_container_id() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let callback_marker = dir.path().join("callback");
@@ -435,7 +435,7 @@ fn run_callback_waits_until_cidfile_has_container_id() {
 #[test]
 fn run_callback_still_runs_when_cidfile_appears_after_initial_wait() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let callback_marker = dir.path().join("callback");
@@ -464,7 +464,7 @@ fn run_callback_still_runs_when_cidfile_appears_after_initial_wait() {
 #[test]
 fn run_cleans_up_the_container_and_registry_when_callback_panics() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let stopped_marker = dir.path().join("stopped");
@@ -497,11 +497,11 @@ fn run_cleans_up_the_container_and_registry_when_callback_panics() {
 #[test]
 fn wait_failure_keeps_registered_run_cleanup_armed() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let cid_dir = tempfile::tempdir().unwrap();
-    crate::creds::set_cidfile(&cid_dir.path().join("cid")).unwrap();
+    set_cidfile(&cid_dir.path().join("cid")).unwrap();
     let child = Command::new("sh").args(["-c", "sleep 10"]).spawn().unwrap();
-    crate::creds::set_child(child.id());
+    set_child(child.id());
     let mut run = RegisteredRun::new(child);
 
     let error = run
@@ -516,7 +516,7 @@ fn wait_failure_keeps_registered_run_cleanup_armed() {
 #[test]
 fn run_does_not_call_callback_when_child_exits_before_cidfile() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let callback_marker = dir.path().join("callback");
@@ -539,7 +539,7 @@ fn run_does_not_call_callback_when_child_exits_before_cidfile() {
 #[test]
 fn run_does_not_call_callback_when_delayed_child_exits_without_cidfile() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let callback_marker = dir.path().join("callback");
@@ -562,7 +562,7 @@ fn run_does_not_call_callback_when_delayed_child_exits_without_cidfile() {
 #[test]
 fn run_immediately_kills_a_lingering_container_and_returns_nonzero() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let stopped_marker = dir.path().join("stopped");
@@ -592,7 +592,7 @@ fn run_immediately_kills_a_lingering_container_and_returns_nonzero() {
 #[test]
 fn run_kills_a_lingering_container_even_when_client_failed() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let stopped_marker = dir.path().join("stopped");
@@ -620,7 +620,7 @@ fn run_kills_a_lingering_container_even_when_client_failed() {
 #[test]
 fn run_reports_failure_when_lingering_container_kill_fails() {
     let _env_lock = crate::test_env_lock();
-    let _run_lock = crate::creds::run_registry_test_lock();
+    let _run_lock = run_registry_test_lock();
     let dir = tempfile::tempdir().unwrap();
     write_fake_docker(dir.path());
     let stopped_marker = dir.path().join("stopped");
