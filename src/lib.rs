@@ -7,7 +7,6 @@
 #![warn(missing_docs)]
 
 mod agent;
-mod agent_config;
 mod cli;
 mod completion;
 mod component;
@@ -15,6 +14,8 @@ mod creds;
 mod docker;
 mod platform;
 mod profile;
+mod profile_model;
+mod profile_state;
 mod runspec;
 mod session;
 mod session_claude;

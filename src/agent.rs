@@ -4,6 +4,9 @@
 //! command construction. Transcript parsing remains in the two Session backend
 //! modules because the Coding Agents use different on-disk formats.
 
+use anyhow::{Context, Result};
+use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 const DEFAULT_CODEX_PROFILE: &str = r#"approval_policy = "never"
@@ -132,12 +135,126 @@ impl AgentKind {
         }
     }
 
+    /// Parse the Coding Agent's native main configuration into a JSON object.
+    pub(crate) fn parse_main_config(self, content: &str) -> Result<Map<String, Value>> {
+        if content.trim().is_empty() {
+            return Ok(Map::new());
+        }
+        let value = match self {
+            Self::Codex => toml_edit::de::from_str::<Value>(content)?,
+            Self::Claude => serde_json::from_str::<Value>(content)?,
+        };
+        value
+            .as_object()
+            .cloned()
+            .with_context(|| format!("{} main configuration must be an object", self.tag()))
+    }
+
+    /// Render a JSON object in the Coding Agent's native main format.
+    pub(crate) fn render_main_config(self, value: &Value) -> Result<String> {
+        if !value.is_object() {
+            anyhow::bail!("{} main configuration must be an object", self.tag());
+        }
+        match self {
+            Self::Codex => Ok(toml_edit::ser::to_string_pretty(value)?),
+            Self::Claude => Ok(format!("{}\n", serde_json::to_string_pretty(value)?)),
+        }
+    }
+
+    /// Normalize native Agent Configuration files into `/config` and `/auth`.
+    pub(crate) fn normalize_config_files(
+        self,
+        main: &str,
+        auth: Option<&str>,
+        claude_auth_keys: &BTreeSet<String>,
+    ) -> Result<Value> {
+        let mut config = self
+            .parse_main_config(main)
+            .context("parse Agent Configuration")?;
+        let mut root = Map::new();
+        match self {
+            Self::Codex => {
+                root.insert("config".to_string(), Value::Object(config));
+                let auth = parse_json_object(auth.unwrap_or(""), "Agent Configuration auth.json")?;
+                root.insert("auth".to_string(), Value::Object(auth));
+            }
+            Self::Claude => {
+                let mut logical_auth = Map::new();
+                if let Some(Value::Object(env)) = config.get_mut("env") {
+                    for key in claude_auth_keys {
+                        if let Some(value) = env.remove(key) {
+                            logical_auth.insert(key.clone(), value);
+                        }
+                    }
+                    if env.is_empty() {
+                        config.remove("env");
+                    }
+                }
+                root.insert("config".to_string(), Value::Object(config));
+                root.insert("auth".to_string(), Value::Object(logical_auth));
+            }
+        }
+        Ok(Value::Object(root))
+    }
+
+    /// Render a normalized `/config` and `/auth` tree into native files.
+    pub(crate) fn render_config_files(self, tree: &Value) -> Result<(String, Option<String>)> {
+        let object = tree
+            .as_object()
+            .context("normalized Agent Configuration must be an object")?;
+        let mut config = object
+            .get("config")
+            .and_then(Value::as_object)
+            .cloned()
+            .context("normalized Agent Configuration needs /config object")?;
+        let auth = object
+            .get("auth")
+            .and_then(Value::as_object)
+            .cloned()
+            .context("normalized Agent Configuration needs /auth object")?;
+        match self {
+            Self::Codex => Ok((
+                self.render_main_config(&Value::Object(config))?,
+                Some(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&Value::Object(auth))?
+                )),
+            )),
+            Self::Claude => {
+                if !auth.is_empty() {
+                    let env = config
+                        .entry("env".to_string())
+                        .or_insert_with(|| Value::Object(Map::new()));
+                    let env = env
+                        .as_object_mut()
+                        .context("Claude settings.env must be an object")?;
+                    for (key, value) in auth {
+                        env.insert(key, value);
+                    }
+                }
+                Ok((self.render_main_config(&Value::Object(config))?, None))
+            }
+        }
+    }
+
     /// Build the Coding Agent command without adding Agent Profile data.
     pub fn build_command(self, passthrough: &[OsString]) -> Vec<OsString> {
         let mut command = vec![OsString::from(self.tag())];
         command.extend(passthrough.iter().cloned());
         command
     }
+}
+
+fn parse_json_object(content: &str, label: &str) -> Result<Map<String, Value>> {
+    let value = if content.trim().is_empty() {
+        Value::Object(Map::new())
+    } else {
+        serde_json::from_str::<Value>(content).with_context(|| format!("parse {label}"))?
+    };
+    value
+        .as_object()
+        .cloned()
+        .with_context(|| format!("{label} must be a JSON object"))
 }
 
 #[cfg(test)]

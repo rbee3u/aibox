@@ -6,8 +6,8 @@
 //! unmanaged native state before installation or removal.
 
 use crate::agent::AgentKind;
-use crate::agent_config::Pointer;
 use crate::cli::{ComponentArgs, ComponentCommand};
+use crate::profile::Pointer;
 use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
