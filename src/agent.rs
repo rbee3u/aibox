@@ -6,8 +6,98 @@
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
 use std::ffi::OsString;
+
+/// Primitive value accepted by one fixed Agent Profile field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProfileValueKind {
+    String,
+    Bool,
+}
+
+/// One fixed main-configuration field that every Profile Application updates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProfileField {
+    pub(crate) path: &'static [&'static str],
+    pub(crate) value_kind: ProfileValueKind,
+}
+
+/// Agent-specific interpretation of an Agent Profile `auth.json`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProfileAuthKind {
+    ClaudeToken,
+    CodexObject,
+}
+
+const CLAUDE_PROFILE_FIELDS: &[ProfileField] = &[
+    ProfileField {
+        path: &["env", "ANTHROPIC_BASE_URL"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["permissions", "defaultMode"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["skipDangerousModePermissionPrompt"],
+        value_kind: ProfileValueKind::Bool,
+    },
+];
+
+const CODEX_PROFILE_FIELDS: &[ProfileField] = &[
+    ProfileField {
+        path: &["approval_policy"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["sandbox_mode"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model_reasoning_effort"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["plan_mode_reasoning_effort"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model_provider"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model_providers", "custom", "name"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model_providers", "custom", "base_url"],
+        value_kind: ProfileValueKind::String,
+    },
+    ProfileField {
+        path: &["model_providers", "custom", "requires_openai_auth"],
+        value_kind: ProfileValueKind::Bool,
+    },
+];
 
 const DEFAULT_CODEX_PROFILE: &str = r#"approval_policy = "never"
 sandbox_mode = "danger-full-access"
@@ -17,6 +107,7 @@ model = "gpt-5.6-sol"
 model_provider = "custom"
 
 [model_providers.custom]
+name = "custom"
 base_url = "https://example.com/v1"
 requires_openai_auth = true
 "#;
@@ -77,7 +168,7 @@ impl AgentKind {
         }
     }
 
-    /// Primary configuration file materialized from an Agent Profile.
+    /// Primary native Agent Configuration file.
     pub const fn main_config_file(self) -> &'static str {
         match self {
             Self::Claude => "settings.json",
@@ -95,27 +186,35 @@ impl AgentKind {
 
     /// Agent Profile credential file.
     ///
-    /// Claude credentials are projected from this string map into
-    /// `settings.json`'s `env` object during materialization.
+    /// Claude's optional token is projected into `settings.json.env` during
+    /// Profile Application; Codex auth replaces the native file as an object.
     pub const fn profile_auth_file(self) -> &'static str {
         match self {
             Self::Claude | Self::Codex => "auth.json",
         }
     }
 
-    /// Native files comprising the Agent Configuration.
-    pub const fn agent_config_files(self) -> &'static [&'static str] {
+    /// Files comprising one complete Agent Profile definition.
+    pub const fn profile_files(self) -> &'static [&'static str] {
         match self {
-            Self::Claude => &["settings.json"],
+            Self::Claude => &["settings.json", "auth.json"],
             Self::Codex => &["config.toml", "auth.json"],
         }
     }
 
-    /// Files comprising one Agent Profile definition.
-    pub const fn profile_files(self) -> &'static [&'static str] {
+    /// Fixed main-configuration fields accepted by an Agent Profile.
+    pub(crate) const fn profile_fields(self) -> &'static [ProfileField] {
         match self {
-            Self::Claude => &["settings.json", "auth.json", ".metadata.json"],
-            Self::Codex => &["config.toml", "auth.json", ".metadata.json"],
+            Self::Claude => CLAUDE_PROFILE_FIELDS,
+            Self::Codex => CODEX_PROFILE_FIELDS,
+        }
+    }
+
+    /// Authentication contract used by an Agent Profile.
+    pub(crate) const fn profile_auth_kind(self) -> ProfileAuthKind {
+        match self {
+            Self::Claude => ProfileAuthKind::ClaudeToken,
+            Self::Codex => ProfileAuthKind::CodexObject,
         }
     }
 
@@ -127,7 +226,7 @@ impl AgentKind {
         }
     }
 
-    /// Built-in credential source used by `profile create`.
+    /// Built-in credential template used by `profile create`.
     pub const fn profile_auth_template(self) -> &'static str {
         match self {
             Self::Claude => DEFAULT_CLAUDE_AUTH,
@@ -137,7 +236,7 @@ impl AgentKind {
 
     /// Parse the Coding Agent's native main configuration into a JSON object.
     pub(crate) fn parse_main_config(self, content: &str) -> Result<Map<String, Value>> {
-        if content.trim().is_empty() {
+        if self == Self::Codex && content.trim().is_empty() {
             return Ok(Map::new());
         }
         let value = match self {
@@ -161,82 +260,6 @@ impl AgentKind {
         }
     }
 
-    /// Normalize native Agent Configuration files into `/config` and `/auth`.
-    pub(crate) fn normalize_config_files(
-        self,
-        main: &str,
-        auth: Option<&str>,
-        claude_auth_keys: &BTreeSet<String>,
-    ) -> Result<Value> {
-        let mut config = self
-            .parse_main_config(main)
-            .context("parse Agent Configuration")?;
-        let mut root = Map::new();
-        match self {
-            Self::Codex => {
-                root.insert("config".to_string(), Value::Object(config));
-                let auth = parse_json_object(auth.unwrap_or(""), "Agent Configuration auth.json")?;
-                root.insert("auth".to_string(), Value::Object(auth));
-            }
-            Self::Claude => {
-                let mut logical_auth = Map::new();
-                if let Some(Value::Object(env)) = config.get_mut("env") {
-                    for key in claude_auth_keys {
-                        if let Some(value) = env.remove(key) {
-                            logical_auth.insert(key.clone(), value);
-                        }
-                    }
-                    if env.is_empty() {
-                        config.remove("env");
-                    }
-                }
-                root.insert("config".to_string(), Value::Object(config));
-                root.insert("auth".to_string(), Value::Object(logical_auth));
-            }
-        }
-        Ok(Value::Object(root))
-    }
-
-    /// Render a normalized `/config` and `/auth` tree into native files.
-    pub(crate) fn render_config_files(self, tree: &Value) -> Result<(String, Option<String>)> {
-        let object = tree
-            .as_object()
-            .context("normalized Agent Configuration must be an object")?;
-        let mut config = object
-            .get("config")
-            .and_then(Value::as_object)
-            .cloned()
-            .context("normalized Agent Configuration needs /config object")?;
-        let auth = object
-            .get("auth")
-            .and_then(Value::as_object)
-            .cloned()
-            .context("normalized Agent Configuration needs /auth object")?;
-        match self {
-            Self::Codex => Ok((
-                self.render_main_config(&Value::Object(config))?,
-                Some(format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&Value::Object(auth))?
-                )),
-            )),
-            Self::Claude => {
-                if !auth.is_empty() {
-                    let env = config
-                        .entry("env".to_string())
-                        .or_insert_with(|| Value::Object(Map::new()));
-                    let env = env
-                        .as_object_mut()
-                        .context("Claude settings.env must be an object")?;
-                    for (key, value) in auth {
-                        env.insert(key, value);
-                    }
-                }
-                Ok((self.render_main_config(&Value::Object(config))?, None))
-            }
-        }
-    }
-
     /// Build the Coding Agent command without adding Agent Profile data.
     pub fn build_command(self, passthrough: &[OsString]) -> Vec<OsString> {
         let mut command = vec![OsString::from(self.tag())];
@@ -245,33 +268,20 @@ impl AgentKind {
     }
 }
 
-fn parse_json_object(content: &str, label: &str) -> Result<Map<String, Value>> {
-    let value = if content.trim().is_empty() {
-        Value::Object(Map::new())
-    } else {
-        serde_json::from_str::<Value>(content).with_context(|| format!("parse {label}"))?
-    };
-    value
-        .as_object()
-        .cloned()
-        .with_context(|| format!("{label} must be a JSON object"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
-        for (agent, tag, state_dir, main, native_auth, agent_files, profile_files, auth) in [
+        for (agent, tag, state_dir, main, native_auth, profile_files, auth) in [
             (
                 AgentKind::Claude,
                 "claude",
                 ".claude",
                 "settings.json",
                 None,
-                &["settings.json"][..],
-                &["settings.json", "auth.json", ".metadata.json"][..],
+                &["settings.json", "auth.json"][..],
                 "{\n  \"ANTHROPIC_AUTH_TOKEN\": \"sk-example\"\n}\n",
             ),
             (
@@ -281,7 +291,6 @@ mod tests {
                 "config.toml",
                 Some("auth.json"),
                 &["config.toml", "auth.json"][..],
-                &["config.toml", "auth.json", ".metadata.json"][..],
                 "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n",
             ),
         ] {
@@ -290,10 +299,19 @@ mod tests {
             assert_eq!(agent.main_config_file(), main, "{agent:?}");
             assert_eq!(agent.native_auth_file(), native_auth, "{agent:?}");
             assert_eq!(agent.profile_auth_file(), "auth.json", "{agent:?}");
-            assert_eq!(agent.agent_config_files(), agent_files, "{agent:?}");
             assert_eq!(agent.profile_files(), profile_files, "{agent:?}");
             assert_eq!(agent.profile_auth_template(), auth, "{agent:?}");
         }
+        assert_eq!(AgentKind::Claude.profile_fields().len(), 7);
+        assert_eq!(AgentKind::Codex.profile_fields().len(), 9);
+        assert_eq!(
+            AgentKind::Claude.profile_auth_kind(),
+            ProfileAuthKind::ClaudeToken
+        );
+        assert_eq!(
+            AgentKind::Codex.profile_auth_kind(),
+            ProfileAuthKind::CodexObject
+        );
     }
 
     #[test]

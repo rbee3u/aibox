@@ -228,18 +228,7 @@ impl CompletionContext {
         let leaves: &[&str] = match self.top {
             TopCommand::Tenant => &["list", "create", "delete"],
             TopCommand::Component => &["list", "install", "remove"],
-            TopCommand::Profile => &[
-                "list",
-                "get",
-                "create",
-                "edit",
-                "delete",
-                "activate",
-                "deactivate",
-                "status",
-                "diff",
-                "reconcile",
-            ],
+            TopCommand::Profile => &["list", "get", "create", "edit", "delete", "apply"],
             TopCommand::Session => &["list", "get", "delete"],
             _ => return,
         };
@@ -342,7 +331,7 @@ fn add_component_completers(command: clap::Command) -> clap::Command {
 fn add_profile_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
     let get = context.clone();
     let edit = context.clone();
-    let activate = context.clone();
+    let apply = context.clone();
     command.mut_subcommand("profile", move |command| {
         command
             .mut_arg("tenant", add_tenant_value_completer)
@@ -355,8 +344,8 @@ fn add_profile_completers(command: clap::Command, context: CompletionContext) ->
             .mut_subcommand("edit", move |command| {
                 add_profile_completer(command, edit, false)
             })
-            .mut_subcommand("activate", move |command| {
-                add_profile_completer(command, activate, false)
+            .mut_subcommand("apply", move |command| {
+                add_profile_completer(command, apply, false)
             })
             .mut_subcommand("delete", move |command| {
                 add_profile_completer(command, context, true)
@@ -684,7 +673,7 @@ mod tests {
         crate::profile::create_profile(&selected, "custom").unwrap();
         crate::profile::create_profile(&selected, "second").unwrap();
         let context = CompletionContext::from_words(&words(&[
-            "aibox", "profile", "--tenant", "work", "activate", "",
+            "aibox", "profile", "--tenant", "work", "apply", "",
         ]));
         let values = complete_profiles(&context, OsStr::new(""), &BTreeSet::new());
         assert_eq!(candidate_values(&values), ["custom", "second"]);

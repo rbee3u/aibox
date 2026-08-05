@@ -30,11 +30,11 @@ aibox tenant delete work test
 aibox tenant delete --all
 ```
 
-Deletion removes the Tenant Home and both Coding Agents' Tenant-local metadata,
-including credentials, settings, Sessions, caches, Agent Profiles, Active Agent
-Profile state, and local toolchains. It does not delete the shared Docker image
-or any Workspace. aibox asks before each deletion; non-interactive callers must
-use `--yes`. There is no deletion backup.
+Deletion removes the Tenant Home and both Coding Agents' Agent Profile catalogs,
+including credentials, settings, Sessions, caches, Agent Profiles, and local
+toolchains. It does not delete the shared Docker image or any Workspace. aibox
+asks before each deletion; non-interactive callers must use `--yes`. There is no
+deletion backup.
 
 An empty deletion selection is an error. `--all` cannot be combined with
 explicit names.
@@ -53,18 +53,14 @@ relative value is resolved from the launch directory.
 $AIBOX_ROOT/
   claude/
     <tenant>/
-      .metadata.json               # Active Profile/transaction state, if any
       <profile>/
-        .metadata.json
         settings.json
         auth.json
     __host/                        # Host Tenant uses the key __host
       ...
   codex/
     <tenant>/
-      .metadata.json               # Active Profile/transaction state, if any
       <profile>/
-        .metadata.json
         config.toml
         auth.json
     __host/
@@ -88,13 +84,13 @@ $AIBOX_ROOT/
 
 `tenants/<tenant>` is both the Managed Tenant's authoritative existence marker
 and the directory mounted at `/home/aibox`. Nothing beneath `claude/` or
-`codex/` is mounted into a Run. Agent/Tenant `.metadata.json` files are mode
-`0600`. Newly created aibox root, collection, Agent/Tenant metadata directory,
-Agent Profile directory, Tenant Home, and native `.codex`/`.claude` state
-directories are mode `0700`. Every Agent Profile file is mode `0600`; the
-baseline `.gitconfig` is mode `0644`. Native configuration, credential, and
-Component entries in the tree above appear on demand. Transcript entries appear
-only after the corresponding Coding Agent creates Sessions.
+`codex/` is mounted into a Run. Newly created aibox root, collection, Agent
+Profile catalog, Agent Profile directory, Tenant Home, and native
+`.codex`/`.claude` state directories are mode `0700`. Every Agent Profile file
+is mode `0600`; the baseline `.gitconfig` is mode `0644`. Native configuration,
+credential, and Component entries in the tree above appear on demand.
+Transcript entries appear only after the corresponding Coding Agent creates
+Sessions.
 
 Managed Tenant and Agent Profile names are 1–63 character lowercase DNS labels:
 only `[a-z0-9-]` is accepted, and the first and last character must be a letter
@@ -102,22 +98,22 @@ or digit. `__host` is an internal storage key and cannot collide with a Managed
 Tenant name. `host` remains a valid Managed Tenant name.
 
 Managed Tenant listing ignores lifecycle staging entries, invalid names, files,
-and symlinks. Agent Profile listing likewise ignores invalid names and unsafe
-entry types, and also hides incomplete profiles. Explicitly selected structural
-paths are rejected unless they are real directories rather than symlinks.
+and symlinks. Agent Profile listing likewise ignores invalid names, unsafe entry
+types, and incomplete profiles. A structurally complete Profile remains visible
+even when its contents are invalid so it can be inspected, edited, or deleted.
+Explicitly selected structural paths reject symlinks and unexpected entries.
 
 ## Lifecycle Recovery
 
 Creation builds the initial Home under `$creating-<tenant>` and publishes it by
 rename. Deletion first renames the Home to `$deleting-<tenant>`, then removes
-the Home and Agent metadata. Repeating the same create or delete command safely
-finishes interrupted work.
+the Home and Agent Profile catalogs. Repeating the same create or delete command
+safely finishes interrupted work.
 
 A missing Managed Tenant is an empty read scope: `profile list` and
-`session list` are empty, `profile status` is inactive, and every Component is
-not installed.
-Read-only commands and completion do not create it. `run`, `profile create`,
-and `component install` may initialize it.
+`session list` are empty, and every Component is not installed. Read-only
+commands and completion do not create it. `run`, `profile create`, and
+`component install` may initialize it.
 
 ## Tenant Home Initialization
 
@@ -141,14 +137,14 @@ aibox session --host list
 aibox session --host --agent claude list
 ```
 
-Its aibox-owned Agent Profile metadata lives under `$AIBOX_ROOT/<agent>/__host/`;
+Its aibox-owned Agent Profile catalog lives under `$AIBOX_ROOT/<agent>/__host/`;
 native Agent Configuration and Sessions remain in the real host Home. aibox
 does not install the Managed Tenant `.gitconfig` or any Tenant Component there.
 
-Host Tenant operations can modify real host state: Agent Profile activation
-changes real Agent Configuration, and Session deletion permanently removes real
-transcripts. The Host Tenant cannot Run, cannot be created or deleted, and does
-not appear in `tenant list`.
+Host Tenant operations can modify real host state: Profile Application changes
+real Agent Configuration, and Session deletion permanently removes real
+transcripts. Profile Application has no backup or rollback. The Host Tenant
+cannot Run, cannot be created or deleted, and does not appear in `tenant list`.
 
 `--tenant host` selects the ordinary runnable Managed Tenant named `host`.
 `--host` selects the Host Tenant. They are never aliases and are mutually
@@ -190,8 +186,9 @@ commands operate on the real host Transcripts described above.
 
 aibox does not provide cross-process locks for Tenant or Agent Profile
 operations. Avoid changing the same Tenant and Coding Agent from multiple aibox
-processes at once. Interrupted lifecycle and Agent Profile operations are
-resumable, but that recovery is not a multi-process coordination mechanism.
+processes at once. Interrupted Tenant lifecycle work is resumable. Each Profile
+Application replaces individual files atomically, but it has no cross-file
+transaction; rerunning the command converges after an interruption.
 
 One aibox process supports only one active container operation: a Run or a
 toolchain installation.
@@ -225,17 +222,12 @@ aibox component install codex-statusline --tenant work
 
 `claude-statusline` writes `.claude/statusline.sh` and sets
 `settings.json.statusLine` to run `bash ~/.claude/statusline.sh`.
-`codex-statusline` owns `tui.status_line` and `tui.status_line_use_colors` in
-`.codex/config.toml`. Installation replaces those owned values with the version
+`codex-statusline` sets `tui.status_line` and `tui.status_line_use_colors` in
+`.codex/config.toml`. Installation replaces those values with the version
 bundled into aibox while preserving unrelated native configuration. Repeating
-an installation is safe and updates modified content.
-
-Before changing Agent Configuration, installation or removal completes an
-interrupted Agent Profile transaction for that Coding Agent. It does not change
-Agent Profile source or Active Agent Profile metadata. Status-line
-configuration is independently owned by the Component and survives Agent
-Profile activation, reconciliation, switching, and deactivation. Installation
-and activation both reject an overlap with the other owner.
+an installation is safe and updates modified content. Profile Fields exclude
+status-line paths, so applying a Profile preserves installed status-line
+configuration without coordination between the two commands.
 
 Remove a Component explicitly:
 

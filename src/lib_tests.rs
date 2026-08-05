@@ -263,44 +263,6 @@ fn nonzero_agent_exit_still_leaves_the_validated_tenant_initialized() {
 
 #[cfg(unix)]
 #[test]
-fn run_recovers_a_pending_profile_transaction_before_starting_the_agent() {
-    let fx = RunFixture::new();
-    let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
-    tenant.ensure_initialized().unwrap();
-    let selected = tenant.for_agent(AgentKind::Codex);
-    selected.ensure_for_management().unwrap();
-    let stale = selected.profile_dir("stale");
-    std::fs::create_dir(&stale).unwrap();
-    std::fs::write(stale.join("keep"), b"partial transaction").unwrap();
-    std::fs::write(
-        selected.metadata_file(),
-        r#"{
-  "active_profile": null,
-  "pending": {
-    "changes": [{
-      "kind": "profile-directory",
-      "profile": "stale",
-      "present": false
-    }],
-    "active_profile": null
-  }
-}
-"#,
-    )
-    .unwrap();
-    tenant::set_600(&selected.metadata_file()).unwrap();
-
-    let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
-
-    assert_eq!(code, 0);
-    assert!(!stale.exists());
-    let metadata = std::fs::read_to_string(selected.metadata_file()).unwrap();
-    assert!(!metadata.contains("\"pending\""), "{metadata}");
-    assert!(fx.log().contains("ARGS: <run>"));
-}
-
-#[cfg(unix)]
-#[test]
 fn run_resolves_a_symlinked_aibox_root_before_mounting_tenant_home() {
     use std::os::unix::fs::symlink;
 
@@ -352,7 +314,7 @@ fn run_uses_a_valid_image_override_for_lookup_and_launch() {
 
 #[cfg(unix)]
 #[test]
-fn run_preserves_working_config_without_remounting_or_reapplying_profile_data() {
+fn run_preserves_agent_configuration_without_reading_or_reapplying_profiles() {
     let fx = RunFixture::new();
     let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
     let selected = tenant.for_agent(AgentKind::Codex);
@@ -367,36 +329,29 @@ fn run_preserves_working_config_without_remounting_or_reapplying_profile_data() 
         r#"{"token":"profile"}"#,
     )
     .unwrap();
-    profile::activate_profile(&selected, "openai", false).unwrap();
+    profile::apply_profile(&selected, "openai").unwrap();
 
-    let working_config = "model = \"locally-adjusted\"\n";
-    let working_auth = r#"{"token":"locally-adjusted"}"#;
-    std::fs::write(selected.state_file("config.toml"), working_config).unwrap();
-    std::fs::write(selected.state_file("auth.json"), working_auth).unwrap();
-    let metadata_before = std::fs::read(selected.metadata_file()).unwrap();
-
+    let native_config = "model = \"locally-adjusted\"\n";
+    let native_auth = r#"{"token":"locally-adjusted"}"#;
+    std::fs::write(selected.state_file("config.toml"), native_config).unwrap();
+    std::fs::write(selected.state_file("auth.json"), native_auth).unwrap();
     let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
 
     assert_eq!(code, 0);
     assert_eq!(
         std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
-        working_config,
-        "a Run must consume native Agent Configuration without injecting Profile source"
+        native_config,
+        "a Run must consume native Agent Configuration without injecting Profile data"
     );
     assert_eq!(
         std::fs::read_to_string(selected.state_file("auth.json")).unwrap(),
-        working_auth,
-        "a run must not replace persisted auth from profile metadata"
-    );
-    assert_eq!(
-        std::fs::read(selected.metadata_file()).unwrap(),
-        metadata_before,
-        "a Run must not activate or reconcile Profile configuration"
+        native_auth,
+        "a Run must not replace persisted auth from a Profile"
     );
     let log = fx.log();
     assert!(
-        !log.contains(&selected.metadata_dir().display().to_string()),
-        "profile metadata must stay host-only and never enter docker arguments: {log}"
+        !log.contains(&selected.profile_catalog_dir().display().to_string()),
+        "the Profile catalog must stay host-only and never enter docker arguments: {log}"
     );
 }
 
@@ -598,7 +553,7 @@ fn tenant_commands_create_and_delete_without_starting_docker() {
 
 #[cfg(unix)]
 #[test]
-fn profile_activate_and_delete_route_to_the_selected_tenant_without_docker() {
+fn profile_apply_and_delete_route_to_the_selected_tenant_without_docker() {
     let fx = RunFixture::new();
 
     fx.run(
@@ -622,7 +577,7 @@ fn profile_activate_and_delete_route_to_the_selected_tenant_without_docker() {
 
     let code = fx
         .run(
-            &["aibox", "profile", "activate", "openai", "--tenant", "work"],
+            &["aibox", "profile", "apply", "openai", "--tenant", "work"],
             Vec::new(),
         )
         .unwrap();
@@ -640,26 +595,6 @@ fn profile_activate_and_delete_route_to_the_selected_tenant_without_docker() {
         "a scoped profile command must not fall back to the default tenant"
     );
 
-    let error = fx
-        .run(
-            &[
-                "aibox",
-                "profile",
-                "--tenant=work",
-                "delete",
-                "openai",
-                "--yes",
-            ],
-            Vec::new(),
-        )
-        .unwrap_err();
-
-    assert!(error.to_string().contains("is active"));
-    fx.run(
-        &["aibox", "profile", "--tenant=work", "deactivate"],
-        Vec::new(),
-    )
-    .unwrap();
     let code = fx
         .run(
             &[
@@ -676,9 +611,10 @@ fn profile_activate_and_delete_route_to_the_selected_tenant_without_docker() {
 
     assert_eq!(code, 0);
     assert!(!selected.profile_dir("openai").exists());
-    assert!(
-        !selected.state_file("config.toml").exists(),
-        "deactivation restores the exact pre-activation Agent Configuration"
+    assert_eq!(
+        std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
+        "model = \"selected-tenant\"\n",
+        "deleting a Profile must not change Agent Configuration"
     );
     assert_eq!(
         fx.log(),
@@ -800,9 +736,9 @@ fn run_rejects_workspace_that_would_expose_aibox_internal_tree() {
 #[test]
 fn run_rejects_mount_that_would_expose_profile_data() {
     let fx = RunFixture::new();
-    let metadata = fx.root.path().join("codex/default");
-    std::fs::create_dir_all(&metadata).unwrap();
-    let mount = format!("{}:/secrets:ro", metadata.display());
+    let catalog = fx.root.path().join("codex/default");
+    std::fs::create_dir_all(&catalog).unwrap();
+    let mount = format!("{}:/secrets:ro", catalog.display());
 
     let err = fx
         .run(&["aibox", "run", "-m", &mount], Vec::new())
@@ -814,7 +750,7 @@ fn run_rejects_mount_that_would_expose_profile_data() {
     assert_eq!(
         fx.log(),
         "",
-        "Profile metadata mount validation should fail before docker is consulted"
+        "Profile catalog mount validation should fail before docker is consulted"
     );
 }
 

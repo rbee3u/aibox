@@ -1,14 +1,13 @@
 //! Optional capabilities derived from native state in a Managed Tenant Home.
 //!
-//! Status-line Components own a narrow set of Agent Configuration paths;
+//! Status-line Components directly edit native Agent Configuration while
 //! toolchains own their Tenant-local SDK directories. There is no Component
 //! registry, so inspection must distinguish healthy, partial, modified, and
 //! unmanaged native state before installation or removal.
 
 use crate::agent::AgentKind;
 use crate::cli::{ComponentArgs, ComponentCommand};
-use crate::profile::Pointer;
-use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
+use crate::tenant::{self, FileSnapshot, ManagedTenant, TenantAgent};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::ffi::OsString;
@@ -272,43 +271,6 @@ fn statusline_status_from_parts(
             ComponentStatus::Incomplete
         }
         _ => ComponentStatus::Modified,
-    }
-}
-
-/// Component-owned logical Agent Configuration paths that Agent Profile
-/// operations must preserve for this scope.
-pub(crate) fn protected_config_paths(selected: &TenantAgent) -> Result<Vec<Pointer>> {
-    let Tenant::Managed(tenant) = &selected.tenant else {
-        return Ok(Vec::new());
-    };
-    if !tenant.exists()? {
-        return Ok(Vec::new());
-    }
-    let kind = statusline_component(selected.agent);
-    if inspect(kind, &tenant.home_dir)? == ComponentStatus::NotInstalled {
-        return Ok(Vec::new());
-    }
-    component_owned_paths(kind)
-        .iter()
-        .map(|path| Pointer::parse(path))
-        .collect()
-}
-
-fn statusline_component(agent: AgentKind) -> ComponentKind {
-    match agent {
-        AgentKind::Claude => ComponentKind::ClaudeStatusline,
-        AgentKind::Codex => ComponentKind::CodexStatusline,
-    }
-}
-
-fn component_owned_paths(kind: ComponentKind) -> &'static [&'static str] {
-    match kind {
-        ComponentKind::ClaudeStatusline => &["/config/statusLine"],
-        ComponentKind::CodexStatusline => &[
-            "/config/tui/status_line",
-            "/config/tui/status_line_use_colors",
-        ],
-        ComponentKind::Rust | ComponentKind::Go => &[],
     }
 }
 
@@ -604,11 +566,6 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
 fn prepare_statusline_install(tenant: &ManagedTenant, agent: AgentKind) -> Result<TenantAgent> {
     tenant.ensure_initialized()?;
     let selected = tenant.for_agent(agent);
-    crate::profile::recover_pending(&selected)?;
-    crate::profile::ensure_component_paths_available(
-        &selected,
-        component_owned_paths(statusline_component(agent)),
-    )?;
     selected.ensure_agent_state_dir()?;
     Ok(selected)
 }
@@ -669,7 +626,6 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
 
 fn remove_claude_statusline(tenant: &ManagedTenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Claude);
-    crate::profile::recover_pending(&selected)?;
     let script = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
     tenant::remove_real_file_if_exists(&script, "Claude status-line script")?;
 
@@ -690,7 +646,6 @@ fn remove_claude_statusline(tenant: &ManagedTenant) -> Result<()> {
 
 fn remove_codex_statusline(tenant: &ManagedTenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Codex);
-    crate::profile::recover_pending(&selected)?;
     let path = selected.state_file(AgentKind::Codex.main_config_file());
     let config = capture_limited(&path, "Codex configuration")?;
     if !config.present || config.content.iter().all(u8::is_ascii_whitespace) {

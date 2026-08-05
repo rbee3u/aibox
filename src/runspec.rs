@@ -538,19 +538,19 @@ mod tests {
             .unwrap();
         let tenant_home = root.path().join("tenants/default");
         let home_child = tenant_home.join("projects/demo");
-        let codex_metadata = root.path().join("codex/default");
-        let host_metadata = root.path().join("claude/__host");
+        let codex_catalog = root.path().join("codex/default");
+        let host_catalog = root.path().join("claude/__host");
         fs::create_dir_all(&home_child).unwrap();
-        fs::create_dir_all(&codex_metadata).unwrap();
-        fs::create_dir_all(&host_metadata).unwrap();
+        fs::create_dir_all(&codex_catalog).unwrap();
+        fs::create_dir_all(&host_catalog).unwrap();
 
         for rejected in [
             root.path(),
             &root.path().join("tenants"),
-            &codex_metadata,
+            &codex_catalog,
             &root.path().join("codex"),
             &root.path().join("claude"),
-            &host_metadata,
+            &host_catalog,
             root.path().parent().unwrap(),
         ] {
             let err = validate_aibox_mount_sources(rejected.to_str().unwrap(), &[], root.path())
@@ -574,10 +574,10 @@ mod tests {
             .unwrap()
             .ensure_initialized()
             .unwrap();
-        let metadata = root.path().join("codex/default");
-        fs::create_dir_all(&metadata).unwrap();
+        let catalog = root.path().join("codex/default");
+        fs::create_dir_all(&catalog).unwrap();
         let linked_profile = links.path().join("profile");
-        symlink(&metadata, &linked_profile).unwrap();
+        symlink(&catalog, &linked_profile).unwrap();
 
         let err = validate_aibox_mount_sources(linked_profile.to_str().unwrap(), &[], root.path())
             .unwrap_err()
@@ -611,8 +611,8 @@ mod tests {
             .ensure_initialized()
             .unwrap();
         let tenant_home = root.path().join("tenants/default");
-        let metadata = root.path().join("codex/default");
-        fs::create_dir_all(&metadata).unwrap();
+        let catalog = root.path().join("codex/default");
+        fs::create_dir_all(&catalog).unwrap();
 
         let workspace = tenant_home.join("..");
         let err = validate_aibox_mount_sources(workspace.to_str().unwrap(), &[], root.path())
@@ -633,7 +633,7 @@ mod tests {
         .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into Profile metadata must be rejected: {err}"
+            "a dotdot mount source that resolves into an Agent Profile catalog must be rejected: {err}"
         );
     }
 

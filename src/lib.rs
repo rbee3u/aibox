@@ -14,7 +14,6 @@ mod docker;
 mod platform;
 mod profile;
 mod profile_model;
-mod profile_state;
 mod runspec;
 mod session;
 mod session_claude;
@@ -211,7 +210,6 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
 
     let root = tenant::aibox_root()?;
     let tenant = ManagedTenant::resolve(&root, run.tenant_name())?;
-    let selected = tenant.for_agent(agent);
 
     let workspace = runspec::resolve_workspace(run.workspace.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
@@ -223,16 +221,6 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
     }
 
     tenant.ensure_initialized()?;
-    profile::recover_pending(&selected)?;
-    match profile::has_divergence(&selected) {
-        Ok(true) => eprintln!(
-            "!! Active Agent Profile has source or working changes; continuing without reapplying it"
-        ),
-        Ok(false) => {}
-        Err(error) => eprintln!(
-            "!! could not inspect Active Agent Profile state; continuing with native Agent Configuration: {error:#}"
-        ),
-    }
     let home_dir = std::fs::canonicalize(&tenant.home_dir)
         .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
     runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;

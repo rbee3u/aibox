@@ -43,11 +43,11 @@ Workspace as well as Extra Mounts:
 - Extra mounts may be nested beneath `/workspace` or `/home/aibox`, but may not
   replace either managed mount or one of its ancestors.
 - `$AIBOX_ROOT` and any host path that contains it are rejected because they
-  would expose host-only metadata indirectly.
+  would expose host-only aibox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
-a bind source. Agent Profile catalogs, Agent/Tenant metadata, internal lifecycle
-staging directories, and Host Tenant metadata stay host-only.
+a bind source. Agent Profile catalogs and internal lifecycle staging
+directories stay host-only.
 
 Mounting another Tenant Home is allowed, but doing so exposes its Coding
 Agent credentials and persistent state. Treat every Extra Mount as an explicit

@@ -31,59 +31,53 @@ scopes, stays read-only, and runs on the host.
 `tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
-`tenants/<name>` is a real directory. Agent/Tenant metadata lives under
-`<agent>/<name>/`; Host Tenant metadata uses `<agent>/__host/`. Do not add layout
-versions, migration readers, management wrappers, or lock directories. Ignore
-unknown collection entries during listing, but reject explicitly selected
-unsafe paths.
+`tenants/<name>` is a real directory. Agent Profile catalogs live under
+`<agent>/<name>/`; the Host Tenant catalog uses `<agent>/__host/`. Profiles
+contain only their native main configuration file and `auth.json`; do not add
+scope/Profile metadata, layout versions, migration readers, management
+wrappers, or lock directories. Ignore unknown collection entries during
+listing, but reject explicitly selected unsafe paths.
 
 **Keep names and local permissions narrow.** Managed Tenant and Agent Profile
 names are lowercase DNS labels of 1–63 characters. Newly created aibox root,
-collection, metadata, Agent Profile, and Tenant Home boundary directories are
-`0700`. Agent Profile files, scope metadata, and Agent Profile-materialized
-Agent Configuration are `0600`; deactivation restores original native modes
-and existing Host Home directory modes are never changed.
+collection, Agent Profile catalog, Agent Profile, and Tenant Home boundary
+directories are `0700`. Agent Profile files and newly created Agent
+Configuration files are `0600`; applying a Profile preserves existing Agent
+Configuration modes, including for the Host Tenant. Existing Host Home
+directory modes are never changed.
 
-**Keep Agent Profile activation explicit and persistent.** A Run consumes
-native Agent Configuration and never injects or reapplies Agent Profile data.
-Agent Profile catalogs and Active Agent Profile state are local to one Tenant
-and Coding Agent. Activation snapshots the base and applied Agent Profile.
-Reconciliation is a three-way merge of applied, source, and working state;
-conflicts require explicit JSON Pointer choices.
+**Keep Profile Application explicit and one-shot.** A Run consumes native Agent
+Configuration and never reads or reapplies Agent Profile data. Each Agent
+Profile belongs to one Tenant and Coding Agent and defines only the fixed
+Profile Fields centralized in `AgentKind`. `profile apply` sets present fields,
+deletes missing fields, preserves unrelated native configuration, and retains
+no association with the Profile afterward. Do not add activation, drift,
+reconciliation, rollback, or transaction state.
 
 **Keep Agent permissions native.** Both built-in Agent Profile templates use
 native Agent Configuration for non-interactive, unrestricted operation. Do not
 add permission or sandbox flags to invocation arguments, or enable the Claude
-status line in its template. Claude Agent Profile `auth.json` is a string map
-projected into `settings.env`; Codex `auth.json` is whole-file ownership. Every
-Agent Profile auth file is mode `0600`.
+status line in its template. Claude Agent Profile `auth.json` allows only an
+optional string `ANTHROPIC_AUTH_TOKEN`, projected into `settings.env`; Codex
+`auth.json` must be a JSON object and replaces the native auth file as a whole.
+Every Agent Profile auth file is mode `0600`.
 
 **Keep Components optional, native, and independently owned.** Tenant
 initialization does not install status lines or toolchains. `component`
 operates only on Managed Tenants and derives state from native Tenant Home
-files without a registry. Status-line Components own only their script when
-applicable and their protected native configuration keys. Claude owns
-`/config/statusLine`; Codex owns `/config/tui/status_line` and
-`/config/tui/status_line_use_colors`. Agent Profiles exclude those paths and
-overlapping ownership is rejected.
-Expose repairable partial state as `incomplete`. Component removal requires
-explicit discard for modified/unmanaged state. Rust and Go install through the
-shared image with only the Tenant Home mounted; preserve Cargo and GOPATH user
-state across SDK replacement and removal.
-
-**Roll Agent Profile transactions forward.** State-changing Agent Profile
-commands first persist typed pending changes in the Agent/Tenant
-`.metadata.json`, then apply them idempotently and clear the pending record.
-Agent Profile commands, Runs, and status-line Component operations resume
-interrupted transactions. Pending records may identify only known Agent and
-Agent Profile files, never arbitrary paths. Do not add backup, restore,
-rollback, or filesystem-lock machinery.
+files without a registry. Status-line Components directly manage their script
+when applicable and their native configuration values. Status-line paths are
+not Profile Fields, so Profile Application preserves them without ownership or
+overlap machinery. Expose repairable partial state as `incomplete`. Component
+removal requires explicit discard for modified/unmanaged state. Rust and Go
+install through the shared image with only the Tenant Home mounted; preserve
+Cargo and GOPATH user state across SDK replacement and removal.
 
 **Use explicit destructive selection.** Tenant, Agent Profile, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
-and explicit selections are mutually exclusive. Explicit deletion rejects an
-Active Agent Profile; Agent Profile `--all` keeps it and deletes the inactive
-Agent Profiles.
+and explicit selections are mutually exclusive. Agent Profile deletion may
+remove safe invalid or incomplete Profile directories, but rejects unsafe
+entries.
 
 **Treat container-writable paths as untrusted.** Host-side reads, writes, and
 deletions reject symlinked or unexpected entries and validate relevant
@@ -94,15 +88,15 @@ user-like records warn and make `session list/get` nonzero without hiding an
 otherwise readable Transcript; deletion remains strict and format-independent.
 
 **Keep missing scopes quiet.** `profile list` and `session list` return empty for
-a missing Managed Tenant, `profile status` reports inactive, and `component list`
-reports every Component as not installed. Read-only commands and completion
-create nothing. `run`, `profile create`, and `component install` may initialize
-a missing Managed Tenant.
+a missing Managed Tenant, and `component list` reports every Component as not
+installed. Read-only commands and completion create nothing. `run`, `profile
+create`, and `component install` may initialize a missing Managed Tenant.
 
-**Do not imply cross-process coordination.** Tenant lifecycle and Agent Profile
-transactions recover their own interrupted filesystem work, but aibox provides
-no multi-process locking guarantee. One aibox process supports only one active
-container operation: a Run or toolchain installation.
+**Do not imply cross-process coordination.** Tenant lifecycle can recover its
+own interrupted filesystem work, but aibox provides no multi-process locking
+guarantee. Profile Application atomically replaces each changed file but is not
+atomic across files; rerunning it converges. One aibox process supports only one
+active container operation: a Run or toolchain installation.
 
 **Keep Run transient and the crate CLI-only.** Do not add Run History or a
 Run-to-Session mapping. A validated Run attempt may initialize its Tenant before

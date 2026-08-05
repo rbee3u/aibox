@@ -255,33 +255,7 @@ fn partial_statusline_installations_are_incomplete() {
 }
 
 #[test]
-fn profile_and_statusline_double_ownership_is_rejected_both_ways() {
-    let (_root, tenant) = initialized_tenant();
-    let selected = tenant.for_agent(AgentKind::Codex);
-
-    install_codex_statusline(&tenant).unwrap();
-    crate::profile::create_profile(&selected, "overlap").unwrap();
-    fs::write(
-        selected.profile_file("overlap", "config.toml"),
-        "[tui]\nstatus_line = [\"profile\"]\n",
-    )
-    .unwrap();
-    let error = crate::profile::activate_profile(&selected, "overlap", false)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("Component path /config/tui/status_line"),
-        "{error}"
-    );
-
-    remove_confirmed(&tenant, ComponentKind::CodexStatusline).unwrap();
-    crate::profile::activate_profile(&selected, "overlap", false).unwrap();
-    let error = install_codex_statusline(&tenant).unwrap_err().to_string();
-    assert!(error.contains("Active Agent Profile 'overlap'"), "{error}");
-}
-
-#[test]
-fn statusline_survives_profile_reconcile_switch_and_deactivate() {
+fn statusline_survives_repeated_profile_applications() {
     let (_root, tenant) = initialized_tenant();
     let selected = tenant.for_agent(AgentKind::Codex);
     for (name, model) in [("one", "one"), ("two", "two")] {
@@ -293,113 +267,41 @@ fn statusline_survives_profile_reconcile_switch_and_deactivate() {
         .unwrap();
     }
 
-    crate::profile::activate_profile(&selected, "one", false).unwrap();
     install_codex_statusline(&tenant).unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
-    let config = selected.state_file("config.toml");
-    let mut working = fs::read_to_string(&config).unwrap();
-    working.push_str("working_only = true\n");
-    fs::write(&config, working).unwrap();
-    crate::profile::reconcile_profile(
-        &selected,
-        &crate::cli::ReconcileArgs {
-            take_profile: Vec::new(),
-            take_config: Vec::new(),
-            take_profile_all: false,
-            take_config_all: false,
-        },
-    )
-    .unwrap();
-    assert!(
-        fs::read_to_string(selected.profile_file("one", "config.toml"))
-            .unwrap()
-            .contains("working_only")
-    );
-    assert!(
-        !fs::read_to_string(selected.profile_file("one", "config.toml"))
-            .unwrap()
-            .contains("status_line")
-    );
-
-    crate::profile::activate_profile(&selected, "two", false).unwrap();
+    crate::profile::apply_profile(&selected, "one").unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
-    crate::profile::deactivate_profile(&selected, false).unwrap();
+    crate::profile::apply_profile(&selected, "two").unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
+    let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
+    assert!(config.contains("model = \"two\""), "{config}");
+    assert!(config.contains("status_line ="), "{config}");
 }
 
-#[cfg(unix)]
 #[test]
-fn profile_deactivation_with_a_component_restores_the_base_file_mode() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let (_root, tenant) = initialized_tenant();
-    let selected = tenant.for_agent(AgentKind::Codex);
-    let config = selected.state_file("config.toml");
-    fs::write(&config, "model = \"base\"\n").unwrap();
-    fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
-    install_codex_statusline(&tenant).unwrap();
-
-    crate::profile::create_profile(&selected, "custom").unwrap();
-    fs::write(
-        selected.profile_file("custom", "config.toml"),
-        "model = \"profile\"\n",
-    )
-    .unwrap();
-    crate::profile::activate_profile(&selected, "custom", false).unwrap();
-    assert_eq!(
-        fs::metadata(&config).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-
-    crate::profile::deactivate_profile(&selected, false).unwrap();
-
-    assert_eq!(
-        fs::metadata(&config).unwrap().permissions().mode() & 0o777,
-        0o640
-    );
-    assert_eq!(
-        inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
-        ComponentStatus::Installed { version: None }
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn absent_component_configuration_stays_absent_after_profile_deactivation() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn statusline_install_after_profile_apply_needs_no_profile_coordination() {
     let (_root, tenant) = initialized_tenant();
     let selected = tenant.for_agent(AgentKind::Claude);
-    let script = selected.state_file("statusline.sh");
-    let settings = selected.state_file("settings.json");
-    fs::write(&script, CLAUDE_STATUSLINE).unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(
-        inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
-        ComponentStatus::Incomplete
-    );
-
     crate::profile::create_profile(&selected, "custom").unwrap();
-    crate::profile::activate_profile(&selected, "custom", false).unwrap();
-    assert!(settings.is_file());
+    crate::profile::apply_profile(&selected, "custom").unwrap();
 
-    crate::profile::deactivate_profile(&selected, false).unwrap();
-
-    assert!(!settings.exists());
-    assert!(script.is_file());
+    install_claude_statusline(&tenant).unwrap();
     assert_eq!(
         inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
-        ComponentStatus::Incomplete
+        ComponentStatus::Installed { version: None }
     );
+    let settings = fs::read_to_string(selected.state_file("settings.json")).unwrap();
+    assert!(settings.contains("ANTHROPIC_BASE_URL"), "{settings}");
+    assert!(settings.contains("statusLine"), "{settings}");
 }
 
 #[test]
@@ -625,21 +527,6 @@ fn go_remove_rejects_a_symlinked_sdk_without_touching_its_target() {
         fs::read(outside.path().join("keep")).unwrap(),
         b"outside sdk"
     );
-}
-
-#[test]
-fn statusline_install_does_not_rewrite_active_profile_metadata() {
-    let (_root, tenant) = initialized_tenant();
-    let selected = tenant.for_agent(AgentKind::Codex);
-    crate::profile::create_profile(&selected, "custom").unwrap();
-    crate::profile::activate_profile(&selected, "custom", false).unwrap();
-    let metadata = fs::read(selected.metadata_file()).unwrap();
-
-    install_codex_statusline(&tenant).unwrap();
-
-    assert_eq!(fs::read(selected.metadata_file()).unwrap(), metadata);
-    let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
-    assert!(config.contains("status_line ="), "{config}");
 }
 
 #[test]

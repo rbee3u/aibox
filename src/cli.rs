@@ -352,7 +352,7 @@ pub enum ProfileCommand {
         #[arg(long)]
         auth: bool,
     },
-    /// Delete one or more inactive Agent Profiles.
+    /// Delete one or more Agent Profiles.
     Delete {
         /// Agent Profile lowercase DNS labels to delete.
         #[arg(
@@ -362,59 +362,19 @@ pub enum ProfileCommand {
             conflicts_with = "all"
         )]
         profiles: Vec<String>,
-        /// Delete every inactive Agent Profile.
+        /// Delete every Agent Profile.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
     },
-    /// Materialize an Agent Profile into the selected Agent Configuration.
-    Activate {
-        /// Agent Profile lowercase DNS label to activate.
+    /// Apply every fixed Agent Profile field to the Agent Configuration once.
+    Apply {
+        /// Agent Profile lowercase DNS label to apply.
         #[arg(value_parser = parse_profile)]
         profile: String,
-        /// Irreversibly discard Agent Configuration changes since activation.
-        #[arg(long)]
-        discard_config_changes: bool,
     },
-    /// Restore the pre-activation Agent Configuration and clear activation.
-    Deactivate {
-        /// Irreversibly discard Agent Configuration changes since activation.
-        #[arg(long)]
-        discard_config_changes: bool,
-    },
-    /// Classify divergence between applied, source, and working configuration.
-    Status,
-    /// Show applied-to-working and applied-to-source changes.
-    Diff(ProfileDiffArgs),
-    /// Reconcile Agent Profile source and working Agent Configuration.
-    Reconcile(ReconcileArgs),
-}
-
-/// Output options for `profile diff`.
-#[derive(Debug, Args)]
-pub struct ProfileDiffArgs {
-    /// Show old and new values outside credential paths.
-    #[arg(long)]
-    pub show_values: bool,
-}
-
-/// Conflict-resolution options for `profile reconcile`.
-#[derive(Debug, Args)]
-pub struct ReconcileArgs {
-    /// Resolve a conflicting JSON Pointer with the Agent Profile source value.
-    #[arg(long = "take-profile", value_name = "JSON_POINTER")]
-    pub take_profile: Vec<String>,
-    /// Resolve a conflicting JSON Pointer with the Agent Configuration value.
-    #[arg(long = "take-config", value_name = "JSON_POINTER")]
-    pub take_config: Vec<String>,
-    /// Resolve every conflict with Agent Profile source values.
-    #[arg(long, conflicts_with = "take_config_all")]
-    pub take_profile_all: bool,
-    /// Resolve every conflict with Agent Configuration values.
-    #[arg(long, conflicts_with = "take_profile_all")]
-    pub take_config_all: bool,
 }
 
 /// Agent- and Tenant-scoped Session browsing arguments.
@@ -611,53 +571,19 @@ mod tests {
     }
 
     #[test]
-    fn removed_profile_apply_is_rejected() {
-        assert_parse_error(
-            &["aibox", "profile", "apply", "custom"],
-            ErrorKind::InvalidSubcommand,
-        );
-        assert_parse_error(&["aibox", "provider", "list"], ErrorKind::InvalidSubcommand);
-    }
-
-    #[test]
-    fn profile_diff_values_are_explicit_and_reconcile_uses_profile_wording() {
-        let cli = Cli::try_parse_from(["aibox", "profile", "diff", "--show-values"]).unwrap();
+    fn profile_apply_is_supported_and_removed_lifecycle_commands_are_rejected() {
+        let cli = Cli::try_parse_from(["aibox", "profile", "apply", "custom"]).unwrap();
         let Command::Profile(args) = cli.command else {
             panic!("expected profile command");
         };
-        let ProfileCommand::Diff(args) = args.command else {
-            panic!("expected profile diff");
-        };
-        assert!(args.show_values);
-
-        Cli::try_parse_from([
-            "aibox",
-            "profile",
-            "reconcile",
-            "--take-profile",
-            "/config/model",
-        ])
-        .unwrap();
-        assert_parse_error(
-            &[
-                "aibox",
-                "profile",
-                "reconcile",
-                "--take-provider",
-                "/config/model",
-            ],
-            ErrorKind::UnknownArgument,
-        );
-
-        let error = Cli::try_parse_from([
-            "aibox",
-            "profile",
-            "reconcile",
-            "--take-profile-all",
-            "--take-config-all",
-        ])
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        assert!(matches!(
+            args.command,
+            ProfileCommand::Apply { profile } if profile == "custom"
+        ));
+        for command in ["activate", "deactivate", "status", "diff", "reconcile"] {
+            assert_parse_error(&["aibox", "profile", command], ErrorKind::InvalidSubcommand);
+        }
+        assert_parse_error(&["aibox", "provider", "list"], ErrorKind::InvalidSubcommand);
     }
 
     #[test]

@@ -13,7 +13,7 @@ persistent in named Tenants.
 - **Explicit host access.** A Run sees its Workspace, Tenant Home, and only the
   Extra Mounts supplied on that command.
 - **Native configuration.** Runs use the Coding Agent's real configuration
-  files. Agent Profiles are activated explicitly and never reapplied by a Run.
+  files. Agent Profiles are applied explicitly and never reapplied by a Run.
 
 ## Quick Start
 
@@ -62,8 +62,8 @@ enabled; credentials can authorize remote actions; writable mounts can be
 changed or deleted; and aibox adds no CPU or memory limits. The built-in Agent
 Profile templates created by `profile create` disable Coding Agent approval
 prompts because Docker is the Filesystem Sandbox. Agent Profiles are never
-created or activated automatically. Review or edit native Agent Configuration
-before activation when a more restrictive policy is required.
+created or applied automatically. Review the template before applying it when
+a more restrictive policy is required.
 
 See [Sandbox and Mounts](docs/sandbox.md) for mount validation and container
 cleanup behavior.
@@ -102,33 +102,27 @@ aibox component remove rust --tenant work --yes
 
 Omitting a Rust or Go version installs the current stable release. Toolchain
 installation uses the shared Docker image and requires `aibox build`; status
-lines own protected native Agent Configuration paths independently of Agent
-Profiles. See
-[Tenant Components](docs/tenants.md#tenant-components) for replacement and
-Agent Profile interaction semantics.
+lines directly edit their native Agent Configuration values. See
+[Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
+replacement semantics.
 
 ## Agent Profiles
 
-An Agent Profile belongs to exactly one Tenant and one Coding Agent. Create its
-native settings and credentials, activate it, then inspect later source or
-working changes:
+An Agent Profile belongs to exactly one Tenant and one Coding Agent. It accepts
+a fixed set of native settings and credentials and applies them once:
 
 ```sh
 aibox profile create custom
 aibox profile edit custom
 aibox profile edit custom --auth
-aibox profile activate custom
-aibox profile status
-aibox profile diff
-aibox profile diff --show-values
+aibox profile apply custom
 ```
 
-The Coding Agent or user may continue editing native Agent Configuration after
-activation. `profile reconcile` three-way merges those working changes with
-Agent Profile source changes, while a Run continues with native Agent
-Configuration unchanged. Read [Agent Profiles](docs/profiles.md) for switching
-and deactivation, conflict resolution, credentials, Host Tenant usage, and
-interrupted-operation recovery.
+Application overwrites or removes every fixed Profile Field and preserves
+unrelated native settings such as status-line configuration. It records no
+active Profile, backup, or rollback state. Read
+[Agent Profiles](docs/profiles.md) for the exact schema, credentials, Host
+Tenant risks, file modes, and partial-write behavior.
 
 ## Sessions
 
@@ -173,7 +167,7 @@ Add the matching command to your shell startup file.
 Completion evaluates command-aware candidates on demand, including existing
 Managed Tenants, Agent Profiles, Sessions, and the fixed Component catalog.
 Discovery is host-side and read-only: it does not create a missing Managed
-Tenant or resume an interrupted Agent Profile transaction.
+Tenant or modify Agent Configuration.
 
 ## Learn More
 
@@ -181,8 +175,8 @@ Tenant or resume an interrupted Agent Profile transaction.
   documentation.
 - [Tenants](docs/tenants.md): persistent state, Host Tenant, layout, Sessions,
   deletion, and Components.
-- [Agent Profiles](docs/profiles.md): activation, reconciliation, secrets, and
-  resumable transactions.
+- [Agent Profiles](docs/profiles.md): fixed fields, one-time application,
+  credentials, and filesystem behavior.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
   cleanup, and custom images.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned

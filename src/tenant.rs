@@ -7,17 +7,14 @@
 use crate::agent::AgentKind;
 use crate::cli::TenantCommand;
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Collection containing all managed Tenant Homes.
 pub const TENANTS_DIR: &str = "tenants";
-/// Storage key used for Host Tenant metadata outside valid Managed Tenant names.
+/// Storage key used for the Host Tenant Profile catalog outside valid names.
 pub const HOST_STORAGE_KEY: &str = "__host";
-/// Agent/Tenant metadata file containing Agent Profile state.
-pub const SCOPE_METADATA_FILE: &str = ".metadata.json";
 const CREATING_PREFIX: &str = "$creating-";
 const DELETING_PREFIX: &str = "$deleting-";
 const GITCONFIG: &[u8] = b"[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n";
@@ -41,7 +38,7 @@ pub enum Tenant {
     Host {
         /// Real host Home containing native Coding Agent state.
         home_dir: PathBuf,
-        /// Root containing host-only aibox metadata.
+        /// Root containing host-only aibox state.
         root_dir: PathBuf,
     },
 }
@@ -55,7 +52,7 @@ pub struct TenantAgent {
     pub agent: AgentKind,
     /// Native Coding Agent state directory.
     pub agent_state_dir: PathBuf,
-    metadata_dir: PathBuf,
+    profile_catalog_dir: PathBuf,
 }
 
 impl ManagedTenant {
@@ -86,13 +83,13 @@ impl ManagedTenant {
             return ensure_home_baseline(&self.home_dir);
         }
 
-        // A missing authoritative Home makes same-name Agent metadata orphaned.
+        // A missing authoritative Home makes same-name Profile catalogs orphaned.
         // Complete any old deletion before establishing a fresh identity.
         remove_real_dir_if_exists(&self.deleting_dir(), "stale Tenant deletion")?;
         for agent in AgentKind::ALL {
             remove_real_dir_if_exists(
                 &self.root_dir.join(agent.tag()).join(&self.name),
-                "orphaned Agent/Tenant metadata",
+                "orphaned Agent Profile catalog",
             )?;
         }
 
@@ -152,12 +149,12 @@ impl Tenant {
     /// Select one Coding Agent in this Tenant.
     pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         let home = self.home_dir().to_path_buf();
-        let metadata_dir = self.root().join(agent.tag()).join(self.storage_key());
+        let profile_catalog_dir = self.root().join(agent.tag()).join(self.storage_key());
         TenantAgent {
             tenant: self.clone(),
             agent,
             agent_state_dir: home.join(agent.state_dir_name()),
-            metadata_dir,
+            profile_catalog_dir,
         }
     }
 
@@ -203,8 +200,8 @@ impl TenantAgent {
         self.tenant.home_dir()
     }
 
-    /// Ensure the Tenant and Agent/Tenant metadata directory exist.
-    pub fn ensure_for_management(&self) -> Result<()> {
+    /// Ensure the Tenant and Tenant-local Agent Profile catalog exist.
+    pub fn ensure_profile_catalog(&self) -> Result<()> {
         match &self.tenant {
             Tenant::Managed(tenant) => tenant.ensure_initialized()?,
             Tenant::Host { home_dir, .. } => require_host_home(home_dir)?,
@@ -212,9 +209,9 @@ impl TenantAgent {
         ensure_real_dir(self.tenant.root(), "aibox root")?;
         ensure_real_dir(
             &self.tenant.root().join(self.agent.tag()),
-            "Coding Agent metadata collection",
+            "Coding Agent Profile catalog collection",
         )?;
-        ensure_real_dir(&self.metadata_dir, "Agent/Tenant metadata directory")
+        ensure_real_dir(&self.profile_catalog_dir, "Agent Profile catalog")
     }
 
     /// Ensure the selected native Agent state directory exists.
@@ -235,40 +232,19 @@ impl TenantAgent {
         Ok(())
     }
 
-    /// Require an existing Home and reject an unsafe Agent state entry.
-    ///
-    /// The Agent state directory may be absent in the Host Tenant; callers that
-    /// need it to exist must use [`Self::ensure_agent_state_dir`].
-    pub fn validate_existing(&self) -> Result<()> {
-        match &self.tenant {
-            Tenant::Managed(tenant) if !tenant.exists()? => {
-                bail!("Managed Tenant '{}' does not exist", tenant.name)
-            }
-            Tenant::Managed(_) => {}
-            Tenant::Host { home_dir, .. } => require_host_home(home_dir)?,
-        }
-        real_dir_exists(&self.agent_state_dir, "Agent state directory")?;
-        Ok(())
-    }
-
     /// File path within the selected native Agent state directory.
     pub fn state_file(&self, file_name: &str) -> PathBuf {
         self.agent_state_dir.join(file_name)
     }
 
-    /// Agent/Tenant metadata directory containing Agent Profile directories.
-    pub fn metadata_dir(&self) -> &Path {
-        &self.metadata_dir
-    }
-
-    /// Active Agent Profile and pending transaction metadata file.
-    pub fn metadata_file(&self) -> PathBuf {
-        self.metadata_dir.join(SCOPE_METADATA_FILE)
+    /// Directory containing Tenant- and Coding Agent-local Profiles.
+    pub fn profile_catalog_dir(&self) -> &Path {
+        &self.profile_catalog_dir
     }
 
     /// One Tenant- and Coding Agent-local Agent Profile directory.
     pub fn profile_dir(&self, profile: &str) -> PathBuf {
-        self.metadata_dir.join(profile)
+        self.profile_catalog_dir.join(profile)
     }
 
     /// One file in an Agent Profile definition.
@@ -276,16 +252,16 @@ impl TenantAgent {
         self.profile_dir(profile).join(file_name)
     }
 
-    /// Whether the metadata directory currently exists.
-    pub fn metadata_dir_exists(&self) -> Result<bool> {
+    /// Whether the Agent Profile catalog currently exists.
+    pub fn profile_catalog_exists(&self) -> Result<bool> {
         if matches!(&self.tenant, Tenant::Managed(tenant) if !tenant.exists()?) {
             return Ok(false);
         }
         let collection = self.tenant.root().join(self.agent.tag());
-        if !real_dir_exists(&collection, "Coding Agent metadata collection")? {
+        if !real_dir_exists(&collection, "Coding Agent Profile catalog collection")? {
             return Ok(false);
         }
-        real_dir_exists(&self.metadata_dir, "Agent/Tenant metadata directory")
+        real_dir_exists(&self.profile_catalog_dir, "Agent Profile catalog")
     }
 }
 
@@ -397,8 +373,8 @@ fn delete_one(root: &Path, name: &str) -> Result<()> {
     }
     for agent in AgentKind::ALL {
         let collection = root.join(agent.tag());
-        if real_dir_exists(&collection, "Coding Agent metadata collection")? {
-            remove_real_dir_if_exists(&collection.join(name), "Agent/Tenant metadata directory")?;
+        if real_dir_exists(&collection, "Coding Agent Profile catalog collection")? {
+            remove_real_dir_if_exists(&collection.join(name), "Agent Profile catalog")?;
         }
     }
     if tenants_exist {
@@ -420,8 +396,8 @@ fn tenant_has_data(root: &Path, name: &str) -> Result<bool> {
     }
     for agent in AgentKind::ALL {
         let collection = root.join(agent.tag());
-        if real_dir_exists(&collection, "Coding Agent metadata collection")?
-            && real_dir_exists(&collection.join(name), "Agent/Tenant metadata directory")?
+        if real_dir_exists(&collection, "Coding Agent Profile catalog collection")?
+            && real_dir_exists(&collection.join(name), "Agent Profile catalog")?
         {
             return Ok(true);
         }
@@ -708,33 +684,12 @@ pub fn set_600(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Serializable native file snapshot used by Agent Profile state and
-/// transactions.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+/// Size-bounded snapshot of one optional native file.
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct FileSnapshot {
     pub present: bool,
-    #[serde(with = "utf8_bytes")]
     pub content: Vec<u8>,
     pub mode: Option<u32>,
-}
-
-mod utf8_bytes {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let value = std::str::from_utf8(bytes).map_err(serde::ser::Error::custom)?;
-        serializer.serialize_str(value)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(String::deserialize(deserializer)?.into_bytes())
-    }
 }
 
 impl FileSnapshot {
@@ -920,7 +875,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let managed = ManagedTenant::resolve(root.path(), "host").unwrap();
         assert_eq!(
-            managed.for_agent(AgentKind::Codex).metadata_dir(),
+            managed.for_agent(AgentKind::Codex).profile_catalog_dir(),
             root.path().join("codex/host")
         );
         let host = Tenant::Host {
@@ -928,7 +883,7 @@ mod tests {
             root_dir: root.path().to_path_buf(),
         };
         assert_eq!(
-            host.for_agent(AgentKind::Codex).metadata_dir(),
+            host.for_agent(AgentKind::Codex).profile_catalog_dir(),
             root.path().join("codex/__host")
         );
     }
@@ -953,9 +908,9 @@ mod tests {
         tenant.ensure_initialized().unwrap();
         tenant.ensure_initialized().unwrap();
         for agent in AgentKind::ALL {
-            let metadata = root.path().join(agent.tag()).join("work");
-            fs::create_dir_all(&metadata).unwrap();
-            fs::write(metadata.join("owned"), b"metadata").unwrap();
+            let catalog = root.path().join(agent.tag()).join("work");
+            fs::create_dir_all(&catalog).unwrap();
+            fs::write(catalog.join("owned"), b"profile data").unwrap();
         }
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
@@ -1026,7 +981,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn orphaned_agent_metadata_symlinks_block_tenant_publication() {
+    fn orphaned_profile_catalog_symlinks_block_tenant_publication() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -1048,7 +1003,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn interrupted_delete_rejects_linked_metadata_and_rolls_forward_safely() {
+    fn interrupted_delete_rejects_linked_profile_catalog_and_rolls_forward_safely() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -1057,8 +1012,8 @@ mod tests {
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
         fs::create_dir(root.path().join("claude")).unwrap();
-        let linked_metadata = root.path().join("claude/work");
-        symlink(outside.path(), &linked_metadata).unwrap();
+        let linked_catalog = root.path().join("claude/work");
+        symlink(outside.path(), &linked_catalog).unwrap();
 
         let error = delete_tenants(root.path(), &["work".to_string()], false, true)
             .unwrap_err()
@@ -1069,7 +1024,7 @@ mod tests {
         assert!(!tenant.home_dir.exists());
         assert!(root.path().join("tenants/$deleting-work").is_dir());
 
-        fs::remove_file(linked_metadata).unwrap();
+        fs::remove_file(linked_catalog).unwrap();
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
 
         assert!(!root.path().join("tenants/$deleting-work").exists());

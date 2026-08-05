@@ -56,32 +56,31 @@ _Avoid_: Namespace Home, profile home
 
 **Tenant Component**:
 An optional capability installed into one Managed Tenant's Tenant Home, such
-as a Coding Agent status line or a Tenant-local toolchain. A Tenant Component
-owns its native state independently of any Agent Profile.
+as a Coding Agent status line or a Tenant-local toolchain. Status-line
+Components directly modify native Agent Configuration.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration and history
 
 **Agent Configuration**:
-The native configuration files read and directly modified by a Coding Agent,
-its TUI, or the user.
+The current native configuration files consumed by a Coding Agent and directly
+modified by aibox, the Coding Agent, its TUI, or the user.
 _Avoid_: Active config, generated config
 
 **Agent Profile**:
-A named set of owned native Agent Configuration and credentials belonging to
-exactly one Tenant and one Coding Agent.
+A named, Agent-specific set of Profile Field values belonging to exactly one
+Tenant and one Coding Agent.
 _Avoid_: Global Agent Profile, permission profile, preset
 
-**Active Agent Profile**:
-The zero or one Agent Profile currently materialized in one Tenant and Coding
-Agent scope and tracked for later comparison or deactivation.
-_Avoid_: Last-applied Agent Profile, selected Agent Profile
+**Profile Field**:
+One fixed logical location in an Agent Profile schema. A Profile Field may be a
+native setting, one credential value, or the complete Codex credential object.
+_Avoid_: Owned path, managed slot
 
-**Reconciliation**:
-The three-way resolution of changes to Agent Profile source and working Agent
-Configuration since activation. Working-only changes become Agent Profile
-source ownership unless they belong to a Tenant Component.
-_Avoid_: Reapply, reset, sync
+**Profile Application**:
+A one-time operation that sets every present Profile Field and removes every
+absent Profile Field from Agent Configuration without retaining a relationship.
+_Avoid_: Activation, materialization, reconciliation
 
 **Session**:
 One interaction record created by a Coding Agent and discovered independently
