@@ -182,6 +182,15 @@ impl TrafficStore {
             .with_context(|| format!("create Traffic Record {}", directory.display()))?;
         restrict_dir(&directory)?;
 
+        // Publish the in-memory active marker before any record files become
+        // complete enough for a concurrent management scan to observe. This
+        // prevents an in-flight request from being classified as interrupted
+        // and selected for deletion during the metadata/body setup window.
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone());
+
         let created = (|| -> Result<_> {
             let request_body = create_private_file(&directory.join(REQUEST_BODY))?;
             let response_body = create_private_file(&directory.join(RESPONSE_BODY))?;
@@ -203,14 +212,14 @@ impl TrafficStore {
         let (request_body, response_body, request) = match created {
             Ok(value) => value,
             Err(error) => {
+                self.active
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&id);
                 let _ = remove_controlled_record_dir(&directory);
                 return Err(error);
             }
         };
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.clone());
         Ok((
             NewRecord {
                 id,

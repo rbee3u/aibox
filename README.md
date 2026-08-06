@@ -163,6 +163,9 @@ the viewer at `http://127.0.0.1:9923/`:
 aibox traffic
 ```
 
+Traffic viewer development commands and the embedded asset workflow are
+documented in [Traffic UI Development](docs/traffic-ui.md).
+
 Point a model provider at the proxy by placing its complete upstream base URL
 after the local address. For Codex inside an aibox container:
 

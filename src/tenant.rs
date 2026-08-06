@@ -87,10 +87,13 @@ impl ManagedTenant {
         // Complete any old deletion before establishing a fresh identity.
         remove_real_dir_if_exists(&self.deleting_dir(), "stale Tenant deletion")?;
         for agent in AgentKind::ALL {
-            remove_real_dir_if_exists(
-                &self.root_dir.join(agent.tag()).join(&self.name),
-                "orphaned Named Config catalog",
-            )?;
+            let collection = self.root_dir.join(agent.tag());
+            if real_dir_exists(&collection, "Named Config catalog collection")? {
+                remove_real_dir_if_exists(
+                    &collection.join(&self.name),
+                    "orphaned Named Config catalog",
+                )?;
+            }
         }
 
         let creating = self.creating_dir();
@@ -1001,6 +1004,28 @@ mod tests {
             "an unsafe orphan must be rejected before publishing a new identity"
         );
         assert_eq!(fs::read(outside.path().join("keep")).unwrap(), b"outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_config_collection_is_rejected_before_orphan_cleanup() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("work")).unwrap();
+        fs::write(outside.path().join("work/keep"), b"outside").unwrap();
+        symlink(outside.path(), root.path().join("claude")).unwrap();
+        let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+
+        let error = tenant.ensure_initialized().unwrap_err().to_string();
+
+        assert!(error.contains("not a real directory"), "{error}");
+        assert!(!tenant.home_dir.exists());
+        assert_eq!(
+            fs::read(outside.path().join("work/keep")).unwrap(),
+            b"outside"
+        );
     }
 
     #[cfg(unix)]

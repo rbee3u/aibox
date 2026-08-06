@@ -396,6 +396,21 @@ fn empty_config_keeps_missing_agent_files_absent() {
     }
 }
 
+#[test]
+fn apply_materializes_missing_codex_auth_file() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+
+    apply_named_config(&selected, "custom").unwrap();
+
+    assert!(selected.state_file("config.toml").is_file());
+    assert_eq!(
+        fs::read_to_string(selected.state_file("auth.json")).unwrap(),
+        "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn apply_preserves_existing_modes_and_uses_0600_for_new_files() {

@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --line: #e1e5ea;
+  --ink: #1c2330;
+  --muted: #687386;
+  --accent: #5b54dc;
+  --accent-soft: #f0efff;
+  --danger: #c43232;
+  --danger-soft: #fff0f0;
+  --green: #17825c;
+  --green-soft: #edf9f3;
+  --orange: #bb681d;
+  font-family:
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--ink);
+  background: var(--panel);
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: #b7beca;
+  background: #fafbfc;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #b9b5ff;
+  outline-offset: 2px;
+}
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

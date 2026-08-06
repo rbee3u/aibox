@@ -343,8 +343,15 @@ pub fn apply_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
         desired.main,
         &mut writes,
     );
-    if let (Some(file), Some(current)) = (selected.agent.native_auth_file(), current_auth.as_ref())
-    {
+    if let Some(file) = selected.agent.native_auth_file() {
+        // A missing Current auth file is still a writable target: applying a
+        // Named Config must materialize its complete native auth object.
+        let absent = FileSnapshot {
+            present: false,
+            content: Vec::new(),
+            mode: None,
+        };
+        let current = current_auth.as_ref().unwrap_or(&absent);
         collect_agent_write(file, current, desired.auth, &mut writes);
     }
     if writes.is_empty() {

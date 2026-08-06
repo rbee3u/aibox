@@ -1,0 +1,54 @@
+.root,
+.value,
+.recording,
+.compactRecording,
+.warning {
+  display: inline-flex;
+  align-items: center;
+}
+.root {
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+}
+.value {
+  gap: 4px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.success {
+  color: var(--green);
+}
+.neutral {
+  color: var(--muted);
+}
+.error,
+.warning,
+.anomaly {
+  color: var(--danger);
+}
+.active,
+.recording,
+.compactRecording {
+  color: var(--orange);
+}
+.recording,
+.anomaly {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.recording {
+  gap: 4px;
+}
+.compactRecording,
+.warning {
+  flex: 0 0 auto;
+}
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}

@@ -1,0 +1,191 @@
+.panel {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+}
+.listHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 12px 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.listHeader h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.2;
+}
+.headerActions,
+.selectionActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.headerActions button,
+.selectionActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.refreshButton {
+  width: 31px;
+  height: 31px;
+  padding: 0;
+}
+.deleteAll {
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+  padding: 6px 7px;
+}
+.deleteAll:hover:not(:disabled) {
+  border-color: #efcaca;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.refreshing {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.tools,
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.selectPage {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.selectionActions {
+  min-width: 0;
+  white-space: nowrap;
+}
+.deleteSelected {
+  padding: 6px 8px;
+}
+.records {
+  min-height: 0;
+  overflow: auto;
+}
+.empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 160px;
+  padding: 30px;
+  color: var(--muted);
+  text-align: center;
+}
+.empty p {
+  margin: 0;
+}
+.record {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 5px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf0f3;
+}
+.current {
+  box-shadow: inset 3px 0 var(--accent);
+  background: var(--accent-soft);
+}
+.record > input {
+  margin-top: 9px;
+}
+.rowButton {
+  display: grid;
+  grid-template-columns: 55px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.rowButton:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+.method {
+  padding-top: 2px;
+  color: var(--accent);
+  font:
+    700 11px/20px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.main strong,
+.main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.main span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.side {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.pagination {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+.pagination button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.pagination button {
+  padding: 6px 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .refreshing {
+    animation: none;
+  }
+}
+@media (max-width: 380px) {
+  .deleteSelectedLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}

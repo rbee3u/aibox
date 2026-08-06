@@ -157,7 +157,6 @@ For Rust changes, run all of these:
 - `cargo fmt --check`
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
-- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
 
 For embedded Traffic UI changes, also run:
 

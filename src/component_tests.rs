@@ -191,6 +191,26 @@ fn claude_statusline_install_overwrites_owned_state_and_preserves_other_settings
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn statusline_install_creates_missing_current_configs_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_root, tenant) = initialized_tenant();
+    install_claude_statusline(&tenant).unwrap();
+    install_codex_statusline(&tenant).unwrap();
+
+    for path in [
+        tenant.home_dir.join(".claude/settings.json"),
+        tenant.home_dir.join(".codex/config.toml"),
+    ] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}
+
 #[test]
 fn codex_statusline_install_preserves_unrelated_toml_and_comments() {
     let (_root, tenant) = initialized_tenant();

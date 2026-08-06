@@ -514,7 +514,7 @@ fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
         write_atomic(
             &settings_path,
             content.as_bytes(),
-            settings.mode.or(Some(0o644)),
+            settings.mode.or(Some(0o600)),
         )?;
     }
     Ok(0)
@@ -558,7 +558,7 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
     tui.insert("status_line_use_colors", toml_edit::value(true));
     let desired = document.to_string();
     if !setting_matches {
-        write_atomic(&path, desired.as_bytes(), config.mode.or(Some(0o644)))?;
+        write_atomic(&path, desired.as_bytes(), config.mode.or(Some(0o600)))?;
     }
     Ok(0)
 }

@@ -1,0 +1,138 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+}
+.topbar {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand > div {
+  display: grid;
+  gap: 1px;
+}
+.brand strong {
+  font-size: 15px;
+}
+.brand span:not(.mark) {
+  color: var(--muted);
+  font-size: 12px;
+}
+.mark {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.resources {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 14px;
+}
+.resources a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 2px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.resources a:hover {
+  color: var(--accent);
+}
+.resources a:focus-visible {
+  outline: 3px solid #b9b5ff;
+  outline-offset: 2px;
+}
+.bannerWrap {
+  padding: 10px 16px 0;
+  background: var(--bg);
+}
+.main {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(340px, 31%) minmax(0, 1fr);
+  gap: 1px;
+  min-height: 0;
+  background: var(--line);
+}
+.emptyDetail {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  min-width: 0;
+  min-height: 420px;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--panel);
+}
+.emptyDetail h1 {
+  margin: 13px 0 5px;
+  color: var(--ink);
+  font-size: 20px;
+}
+.emptyDetail p {
+  margin: 0;
+}
+.loader {
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader {
+    animation: none;
+  }
+}
+@media (max-width: 800px) {
+  .app {
+    height: auto;
+    overflow: visible;
+  }
+  .topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+  }
+  .resources {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+  .main {
+    flex: none;
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+  .emptyDetail {
+    min-height: 360px;
+  }
+}

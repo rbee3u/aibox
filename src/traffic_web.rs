@@ -64,12 +64,12 @@ fn validate_management_request(
         .headers()
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
-    let expected_origin = format!("http://{expected}");
-    if origin.is_some_and(|origin| !origin.eq_ignore_ascii_case(&expected_origin)) {
+    let origin_allowed = origin.is_some_and(|origin| allowed_loopback_origin(origin, state.port));
+    if origin.is_some() && !origin_allowed {
         return Err("invalid Origin for the Traffic management interface".to_string());
     }
     if !matches!(*request.method(), Method::GET | Method::HEAD) {
-        if origin != Some(expected_origin.as_str()) {
+        if !origin_allowed {
             return Err("mutating management requests require the loopback Origin".to_string());
         }
         let token = request
@@ -81,6 +81,16 @@ fn validate_management_request(
         }
     }
     Ok(())
+}
+
+fn allowed_loopback_origin(origin: &str, port: u16) -> bool {
+    [
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+        format!("http://[::1]:{port}"),
+    ]
+    .iter()
+    .any(|allowed| origin.eq_ignore_ascii_case(allowed))
 }
 
 fn secure_response(mut response: Response<Body>) -> Response<Body> {
@@ -513,6 +523,26 @@ mod tests {
                 Method::POST,
                 Some("127.0.0.1:9923"),
                 Some("http://127.0.0.1:9923"),
+                Some("same-origin"),
+                Some(true),
+                None,
+            ),
+            (
+                "localhost authenticated POST",
+                "127.0.0.1:40000",
+                Method::POST,
+                Some("localhost:9923"),
+                Some("http://localhost:9923"),
+                Some("same-origin"),
+                Some(true),
+                None,
+            ),
+            (
+                "IPv6 authenticated POST",
+                "[::1]:40000",
+                Method::POST,
+                Some("[::1]:9923"),
+                Some("http://[::1]:9923"),
                 Some("same-origin"),
                 Some(true),
                 None,
