@@ -1,8 +1,8 @@
-use super::store::{
+use crate::traffic::AppState;
+use crate::traffic_store::{
     utc_now, ErrorMetadata, NewRecord, Outcome, RecordedHeader, ResponseMetadata, ResponseSource,
     RuntimeMeasurements, TrafficStore,
 };
-use super::AppState;
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, Request, Response, StatusCode, Version};

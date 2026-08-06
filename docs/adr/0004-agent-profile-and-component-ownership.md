@@ -1,7 +1,7 @@
 # Separate Agent Profile and Tenant Component ownership
 
 Status: superseded by
-[ADR 0005](0005-one-time-fixed-field-profile-application.md).
+[ADR 0005](0005-one-time-fixed-field-config-application.md).
 
 Each Tenant and Coding Agent scope has at most one Active Agent Profile.
 Reconciliation automatically adopts working-only changes into that Agent

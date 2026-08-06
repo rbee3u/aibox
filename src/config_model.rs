@@ -1,22 +1,20 @@
-//! Fixed Agent Profile schema validation and one-time application.
+//! Fixed Named Config schema validation and one-time application.
 
-use crate::agent::{AgentKind, ProfileAuthKind, ProfileField, ProfileValueKind};
+use crate::agent::{AgentKind, ConfigField, ConfigValueKind};
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
 use std::str::FromStr;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-const CLAUDE_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
-
-/// A validated Agent Profile definition in native main/auth formats.
+/// A validated Named Config definition in native main/auth formats.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ProfileDefinition {
+pub(crate) struct NamedConfigDefinition {
     agent: AgentKind,
     main: Map<String, Value>,
-    auth: Map<String, Value>,
+    auth: Option<Map<String, Value>>,
 }
 
-/// Desired native Agent Configuration files after one Profile Application.
+/// Desired native Current Config files after one Config Application.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplicationResult {
     /// Desired main file; `None` preserves an absent, semantically empty file.
@@ -25,24 +23,46 @@ pub(crate) struct ApplicationResult {
     pub(crate) auth: Option<String>,
 }
 
-impl ProfileDefinition {
-    /// Parse and validate the fixed Profile Fields for one Coding Agent.
-    pub(crate) fn parse(agent: AgentKind, main: &str, auth: &str) -> Result<Self> {
+impl NamedConfigDefinition {
+    /// Parse and validate the fixed Config Fields for one Coding Agent.
+    pub(crate) fn parse(agent: AgentKind, main: &str, auth: Option<&str>) -> Result<Self> {
         let main = agent
             .parse_main_config(main)
-            .context("parse Agent Profile main configuration")?;
-        validate_profile_main(agent, &main)?;
+            .context("parse Named Config main configuration")?;
+        validate_config_main(agent, &main)?;
 
-        let auth = parse_json_object(auth, "Agent Profile auth.json")?;
-        match agent.profile_auth_kind() {
-            ProfileAuthKind::ClaudeToken => validate_claude_auth(&auth)?,
-            ProfileAuthKind::CodexObject => {}
-        }
+        let auth = match agent {
+            AgentKind::Claude => {
+                if auth.is_some() {
+                    bail!("Claude Named Config does not use auth.json");
+                }
+                None
+            }
+            AgentKind::Codex => Some(parse_json_object(
+                auth.context("Codex Named Config auth.json is missing")?,
+                "Named Config auth.json",
+            )?),
+        };
 
         Ok(Self { agent, main, auth })
     }
 
-    /// Apply every fixed Profile Field to the current native configuration.
+    /// Validate one independently editable file in a Named Config.
+    pub(crate) fn validate_file(agent: AgentKind, file: &str, content: &str) -> Result<()> {
+        if file == agent.main_config_file() {
+            let main = agent
+                .parse_main_config(content)
+                .context("parse Named Config main configuration")?;
+            return validate_config_main(agent, &main);
+        }
+        if agent.native_auth_file() == Some(file) {
+            parse_json_object(content, "Named Config auth.json")?;
+            return Ok(());
+        }
+        bail!("unsupported Named Config file: {file}")
+    }
+
+    /// Apply every fixed Config Field to the current native configuration.
     pub(crate) fn apply(
         &self,
         current_main: Option<&str>,
@@ -59,10 +79,10 @@ impl ProfileDefinition {
         let mut configuration = self
             .agent
             .parse_main_config(current_main.unwrap_or("{}"))
-            .context("parse Agent Configuration settings.json")?;
+            .context("parse Current Config settings.json")?;
         let mut changed = false;
 
-        for field in self.agent.profile_fields() {
+        for field in self.agent.config_fields() {
             match value_at_path(&self.main, field.path) {
                 Some(value) => {
                     changed |= set_json_path(&mut configuration, field.path, value.clone())
@@ -70,17 +90,6 @@ impl ProfileDefinition {
                 None => changed |= remove_json_path(&mut configuration, field.path),
             }
         }
-        match self.auth.get(CLAUDE_AUTH_TOKEN) {
-            Some(value) => {
-                changed |= set_json_path(
-                    &mut configuration,
-                    &["env", CLAUDE_AUTH_TOKEN],
-                    value.clone(),
-                );
-            }
-            None => changed |= remove_json_path(&mut configuration, &["env", CLAUDE_AUTH_TOKEN]),
-        }
-
         let main = if current_main.is_none() && configuration.is_empty() {
             None
         } else if !changed && !original.trim().is_empty() {
@@ -89,7 +98,7 @@ impl ProfileDefinition {
             Some(
                 self.agent
                     .render_main_config(&Value::Object(configuration))
-                    .context("render Agent Configuration settings.json")?,
+                    .context("render Current Config settings.json")?,
             )
         };
         Ok(ApplicationResult { main, auth: None })
@@ -104,10 +113,10 @@ impl ProfileDefinition {
         let mut document = if original_main.trim().is_empty() {
             DocumentMut::new()
         } else {
-            DocumentMut::from_str(original_main).context("parse Agent Configuration config.toml")?
+            DocumentMut::from_str(original_main).context("parse Current Config config.toml")?
         };
         let mut changed = false;
-        for field in self.agent.profile_fields() {
+        for field in self.agent.config_fields() {
             match value_at_path(&self.main, field.path) {
                 Some(value) => changed |= set_codex_path(&mut document, field.path, value)?,
                 None => changed |= remove_codex_path(&mut document, field.path),
@@ -121,21 +130,20 @@ impl ProfileDefinition {
             Some(document.to_string())
         };
 
-        let current_auth_object = parse_json_object(
-            current_auth.unwrap_or("{}"),
-            "Agent Configuration auth.json",
-        )?;
-        let auth = if current_auth.is_none() && self.auth.is_empty() {
+        let current_auth_object =
+            parse_json_object(current_auth.unwrap_or("{}"), "Current Config auth.json")?;
+        let desired_auth = self.auth.as_ref().expect("Codex Named Config has auth");
+        let auth = if current_auth.is_none() && desired_auth.is_empty() {
             None
         } else if current_auth.is_some()
-            && current_auth_object == self.auth
+            && current_auth_object == *desired_auth
             && current_auth.is_some_and(|content| !content.trim().is_empty())
         {
             current_auth.map(str::to_string)
         } else {
             Some(format!(
                 "{}\n",
-                serde_json::to_string_pretty(&Value::Object(self.auth.clone()))?
+                serde_json::to_string_pretty(&Value::Object(desired_auth.clone()))?
             ))
         };
 
@@ -143,14 +151,14 @@ impl ProfileDefinition {
     }
 }
 
-fn validate_profile_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
+fn validate_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
     let mut path = Vec::new();
-    validate_profile_object(main, agent.profile_fields(), &mut path)
+    validate_config_object(main, agent.config_fields(), &mut path)
 }
 
-fn validate_profile_object(
+fn validate_config_object(
     object: &Map<String, Value>,
-    fields: &[ProfileField],
+    fields: &[ConfigField],
     path: &mut Vec<String>,
 ) -> Result<()> {
     for (key, value) in object {
@@ -158,49 +166,31 @@ fn validate_profile_object(
         let exact = fields.iter().find(|field| path_matches(field.path, path));
         if let Some(field) = exact {
             let valid = match field.value_kind {
-                ProfileValueKind::String => value.is_string(),
-                ProfileValueKind::Bool => value.is_boolean(),
+                ConfigValueKind::String => value.is_string(),
+                ConfigValueKind::Bool => value.is_boolean(),
             };
             if !valid {
                 bail!(
-                    "Agent Profile Field {} must be {}",
+                    "Config Field {} must be {}",
                     display_path("config", path),
                     match field.value_kind {
-                        ProfileValueKind::String => "a string",
-                        ProfileValueKind::Bool => "a boolean",
+                        ConfigValueKind::String => "a string",
+                        ConfigValueKind::Bool => "a boolean",
                     }
                 );
             }
         } else if fields.iter().any(|field| path_is_prefix(path, field.path)) {
             let child = value.as_object().with_context(|| {
                 format!(
-                    "Agent Profile Field parent {} must be an object or table",
+                    "Config Field parent {} must be an object or table",
                     display_path("config", path)
                 )
             })?;
-            validate_profile_object(child, fields, path)?;
+            validate_config_object(child, fields, path)?;
         } else {
-            bail!(
-                "unsupported Agent Profile Field {}",
-                display_path("config", path)
-            );
+            bail!("unsupported Config Field {}", display_path("config", path));
         }
         path.pop();
-    }
-    Ok(())
-}
-
-fn validate_claude_auth(auth: &Map<String, Value>) -> Result<()> {
-    for (key, value) in auth {
-        if key != CLAUDE_AUTH_TOKEN {
-            bail!(
-                "unsupported Agent Profile Field {}",
-                display_path("auth", std::slice::from_ref(key))
-            );
-        }
-        if !value.is_string() {
-            bail!("Agent Profile Field /auth/{CLAUDE_AUTH_TOKEN} must be a string");
-        }
     }
     Ok(())
 }
@@ -324,7 +314,7 @@ fn set_toml_item(table: &mut dyn TableLike, key: &str, value: &Value) -> Result<
     let mut item = match value {
         Value::String(value) => toml_edit::value(value.clone()),
         Value::Bool(value) => toml_edit::value(*value),
-        _ => bail!("Agent Profile Field has an unsupported TOML value type"),
+        _ => bail!("Config Field has an unsupported TOML value type"),
     };
     if let Some(existing) = table.get_mut(key) {
         if let (Some(previous), Some(replacement)) = (existing.as_value(), item.as_value_mut()) {
@@ -411,5 +401,5 @@ fn remove_codex_path(document: &mut DocumentMut, path: &[&str]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "profile_model_tests.rs"]
+#[path = "config_model_tests.rs"]
 mod tests;

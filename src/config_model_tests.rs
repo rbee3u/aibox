@@ -2,31 +2,31 @@ use super::*;
 
 #[test]
 fn schema_accepts_only_fixed_fields_and_types() {
-    ProfileDefinition::parse(
+    NamedConfigDefinition::parse(
         AgentKind::Claude,
-        r#"{"env":{},"permissions":{},"skipDangerousModePermissionPrompt":true}"#,
-        r#"{"ANTHROPIC_AUTH_TOKEN":"secret"}"#,
+        r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"},"permissions":{},"skipDangerousModePermissionPrompt":true}"#,
+        None,
     )
     .unwrap();
-    ProfileDefinition::parse(
+    NamedConfigDefinition::parse(
         AgentKind::Codex,
         "model = \"gpt\"\n[model_providers.custom]\nrequires_openai_auth = true\n",
-        r#"{"tokens":{"access":"secret"}}"#,
+        Some(r#"{"tokens":{"access":"secret"}}"#),
     )
     .unwrap();
 
-    let unknown = ProfileDefinition::parse(AgentKind::Claude, r#"{"theme":"dark"}"#, "{}")
+    let unknown = NamedConfigDefinition::parse(AgentKind::Claude, r#"{"theme":"dark"}"#, None)
         .unwrap_err()
         .to_string();
     assert!(unknown.contains("/config/theme"), "{unknown}");
-    let wrong_type = ProfileDefinition::parse(AgentKind::Codex, "model = true", "{}")
+    let wrong_type = NamedConfigDefinition::parse(AgentKind::Codex, "model = true", Some("{}"))
         .unwrap_err()
         .to_string();
     assert!(wrong_type.contains("must be a string"), "{wrong_type}");
-    let unknown_provider = ProfileDefinition::parse(
+    let unknown_provider = NamedConfigDefinition::parse(
         AgentKind::Codex,
         "[model_providers.other]\nname = \"other\"\n",
-        "{}",
+        Some("{}"),
     )
     .unwrap_err()
     .to_string();
@@ -37,35 +37,41 @@ fn schema_accepts_only_fixed_fields_and_types() {
 }
 
 #[test]
-fn claude_auth_accepts_only_an_optional_string_token() {
-    ProfileDefinition::parse(AgentKind::Claude, "{}", "{}").unwrap();
-    let unknown =
-        ProfileDefinition::parse(AgentKind::Claude, "{}", r#"{"ANTHROPIC_API_KEY":"secret"}"#)
-            .unwrap_err()
-            .to_string();
-    assert!(unknown.contains("/auth/ANTHROPIC_API_KEY"), "{unknown}");
-    let wrong_type =
-        ProfileDefinition::parse(AgentKind::Claude, "{}", r#"{"ANTHROPIC_AUTH_TOKEN":true}"#)
-            .unwrap_err()
-            .to_string();
+fn claude_token_is_a_string_field_in_settings() {
+    NamedConfigDefinition::parse(
+        AgentKind::Claude,
+        r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}"#,
+        None,
+    )
+    .unwrap();
+    let wrong_type = NamedConfigDefinition::parse(
+        AgentKind::Claude,
+        r#"{"env":{"ANTHROPIC_AUTH_TOKEN":true}}"#,
+        None,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(wrong_type.contains("must be a string"), "{wrong_type}");
 
-    assert!(ProfileDefinition::parse(AgentKind::Claude, "{}", "").is_err());
-    assert!(ProfileDefinition::parse(AgentKind::Claude, "", "{}").is_err());
+    assert!(NamedConfigDefinition::parse(AgentKind::Claude, "", None).is_err());
+    assert!(NamedConfigDefinition::parse(AgentKind::Claude, "{}", Some("{}")).is_err());
 }
 
 #[test]
 fn claude_application_sets_removes_and_preserves_fields() {
-    let profile = ProfileDefinition::parse(
+    let config = NamedConfigDefinition::parse(
         AgentKind::Claude,
         r#"{
-          "env": {"ANTHROPIC_BASE_URL": "https://new"},
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://new",
+            "ANTHROPIC_AUTH_TOKEN": "new-token"
+          },
           "permissions": {"defaultMode": "bypassPermissions"}
         }"#,
-        r#"{"ANTHROPIC_AUTH_TOKEN":"new-token"}"#,
+        None,
     )
     .unwrap();
-    let result = profile
+    let result = config
         .apply(
             Some(
                 r#"{
@@ -93,13 +99,13 @@ fn claude_application_sets_removes_and_preserves_fields() {
 
 #[test]
 fn codex_application_preserves_comments_and_replaces_whole_auth() {
-    let profile = ProfileDefinition::parse(
+    let config = NamedConfigDefinition::parse(
         AgentKind::Codex,
         "model = \"new\"\n[model_providers.custom]\nname = \"custom\"\n",
-        r#"{"OPENAI_API_KEY":"new"}"#,
+        Some(r#"{"OPENAI_API_KEY":"new"}"#),
     )
     .unwrap();
-    let result = profile
+    let result = config
         .apply(
             Some(
                 "# keep comment\nmodel = \"old\"\nsandbox_mode = \"workspace-write\"\n\n[tui]\nstatus_line = [\"model\"]\n",
@@ -118,7 +124,7 @@ fn codex_application_preserves_comments_and_replaces_whole_auth() {
 
 #[test]
 fn semantically_empty_missing_files_remain_absent() {
-    let claude = ProfileDefinition::parse(AgentKind::Claude, "{}", "{}").unwrap();
+    let claude = NamedConfigDefinition::parse(AgentKind::Claude, "{}", None).unwrap();
     assert_eq!(
         claude.apply(None, None).unwrap(),
         ApplicationResult {
@@ -126,7 +132,7 @@ fn semantically_empty_missing_files_remain_absent() {
             auth: None
         }
     );
-    let codex = ProfileDefinition::parse(AgentKind::Codex, "", "{}").unwrap();
+    let codex = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
     assert_eq!(
         codex.apply(None, None).unwrap(),
         ApplicationResult {
@@ -138,16 +144,16 @@ fn semantically_empty_missing_files_remain_absent() {
 
 #[test]
 fn existing_blank_json_configuration_is_invalid() {
-    let claude = ProfileDefinition::parse(AgentKind::Claude, "{}", "{}").unwrap();
+    let claude = NamedConfigDefinition::parse(AgentKind::Claude, "{}", None).unwrap();
     assert!(claude.apply(Some(""), None).is_err());
 
-    let codex = ProfileDefinition::parse(AgentKind::Codex, "", "{}").unwrap();
+    let codex = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
     assert!(codex.apply(None, Some("")).is_err());
 }
 
 #[test]
 fn missing_fields_remove_conflicting_parent_structures() {
-    let claude = ProfileDefinition::parse(AgentKind::Claude, "{}", "{}").unwrap();
+    let claude = NamedConfigDefinition::parse(AgentKind::Claude, "{}", None).unwrap();
     let result = claude
         .apply(
             Some(r#"{"env":"conflict","permissions":["conflict"],"keep":true}"#),
@@ -157,7 +163,7 @@ fn missing_fields_remove_conflicting_parent_structures() {
     let main: Value = serde_json::from_str(result.main.as_deref().unwrap()).unwrap();
     assert_eq!(main, serde_json::json!({"keep": true}));
 
-    let codex = ProfileDefinition::parse(AgentKind::Codex, "", "{}").unwrap();
+    let codex = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
     let result = codex
         .apply(Some("model_providers = \"conflict\"\nkeep = true\n"), None)
         .unwrap();

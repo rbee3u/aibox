@@ -13,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// Collection containing all managed Tenant Homes.
 pub const TENANTS_DIR: &str = "tenants";
-/// Storage key used for the Host Tenant Profile catalog outside valid names.
+/// Storage key used for the Host Tenant Named Config catalog outside valid names.
 pub const HOST_STORAGE_KEY: &str = "__host";
 const CREATING_PREFIX: &str = "$creating-";
 const DELETING_PREFIX: &str = "$deleting-";
@@ -52,7 +52,7 @@ pub struct TenantAgent {
     pub agent: AgentKind,
     /// Native Coding Agent state directory.
     pub agent_state_dir: PathBuf,
-    profile_catalog_dir: PathBuf,
+    named_config_catalog_dir: PathBuf,
 }
 
 impl ManagedTenant {
@@ -83,13 +83,13 @@ impl ManagedTenant {
             return ensure_home_baseline(&self.home_dir);
         }
 
-        // A missing authoritative Home makes same-name Profile catalogs orphaned.
+        // A missing authoritative Home makes same-name Named Config catalogs orphaned.
         // Complete any old deletion before establishing a fresh identity.
         remove_real_dir_if_exists(&self.deleting_dir(), "stale Tenant deletion")?;
         for agent in AgentKind::ALL {
             remove_real_dir_if_exists(
                 &self.root_dir.join(agent.tag()).join(&self.name),
-                "orphaned Agent Profile catalog",
+                "orphaned Named Config catalog",
             )?;
         }
 
@@ -149,12 +149,12 @@ impl Tenant {
     /// Select one Coding Agent in this Tenant.
     pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         let home = self.home_dir().to_path_buf();
-        let profile_catalog_dir = self.root().join(agent.tag()).join(self.storage_key());
+        let named_config_catalog_dir = self.root().join(agent.tag()).join(self.storage_key());
         TenantAgent {
             tenant: self.clone(),
             agent,
             agent_state_dir: home.join(agent.state_dir_name()),
-            profile_catalog_dir,
+            named_config_catalog_dir,
         }
     }
 
@@ -195,13 +195,13 @@ impl TenantAgent {
         Ok(Tenant::resolve(root, host, tenant)?.for_agent(agent))
     }
 
-    /// Home containing the selected Agent Configuration and Sessions.
+    /// Home containing the selected Current Config and Sessions.
     pub fn home_dir(&self) -> &Path {
         self.tenant.home_dir()
     }
 
-    /// Ensure the Tenant and Tenant-local Agent Profile catalog exist.
-    pub fn ensure_profile_catalog(&self) -> Result<()> {
+    /// Ensure the Tenant and Tenant-local Named Config catalog exist.
+    pub fn ensure_named_config_catalog(&self) -> Result<()> {
         match &self.tenant {
             Tenant::Managed(tenant) => tenant.ensure_initialized()?,
             Tenant::Host { home_dir, .. } => require_host_home(home_dir)?,
@@ -209,9 +209,9 @@ impl TenantAgent {
         ensure_real_dir(self.tenant.root(), "aibox root")?;
         ensure_real_dir(
             &self.tenant.root().join(self.agent.tag()),
-            "Coding Agent Profile catalog collection",
+            "Named Config catalog collection",
         )?;
-        ensure_real_dir(&self.profile_catalog_dir, "Agent Profile catalog")
+        ensure_real_dir(&self.named_config_catalog_dir, "Named Config catalog")
     }
 
     /// Ensure the selected native Agent state directory exists.
@@ -237,31 +237,31 @@ impl TenantAgent {
         self.agent_state_dir.join(file_name)
     }
 
-    /// Directory containing Tenant- and Coding Agent-local Profiles.
-    pub fn profile_catalog_dir(&self) -> &Path {
-        &self.profile_catalog_dir
+    /// Directory containing Tenant- and Coding Agent-local Configs.
+    pub fn named_config_catalog_dir(&self) -> &Path {
+        &self.named_config_catalog_dir
     }
 
-    /// One Tenant- and Coding Agent-local Agent Profile directory.
-    pub fn profile_dir(&self, profile: &str) -> PathBuf {
-        self.profile_catalog_dir.join(profile)
+    /// One Tenant- and Coding Agent-local Named Config directory.
+    pub fn named_config_dir(&self, config: &str) -> PathBuf {
+        self.named_config_catalog_dir.join(config)
     }
 
-    /// One file in an Agent Profile definition.
-    pub fn profile_file(&self, profile: &str, file_name: &str) -> PathBuf {
-        self.profile_dir(profile).join(file_name)
+    /// One file in a Named Config definition.
+    pub fn named_config_file(&self, config: &str, file_name: &str) -> PathBuf {
+        self.named_config_dir(config).join(file_name)
     }
 
-    /// Whether the Agent Profile catalog currently exists.
-    pub fn profile_catalog_exists(&self) -> Result<bool> {
+    /// Whether the Named Config catalog currently exists.
+    pub fn named_config_catalog_exists(&self) -> Result<bool> {
         if matches!(&self.tenant, Tenant::Managed(tenant) if !tenant.exists()?) {
             return Ok(false);
         }
         let collection = self.tenant.root().join(self.agent.tag());
-        if !real_dir_exists(&collection, "Coding Agent Profile catalog collection")? {
+        if !real_dir_exists(&collection, "Named Config catalog collection")? {
             return Ok(false);
         }
-        real_dir_exists(&self.profile_catalog_dir, "Agent Profile catalog")
+        real_dir_exists(&self.named_config_catalog_dir, "Named Config catalog")
     }
 }
 
@@ -373,8 +373,8 @@ fn delete_one(root: &Path, name: &str) -> Result<()> {
     }
     for agent in AgentKind::ALL {
         let collection = root.join(agent.tag());
-        if real_dir_exists(&collection, "Coding Agent Profile catalog collection")? {
-            remove_real_dir_if_exists(&collection.join(name), "Agent Profile catalog")?;
+        if real_dir_exists(&collection, "Named Config catalog collection")? {
+            remove_real_dir_if_exists(&collection.join(name), "Named Config catalog")?;
         }
     }
     if tenants_exist {
@@ -396,8 +396,8 @@ fn tenant_has_data(root: &Path, name: &str) -> Result<bool> {
     }
     for agent in AgentKind::ALL {
         let collection = root.join(agent.tag());
-        if real_dir_exists(&collection, "Coding Agent Profile catalog collection")?
-            && real_dir_exists(&collection.join(name), "Agent Profile catalog")?
+        if real_dir_exists(&collection, "Named Config catalog collection")?
+            && real_dir_exists(&collection.join(name), "Named Config catalog")?
         {
             return Ok(true);
         }
@@ -467,7 +467,7 @@ fn absolutize(path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// Validate a Tenant or Agent Profile name as a lowercase DNS label.
+/// Validate a Tenant or Named Config name as a lowercase DNS label.
 pub fn validate_name(kind: &str, value: &str) -> Result<()> {
     if is_safe_name(value) {
         Ok(())
@@ -875,7 +875,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let managed = ManagedTenant::resolve(root.path(), "host").unwrap();
         assert_eq!(
-            managed.for_agent(AgentKind::Codex).profile_catalog_dir(),
+            managed
+                .for_agent(AgentKind::Codex)
+                .named_config_catalog_dir(),
             root.path().join("codex/host")
         );
         let host = Tenant::Host {
@@ -883,7 +885,7 @@ mod tests {
             root_dir: root.path().to_path_buf(),
         };
         assert_eq!(
-            host.for_agent(AgentKind::Codex).profile_catalog_dir(),
+            host.for_agent(AgentKind::Codex).named_config_catalog_dir(),
             root.path().join("codex/__host")
         );
     }
@@ -910,7 +912,7 @@ mod tests {
         for agent in AgentKind::ALL {
             let catalog = root.path().join(agent.tag()).join("work");
             fs::create_dir_all(&catalog).unwrap();
-            fs::write(catalog.join("owned"), b"profile data").unwrap();
+            fs::write(catalog.join("owned"), b"config data").unwrap();
         }
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
@@ -981,7 +983,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn orphaned_profile_catalog_symlinks_block_tenant_publication() {
+    fn orphaned_config_catalog_symlinks_block_tenant_publication() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
@@ -1003,7 +1005,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn interrupted_delete_rejects_linked_profile_catalog_and_rolls_forward_safely() {
+    fn interrupted_delete_rejects_linked_config_catalog_and_rolls_forward_safely() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();

@@ -1,8 +1,5 @@
-mod proxy;
-mod store;
-mod web;
-
 use crate::cli::TrafficArgs;
+use crate::traffic_store::TrafficStore;
 use anyhow::{bail, Context, Result};
 use axum::extract::State;
 use axum::middleware;
@@ -18,19 +15,19 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 #[derive(Clone)]
-struct AppState {
-    store: store::TrafficStore,
-    csrf: String,
-    port: u16,
-    shutdown: CancellationToken,
-    response_tasks: TaskTracker,
-    allow_private_upstream: bool,
+pub(super) struct AppState {
+    pub(super) store: TrafficStore,
+    pub(super) csrf: String,
+    pub(super) port: u16,
+    pub(super) shutdown: CancellationToken,
+    pub(super) response_tasks: TaskTracker,
+    pub(super) allow_private_upstream: bool,
 }
 
 impl AppState {
-    fn new(root: &Path, port: u16, shutdown: CancellationToken) -> Result<Self> {
+    pub(super) fn new(root: &Path, port: u16, shutdown: CancellationToken) -> Result<Self> {
         Ok(Self {
-            store: store::TrafficStore::open(root)?,
+            store: TrafficStore::open(root)?,
             csrf: uuid::Uuid::new_v4().to_string(),
             port,
             shutdown,
@@ -40,7 +37,7 @@ impl AppState {
     }
 
     #[cfg(test)]
-    fn for_test(root: &Path, port: u16) -> Result<Self> {
+    pub(super) fn for_test(root: &Path, port: u16) -> Result<Self> {
         let mut state = Self::new(root, port, CancellationToken::new())?;
         state.allow_private_upstream = true;
         Ok(state)
@@ -125,31 +122,40 @@ async fn serve(listen: SocketAddr, root: &Path) -> Result<()> {
 
 fn router(state: AppState) -> Router {
     let management = Router::new()
-        .route("/", get(web::index))
-        .route("/_aibox/traffic/app.css", get(web::css))
-        .route("/_aibox/traffic/app.js", get(web::js))
-        .route("/_aibox/traffic/api/records", get(web::list_records))
+        .route("/", get(crate::traffic_web::index))
+        .route("/_aibox/traffic/app.css", get(crate::traffic_web::css))
+        .route("/_aibox/traffic/app.js", get(crate::traffic_web::js))
+        .route(
+            "/_aibox/traffic/api/records",
+            get(crate::traffic_web::list_records),
+        )
         .route(
             "/_aibox/traffic/api/records/delete",
-            post(web::delete_records),
+            post(crate::traffic_web::delete_records),
         )
         .route(
             "/_aibox/traffic/api/records/delete-all",
-            post(web::delete_all),
+            post(crate::traffic_web::delete_all),
         )
-        .route("/_aibox/traffic/api/records/{id}", get(web::record_detail))
+        .route(
+            "/_aibox/traffic/api/records/{id}",
+            get(crate::traffic_web::record_detail),
+        )
         .route(
             "/_aibox/traffic/api/records/{id}/request-body",
-            get(web::request_body),
+            get(crate::traffic_web::request_body),
         )
         .route(
             "/_aibox/traffic/api/records/{id}/response-body",
-            get(web::response_body),
+            get(crate::traffic_web::response_body),
         )
-        .route("/_aibox/traffic/{*path}", get(web::not_found))
+        .route(
+            "/_aibox/traffic/{*path}",
+            get(crate::traffic_web::not_found),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            web::security_middleware,
+            crate::traffic_web::security_middleware,
         ));
     Router::new()
         .merge(management)
@@ -161,7 +167,7 @@ async fn proxy_fallback(
     State(state): State<AppState>,
     request: axum::extract::Request,
 ) -> axum::response::Response {
-    proxy::handle(state, request).await
+    crate::traffic_proxy::handle(state, request).await
 }
 
 fn bind_listeners(requested: SocketAddr) -> Result<Vec<TcpListener>> {
@@ -371,7 +377,7 @@ mod tests {
         (state, upstream, proxy_address, upstream_task, proxy_task)
     }
 
-    async fn wait_for_terminal(state: &AppState) -> store::StoredRecord {
+    async fn wait_for_terminal(state: &AppState) -> crate::traffic_store::StoredRecord {
         for _ in 0..100 {
             let records = state.store.scan().unwrap();
             if let Some(record) = records.into_iter().next() {
@@ -441,7 +447,10 @@ mod tests {
             std::fs::read(record.directory.join("response.body")).unwrap(),
             raw
         );
-        assert_eq!(record.result.unwrap().outcome, store::Outcome::Completed);
+        assert_eq!(
+            record.result.unwrap().outcome,
+            crate::traffic_store::Outcome::Completed
+        );
 
         let redirect_url = format!("http://{proxy_address}/http://{upstream}/v1/redirect");
         assert_eq!(

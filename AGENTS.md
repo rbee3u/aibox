@@ -8,20 +8,21 @@ user documentation aligned with it. Architectural decisions live in
 
 `README.md` is the concise entry point for evaluation, installation, first use,
 and the core safety model. Advanced behavior has one canonical home in
-`docs/tenants.md`, `docs/profiles.md`, or `docs/sandbox.md`; keep examples and
+`docs/tenants.md`, `docs/configs.md`, or `docs/sandbox.md`; keep examples and
 clap help aligned without copying full references between them.
 
 ## Constraints
 
-**Centralize Coding Agent contracts.** Put agent-specific paths, Agent Profile
-files/templates, and invocation behavior in `AgentKind` in `agent.rs`. Keep
+**Centralize Coding Agent contracts.** Put agent-specific paths, Config
+files/templates, empty Current Config content, and invocation behavior in
+`AgentKind` in `agent.rs`. Keep
 transcript parsing in `session_claude.rs` and `session_codex.rs`. The Docker
 image, container Home, and orchestration remain shared.
 
 **Preserve the CLI boundary.** Split argv at the first `--` before clap parses
-it, and pass the right side verbatim only to `run`. `run`, `profile`, and
+it, and pass the right side verbatim only to `run`. `run`, `config`, and
 `session` own separately scoped `--agent`/`--tenant` options; `component` owns
-only `--tenant`; only `profile` and `session` accept `--host`. `build`,
+only `--tenant`; only `config` and `session` accept `--host`. `build`,
 `completion`, and `tenant` accept none of them. `traffic` owns only `--listen`
 and `--allow-remote`; it does not accept selectors or pass-through arguments.
 Completion mirrors these scopes, stays read-only, and runs on the host.
@@ -32,52 +33,61 @@ Completion mirrors these scopes, stays read-only, and runs on the host.
 `tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
-`tenants/<name>` is a real directory. Agent Profile catalogs live under
-`<agent>/<name>/`; the Host Tenant catalog uses `<agent>/__host/`. Profiles
-contain only their native main configuration file and `auth.json`; do not add
-scope/Profile metadata, layout versions, migration readers, management
-wrappers, or lock directories. Ignore unknown collection entries during
-listing, but reject explicitly selected unsafe paths.
+`tenants/<name>` is a real directory. Named Config catalogs live under
+`<agent>/<name>/`; the Host Tenant catalog uses `<agent>/__host/`. A Claude
+Named Config contains only native `settings.json`; a Codex Named Config
+contains only native `config.toml` and `auth.json`. Do not add scope/Config
+metadata, layout versions, migration readers, management wrappers, or lock
+directories. Ignore unknown collection entries during listing, but reject
+explicitly selected unsafe paths.
 
-**Keep names and local permissions narrow.** Managed Tenant and Agent Profile
+**Keep names and local permissions narrow.** Managed Tenant and Named Config
 names are lowercase DNS labels of 1–63 characters. Newly created aibox root,
-collection, Agent Profile catalog, Agent Profile, and Tenant Home boundary
-directories are `0700`. Agent Profile files and newly created Agent
-Configuration files are `0600`; applying a Profile preserves existing Agent
-Configuration modes, including for the Host Tenant. Existing Host Home
+collection, Named Config catalog, Named Config, and Tenant Home boundary
+directories are `0700`. Named Config files and newly created Current Config
+files are `0600`; applying or directly editing Current Config preserves
+existing file modes, including for the Host Tenant. Existing Host Home
 directory modes are never changed.
 
-**Keep Profile Application explicit and one-shot.** A Run consumes native Agent
-Configuration and never reads or reapplies Agent Profile data. Each Agent
-Profile belongs to one Tenant and Coding Agent and defines only the fixed
-Profile Fields centralized in `AgentKind`. `profile apply` sets present fields,
+**Keep Config Application explicit and one-shot.** A Run consumes Current
+Config and never reads or reapplies Named Config data. Each Named Config
+belongs to one Tenant and Coding Agent and defines only the fixed
+Config Fields centralized in `AgentKind`. `config apply` sets present fields,
 deletes missing fields, preserves unrelated native configuration, and retains
-no association with the Profile afterward. Do not add activation, drift,
+no association with the Named Config afterward. Do not add activation, drift,
 reconciliation, rollback, or transaction state.
 
-**Keep Agent permissions native.** Both built-in Agent Profile templates use
-native Agent Configuration for non-interactive, unrestricted operation. Do not
-add permission or sandbox flags to invocation arguments, or enable the Claude
-status line in its template. Claude Agent Profile `auth.json` allows only an
-optional string `ANTHROPIC_AUTH_TOKEN`, projected into `settings.env`; Codex
-`auth.json` must be a JSON object and replaces the native auth file as a whole.
-Every Agent Profile auth file is mode `0600`.
+**Keep Current Config direct and explicit.** `config get` and `config edit`
+require either a Named Config name or `--current`; other Config commands operate
+only on Named Configs. `get` prints every native file in Agent-defined order
+with file headings and without credential redaction. `edit` opens and commits
+each file separately in that order. Named Config edits validate the selected
+file before committing; Current Config edits preserve arbitrary bytes without
+syntax validation and may initialize a missing Managed Tenant. A later editor
+failure does not roll back an earlier committed file.
+
+**Keep Agent permissions native.** Both built-in Named Config templates use
+native Current Config for non-interactive, unrestricted operation. Do not add
+permission or sandbox flags to invocation arguments, or enable the Claude
+status line in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
+`settings.json.env`; Codex `auth.json` must be a JSON object and replaces the
+native auth file as a whole. Every Named Config file is mode `0600`.
 
 **Keep Components optional, native, and independently owned.** Tenant
 initialization does not install status lines or toolchains. `component`
 operates only on Managed Tenants and derives state from native Tenant Home
 files without a registry. Status-line Components directly manage their script
 when applicable and their native configuration values. Status-line paths are
-not Profile Fields, so Profile Application preserves them without ownership or
+not Config Fields, so Config Application preserves them without ownership or
 overlap machinery. Expose repairable partial state as `incomplete`. Component
 removal requires explicit discard for modified/unmanaged state. Rust and Go
 install through the shared image with only the Tenant Home mounted; preserve
 Cargo and GOPATH user state across SDK replacement and removal.
 
-**Use explicit destructive selection.** Tenant, Agent Profile, and Session
+**Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
-and explicit selections are mutually exclusive. Agent Profile deletion may
-remove safe invalid or incomplete Profile directories, but rejects unsafe
+and explicit selections are mutually exclusive. Named Config deletion may
+remove safe invalid or incomplete Named Config directories, but rejects unsafe
 entries.
 
 **Treat container-writable paths as untrusted.** Host-side reads, writes, and
@@ -88,15 +98,17 @@ typed prompt remain visible and deletable. Malformed JSONL and unsupported
 user-like records warn and make `session list/get` nonzero without hiding an
 otherwise readable Transcript; deletion remains strict and format-independent.
 
-**Keep missing scopes quiet.** `profile list` and `session list` return empty for
+**Keep missing scopes quiet.** `config list` and `session list` return empty for
 a missing Managed Tenant, and `component list` reports every Component as not
-installed. Read-only commands and completion create nothing. `run`, `profile
-create`, and `component install` may initialize a missing Managed Tenant.
+installed. Read-only commands and completion create nothing. `run`, `config
+create`, `config edit --current`, and `component install` may initialize a
+missing Managed Tenant.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
 own interrupted filesystem work, but aibox provides no multi-process locking
-guarantee. Profile Application atomically replaces each changed file but is not
-atomic across files; rerunning it converges. One aibox process supports only one
+guarantee. Config Application atomically replaces each changed file but is not
+atomic across files; rerunning it converges. Sequential Config edits likewise
+commit one file at a time without rollback. One aibox process supports only one
 active container operation: a Run or toolchain installation.
 
 **Keep Traffic host-side and raw.** The Traffic Proxy is global rather than

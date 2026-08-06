@@ -220,7 +220,7 @@ fn build_uses_single_image_and_aibox_image_override() {
 
 #[cfg(unix)]
 #[test]
-fn default_run_uses_codex_managed_tenant_home_without_profile_injection() {
+fn default_run_uses_codex_managed_tenant_home_without_config_injection() {
     let fx = RunFixture::new();
     let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
     assert_eq!(code, 0);
@@ -314,22 +314,22 @@ fn run_uses_a_valid_image_override_for_lookup_and_launch() {
 
 #[cfg(unix)]
 #[test]
-fn run_preserves_agent_configuration_without_reading_or_reapplying_profiles() {
+fn run_preserves_current_config_without_reading_or_reapplying_named_configs() {
     let fx = RunFixture::new();
     let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
     let selected = tenant.for_agent(AgentKind::Codex);
-    profile::create_profile(&selected, "openai").unwrap();
+    config::create_named_config(&selected, "openai").unwrap();
     std::fs::write(
-        selected.profile_file("openai", "config.toml"),
-        "model = \"profile\"\n",
+        selected.named_config_file("openai", "config.toml"),
+        "model = \"config\"\n",
     )
     .unwrap();
     std::fs::write(
-        selected.profile_file("openai", "auth.json"),
-        r#"{"token":"profile"}"#,
+        selected.named_config_file("openai", "auth.json"),
+        r#"{"token":"config"}"#,
     )
     .unwrap();
-    profile::apply_profile(&selected, "openai").unwrap();
+    config::apply_named_config(&selected, "openai").unwrap();
 
     let native_config = "model = \"locally-adjusted\"\n";
     let native_auth = r#"{"token":"locally-adjusted"}"#;
@@ -341,17 +341,17 @@ fn run_preserves_agent_configuration_without_reading_or_reapplying_profiles() {
     assert_eq!(
         std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
         native_config,
-        "a Run must consume native Agent Configuration without injecting Profile data"
+        "a Run must consume Current Config without injecting Named Config data"
     );
     assert_eq!(
         std::fs::read_to_string(selected.state_file("auth.json")).unwrap(),
         native_auth,
-        "a Run must not replace persisted auth from a Profile"
+        "a Run must not replace persisted auth from a Config"
     );
     let log = fx.log();
     assert!(
-        !log.contains(&selected.profile_catalog_dir().display().to_string()),
-        "the Profile catalog must stay host-only and never enter docker arguments: {log}"
+        !log.contains(&selected.named_config_catalog_dir().display().to_string()),
+        "the Named Config catalog must stay host-only and never enter docker arguments: {log}"
     );
 }
 
@@ -451,7 +451,7 @@ fn non_run_commands_reject_passthrough_before_docker() {
     let fx = RunFixture::new();
     for (argv, expected) in [
         (&["aibox", "component", "list"][..], "applies only to a run"),
-        (&["aibox", "profile", "list"][..], "applies only to a run"),
+        (&["aibox", "config", "list"][..], "applies only to a run"),
         (&["aibox", "session", "list"][..], "applies only to a run"),
         (
             &["aibox", "traffic"][..],
@@ -486,7 +486,7 @@ fn read_only_commands_keep_a_missing_managed_tenant_quiet_and_absent() {
     let fx = RunFixture::new();
 
     for argv in [
-        &["aibox", "profile", "--tenant", "missing", "list"][..],
+        &["aibox", "config", "--tenant", "missing", "list"][..],
         &["aibox", "session", "--tenant", "missing", "list"][..],
         &["aibox", "component", "--tenant", "missing", "list"][..],
     ] {
@@ -500,14 +500,14 @@ fn read_only_commands_keep_a_missing_managed_tenant_quiet_and_absent() {
 
 #[cfg(unix)]
 #[test]
-fn profile_command_agent_selects_the_agent_tenant_catalog() {
+fn config_command_agent_selects_the_agent_tenant_catalog() {
     let fx = RunFixture::new();
 
     let code = fx
         .run(
             &[
                 "aibox",
-                "profile",
+                "config",
                 "--agent",
                 "claude",
                 "create",
@@ -523,9 +523,14 @@ fn profile_command_agent_selects_the_agent_tenant_catalog() {
         .path()
         .join("claude/default/anthropic/settings.json")
         .is_file());
+    assert!(!fx
+        .root
+        .path()
+        .join("claude/default/anthropic/auth.json")
+        .exists());
     assert!(
         !fx.root.path().join("codex/default/anthropic").exists(),
-        "a command-level --agent claude must not create a Codex profile"
+        "a command-level --agent claude must not create a Codex config"
     );
 }
 
@@ -557,11 +562,11 @@ fn tenant_commands_create_and_delete_without_starting_docker() {
 
 #[cfg(unix)]
 #[test]
-fn profile_apply_and_delete_route_to_the_selected_tenant_without_docker() {
+fn config_apply_and_delete_route_to_the_selected_tenant_without_docker() {
     let fx = RunFixture::new();
 
     fx.run(
-        &["aibox", "profile", "--tenant", "work", "create", "openai"],
+        &["aibox", "config", "--tenant", "work", "create", "openai"],
         Vec::new(),
     )
     .unwrap();
@@ -569,19 +574,19 @@ fn profile_apply_and_delete_route_to_the_selected_tenant_without_docker() {
         .unwrap()
         .for_agent(AgentKind::Codex);
     std::fs::write(
-        selected.profile_file("openai", "config.toml"),
+        selected.named_config_file("openai", "config.toml"),
         "model = \"selected-tenant\"\n",
     )
     .unwrap();
     std::fs::write(
-        selected.profile_file("openai", "auth.json"),
+        selected.named_config_file("openai", "auth.json"),
         r#"{"token":"selected-tenant"}"#,
     )
     .unwrap();
 
     let code = fx
         .run(
-            &["aibox", "profile", "apply", "openai", "--tenant", "work"],
+            &["aibox", "config", "apply", "openai", "--tenant", "work"],
             Vec::new(),
         )
         .unwrap();
@@ -596,14 +601,14 @@ fn profile_apply_and_delete_route_to_the_selected_tenant_without_docker() {
             .path()
             .join("tenants/default/.codex/config.toml")
             .exists(),
-        "a scoped profile command must not fall back to the default tenant"
+        "a scoped config command must not fall back to the default tenant"
     );
 
     let code = fx
         .run(
             &[
                 "aibox",
-                "profile",
+                "config",
                 "--tenant=work",
                 "delete",
                 "openai",
@@ -614,16 +619,16 @@ fn profile_apply_and_delete_route_to_the_selected_tenant_without_docker() {
         .unwrap();
 
     assert_eq!(code, 0);
-    assert!(!selected.profile_dir("openai").exists());
+    assert!(!selected.named_config_dir("openai").exists());
     assert_eq!(
         std::fs::read_to_string(selected.state_file("config.toml")).unwrap(),
         "model = \"selected-tenant\"\n",
-        "deleting a Profile must not change Agent Configuration"
+        "deleting a Config must not change Current Config"
     );
     assert_eq!(
         fx.log(),
         "",
-        "host-side profile management must never invoke Docker"
+        "host-side config management must never invoke Docker"
     );
 }
 
@@ -671,7 +676,7 @@ fn duplicate_agent_flags_are_rejected_before_docker_is_consulted() {
     for argv in [
         &["aibox", "run", "--agent", "claude", "--agent", "codex"][..],
         &[
-            "aibox", "profile", "--agent", "claude", "list", "--agent", "codex",
+            "aibox", "config", "--agent", "claude", "list", "--agent", "codex",
         ][..],
         &[
             "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
@@ -738,7 +743,7 @@ fn run_rejects_workspace_that_would_expose_aibox_internal_tree() {
 
 #[cfg(unix)]
 #[test]
-fn run_rejects_mount_that_would_expose_profile_data() {
+fn run_rejects_mount_that_would_expose_config_data() {
     let fx = RunFixture::new();
     let catalog = fx.root.path().join("codex/default");
     std::fs::create_dir_all(&catalog).unwrap();
@@ -754,7 +759,7 @@ fn run_rejects_mount_that_would_expose_profile_data() {
     assert_eq!(
         fx.log(),
         "",
-        "Profile catalog mount validation should fail before docker is consulted"
+        "Named Config catalog mount validation should fail before docker is consulted"
     );
 }
 
@@ -799,6 +804,7 @@ fn output_writes_treat_broken_pipes_as_clean_stops_but_report_other_errors() {
 
     assert!(!write_line(&mut AlwaysBroken, "x").unwrap());
     assert!(!write_text(&mut AlwaysBroken, "x").unwrap());
+    assert!(!write_bytes(&mut AlwaysBroken, b"x").unwrap());
     assert!(
         !write_line(&mut BrokenOnNewline { writes: 0 }, "x").unwrap(),
         "a reader may hang up after the line body but before its delimiter"

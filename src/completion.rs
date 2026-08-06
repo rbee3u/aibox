@@ -83,7 +83,7 @@ enum TopCommand {
     Run,
     Tenant,
     Component,
-    Profile,
+    Config,
     Session,
     Traffic,
     Other,
@@ -97,6 +97,7 @@ struct CompletionContext {
     host: bool,
     selection_valid: bool,
     all: bool,
+    current: bool,
     positionals: BTreeSet<String>,
 }
 
@@ -109,6 +110,7 @@ impl Default for CompletionContext {
             host: false,
             selection_valid: true,
             all: false,
+            current: false,
             positionals: BTreeSet::new(),
         }
     }
@@ -140,7 +142,7 @@ impl CompletionContext {
             Some("run") => TopCommand::Run,
             Some("tenant") => TopCommand::Tenant,
             Some("component") => TopCommand::Component,
-            Some("profile") => TopCommand::Profile,
+            Some("config") => TopCommand::Config,
             Some("session") => TopCommand::Session,
             Some("traffic") => TopCommand::Traffic,
             Some("build" | "completion") => TopCommand::Other,
@@ -148,7 +150,7 @@ impl CompletionContext {
         };
         let scoped = matches!(
             context.top,
-            TopCommand::Run | TopCommand::Component | TopCommand::Profile | TopCommand::Session
+            TopCommand::Run | TopCommand::Component | TopCommand::Config | TopCommand::Session
         );
         let mut option_parts = BTreeSet::new();
         if scoped {
@@ -165,6 +167,12 @@ impl CompletionContext {
         let mut index = 2;
         while index < values.len() {
             let token = values[index];
+            if token == "--current" {
+                option_parts.insert(index);
+                self.current = true;
+                index += 1;
+                continue;
+            }
             if token == "--host" {
                 option_parts.insert(index);
                 if seen_host
@@ -230,7 +238,7 @@ impl CompletionContext {
         let leaves: &[&str] = match self.top {
             TopCommand::Tenant => &["list", "create", "delete"],
             TopCommand::Component => &["list", "install", "remove"],
-            TopCommand::Profile => &["list", "get", "create", "edit", "delete", "apply"],
+            TopCommand::Config => &["list", "get", "create", "edit", "delete", "apply"],
             TopCommand::Session => &["list", "get", "delete"],
             _ => return,
         };
@@ -262,7 +270,7 @@ fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) 
     let command = add_run_completers(Cli::command(), current_dir);
     let command = add_tenant_completers(command, context.clone());
     let command = add_component_completers(command);
-    let command = add_profile_completers(command, context.clone());
+    let command = add_config_completers(command, context.clone());
     add_session_completers(command, context)
 }
 
@@ -330,27 +338,27 @@ fn add_component_completers(command: clap::Command) -> clap::Command {
     })
 }
 
-fn add_profile_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+fn add_config_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
     let get = context.clone();
     let edit = context.clone();
     let apply = context.clone();
-    command.mut_subcommand("profile", move |command| {
+    command.mut_subcommand("config", move |command| {
         command
             .mut_arg("tenant", add_tenant_value_completer)
             .mut_subcommand("create", |command| {
-                command.mut_arg("profile", |arg| arg.value_hint(ValueHint::Other))
+                command.mut_arg("config", |arg| arg.value_hint(ValueHint::Other))
             })
             .mut_subcommand("get", move |command| {
-                add_profile_completer(command, get, false)
+                add_config_completer(command, get, false)
             })
             .mut_subcommand("edit", move |command| {
-                add_profile_completer(command, edit, false)
+                add_config_completer(command, edit, false)
             })
             .mut_subcommand("apply", move |command| {
-                add_profile_completer(command, apply, false)
+                add_config_completer(command, apply, false)
             })
             .mut_subcommand("delete", move |command| {
-                add_profile_completer(command, context, true)
+                add_config_completer(command, context, true)
             })
     })
 }
@@ -384,16 +392,16 @@ fn complete_components(current: &OsStr) -> Vec<CompletionCandidate> {
     )
 }
 
-fn add_profile_completer(
+fn add_config_completer(
     command: clap::Command,
     context: CompletionContext,
     repeatable: bool,
 ) -> clap::Command {
-    let id = if repeatable { "profiles" } else { "profile" };
+    let id = if repeatable { "configs" } else { "config" };
     command.mut_arg(id, move |arg| {
         arg.value_hint(ValueHint::Other)
             .add(ArgValueCompleter::new(move |current: &OsStr| {
-                if repeatable && context.all {
+                if context.current || (repeatable && context.all) {
                     Vec::new()
                 } else {
                     let excluded = if repeatable {
@@ -401,7 +409,7 @@ fn add_profile_completer(
                     } else {
                         &BTreeSet::new()
                     };
-                    complete_profiles(&context, current, excluded)
+                    complete_named_configs(&context, current, excluded)
                 }
             }))
     })
@@ -455,7 +463,7 @@ fn selected_at(root: &Path, context: &CompletionContext) -> Result<TenantAgent> 
     TenantAgent::resolve(context.agent, root, context.host, &context.tenant)
 }
 
-fn complete_profiles(
+fn complete_named_configs(
     context: &CompletionContext,
     current: &OsStr,
     excluded: &BTreeSet<String>,
@@ -465,7 +473,7 @@ fn complete_profiles(
     }
     let values = (|| -> Result<Vec<String>> {
         let root = tenant::aibox_root()?;
-        crate::profile::list_profiles(&selected_at(&root, context)?)
+        crate::config::list_named_configs(&selected_at(&root, context)?)
     })()
     .unwrap_or_default();
     filter_candidates(values, current, excluded)
@@ -567,11 +575,11 @@ mod tests {
 
     #[test]
     fn host_and_tenant_are_distinct_and_conflicting() {
-        let host = CompletionContext::from_words(&words(&["aibox", "profile", "--host", "list"]));
+        let host = CompletionContext::from_words(&words(&["aibox", "config", "--host", "list"]));
         assert!(host.host);
         assert!(host.selection_valid);
         let bad = CompletionContext::from_words(&words(&[
-            "aibox", "profile", "--host", "--tenant", "host", "list",
+            "aibox", "config", "--host", "--tenant", "host", "list",
         ]));
         assert!(!bad.selection_valid);
     }
@@ -581,7 +589,7 @@ mod tests {
         for args in [
             &["aibox", "run", "--host"][..],
             &["aibox", "component", "--agent", "claude", "list"][..],
-            &["aibox", "profile", "--agent", "unknown", "list"][..],
+            &["aibox", "config", "--agent", "unknown", "list"][..],
             &[
                 "aibox",
                 "session",
@@ -598,14 +606,14 @@ mod tests {
                 "completion accepted an invalid command scope: {args:?}"
             );
             assert!(
-                complete_profiles(&context, OsStr::new(""), &BTreeSet::new()).is_empty(),
+                complete_named_configs(&context, OsStr::new(""), &BTreeSet::new()).is_empty(),
                 "invalid selection must not discover host-side candidates: {args:?}"
             );
         }
 
         let inline = CompletionContext::from_words(&words(&[
             "aibox",
-            "profile",
+            "config",
             "--agent=claude",
             "--tenant=work",
             "list",
@@ -665,27 +673,32 @@ mod tests {
     }
 
     #[test]
-    fn profile_candidates_are_tenant_local() {
+    fn config_candidates_are_tenant_local() {
         let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
         let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
         let selected = tenant.for_agent(AgentKind::Codex);
-        crate::profile::create_profile(&selected, "custom").unwrap();
-        crate::profile::create_profile(&selected, "second").unwrap();
+        crate::config::create_named_config(&selected, "custom").unwrap();
+        crate::config::create_named_config(&selected, "second").unwrap();
         let context = CompletionContext::from_words(&words(&[
-            "aibox", "profile", "--tenant", "work", "apply", "",
+            "aibox", "config", "--tenant", "work", "apply", "",
         ]));
-        let values = complete_profiles(&context, OsStr::new(""), &BTreeSet::new());
+        let values = complete_named_configs(&context, OsStr::new(""), &BTreeSet::new());
         assert_eq!(candidate_values(&values), ["custom", "second"]);
 
         let deleting = CompletionContext::from_words(&words(&[
-            "aibox", "profile", "--tenant", "work", "delete", "custom", "",
+            "aibox", "config", "--tenant", "work", "delete", "custom", "",
         ]));
         assert_eq!(deleting.positionals, BTreeSet::from(["custom".to_string()]));
-        let values = complete_profiles(&deleting, OsStr::new(""), &deleting.positionals);
+        let values = complete_named_configs(&deleting, OsStr::new(""), &deleting.positionals);
         assert_eq!(candidate_values(&values), ["second"]);
+
+        let current =
+            CompletionContext::from_words(&words(&["aibox", "config", "get", "--current", ""]));
+        assert!(current.current);
+        assert!(complete_named_configs(&current, OsStr::new(""), &BTreeSet::new()).is_empty());
     }
 
     #[test]

@@ -46,7 +46,7 @@ Workspace as well as Extra Mounts:
   would expose host-only aibox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
-a bind source. Agent Profile catalogs and internal lifecycle staging
+a bind source. Named Config catalogs and internal lifecycle staging
 directories stay host-only.
 
 Mounting another Tenant Home is allowed, but doing so exposes its Coding
@@ -81,7 +81,7 @@ The following remain outside the Filesystem Sandbox:
 - Writable Workspace, Tenant Home, and Extra Mounts can be modified or
   deleted by the Coding Agent.
 
-The built-in Codex Agent Profile template sets `approval_policy = "never"` and
+The built-in Codex Named Config template sets `approval_policy = "never"` and
 `sandbox_mode = "danger-full-access"`; Docker remains its Filesystem Sandbox.
 The built-in Claude template uses `bypassPermissions` and suppresses its
 dangerous-mode prompt. Native Agent settings may grant authority beyond the
@@ -199,7 +199,7 @@ non-active count and returns a conflict if that count changes.
 Claude Messages and OpenAI Responses streaming are HTTP SSE and work through
 this path. WebSocket transport is outside v1; if native Codex configuration
 manually sets `supports_websockets = true` for the selected custom provider,
-set it to `false` while using Traffic. Agent Profile fixed fields are unchanged.
+set it to `false` while using Traffic. Config Fields are unchanged.
 See [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
 [OpenAI Responses streaming](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl),
 and [Docker host networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/).

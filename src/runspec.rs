@@ -576,10 +576,10 @@ mod tests {
             .unwrap();
         let catalog = root.path().join("codex/default");
         fs::create_dir_all(&catalog).unwrap();
-        let linked_profile = links.path().join("profile");
-        symlink(&catalog, &linked_profile).unwrap();
+        let linked_config = links.path().join("config");
+        symlink(&catalog, &linked_config).unwrap();
 
-        let err = validate_aibox_mount_sources(linked_profile.to_str().unwrap(), &[], root.path())
+        let err = validate_aibox_mount_sources(linked_config.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
@@ -633,7 +633,7 @@ mod tests {
         .to_string();
         assert!(
             err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into an Agent Profile catalog must be rejected: {err}"
+            "a dotdot mount source that resolves into a Named Config catalog must be rejected: {err}"
         );
     }
 

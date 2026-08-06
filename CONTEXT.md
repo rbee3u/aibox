@@ -47,7 +47,7 @@ _Avoid_: Session, Transcript, Run History
 ### Persistent identity
 
 **Tenant**:
-A persistent identity that scopes Coding Agent state, Agent Profiles, Tenant
+A persistent identity that scopes Coding Agent state, Named Configs, Tenant
 Components, and Sessions. Every Tenant is either a Managed Tenant or the Host
 Tenant.
 _Avoid_: Namespace, Target, profile, environment
@@ -69,29 +69,29 @@ _Avoid_: Namespace Home, profile home
 **Tenant Component**:
 An optional capability installed into one Managed Tenant's Tenant Home, such
 as a Coding Agent status line or a Tenant-local toolchain. Status-line
-Components directly modify native Agent Configuration.
+Components directly modify native Current Config.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration and history
 
-**Agent Configuration**:
+**Current Config**:
 The current native configuration files consumed by a Coding Agent and directly
 modified by aibox, the Coding Agent, its TUI, or the user.
-_Avoid_: Active config, generated config
+_Avoid_: Agent Configuration, active config, effective config, working config
 
-**Agent Profile**:
-A named, Agent-specific set of Profile Field values belonging to exactly one
+**Named Config**:
+A named, Agent-specific set of Config Field values belonging to exactly one
 Tenant and one Coding Agent.
-_Avoid_: Global Agent Profile, permission profile, preset
+_Avoid_: Agent Profile, Saved Config, Config Template, preset
 
-**Profile Field**:
-One fixed logical location in an Agent Profile schema. A Profile Field may be a
-native setting, one credential value, or the complete Codex credential object.
+**Config Field**:
+One fixed logical location in a Named Config schema. A Config Field may be a
+native setting, a credential value, or the complete Codex credential object.
 _Avoid_: Owned path, managed slot
 
-**Profile Application**:
-A one-time operation that sets every present Profile Field and removes every
-absent Profile Field from Agent Configuration without retaining a relationship.
+**Config Application**:
+A one-time operation that sets every present Config Field and removes every
+absent Config Field from Current Config without retaining a relationship.
 _Avoid_: Activation, materialization, reconciliation
 
 **Session**:

@@ -5,8 +5,8 @@ Status: accepted
 aibox models persistent identity as `Tenant::{Managed, Host}` instead of
 maintaining separate Namespace and Target concepts. Managed Tenants are
 runnable and own `$AIBOX_ROOT/tenants/<name>` Homes; the Host Tenant is
-management-only, uses the real host Home, and stores its Agent Profile catalog
-under the reserved `__host` key. This keeps Agent Profile and Session scoping
+management-only, uses the real host Home, and stores its Named Config catalog
+under the reserved `__host` key. This keeps Named Config and Session scoping
 uniform without making host state runnable or deletable.
 
 ## Consequences

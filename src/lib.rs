@@ -10,10 +10,10 @@ mod agent;
 mod cli;
 mod completion;
 mod component;
+mod config;
+mod config_model;
 mod docker;
 mod platform;
-mod profile;
-mod profile_model;
 mod runspec;
 mod session;
 mod session_claude;
@@ -22,6 +22,9 @@ mod tenant;
 #[cfg(test)]
 mod testutil;
 mod traffic;
+mod traffic_proxy;
+mod traffic_store;
+mod traffic_web;
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -95,6 +98,10 @@ pub(crate) fn print_text(text: &str) -> Result<bool> {
     write_text(&mut std::io::stdout().lock(), text)
 }
 
+pub(crate) fn print_bytes(bytes: &[u8]) -> Result<bool> {
+    write_bytes(&mut std::io::stdout().lock(), bytes)
+}
+
 fn write_line(out: &mut impl std::io::Write, line: &str) -> Result<bool> {
     if !write_text(out, line)? {
         return Ok(false);
@@ -107,7 +114,11 @@ fn write_line(out: &mut impl std::io::Write, line: &str) -> Result<bool> {
 }
 
 fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
-    match out.write_all(text.as_bytes()) {
+    write_bytes(out, text.as_bytes())
+}
+
+fn write_bytes(out: &mut impl std::io::Write, bytes: &[u8]) -> Result<bool> {
+    match out.write_all(bytes) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
         Err(e) => Err(e).context("write to stdout"),
@@ -149,13 +160,13 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
             reject_passthrough("component takes no pass-through args", passthrough)?;
             component::dispatch(&args)
         }
-        Command::Profile(args) => {
+        Command::Config(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
-            reject_passthrough("profile takes no pass-through args", passthrough)?;
+            reject_passthrough("config takes no pass-through args", passthrough)?;
             let root = tenant::aibox_root()?;
             let selected =
                 TenantAgent::resolve(agent, &root, args.tenant.host, args.tenant.tenant_name())?;
-            profile::dispatch(&selected, &args.command)
+            config::dispatch(&selected, &args.command)
         }
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);

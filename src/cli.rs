@@ -80,7 +80,7 @@ impl Cli {
 
 fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
     let command = args.get(1).and_then(|value| value.to_str());
-    if !matches!(command, Some("run" | "component" | "profile" | "session")) {
+    if !matches!(command, Some("run" | "component" | "config" | "session")) {
         return Ok(());
     }
     let mut seen = BTreeSet::new();
@@ -129,8 +129,8 @@ pub enum Command {
     Tenant(TenantArgs),
     /// Manage optional components in a Managed Tenant.
     Component(ComponentArgs),
-    /// Manage Tenant-local Agent Profiles and Agent Configuration.
-    Profile(ProfileArgs),
+    /// Manage Tenant-local Named Configs and Current Config.
+    Config(ConfigArgs),
     /// Browse saved Sessions on the host without starting Docker.
     Session(SessionArgs),
     /// Record and inspect HTTP/SSE traffic through a local host-side proxy.
@@ -337,73 +337,83 @@ impl TenantSelection {
     }
 }
 
-/// Agent- and Tenant-scoped Agent Profile management arguments.
+/// Agent- and Tenant-scoped Named Config management arguments.
 #[derive(Debug, Args)]
-pub struct ProfileArgs {
-    /// Coding Agent whose Agent Profile catalog and configuration to manage.
+pub struct ConfigArgs {
+    /// Coding Agent whose Named Config catalog and Current Config to manage.
     #[arg(long = "agent", value_name = "AGENT", value_enum, global = true)]
     pub agent: Option<AgentKind>,
 
-    /// Tenant whose Agent Profile catalog and Agent Configuration to manage.
+    /// Tenant whose Named Config catalog and Current Config to manage.
     #[command(flatten)]
     pub tenant: TenantSelection,
 
-    /// Agent Profile operation to perform.
+    /// Named Config operation to perform.
     #[command(subcommand)]
-    pub command: ProfileCommand,
+    pub command: ConfigCommand,
 }
 
-/// Agent Profile configuration operations.
+/// Named and Current Config operations.
 #[derive(Debug, Subcommand)]
-pub enum ProfileCommand {
-    /// List Agent Profiles in the selected Tenant and Coding Agent.
+pub enum ConfigCommand {
+    /// List Named Configs in the selected Tenant and Coding Agent.
     List,
-    /// Print one Agent Profile file.
+    /// Print a Named Config or the Current Config.
     Get {
-        /// Agent Profile lowercase DNS label to print.
-        #[arg(value_parser = parse_profile)]
-        profile: String,
-        /// Print the credential file instead of the main configuration.
-        #[arg(long)]
-        auth: bool,
-    },
-    /// Create an Agent Profile from the built-in native template.
-    Create {
-        /// Agent Profile lowercase DNS label to create.
-        #[arg(value_parser = parse_profile)]
-        profile: String,
-    },
-    /// Open an Agent Profile file in `$VISUAL` or `$EDITOR`.
-    Edit {
-        /// Agent Profile lowercase DNS label to edit.
-        #[arg(value_parser = parse_profile)]
-        profile: String,
-        /// Edit the credential file instead of the main configuration.
-        #[arg(long)]
-        auth: bool,
-    },
-    /// Delete one or more Agent Profiles.
-    Delete {
-        /// Agent Profile lowercase DNS labels to delete.
+        /// Named Config lowercase DNS label to print.
         #[arg(
-            value_name = "PROFILE",
-            value_parser = parse_profile,
+            value_name = "NAME",
+            value_parser = parse_config,
+            required_unless_present = "current",
+            conflicts_with = "current"
+        )]
+        config: Option<String>,
+        /// Print the Current Config instead of a Named Config.
+        #[arg(long)]
+        current: bool,
+    },
+    /// Create a Named Config from the built-in native template.
+    Create {
+        /// Named Config lowercase DNS label to create.
+        #[arg(value_parser = parse_config)]
+        config: String,
+    },
+    /// Edit a Named Config or the Current Config in `$VISUAL` or `$EDITOR`.
+    Edit {
+        /// Named Config lowercase DNS label to edit.
+        #[arg(
+            value_name = "NAME",
+            value_parser = parse_config,
+            required_unless_present = "current",
+            conflicts_with = "current"
+        )]
+        config: Option<String>,
+        /// Edit the Current Config instead of a Named Config.
+        #[arg(long)]
+        current: bool,
+    },
+    /// Delete one or more Named Configs.
+    Delete {
+        /// Named Config lowercase DNS labels to delete.
+        #[arg(
+            value_name = "CONFIG",
+            value_parser = parse_config,
             required_unless_present = "all",
             conflicts_with = "all"
         )]
-        profiles: Vec<String>,
-        /// Delete every Agent Profile.
+        configs: Vec<String>,
+        /// Delete every Named Config.
         #[arg(long)]
         all: bool,
         /// Skip delete confirmations.
         #[arg(short, long)]
         yes: bool,
     },
-    /// Apply every fixed Agent Profile field to the Agent Configuration once.
+    /// Apply every fixed Config Field to the Current Config once.
     Apply {
-        /// Agent Profile lowercase DNS label to apply.
-        #[arg(value_parser = parse_profile)]
-        profile: String,
+        /// Named Config lowercase DNS label to apply.
+        #[arg(value_parser = parse_config)]
+        config: String,
     },
 }
 
@@ -457,8 +467,8 @@ fn parse_tenant(value: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
-fn parse_profile(value: &str) -> Result<String, String> {
-    crate::tenant::validate_name("profile", value)
+fn parse_config(value: &str) -> Result<String, String> {
+    crate::tenant::validate_name("config", value)
         .map(|()| value.to_string())
         .map_err(|error| error.to_string())
 }
@@ -499,16 +509,16 @@ mod tests {
 
     #[test]
     fn host_tenant_is_distinct_from_managed_tenant_named_host() {
-        let cli = Cli::try_parse_from(["aibox", "profile", "--tenant", "host", "list"]).unwrap();
-        let Command::Profile(args) = cli.command else {
-            panic!("expected profile command");
+        let cli = Cli::try_parse_from(["aibox", "config", "--tenant", "host", "list"]).unwrap();
+        let Command::Config(args) = cli.command else {
+            panic!("expected config command");
         };
         assert_eq!(args.tenant.tenant.as_deref(), Some("host"));
         assert!(!args.tenant.host);
 
-        let cli = Cli::try_parse_from(["aibox", "profile", "--host", "list"]).unwrap();
-        let Command::Profile(args) = cli.command else {
-            panic!("expected profile command");
+        let cli = Cli::try_parse_from(["aibox", "config", "--host", "list"]).unwrap();
+        let Command::Config(args) = cli.command else {
+            panic!("expected config command");
         };
         assert!(args.tenant.host);
         assert!(args.tenant.tenant.is_none());
@@ -526,7 +536,7 @@ mod tests {
     fn destructive_commands_require_explicit_selections() {
         for args in [
             vec!["aibox", "tenant", "delete"],
-            vec!["aibox", "profile", "delete"],
+            vec!["aibox", "config", "delete"],
             vec!["aibox", "session", "delete"],
         ] {
             let error = Cli::try_parse_from(args).unwrap_err();
@@ -538,7 +548,7 @@ mod tests {
     fn destructive_all_selection_conflicts_with_explicit_targets() {
         for args in [
             &["aibox", "tenant", "delete", "work", "--all"][..],
-            &["aibox", "profile", "delete", "custom", "--all"][..],
+            &["aibox", "config", "delete", "custom", "--all"][..],
             &["aibox", "session", "delete", "session-id", "--all"][..],
         ] {
             let error = Cli::try_parse_from(args).unwrap_err();
@@ -553,14 +563,14 @@ mod tests {
             &["aibox", "completion", "zsh", "--tenant", "work"][..],
             &["aibox", "tenant", "list", "--host"][..],
             &["aibox", "component", "list", "--agent", "claude"][..],
-            &["aibox", "profile", "list", "--workspace", "."][..],
+            &["aibox", "config", "list", "--workspace", "."][..],
             &["aibox", "session", "list", "--mount", ".:/data"][..],
         ] {
             assert_parse_error(args, ErrorKind::UnknownArgument);
         }
 
         Cli::try_parse_from(["aibox", "run", "--agent", "claude", "--tenant", "work"]).unwrap();
-        Cli::try_parse_from(["aibox", "profile", "list", "--agent", "claude", "--host"]).unwrap();
+        Cli::try_parse_from(["aibox", "config", "list", "--agent", "claude", "--host"]).unwrap();
         Cli::try_parse_from([
             "aibox", "session", "--tenant", "work", "list", "--agent", "claude",
         ])
@@ -572,7 +582,7 @@ mod tests {
     fn duplicate_selection_detection_accepts_agent_passthrough_lookalikes() {
         for args in [
             &["aibox", "run", "--tenant", "one", "--tenant=two"][..],
-            &["aibox", "profile", "--host", "list", "--host"][..],
+            &["aibox", "config", "--host", "list", "--host"][..],
             &[
                 "aibox",
                 "session",
@@ -601,19 +611,62 @@ mod tests {
     }
 
     #[test]
-    fn profile_apply_is_supported_and_removed_lifecycle_commands_are_rejected() {
-        let cli = Cli::try_parse_from(["aibox", "profile", "apply", "custom"]).unwrap();
-        let Command::Profile(args) = cli.command else {
-            panic!("expected profile command");
+    fn config_apply_is_supported_and_removed_lifecycle_commands_are_rejected() {
+        let cli = Cli::try_parse_from(["aibox", "config", "apply", "custom"]).unwrap();
+        let Command::Config(args) = cli.command else {
+            panic!("expected config command");
         };
         assert!(matches!(
             args.command,
-            ProfileCommand::Apply { profile } if profile == "custom"
+            ConfigCommand::Apply { config } if config == "custom"
         ));
         for command in ["activate", "deactivate", "status", "diff", "reconcile"] {
-            assert_parse_error(&["aibox", "profile", command], ErrorKind::InvalidSubcommand);
+            assert_parse_error(&["aibox", "config", command], ErrorKind::InvalidSubcommand);
         }
         assert_parse_error(&["aibox", "provider", "list"], ErrorKind::InvalidSubcommand);
+        assert_parse_error(&["aibox", "profile", "list"], ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn config_get_and_edit_require_exactly_one_target() {
+        for command in ["get", "edit"] {
+            assert_parse_error(
+                &["aibox", "config", command],
+                ErrorKind::MissingRequiredArgument,
+            );
+            assert_parse_error(
+                &["aibox", "config", command, "custom", "--current"],
+                ErrorKind::ArgumentConflict,
+            );
+            assert_parse_error(
+                &["aibox", "config", command, "custom", "--auth"],
+                ErrorKind::UnknownArgument,
+            );
+        }
+
+        let named = Cli::try_parse_from(["aibox", "config", "get", "custom"]).unwrap();
+        let Command::Config(named) = named.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(
+            named.command,
+            ConfigCommand::Get {
+                config: Some(config),
+                current: false
+            } if config == "custom"
+        ));
+
+        let current = Cli::try_parse_from(["aibox", "config", "edit", "--current"]).unwrap();
+        let Command::Config(current) = current.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(
+            current.command,
+            ConfigCommand::Edit {
+                config: None,
+                current: true
+            }
+        ));
     }
 
     #[test]

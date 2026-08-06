@@ -1,6 +1,6 @@
 //! Coding Agent-specific runtime and configuration contracts.
 //!
-//! Shared orchestration asks [`AgentKind`] for paths, Agent Profile files, and
+//! Shared orchestration asks [`AgentKind`] for paths, Named Config files, and
 //! command construction. Transcript parsing remains in the two Session backend
 //! modules because the Coding Agents use different on-disk formats.
 
@@ -8,98 +8,95 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 
-/// Primitive value accepted by one fixed Agent Profile field.
+/// Primitive value accepted by one fixed Config Field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProfileValueKind {
+pub(crate) enum ConfigValueKind {
     String,
     Bool,
 }
 
-/// One fixed main-configuration field that every Profile Application updates.
+/// One fixed main-configuration field that every Config Application updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProfileField {
+pub(crate) struct ConfigField {
     pub(crate) path: &'static [&'static str],
-    pub(crate) value_kind: ProfileValueKind,
+    pub(crate) value_kind: ConfigValueKind,
 }
 
-/// Agent-specific interpretation of an Agent Profile `auth.json`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProfileAuthKind {
-    ClaudeToken,
-    CodexObject,
-}
-
-const CLAUDE_PROFILE_FIELDS: &[ProfileField] = &[
-    ProfileField {
+const CLAUDE_CONFIG_FIELDS: &[ConfigField] = &[
+    ConfigField {
         path: &["env", "ANTHROPIC_BASE_URL"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
+        path: &["env", "ANTHROPIC_AUTH_TOKEN"],
+        value_kind: ConfigValueKind::String,
+    },
+    ConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["permissions", "defaultMode"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["skipDangerousModePermissionPrompt"],
-        value_kind: ProfileValueKind::Bool,
+        value_kind: ConfigValueKind::Bool,
     },
 ];
 
-const CODEX_PROFILE_FIELDS: &[ProfileField] = &[
-    ProfileField {
+const CODEX_CONFIG_FIELDS: &[ConfigField] = &[
+    ConfigField {
         path: &["approval_policy"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["sandbox_mode"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model_reasoning_effort"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["plan_mode_reasoning_effort"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model_provider"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model_providers", "custom", "name"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model_providers", "custom", "base_url"],
-        value_kind: ProfileValueKind::String,
+        value_kind: ConfigValueKind::String,
     },
-    ProfileField {
+    ConfigField {
         path: &["model_providers", "custom", "requires_openai_auth"],
-        value_kind: ProfileValueKind::Bool,
+        value_kind: ConfigValueKind::Bool,
     },
 ];
 
-const DEFAULT_CODEX_PROFILE: &str = r#"approval_policy = "never"
+const DEFAULT_CODEX_CONFIG: &str = r#"approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
@@ -117,9 +114,10 @@ const DEFAULT_CODEX_AUTH: &str = r#"{
 }
 "#;
 
-const DEFAULT_CLAUDE_PROFILE: &str = r#"{
+const DEFAULT_CLAUDE_CONFIG: &str = r#"{
   "env": {
     "ANTHROPIC_BASE_URL": "https://example.com",
+    "ANTHROPIC_AUTH_TOKEN": "sk-example",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
@@ -129,11 +127,6 @@ const DEFAULT_CLAUDE_PROFILE: &str = r#"{
     "defaultMode": "bypassPermissions"
   },
   "skipDangerousModePermissionPrompt": true
-}
-"#;
-
-const DEFAULT_CLAUDE_AUTH: &str = r#"{
-  "ANTHROPIC_AUTH_TOKEN": "sk-example"
 }
 "#;
 
@@ -168,7 +161,7 @@ impl AgentKind {
         }
     }
 
-    /// Primary native Agent Configuration file.
+    /// Primary native Current Config file.
     pub const fn main_config_file(self) -> &'static str {
         match self {
             Self::Claude => "settings.json",
@@ -176,7 +169,7 @@ impl AgentKind {
         }
     }
 
-    /// Native authentication file in the Agent Configuration, when separate.
+    /// Native authentication file in the Current Config, when separate.
     pub const fn native_auth_file(self) -> Option<&'static str> {
         match self {
             Self::Claude => None,
@@ -184,53 +177,45 @@ impl AgentKind {
         }
     }
 
-    /// Agent Profile credential file.
-    ///
-    /// Claude's optional token is projected into `settings.json.env` during
-    /// Profile Application; Codex auth replaces the native file as an object.
-    pub const fn profile_auth_file(self) -> &'static str {
+    /// Native files comprising a Named Config or Current Config.
+    pub const fn config_files(self) -> &'static [&'static str] {
         match self {
-            Self::Claude | Self::Codex => "auth.json",
-        }
-    }
-
-    /// Files comprising one complete Agent Profile definition.
-    pub const fn profile_files(self) -> &'static [&'static str] {
-        match self {
-            Self::Claude => &["settings.json", "auth.json"],
+            Self::Claude => &["settings.json"],
             Self::Codex => &["config.toml", "auth.json"],
         }
     }
 
-    /// Fixed main-configuration fields accepted by an Agent Profile.
-    pub(crate) const fn profile_fields(self) -> &'static [ProfileField] {
-        match self {
-            Self::Claude => CLAUDE_PROFILE_FIELDS,
-            Self::Codex => CODEX_PROFILE_FIELDS,
+    /// Empty native content used when editing a missing Current Config file.
+    pub fn empty_config_file(self, file: &str) -> Option<&'static str> {
+        match (self, file) {
+            (Self::Claude, "settings.json") => Some("{}\n"),
+            (Self::Codex, "config.toml") => Some(""),
+            (Self::Codex, "auth.json") => Some("{}\n"),
+            _ => None,
         }
     }
 
-    /// Authentication contract used by an Agent Profile.
-    pub(crate) const fn profile_auth_kind(self) -> ProfileAuthKind {
+    /// Fixed main-configuration fields accepted by a Named Config.
+    pub(crate) const fn config_fields(self) -> &'static [ConfigField] {
         match self {
-            Self::Claude => ProfileAuthKind::ClaudeToken,
-            Self::Codex => ProfileAuthKind::CodexObject,
+            Self::Claude => CLAUDE_CONFIG_FIELDS,
+            Self::Codex => CODEX_CONFIG_FIELDS,
         }
     }
 
-    /// Built-in native main configuration used by `profile create`.
-    pub const fn profile_template(self) -> &'static str {
+    /// Built-in native main configuration used by `config create`.
+    pub const fn config_template(self) -> &'static str {
         match self {
-            Self::Claude => DEFAULT_CLAUDE_PROFILE,
-            Self::Codex => DEFAULT_CODEX_PROFILE,
+            Self::Claude => DEFAULT_CLAUDE_CONFIG,
+            Self::Codex => DEFAULT_CODEX_CONFIG,
         }
     }
 
-    /// Built-in credential template used by `profile create`.
-    pub const fn profile_auth_template(self) -> &'static str {
+    /// Built-in native credential template used by `config create`, if separate.
+    pub const fn config_auth_template(self) -> Option<&'static str> {
         match self {
-            Self::Claude => DEFAULT_CLAUDE_AUTH,
-            Self::Codex => DEFAULT_CODEX_AUTH,
+            Self::Claude => None,
+            Self::Codex => Some(DEFAULT_CODEX_AUTH),
         }
     }
 
@@ -260,7 +245,7 @@ impl AgentKind {
         }
     }
 
-    /// Build the Coding Agent command without adding Agent Profile data.
+    /// Build the Coding Agent command without adding Named Config data.
     pub fn build_command(self, passthrough: &[OsString]) -> Vec<OsString> {
         let mut command = vec![OsString::from(self.tag())];
         command.extend(passthrough.iter().cloned());
@@ -274,15 +259,15 @@ mod tests {
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
-        for (agent, tag, state_dir, main, native_auth, profile_files, auth) in [
+        for (agent, tag, state_dir, main, native_auth, config_files, auth) in [
             (
                 AgentKind::Claude,
                 "claude",
                 ".claude",
                 "settings.json",
                 None,
-                &["settings.json", "auth.json"][..],
-                "{\n  \"ANTHROPIC_AUTH_TOKEN\": \"sk-example\"\n}\n",
+                &["settings.json"][..],
+                None,
             ),
             (
                 AgentKind::Codex,
@@ -291,31 +276,28 @@ mod tests {
                 "config.toml",
                 Some("auth.json"),
                 &["config.toml", "auth.json"][..],
-                "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n",
+                Some("{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"),
             ),
         ] {
             assert_eq!(agent.tag(), tag, "{agent:?}");
             assert_eq!(agent.state_dir_name(), state_dir, "{agent:?}");
             assert_eq!(agent.main_config_file(), main, "{agent:?}");
             assert_eq!(agent.native_auth_file(), native_auth, "{agent:?}");
-            assert_eq!(agent.profile_auth_file(), "auth.json", "{agent:?}");
-            assert_eq!(agent.profile_files(), profile_files, "{agent:?}");
-            assert_eq!(agent.profile_auth_template(), auth, "{agent:?}");
+            assert_eq!(agent.config_files(), config_files, "{agent:?}");
+            assert_eq!(agent.config_auth_template(), auth, "{agent:?}");
+            for file in config_files {
+                assert!(agent.empty_config_file(file).is_some(), "{agent:?} {file}");
+            }
         }
-        assert_eq!(AgentKind::Claude.profile_fields().len(), 7);
-        assert_eq!(AgentKind::Codex.profile_fields().len(), 9);
-        assert_eq!(
-            AgentKind::Claude.profile_auth_kind(),
-            ProfileAuthKind::ClaudeToken
-        );
-        assert_eq!(
-            AgentKind::Codex.profile_auth_kind(),
-            ProfileAuthKind::CodexObject
-        );
+        assert_eq!(AgentKind::Claude.config_fields().len(), 8);
+        assert_eq!(AgentKind::Codex.config_fields().len(), 9);
+        assert!(AgentKind::Claude
+            .config_template()
+            .contains("ANTHROPIC_AUTH_TOKEN"));
     }
 
     #[test]
-    fn build_command_preserves_passthrough_without_injecting_profile_config() {
+    fn build_command_preserves_passthrough_without_injecting_named_config() {
         let pass = vec![OsString::from("--model"), OsString::from("opus")];
         let command = AgentKind::Claude.build_command(&pass);
         assert_eq!(command, ["claude", "--model", "opus"]);

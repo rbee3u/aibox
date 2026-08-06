@@ -1,7 +1,7 @@
 # Materialize Tenant-local Agent Profiles with roll-forward reconciliation
 
 Status: superseded by
-[ADR 0005](0005-one-time-fixed-field-profile-application.md).
+[ADR 0005](0005-one-time-fixed-field-config-application.md).
 
 Each Agent Profile belongs to one Tenant and one Coding Agent. Activation
 records the pre-activation Agent Configuration and exact applied Agent Profile,

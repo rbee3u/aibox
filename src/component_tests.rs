@@ -255,13 +255,13 @@ fn partial_statusline_installations_are_incomplete() {
 }
 
 #[test]
-fn statusline_survives_repeated_profile_applications() {
+fn statusline_survives_repeated_config_applications() {
     let (_root, tenant) = initialized_tenant();
     let selected = tenant.for_agent(AgentKind::Codex);
     for (name, model) in [("one", "one"), ("two", "two")] {
-        crate::profile::create_profile(&selected, name).unwrap();
+        crate::config::create_named_config(&selected, name).unwrap();
         fs::write(
-            selected.profile_file(name, "config.toml"),
+            selected.named_config_file(name, "config.toml"),
             format!("model = \"{model}\"\n"),
         )
         .unwrap();
@@ -272,12 +272,12 @@ fn statusline_survives_repeated_profile_applications() {
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
-    crate::profile::apply_profile(&selected, "one").unwrap();
+    crate::config::apply_named_config(&selected, "one").unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
-    crate::profile::apply_profile(&selected, "two").unwrap();
+    crate::config::apply_named_config(&selected, "two").unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
@@ -288,11 +288,11 @@ fn statusline_survives_repeated_profile_applications() {
 }
 
 #[test]
-fn statusline_install_after_profile_apply_needs_no_profile_coordination() {
+fn statusline_install_after_config_apply_needs_no_config_coordination() {
     let (_root, tenant) = initialized_tenant();
     let selected = tenant.for_agent(AgentKind::Claude);
-    crate::profile::create_profile(&selected, "custom").unwrap();
-    crate::profile::apply_profile(&selected, "custom").unwrap();
+    crate::config::create_named_config(&selected, "custom").unwrap();
+    crate::config::apply_named_config(&selected, "custom").unwrap();
 
     install_claude_statusline(&tenant).unwrap();
     assert_eq!(

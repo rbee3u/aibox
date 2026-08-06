@@ -1,6 +1,6 @@
 //! Optional capabilities derived from native state in a Managed Tenant Home.
 //!
-//! Status-line Components directly edit native Agent Configuration while
+//! Status-line Components directly edit native Current Config while
 //! toolchains own their Tenant-local SDK directories. There is no Component
 //! registry, so inspection must distinguish healthy, partial, modified, and
 //! unmanaged native state before installation or removal.

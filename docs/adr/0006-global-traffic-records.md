@@ -4,7 +4,7 @@ Status: accepted
 
 The Traffic Proxy is a temporary host-side HTTP/SSE diagnostic tool. Its
 Traffic Records live directly under `$AIBOX_ROOT/traffic/<record>/`, outside
-Managed Tenant Homes and Agent Profile catalogs. The command owns only
+Managed Tenant Homes and Named Config catalogs. The command owns only
 `--listen` and `--allow-remote`; it neither selects a Tenant or Coding Agent nor
 starts Docker.
 

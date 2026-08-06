@@ -1,6 +1,6 @@
-use super::proxy;
-use super::store::{StoredRecord, TrafficStore};
-use super::AppState;
+use crate::traffic::AppState;
+use crate::traffic_proxy;
+use crate::traffic_store::{StoredRecord, TrafficStore};
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, Method, Response, StatusCode};
@@ -14,9 +14,9 @@ use tokio::io::AsyncReadExt as _;
 use tokio_util::io::ReaderStream;
 
 const PAGE_SIZE: usize = 50;
-const HTML: &str = include_str!("../../assets/traffic.html");
-const CSS: &str = include_str!("../../assets/traffic.css");
-const JS: &str = include_str!("../../assets/traffic.js");
+const HTML: &str = include_str!("../assets/traffic.html");
+const CSS: &str = include_str!("../assets/traffic.css");
+const JS: &str = include_str!("../assets/traffic.js");
 
 pub(super) async fn security_middleware(
     State(state): State<AppState>,
@@ -25,7 +25,7 @@ pub(super) async fn security_middleware(
     next: Next,
 ) -> Response<Body> {
     if let Err(message) = validate_management_request(&state, peer, &request) {
-        return secure_response(proxy::bare_error(StatusCode::FORBIDDEN, &message));
+        return secure_response(traffic_proxy::bare_error(StatusCode::FORBIDDEN, &message));
     }
     secure_response(next.run(request).await)
 }
@@ -114,7 +114,7 @@ pub(super) async fn js() -> Response<Body> {
 }
 
 pub(super) async fn not_found() -> Response<Body> {
-    proxy::bare_error(StatusCode::NOT_FOUND, "Traffic management route not found")
+    traffic_proxy::bare_error(StatusCode::NOT_FOUND, "Traffic management route not found")
 }
 
 fn content(
@@ -220,9 +220,9 @@ fn summary(record: &StoredRecord) -> RecordSummary {
 
 #[derive(Serialize)]
 struct RecordDetail {
-    request: super::store::RequestMetadata,
-    response: Option<super::store::ResponseMetadata>,
-    result: Option<super::store::ResultMetadata>,
+    request: crate::traffic_store::RequestMetadata,
+    response: Option<crate::traffic_store::ResponseMetadata>,
+    result: Option<crate::traffic_store::ResultMetadata>,
     state: String,
     request_body_bytes: u64,
     response_body_bytes: u64,
@@ -454,8 +454,8 @@ mod tests {
                 .finish(
                     &record,
                     std::time::Instant::now(),
-                    &super::super::store::RuntimeMeasurements::default(),
-                    super::super::store::Outcome::Rejected,
+                    &crate::traffic_store::RuntimeMeasurements::default(),
+                    crate::traffic_store::Outcome::Rejected,
                     None,
                 )
                 .unwrap();
@@ -475,8 +475,8 @@ mod tests {
             .finish(
                 &newest,
                 std::time::Instant::now(),
-                &super::super::store::RuntimeMeasurements::default(),
-                super::super::store::Outcome::Rejected,
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Rejected,
                 None,
             )
             .unwrap();
