@@ -38,6 +38,7 @@ export interface RecordSummary {
   status: number | null;
   outcome: string;
   state: RecordState;
+  ttfb_ms: number | null;
   total_ms: number | null;
 }
 

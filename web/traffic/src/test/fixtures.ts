@@ -10,6 +10,7 @@ export const completedSummary: RecordSummary = {
   status: 200,
   outcome: "completed",
   state: "completed",
+  ttfb_ms: 100,
   total_ms: 1250,
 };
 
@@ -22,6 +23,7 @@ export const activeSummary: RecordSummary = {
   status: null,
   outcome: "active",
   state: "active",
+  ttfb_ms: null,
   total_ms: null,
 };
 

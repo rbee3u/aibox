@@ -151,13 +151,8 @@ impl TrafficStore {
         })
     }
 
-    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    pub fn root_display(&self) -> String {
-        self.root.display().to_string()
     }
 
     pub fn begin(

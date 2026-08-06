@@ -1,8 +1,8 @@
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   background: var(--bg);
   color: var(--ink);
@@ -22,17 +22,32 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
+  overflow: hidden;
 }
-.brand > div {
-  display: grid;
-  gap: 1px;
+.brandText {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .brand strong {
+  flex: 0 0 auto;
   font-size: 15px;
 }
-.brand span:not(.mark) {
+.separator {
+  flex: 0 0 auto;
+}
+.separator,
+.tagline {
   color: var(--muted);
   font-size: 12px;
+}
+.tagline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mark {
   display: grid;
@@ -78,6 +93,7 @@
   grid-template-columns: minmax(340px, 31%) minmax(0, 1fr);
   gap: 1px;
   min-height: 0;
+  overflow: hidden;
   background: var(--line);
 }
 .emptyDetail {
@@ -116,6 +132,7 @@
 @media (max-width: 800px) {
   .app {
     height: auto;
+    min-height: 100vh;
     overflow: visible;
   }
   .topbar {
@@ -131,6 +148,7 @@
     flex: none;
     grid-template-columns: 1fr;
     min-height: auto;
+    overflow: visible;
   }
   .emptyDetail {
     min-height: 360px;

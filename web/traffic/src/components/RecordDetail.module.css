@@ -1,6 +1,8 @@
 .panel {
   min-width: 0;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior-y: contain;
   padding: 25px 30px 36px;
   background: var(--panel);
 }
@@ -210,6 +212,8 @@
 @media (max-width: 800px) {
   .panel {
     min-height: 55vh;
+    overflow: visible;
+    overscroll-behavior-y: auto;
     padding: 20px 18px 30px;
   }
 }

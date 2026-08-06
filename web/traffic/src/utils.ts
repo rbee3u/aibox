@@ -1,5 +1,43 @@
 import type { HeaderValue, RecordSummary } from "./types";
 
+const UTC_PLUS_EIGHT_MS = 8 * 60 * 60 * 1000;
+const EXPLICIT_TIME_ZONE = /(?:z|[+-]\d{2}:\d{2})$/i;
+
+function twoDigits(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+export function formatTimestamp(value: string): string {
+  if (!EXPLICIT_TIME_ZONE.test(value)) return "—";
+  const parsed = new Date(value);
+  const timestamp = parsed.getTime();
+  if (!Number.isFinite(timestamp)) return "—";
+
+  const eastEight = new Date(timestamp + UTC_PLUS_EIGHT_MS);
+  if (!Number.isFinite(eastEight.getTime())) return "—";
+  return [
+    `${eastEight.getUTCFullYear()}-${twoDigits(eastEight.getUTCMonth() + 1)}-${twoDigits(eastEight.getUTCDate())}`,
+    `${twoDigits(eastEight.getUTCHours())}:${twoDigits(eastEight.getUTCMinutes())}:${twoDigits(eastEight.getUTCSeconds())}`,
+  ].join(" ");
+}
+
+export function compactDuration(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [
+    hours > 0 ? `${hours}h` : "",
+    minutes > 0 ? `${minutes}m` : "",
+    seconds > 0 ? `${seconds}s` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
 export function duration(ms: number | null | undefined): string {
   if (ms == null) return "—";
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;

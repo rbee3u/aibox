@@ -1,7 +1,15 @@
 import { Check, Clipboard, Download, FileText, LoaderCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { RecordDetail as RecordDetailData } from "../types";
-import { bytes, concatChunks, decodeBytes, decodeHeader, duration, queryParams } from "../utils";
+import {
+  bytes,
+  concatChunks,
+  decodeBytes,
+  decodeHeader,
+  duration,
+  formatTimestamp,
+  queryParams,
+} from "../utils";
 import styles from "./RecordDetail.module.css";
 import { RecordStatus } from "./RecordStatus";
 
@@ -71,7 +79,7 @@ export function RecordDetail({
           </table>
         )}
         <div className={styles.metrics}>
-          <Metric label="Started" value={new Date(request.started_at).toLocaleString()} />
+          <Metric label="Started" value={formatTimestamp(request.started_at)} />
           <Metric
             label="Response headers"
             value={response?.headers_at ? new Date(response.headers_at).toLocaleTimeString() : "—"}

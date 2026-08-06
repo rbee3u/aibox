@@ -1,15 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
   bytes,
+  compactDuration,
   concatChunks,
   decodeBytes,
   decodeHeader,
   duration,
+  formatTimestamp,
   queryParams,
   recordUrl,
 } from "./utils";
 
 describe("traffic display utilities", () => {
+  it("formats timestamps in fixed UTC+08:00", () => {
+    expect(formatTimestamp("2026-08-06T04:00:00Z")).toBe("2026-08-06 12:00:00");
+    expect(formatTimestamp("2026-08-06T16:30:45Z")).toBe("2026-08-07 00:30:45");
+    expect(formatTimestamp("2026-08-06T04:00:00")).toBe("—");
+    expect(formatTimestamp("not-a-timestamp")).toBe("—");
+  });
+
+  it("formats compact list durations with whole-second precision", () => {
+    expect(compactDuration(null)).toBe("—");
+    expect(compactDuration(999)).toBe("999ms");
+    expect(compactDuration(1000)).toBe("1s");
+    expect(compactDuration(1499)).toBe("1s");
+    expect(compactDuration(1500)).toBe("2s");
+    expect(compactDuration(59999)).toBe("1m");
+    expect(compactDuration(123000)).toBe("2m3s");
+    expect(compactDuration(3603000)).toBe("1h3s");
+    expect(compactDuration(3723000)).toBe("1h2m3s");
+  });
+
   it("formats durations and byte counts", () => {
     expect(duration(null)).toBe("—");
     expect(duration(800)).toBe("800 ms");

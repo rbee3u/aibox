@@ -432,7 +432,7 @@ pub fn aibox_root() -> Result<PathBuf> {
     absolutize(&root)
 }
 
-fn host_home() -> Result<PathBuf> {
+pub(crate) fn host_home() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
     if home.is_empty() {
         bail!("HOME is set but empty");

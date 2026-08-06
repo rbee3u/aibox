@@ -1,6 +1,7 @@
 .panel {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  container-type: inline-size;
   min-width: 0;
   min-height: 0;
   background: var(--panel);
@@ -13,11 +14,6 @@
   min-height: 48px;
   padding: 8px 12px 8px 14px;
   border-bottom: 1px solid var(--line);
-}
-.listHeader h2 {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.2;
 }
 .headerActions,
 .selectionActions {
@@ -32,10 +28,31 @@
   justify-content: center;
   gap: 5px;
 }
+.headerActions {
+  margin-left: auto;
+}
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.selectRecords,
+.refreshButton,
+.cancelSelection {
+  padding: 6px 8px;
+}
+.selectRecords,
 .refreshButton {
-  width: 31px;
-  height: 31px;
-  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.cancelSelection {
+  color: var(--accent);
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
 }
 .deleteAll {
   border-color: transparent;
@@ -56,7 +73,6 @@
     transform: rotate(360deg);
   }
 }
-.tools,
 .pagination {
   display: flex;
   align-items: center;
@@ -67,15 +83,19 @@
   font-size: 12px;
   border-bottom: 1px solid var(--line);
 }
-.selectPage {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  white-space: nowrap;
+.pageSelection {
+  padding: 5px 7px;
+  color: var(--accent);
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
 }
 .selectionActions {
   min-width: 0;
   white-space: nowrap;
+}
+.selectionCount {
+  font-variant-numeric: tabular-nums;
 }
 .deleteSelected {
   padding: 6px 8px;
@@ -83,6 +103,7 @@
 .records {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior-y: contain;
 }
 .empty {
   display: grid;
@@ -99,17 +120,34 @@
 }
 .record {
   display: grid;
-  grid-template-columns: 26px 1fr;
-  gap: 5px;
+  grid-template-columns: minmax(0, 1fr) 29px;
+  align-items: stretch;
+  gap: 6px;
   padding: 10px 12px;
   border-bottom: 1px solid #edf0f3;
+}
+.record:hover {
+  background: var(--accent-soft);
 }
 .current {
   box-shadow: inset 3px 0 var(--accent);
   background: var(--accent-soft);
 }
-.record > input {
-  margin-top: 9px;
+.record.current:hover {
+  background: var(--accent-hover);
+}
+.selectionRecord.current {
+  background: var(--panel);
+}
+.selectionRecord:not(.unselectable):hover {
+  background: #fafbfc;
+}
+.selectionRecord.unselectable:hover {
+  background: var(--panel);
+}
+.selectionRecord.selected,
+.selectionRecord.selected:hover {
+  background: var(--accent-hover);
 }
 .rowButton {
   display: grid;
@@ -124,9 +162,52 @@
   text-align: left;
   cursor: pointer;
 }
-.rowButton:hover {
+.deleteSlot {
+  display: grid;
+  place-items: center;
+}
+.deleteRecord {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+.deleteRecord:hover:not(:disabled),
+.deleteRecord:focus-visible {
+  color: var(--danger);
+  border-color: #efcaca;
+  background: var(--danger-soft);
+}
+.deleting {
+  animation: spin 1s linear infinite;
+}
+.selectionRecord .rowButton {
+  position: relative;
+  grid-column: 1 / -1;
+  padding-right: 35px;
+}
+.selectionIndicator {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  color: var(--accent);
+  transform: translateY(-50%);
+}
+.rowButton:hover:not(:disabled) {
+  border-color: transparent;
   color: var(--ink);
-  background: var(--accent-soft);
+  background: transparent;
+}
+.rowButton:disabled {
+  cursor: default;
 }
 .method {
   padding-top: 2px;
@@ -153,11 +234,27 @@
   font-size: 12px;
 }
 .side {
+  position: relative;
   display: grid;
   justify-items: end;
   gap: 1px;
   color: var(--muted);
   font-size: 11px;
+}
+.timestamp,
+.timing {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .pagination {
   border-top: 1px solid var(--line);
@@ -173,11 +270,12 @@
   padding: 6px 8px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .refreshing {
+  .refreshing,
+  .deleting {
     animation: none;
   }
 }
-@media (max-width: 380px) {
+@container (max-width: 410px) {
   .deleteSelectedLabel {
     position: absolute;
     width: 1px;
@@ -187,5 +285,11 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+}
+
+@media (max-width: 800px) {
+  .records {
+    overscroll-behavior-y: auto;
   }
 }

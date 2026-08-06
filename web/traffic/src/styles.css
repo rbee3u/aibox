@@ -7,6 +7,7 @@
   --muted: #687386;
   --accent: #5b54dc;
   --accent-soft: #f0efff;
+  --accent-hover: #e7e5ff;
   --danger: #c43232;
   --danger-soft: #fff0f0;
   --green: #17825c;
@@ -28,9 +29,12 @@
 html,
 body,
 #root {
+  height: 100%;
   min-width: 320px;
   min-height: 100%;
   margin: 0;
+  overflow: hidden;
+  overscroll-behavior-y: none;
 }
 body {
   background: var(--bg);
@@ -75,4 +79,13 @@ input[type="checkbox"] {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@media (max-width: 800px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    overflow: visible;
+  }
 }

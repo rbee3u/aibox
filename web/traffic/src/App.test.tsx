@@ -22,8 +22,9 @@ describe("Traffic App", () => {
     const api = fakeApi();
     const { container } = render(<App api={api} />);
 
-    expect(await screen.findByText("aibox traffic")).toBeInTheDocument();
-    expect(screen.getByText("Understand your model API traffic")).toBeInTheDocument();
+    const brandName = await screen.findByText("aibox traffic");
+    const tagline = screen.getByText("Inspect LLM API activity");
+    expect(brandName.parentElement).toBe(tagline.parentElement);
     expect(screen.queryByText("temporary HTTP/SSE inspector")).not.toBeInTheDocument();
     expect(container.querySelector("header svg")).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByText("ai")).not.toBeInTheDocument();
@@ -31,10 +32,15 @@ describe("Traffic App", () => {
     const banner = screen.getByRole("banner");
     const resources = within(banner).getByRole("navigation", { name: "Resources" });
     const links = [
-      ["GitHub", "https://github.com/rbee3u/aibox"],
       ["Codex docs", "https://developers.openai.com/codex/cli"],
       ["Claude docs", "https://code.claude.com/docs/en/overview"],
+      ["GitHub", "https://github.com/rbee3u/aibox"],
     ] as const;
+    expect(
+      within(resources)
+        .getAllByRole("link")
+        .map((link) => link.textContent?.trim()),
+    ).toEqual(links.map(([name]) => name));
     for (const [name, href] of links) {
       const link = within(resources).getByRole("link", { name });
       expect(link).toHaveAttribute("href", href);
@@ -45,11 +51,25 @@ describe("Traffic App", () => {
 
     const recordListPanel = screen.getByRole("complementary", { name: "Traffic records" });
     expect(
-      within(recordListPanel).getByRole("button", { name: "Refresh traffic records" }),
+      within(recordListPanel).getByRole("heading", { name: "Traffic records", level: 2 }),
     ).toBeInTheDocument();
+    const refreshButton = within(recordListPanel).getByRole("button", {
+      name: "Refresh traffic records",
+    });
+    expect(refreshButton).toHaveTextContent("Refresh");
+    expect(refreshButton).not.toHaveAttribute("title");
     await waitFor(() =>
       expect(within(recordListPanel).getByRole("button", { name: "Delete all" })).toBeEnabled(),
     );
+    expect(within(recordListPanel).getByText("2026-08-06 12:00:00")).toBeInTheDocument();
+    expect(within(recordListPanel).getByText("2026-08-06 12:01:00")).toBeInTheDocument();
+    const completedTiming = within(recordListPanel).getByTitle("First 100ms; Total 1s");
+    expect(completedTiming).toHaveTextContent("100ms / 1s");
+    const completedRow = within(recordListPanel).getByRole("button", {
+      name: "POST api.example.test",
+    });
+    expect(completedRow).toHaveAccessibleDescription("First 100ms; Total 1s");
+    expect(within(recordListPanel).getByTitle("First —; Total —")).toHaveTextContent("— / —");
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {
@@ -129,7 +149,7 @@ describe("Traffic App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await act(async () => Promise.resolve());
-    expect(screen.getByText("Page 2")).toBeInTheDocument();
+    expect(screen.getByText(/^Page 2 ·/)).toBeInTheDocument();
     expect(listRecords).toHaveBeenLastCalledWith("next-page", expect.any(AbortSignal));
   });
 
@@ -157,28 +177,59 @@ describe("Traffic App", () => {
 
     await user.click(await screen.findByRole("button", { name: /Next/ }));
 
-    expect(await screen.findByText("Page 2")).toBeInTheDocument();
+    expect(await screen.findByText(/^Page 2 ·/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/_aibox/traffic/api/records?cursor=next-page");
   });
 
-  it("renders records and keeps active records out of deletion selection", async () => {
+  it("keeps selection controls out of browsing mode and selects records by row", async () => {
     const api = fakeApi();
     const user = userEvent.setup();
     render(<App api={api} />);
 
     expect(await screen.findByText("api.example.test")).toBeInTheDocument();
     expect(screen.getByText("stream.example.test")).toBeInTheDocument();
-    expect(screen.getAllByText("2 records")).toHaveLength(1);
-    expect(
-      screen.getByRole("checkbox", { name: /Select GET stream\.example\.test/ }),
-    ).toBeDisabled();
-    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    expect(screen.getByText("Page 1 · 2 shown · 2 total")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select page" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toBeEnabled();
+    const activeDelete = screen.getByRole("button", {
+      name: "Cannot delete active GET stream.example.test",
+    });
+    expect(activeDelete).toBeDisabled();
+    expect(activeDelete.parentElement).toHaveAttribute("title", "Active records cannot be deleted");
 
-    await user.click(screen.getByRole("checkbox", { name: /Select POST api\.example\.test/ }));
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    const selectPage = screen.getByRole("button", { name: "Select page" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(selectPage.parentElement).toContainElement(cancel);
+    expect(screen.queryByRole("heading", { name: "Traffic records" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Refresh traffic records" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete all" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete POST api.example.test" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
+    const activeSelection = screen.getByRole("button", { name: "Select GET stream.example.test" });
+    expect(activeSelection).toBeDisabled();
+    expect(activeSelection.lastElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(activeSelection.lastElementChild?.querySelector("svg")).not.toBeInTheDocument();
+
+    const completed = screen.getByRole("button", { name: "Select POST api.example.test" });
+    expect(completed).toHaveAttribute("aria-pressed", "false");
+    expect(completed.lastElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(completed.lastElementChild?.querySelector("svg")).not.toBeInTheDocument();
+    await user.click(completed);
+
+    const selected = screen.getByRole("button", { name: "Deselect POST api.example.test" });
+    expect(selected).toHaveAttribute("aria-pressed", "true");
+    expect(selected.lastElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(selected.lastElementChild?.querySelector("svg")).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
-    expect(screen.queryByText("Page 1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Delete selected/ }));
     expect(screen.getByRole("dialog", { name: "Delete 1 selected record?" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
@@ -188,9 +239,11 @@ describe("Traffic App", () => {
     await waitFor(() =>
       expect(deleteRecordsMock.mock.calls).toContainEqual([[completedSummary.id]]),
     );
+    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
   });
 
-  it("shows a mixed Select page state for a partial page selection", async () => {
+  it("selects, completes, and clears the current page without checkboxes", async () => {
     const secondCompleted = {
       ...completedSummary,
       id: "0198-demo-completed-second",
@@ -211,15 +264,26 @@ describe("Traffic App", () => {
       />,
     );
 
-    await user.click(
-      await screen.findByRole("checkbox", { name: /Select POST api\.example\.test/ }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
 
-    expect(screen.getByRole("checkbox", { name: "Select page" })).toBePartiallyChecked();
+    expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select page" }));
+
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Deselect POST second.example.test" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Clear page" }));
+
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
   });
 
-  it("disables page and global deletion when no completed records exist", async () => {
+  it("disables selection and global deletion when no completed records exist", async () => {
     render(
       <App
         api={fakeApi({
@@ -233,12 +297,134 @@ describe("Traffic App", () => {
       />,
     );
 
-    expect(
-      await screen.findByRole("checkbox", { name: /Select GET stream\.example\.test/ }),
-    ).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: "Select page" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Select" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete all" })).toBeDisabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select page" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
+  });
+
+  it("deletes one record without confirmation, locks deletion, clears detail, and restores focus", async () => {
+    const secondCompleted = {
+      ...completedSummary,
+      id: "0198-demo-completed-second",
+      incoming_uri: "/https://second.example.test/v1/responses",
+      upstream_url: "https://second.example.test/v1/responses",
+    };
+    const initial = {
+      records: [completedSummary, secondCompleted],
+      total: 2,
+      deletable_count: 2,
+      next_cursor: null,
+    };
+    const afterDelete = {
+      records: [secondCompleted],
+      total: 1,
+      deletable_count: 1,
+      next_cursor: null,
+    };
+    let resolveDelete!: (deleted: number) => void;
+    const deleteRequest = new Promise<number>((resolve) => (resolveDelete = resolve));
+    const listRecords = vi
+      .fn<TrafficApi["listRecords"]>()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(afterDelete);
+    const deleteRecords = vi.fn<TrafficApi["deleteRecords"]>().mockReturnValue(deleteRequest);
+    const user = userEvent.setup();
+    render(<App api={fakeApi({ listRecords, deleteRecords })} />);
+
+    await user.click(await screen.findByRole("button", { name: "POST api.example.test" }));
+    expect(
+      await screen.findByRole("region", { name: "Traffic record details" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete POST api.example.test" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deleting POST api.example.test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deleting POST api.example.test" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Delete POST second.example.test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Select" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete all" })).toBeDisabled();
+
+    act(() => resolveDelete(1));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "POST api.example.test" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id]);
+    expect(screen.getByText("Page 1 · 1 shown · 1 total")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select a request" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete POST second.example.test" })).toHaveFocus();
+    expect(screen.queryByText("Record deleted")).not.toBeInTheDocument();
+  });
+
+  it("keeps a record when immediate deletion fails", async () => {
+    const deleteRecords = vi
+      .fn<TrafficApi["deleteRecords"]>()
+      .mockRejectedValue(new Error("cannot delete record"));
+    const user = userEvent.setup();
+    render(<App api={fakeApi({ deleteRecords })} />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete POST api.example.test" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot delete record");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "POST api.example.test" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toBeEnabled();
+  });
+
+  it("returns to the previous page when immediate deletion empties the current page", async () => {
+    const secondPageSummary = {
+      ...completedSummary,
+      id: "0198-demo-second-page",
+      incoming_uri: "/https://second.example.test/v1/responses",
+      upstream_url: "https://second.example.test/v1/responses",
+    };
+    const firstPage = {
+      records: [completedSummary],
+      total: 2,
+      deletable_count: 2,
+      next_cursor: "second-page",
+    };
+    const secondPage = {
+      records: [secondPageSummary],
+      total: 2,
+      deletable_count: 2,
+      next_cursor: null,
+    };
+    const emptySecondPage = {
+      records: [],
+      total: 1,
+      deletable_count: 1,
+      next_cursor: null,
+    };
+    const firstPageAfterDelete = {
+      ...firstPage,
+      total: 1,
+      deletable_count: 1,
+      next_cursor: null,
+    };
+    const listRecords = vi
+      .fn<TrafficApi["listRecords"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage)
+      .mockResolvedValueOnce(emptySecondPage)
+      .mockResolvedValue(firstPageAfterDelete);
+    const user = userEvent.setup();
+    render(<App api={fakeApi({ listRecords, deleteRecords: vi.fn().mockResolvedValue(1) })} />);
+
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Delete POST second.example.test" }),
+    );
+
+    expect(await screen.findByText("Page 1 · 1 shown · 1 total")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toHaveFocus();
   });
 
   it("preserves the selected count across record pages", async () => {
@@ -267,14 +453,94 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={fakeApi({ listRecords })} />);
 
-    await user.click(
-      await screen.findByRole("checkbox", { name: /Select POST api\.example\.test/ }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
     await user.click(screen.getByRole("button", { name: /Next/ }));
 
     expect(await screen.findByText("second.example.test")).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Select page" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select POST second.example.test" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("clears selection when Cancel or Escape exits selection mode", async () => {
+    const user = userEvent.setup();
+    render(<App api={fakeApi()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+  });
+
+  it("lets a confirmation Escape close only the dialog", async () => {
+    const user = userEvent.setup();
+    render(<App api={fakeApi()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+  });
+
+  it("keeps selection mode and selected ids when deletion fails", async () => {
+    const api = fakeApi({ deleteRecords: vi.fn().mockRejectedValue(new Error("delete failed")) });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("delete failed");
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deselect POST api.example.test" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("pauses list polling during selection and refreshes immediately after exit", async () => {
+    vi.useFakeTimers();
+    const listRecords = vi.fn<TrafficApi["listRecords"]>().mockResolvedValue(recordList);
+    render(<App api={fakeApi({ listRecords })} />);
+
+    await act(async () => Promise.resolve());
+    expect(screen.getByRole("button", { name: "Select" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    await act(async () => vi.advanceTimersByTimeAsync(7500));
+
+    expect(listRecords).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: "Refresh traffic records" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => Promise.resolve());
+    expect(listRecords).toHaveBeenCalledTimes(2);
   });
 
   it("loads request and response bodies when a record is selected", async () => {
@@ -290,12 +556,18 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    await user.click(await screen.findByRole("button", { name: /POST api\.example\.test/ }));
+    await user.click(await screen.findByRole("button", { name: "POST api.example.test" }));
     expect(await screen.findByText("request body")).toBeInTheDocument();
+    const detail = screen.getByRole("region", { name: "Traffic record details" });
+    expect(within(detail).getByText("2026-08-06 12:00:00")).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Response" }));
+    expect(screen.getByText("response body")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const getRecordMock = api.getRecord as unknown as { mock: { calls: unknown[][] } };
+    expect(getRecordMock.mock.calls).toHaveLength(1);
     expect(getRecordMock.mock.calls[0]).toEqual([completedSummary.id, expect.any(AbortSignal)]);
   });
 
@@ -309,7 +581,7 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    await user.click(await screen.findByRole("button", { name: /GET stream\.example\.test/ }));
+    await user.click(await screen.findByRole("button", { name: "GET stream.example.test" }));
     await user.click(screen.getByRole("button", { name: "Delete all" }));
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
 
@@ -401,7 +673,7 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await act(async () => Promise.resolve());
-    fireEvent.click(screen.getByRole("button", { name: /GET stream\.example\.test/ }));
+    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
     await act(async () => Promise.resolve());
     const detail = screen.getByRole("region", { name: "Traffic record details" });
     expect(within(detail).getByText("Active")).toBeInTheDocument();
@@ -446,7 +718,7 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await act(async () => Promise.resolve());
-    fireEvent.click(screen.getByRole("button", { name: /GET stream\.example\.test/ }));
+    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
     await act(async () => Promise.resolve());
     await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(loadBody).toHaveBeenCalledTimes(4);

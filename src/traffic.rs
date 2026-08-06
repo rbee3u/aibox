@@ -73,12 +73,9 @@ async fn serve(listen: SocketAddr, root: &Path) -> Result<()> {
     let listeners = bind_listeners(listen)?;
     let router = router(state.clone());
 
-    eprintln!(">> Traffic Proxy listening on http://{listen}");
-    eprintln!(
-        ">> Traffic viewer: http://127.0.0.1:{}/ (raw records: {})",
-        listen.port(),
-        state.store.root_display()
-    );
+    let home = crate::tenant::host_home().ok();
+    let summary = startup_summary(listen.port(), state.store.root(), home.as_deref());
+    eprintln!("{summary}");
 
     let signal_shutdown = shutdown.clone();
     let signal_task = tokio::spawn(async move {
@@ -118,6 +115,24 @@ async fn serve(listen: SocketAddr, root: &Path) -> Result<()> {
         return Err(error).context("serve Traffic Proxy");
     }
     Ok(())
+}
+
+fn startup_summary(port: u16, raw_records: &Path, home: Option<&Path>) -> String {
+    let raw_records = display_path(raw_records, home);
+    format!(
+        ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:{port}/\n   Raw records {raw_records}"
+    )
+}
+
+fn display_path(path: &Path, home: Option<&Path>) -> String {
+    let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) else {
+        return path.display().to_string();
+    };
+    if relative.as_os_str().is_empty() {
+        "~".to_string()
+    } else {
+        format!("~/{}", relative.display())
+    }
 }
 
 fn router(state: AppState) -> Router {
@@ -256,6 +271,50 @@ mod tests {
             ..denied
         };
         validate_listener_scope(&allowed).unwrap();
+    }
+
+    #[test]
+    fn startup_summary_uses_loopback_viewer_and_home_relative_records() {
+        assert_eq!(
+            startup_summary(
+                9923,
+                Path::new("/Users/example/.aibox/traffic"),
+                Some(Path::new("/Users/example")),
+            ),
+            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records ~/.aibox/traffic"
+        );
+    }
+
+    #[test]
+    fn startup_summary_changes_only_the_viewer_port() {
+        assert_eq!(
+            startup_summary(
+                8080,
+                Path::new("/Users/example/.aibox/traffic"),
+                Some(Path::new("/Users/example")),
+            ),
+            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:8080/\n   Raw records ~/.aibox/traffic"
+        );
+    }
+
+    #[test]
+    fn startup_summary_keeps_records_outside_home_absolute() {
+        assert_eq!(
+            startup_summary(
+                9923,
+                Path::new("/var/lib/aibox/traffic"),
+                Some(Path::new("/Users/example")),
+            ),
+            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records /var/lib/aibox/traffic"
+        );
+    }
+
+    #[test]
+    fn startup_summary_uses_absolute_records_path_without_home() {
+        assert_eq!(
+            startup_summary(9923, Path::new("/var/lib/aibox/traffic"), None),
+            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records /var/lib/aibox/traffic"
+        );
     }
 
     #[tokio::test]

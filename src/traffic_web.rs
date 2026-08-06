@@ -155,6 +155,7 @@ struct RecordSummary {
     status: Option<u16>,
     outcome: String,
     state: String,
+    ttfb_ms: Option<u64>,
     total_ms: Option<u64>,
 }
 
@@ -224,6 +225,7 @@ fn summary(record: &StoredRecord) -> RecordSummary {
         status: record.response.as_ref().map(|response| response.status),
         outcome: outcome.to_string(),
         state: state.to_string(),
+        ttfb_ms: record.result.as_ref().and_then(|result| result.ttfb_ms),
         total_ms: record.result.as_ref().map(|result| result.total_ms),
     }
 }
@@ -632,7 +634,22 @@ mod tests {
         drop(first_process);
 
         let store = TrafficStore::open(temp.path()).unwrap();
-        let completed_id = finished_record(&store, "/completed", b"", b"");
+        let (completed, _) = store
+            .begin("GET", "/completed", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let completed_id = completed.id.clone();
+        store
+            .finish(
+                &completed,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements {
+                    ttfb: Some(std::time::Duration::from_millis(321)),
+                    ..Default::default()
+                },
+                crate::traffic_store::Outcome::Rejected,
+                None,
+            )
+            .unwrap();
         let (active, _) = store
             .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();
@@ -640,16 +657,17 @@ mod tests {
 
         assert_eq!(list.total, 3);
         assert_eq!(list.deletable_count, 2);
-        for (id, state, outcome) in [
-            (active.id.as_str(), "active", "active"),
-            (completed_id.as_str(), "completed", "rejected"),
-            (interrupted_id.as_str(), "interrupted", "interrupted"),
+        for (id, state, outcome, ttfb_ms) in [
+            (active.id.as_str(), "active", "active", None),
+            (completed_id.as_str(), "completed", "rejected", Some(321)),
+            (interrupted_id.as_str(), "interrupted", "interrupted", None),
         ] {
             let record = list.records.iter().find(|record| record.id == id).unwrap();
             assert_eq!(
                 (record.state.as_str(), record.outcome.as_str()),
                 (state, outcome)
             );
+            assert_eq!(record.ttfb_ms, ttfb_ms);
         }
     }
 
