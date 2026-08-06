@@ -403,6 +403,63 @@ fn decode_cursor(cursor: &str) -> anyhow::Result<(String, String)> {
 mod tests {
     use super::*;
     use axum::http::Request;
+    use http_body_util::BodyExt as _;
+    use std::io::Write as _;
+    use uuid::Uuid;
+
+    fn management_request(
+        method: Method,
+        host: Option<&str>,
+        origin: Option<&str>,
+        fetch_site: Option<&str>,
+        csrf: Option<&str>,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri("/_aibox/traffic/api/records");
+        for (name, value) in [
+            (header::HOST.as_str(), host),
+            (header::ORIGIN.as_str(), origin),
+            ("sec-fetch-site", fetch_site),
+            ("x-aibox-traffic-csrf", csrf),
+        ] {
+            if let Some(value) = value {
+                builder = builder.header(name, value);
+            }
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    fn finished_record(
+        store: &TrafficStore,
+        incoming_uri: &str,
+        request_body: &[u8],
+        response_body: &[u8],
+    ) -> String {
+        let (mut record, _) = store
+            .begin("POST", incoming_uri, None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        record.request_body.write_all(request_body).unwrap();
+        record.request_body.flush().unwrap();
+        record.response_body.write_all(response_body).unwrap();
+        record.response_body.flush().unwrap();
+        let id = record.id.clone();
+        store
+            .finish(
+                &record,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        id
+    }
+
+    async fn response_json(response: Response<Body>) -> serde_json::Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
 
     #[test]
     fn cursors_are_opaque_and_round_trip() {
@@ -416,30 +473,241 @@ mod tests {
     }
 
     #[test]
-    fn management_security_requires_loopback_host_origin_and_csrf() {
+    fn management_security_enforces_each_loopback_origin_and_csrf_boundary() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path(), 9923).unwrap();
-        let peer: SocketAddr = "127.0.0.1:40000".parse().unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/_aibox/traffic/api/records/delete")
-            .header("host", "127.0.0.1:9923")
-            .header("origin", "http://127.0.0.1:9923")
-            .header("sec-fetch-site", "same-origin")
-            .header("x-aibox-traffic-csrf", &state.csrf)
-            .body(Body::empty())
+        for (label, peer, method, host, origin, site, token, expected) in [
+            (
+                "canonical GET",
+                "127.0.0.1:40000",
+                Method::GET,
+                Some("127.0.0.1:9923"),
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "localhost HEAD",
+                "127.0.0.1:40000",
+                Method::HEAD,
+                Some("localhost:9923"),
+                None,
+                Some("none"),
+                None,
+                None,
+            ),
+            (
+                "IPv6 loopback GET",
+                "[::1]:40000",
+                Method::GET,
+                Some("[::1]:9923"),
+                Some("http://127.0.0.1:9923"),
+                Some("same-origin"),
+                None,
+                None,
+            ),
+            (
+                "authenticated POST",
+                "127.0.0.1:40000",
+                Method::POST,
+                Some("127.0.0.1:9923"),
+                Some("http://127.0.0.1:9923"),
+                Some("same-origin"),
+                Some(true),
+                None,
+            ),
+            (
+                "remote peer",
+                "192.0.2.1:40000",
+                Method::GET,
+                Some("127.0.0.1:9923"),
+                None,
+                None,
+                None,
+                Some("the Traffic management interface is loopback-only"),
+            ),
+            (
+                "untrusted Host",
+                "127.0.0.1:40000",
+                Method::GET,
+                Some("evil.example"),
+                None,
+                None,
+                None,
+                Some("invalid Host for the Traffic management interface"),
+            ),
+            (
+                "cross-site fetch",
+                "127.0.0.1:40000",
+                Method::GET,
+                Some("127.0.0.1:9923"),
+                None,
+                Some("cross-site"),
+                None,
+                Some("cross-site management requests are not accepted"),
+            ),
+            (
+                "foreign Origin",
+                "127.0.0.1:40000",
+                Method::GET,
+                Some("127.0.0.1:9923"),
+                Some("http://evil.example"),
+                None,
+                None,
+                Some("invalid Origin for the Traffic management interface"),
+            ),
+            (
+                "POST without Origin",
+                "127.0.0.1:40000",
+                Method::POST,
+                Some("127.0.0.1:9923"),
+                None,
+                None,
+                Some(true),
+                Some("mutating management requests require the loopback Origin"),
+            ),
+            (
+                "POST with bad CSRF",
+                "127.0.0.1:40000",
+                Method::POST,
+                Some("127.0.0.1:9923"),
+                Some("http://127.0.0.1:9923"),
+                None,
+                Some(false),
+                Some("invalid Traffic management CSRF token"),
+            ),
+        ] {
+            let csrf = token.map(|valid| {
+                if valid {
+                    state.csrf.as_str()
+                } else {
+                    "wrong-token"
+                }
+            });
+            let request = management_request(method, host, origin, site, csrf);
+            let actual = validate_management_request(&state, peer.parse().unwrap(), &request).err();
+            assert_eq!(actual.as_deref(), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn record_summaries_distinguish_active_interrupted_and_completed_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let first_process = TrafficStore::open(temp.path()).unwrap();
+        let (interrupted, _) = first_process
+            .begin("GET", "/interrupted", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();
-        assert!(validate_management_request(&state, peer, &request).is_ok());
-        let remote = "192.0.2.1:40000".parse().unwrap();
-        assert!(validate_management_request(&state, remote, &request).is_err());
-        let bad = Request::builder()
-            .method("POST")
-            .uri("/_aibox/traffic/api/records/delete")
-            .header("host", "127.0.0.1:9923")
-            .header("origin", "http://evil.example")
-            .body(Body::empty())
+        let interrupted_id = interrupted.id.clone();
+        drop(first_process);
+
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let completed_id = finished_record(&store, "/completed", b"", b"");
+        let (active, _) = store
+            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();
-        assert!(validate_management_request(&state, peer, &bad).is_err());
+        let list = list_records_inner(&store, None).unwrap();
+
+        assert_eq!(list.total, 3);
+        assert_eq!(list.deletable_count, 2);
+        for (id, state, outcome) in [
+            (active.id.as_str(), "active", "active"),
+            (completed_id.as_str(), "completed", "rejected"),
+            (interrupted_id.as_str(), "interrupted", "interrupted"),
+        ] {
+            let record = list.records.iter().find(|record| record.id == id).unwrap();
+            assert_eq!(
+                (record.state.as_str(), record.outcome.as_str()),
+                (state, outcome)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn body_api_streams_exact_offsets_and_reports_invalid_ranges() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let id = finished_record(&store, "/body", b"abc\0\xff", b"response");
+
+        for (response_body, offset, expected, length, next_offset) in [
+            (false, 2, &b"c\0\xff"[..], "3", "5"),
+            (false, 5, &b""[..], "0", "5"),
+            (true, 1, &b"esponse"[..], "7", "8"),
+        ] {
+            let response = body_response(&store, &id, response_body, offset).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_LENGTH], length);
+            assert_eq!(
+                response.headers()["x-aibox-traffic-next-offset"],
+                next_offset
+            );
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(body.as_ref(), expected);
+        }
+
+        let invalid_range = body_response(&store, &id, false, 6).await;
+        assert_eq!(invalid_range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        let missing = body_response(&store, &Uuid::now_v7().to_string(), false, 0).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn deletion_api_maps_selection_conflicts_and_successes() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (active, _) = state
+            .store
+            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+
+        let conflict = delete_records(
+            State(state.clone()),
+            Json(DeleteRequest {
+                ids: vec![active.id.clone()],
+            }),
+        )
+        .await;
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+        state
+            .store
+            .finish(
+                &active,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        let stale_count = delete_all(
+            State(state.clone()),
+            Json(DeleteAllRequest {
+                expected_deletable_count: 0,
+            }),
+        )
+        .await;
+        assert_eq!(stale_count.status(), StatusCode::CONFLICT);
+
+        let deleted = delete_records(
+            State(state.clone()),
+            Json(DeleteRequest {
+                ids: vec![active.id],
+            }),
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::OK);
+        assert_eq!(response_json(deleted).await, json!({"deleted": 1}));
+
+        finished_record(&state.store, "/delete-all", b"", b"");
+        let deleted = delete_all(
+            State(state),
+            Json(DeleteAllRequest {
+                expected_deletable_count: 1,
+            }),
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::OK);
+        assert_eq!(response_json(deleted).await, json!({"deleted": 1}));
     }
 
     #[test]
@@ -447,18 +715,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         for _ in 0..51 {
-            let (record, _) = store
-                .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-                .unwrap();
-            store
-                .finish(
-                    &record,
-                    std::time::Instant::now(),
-                    &crate::traffic_store::RuntimeMeasurements::default(),
-                    crate::traffic_store::Outcome::Rejected,
-                    None,
-                )
-                .unwrap();
+            finished_record(&store, "/bad", b"", b"");
         }
         let first = list_records_inner(&store, None).unwrap();
         assert_eq!(first.total, 51);
@@ -468,18 +725,7 @@ mod tests {
         assert_eq!(second.records.len(), 1);
         assert!(second.next_cursor.is_none());
 
-        let (newest, _) = store
-            .begin("GET", "/new", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        store
-            .finish(
-                &newest,
-                std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
-                None,
-            )
-            .unwrap();
+        finished_record(&store, "/new", b"", b"");
         let stable_second = list_records_inner(&store, Some(&cursor)).unwrap();
         assert_eq!(stable_second.total, 52);
         assert_eq!(stable_second.records.len(), 1);

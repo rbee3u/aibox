@@ -647,6 +647,23 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    fn finished_record(store: &TrafficStore, incoming_uri: &str) -> String {
+        let (record, _) = store
+            .begin("GET", incoming_uri, None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let id = record.id.clone();
+        store
+            .finish(
+                &record,
+                std::time::Instant::now(),
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        id
+    }
+
     #[test]
     fn host_slug_and_flat_record_layout_are_safe() {
         assert_eq!(sanitize_host("API.Example.com:443"), "api.example.com-443");
@@ -714,6 +731,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn opening_and_scanning_never_follow_symlinked_traffic_paths() {
+        use std::os::unix::fs::symlink;
+
+        let linked_root = tempfile::tempdir().unwrap();
+        let outside_collection = tempfile::tempdir().unwrap();
+        fs::write(outside_collection.path().join("keep"), b"outside").unwrap();
+        symlink(
+            outside_collection.path(),
+            linked_root.path().join("traffic"),
+        )
+        .unwrap();
+        let error = TrafficStore::open(linked_root.path())
+            .err()
+            .expect("a symlinked collection must be rejected")
+            .to_string();
+        assert!(error.contains("not a real directory"), "{error}");
+        assert_eq!(
+            fs::read(outside_collection.path().join("keep")).unwrap(),
+            b"outside"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let outside_body = tempfile::tempdir().unwrap();
+        let target = outside_body.path().join("request.body");
+        fs::write(&target, b"secret").unwrap();
+        let store = TrafficStore::open(root.path()).unwrap();
+        let (record, _) = store
+            .begin("POST", "/unsafe", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let body = record.directory.join(REQUEST_BODY);
+        fs::remove_file(&body).unwrap();
+        symlink(&target, &body).unwrap();
+
+        assert!(store.scan().unwrap().is_empty());
+        assert_eq!(fs::read(target).unwrap(), b"secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn deletion_rejects_symlinked_record_entries_without_touching_targets() {
         use std::os::unix::fs::symlink;
 
@@ -745,18 +801,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         for _ in 0..2 {
-            let (record, _) = store
-                .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-                .unwrap();
-            store
-                .finish(
-                    &record,
-                    std::time::Instant::now(),
-                    &RuntimeMeasurements::default(),
-                    Outcome::Rejected,
-                    None,
-                )
-                .unwrap();
+            finished_record(&store, "/bad");
         }
         let (active, _) = store
             .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
@@ -764,6 +809,49 @@ mod tests {
         assert!(store.delete_all(1).is_err());
         assert_eq!(store.scan().unwrap().len(), 3);
         assert_eq!(store.delete_all(2).unwrap(), 2);
+        let remaining = store.scan().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].request.id, active.id);
+        assert!(remaining[0].active);
+    }
+
+    #[test]
+    fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anything() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let first = finished_record(&store, "/first");
+        let second = finished_record(&store, "/second");
+        let (active, _) = store
+            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let missing = Uuid::now_v7().to_string();
+
+        for (ids, expected) in [
+            (Vec::new(), "at least one"),
+            (vec![first.clone(), first.clone()], "must not be repeated"),
+            (
+                vec![
+                    first.clone(),
+                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ],
+                "not UUID v7",
+            ),
+            (vec![first.clone(), missing], "not found"),
+            (vec![first.clone(), active.id.clone()], "active Traffic"),
+        ] {
+            let error = store.delete_ids(&ids).unwrap_err().to_string();
+            assert!(error.contains(expected), "{ids:?}: {error}");
+            assert!(
+                store.find(&first).is_ok(),
+                "{ids:?} removed the first record"
+            );
+            assert!(
+                store.find(&second).is_ok(),
+                "{ids:?} removed the second record"
+            );
+        }
+
+        assert_eq!(store.delete_ids(&[first, second]).unwrap(), 2);
         let remaining = store.scan().unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].request.id, active.id);

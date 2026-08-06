@@ -571,6 +571,23 @@ mod tests {
             "aibox", "run", "--tenant", "work", "--", "--tenant", "ignored",
         ]));
         assert_eq!(context.tenant, "work");
+
+        let protocol = CompletionContext::from_protocol_argv(&words(&[
+            "aibox",
+            "--shell",
+            "bash",
+            "--",
+            "aibox",
+            "run",
+            "--agent=claude",
+            "--tenant=work",
+            "--",
+            "--agent=codex",
+        ]));
+        assert_eq!(protocol.top, TopCommand::Run);
+        assert_eq!(protocol.agent, AgentKind::Claude);
+        assert_eq!(protocol.tenant, "work");
+        assert!(protocol.selection_valid);
     }
 
     #[test]

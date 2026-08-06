@@ -259,7 +259,17 @@ mod tests {
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
-        for (agent, tag, state_dir, main, native_auth, config_files, auth) in [
+        for (
+            agent,
+            tag,
+            state_dir,
+            main,
+            native_auth,
+            config_files,
+            empty_files,
+            config_fields,
+            auth,
+        ) in [
             (
                 AgentKind::Claude,
                 "claude",
@@ -267,6 +277,35 @@ mod tests {
                 "settings.json",
                 None,
                 &["settings.json"][..],
+                &[("settings.json", "{}\n")][..],
+                &[
+                    (&["env", "ANTHROPIC_BASE_URL"][..], ConfigValueKind::String),
+                    (
+                        &["env", "ANTHROPIC_AUTH_TOKEN"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (&["permissions", "defaultMode"][..], ConfigValueKind::String),
+                    (
+                        &["skipDangerousModePermissionPrompt"][..],
+                        ConfigValueKind::Bool,
+                    ),
+                ][..],
                 None,
             ),
             (
@@ -276,6 +315,27 @@ mod tests {
                 "config.toml",
                 Some("auth.json"),
                 &["config.toml", "auth.json"][..],
+                &[("config.toml", ""), ("auth.json", "{}\n")][..],
+                &[
+                    (&["approval_policy"][..], ConfigValueKind::String),
+                    (&["sandbox_mode"][..], ConfigValueKind::String),
+                    (&["model_reasoning_effort"][..], ConfigValueKind::String),
+                    (&["plan_mode_reasoning_effort"][..], ConfigValueKind::String),
+                    (&["model"][..], ConfigValueKind::String),
+                    (&["model_provider"][..], ConfigValueKind::String),
+                    (
+                        &["model_providers", "custom", "name"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["model_providers", "custom", "base_url"][..],
+                        ConfigValueKind::String,
+                    ),
+                    (
+                        &["model_providers", "custom", "requires_openai_auth"][..],
+                        ConfigValueKind::Bool,
+                    ),
+                ][..],
                 Some("{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"),
             ),
         ] {
@@ -285,15 +345,21 @@ mod tests {
             assert_eq!(agent.native_auth_file(), native_auth, "{agent:?}");
             assert_eq!(agent.config_files(), config_files, "{agent:?}");
             assert_eq!(agent.config_auth_template(), auth, "{agent:?}");
-            for file in config_files {
-                assert!(agent.empty_config_file(file).is_some(), "{agent:?} {file}");
+            for (file, expected) in empty_files {
+                assert_eq!(
+                    agent.empty_config_file(file),
+                    Some(*expected),
+                    "{agent:?} {file}"
+                );
             }
+            assert_eq!(agent.empty_config_file("unknown"), None, "{agent:?}");
+            let actual_fields: Vec<_> = agent
+                .config_fields()
+                .iter()
+                .map(|field| (field.path, field.value_kind))
+                .collect();
+            assert_eq!(actual_fields, config_fields, "{agent:?}");
         }
-        assert_eq!(AgentKind::Claude.config_fields().len(), 8);
-        assert_eq!(AgentKind::Codex.config_fields().len(), 9);
-        assert!(AgentKind::Claude
-            .config_template()
-            .contains("ANTHROPIC_AUTH_TOKEN"));
     }
 
     #[test]

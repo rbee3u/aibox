@@ -877,10 +877,6 @@ fn install_signal_handler() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "docker_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "docker_cleanup_tests.rs"]
-mod cleanup_tests;

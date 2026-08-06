@@ -118,7 +118,7 @@ mod tests {
     use crate::testutil::{only, write_jsonl};
 
     #[test]
-    fn files_discovers_jsonl_transcripts_under_projects() {
+    fn strict_and_tolerant_discovery_find_only_jsonl_under_projects() {
         let dir = tempfile::tempdir().unwrap();
         let transcript = write_jsonl(
             dir.path(),
@@ -136,22 +136,9 @@ mod tests {
         )
         .unwrap();
 
-        let files = Claude.files(dir.path()).unwrap();
-
-        assert_eq!(files, vec![transcript]);
-    }
-
-    #[test]
-    fn list_files_discovers_the_same_transcripts_tolerantly() {
-        let dir = tempfile::tempdir().unwrap();
-        let transcript = write_jsonl(
-            dir.path(),
-            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
-            &[r#"{"type":"assistant"}"#],
-        );
-
         let discovery = Claude.list_files(dir.path()).unwrap();
 
+        assert_eq!(Claude.files(dir.path()).unwrap(), vec![transcript.clone()]);
         assert_eq!(discovery.files, vec![transcript]);
         assert!(discovery.errors.is_empty());
     }

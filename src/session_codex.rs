@@ -220,7 +220,7 @@ mod tests {
     use crate::testutil::{only, write_jsonl};
 
     #[test]
-    fn files_keep_only_rollout_jsonl_transcripts() {
+    fn strict_and_tolerant_discovery_keep_only_rollout_jsonl_transcripts() {
         let dir = tempfile::tempdir().unwrap();
         let rollout = write_jsonl(
             dir.path(),
@@ -239,27 +239,9 @@ mod tests {
         )
         .unwrap();
 
-        let files = Codex.files(dir.path()).unwrap();
-
-        assert_eq!(files, vec![rollout]);
-    }
-
-    #[test]
-    fn list_files_apply_the_same_rollout_filter_as_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let rollout = write_jsonl(
-            dir.path(),
-            ".codex/sessions/2026/07/14/rollout-x-3f2a1b6c-1111-2222-3333-444455556666.jsonl",
-            &[r#"{"type":"session_meta"}"#],
-        );
-        write_jsonl(
-            dir.path(),
-            ".codex/sessions/2026/07/14/session-x-ignored.jsonl",
-            &[r#"{"type":"session_meta"}"#],
-        );
-
         let discovery = Codex.list_files(dir.path()).unwrap();
 
+        assert_eq!(Codex.files(dir.path()).unwrap(), vec![rollout.clone()]);
         assert_eq!(discovery.files, vec![rollout]);
         assert!(discovery.errors.is_empty());
     }
