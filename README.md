@@ -95,6 +95,8 @@ Tenant baseline:
 aibox component list
 aibox component install claude-statusline
 aibox component install codex-statusline
+aibox component --host list
+aibox component --host install claude-statusline
 aibox component install rust
 aibox component install go@1.25.6 --tenant work
 aibox component remove rust --tenant work --yes
@@ -102,7 +104,9 @@ aibox component remove rust --tenant work --yes
 
 Omitting a Rust or Go version installs the current stable release. Toolchain
 installation uses the shared Docker image and requires `aibox build`; status
-lines directly edit their native Current Config values. See
+lines directly edit their native Current Config values; Host statusline
+Components are available through `--host`, while Rust and Go remain Managed
+Tenant-only. See
 [Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
 replacement semantics.
 

@@ -68,6 +68,8 @@ describe("Traffic App", () => {
     const completedRow = within(recordListPanel).getByRole("button", {
       name: "POST api.example.test",
     });
+    expect(within(completedRow).getByText("HTTP/2")).toBeInTheDocument();
+    expect(within(completedRow).getByText("200")).toBeInTheDocument();
     expect(completedRow).toHaveAccessibleDescription("First token —; Duration 1s");
     expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
       "— / 500ms",
@@ -594,10 +596,9 @@ describe("Traffic App", () => {
     expect(await screen.findByText("request body")).toBeInTheDocument();
     const requestLine = within(detail).getByText("POST").parentElement;
     expect(requestLine).toContainElement(within(detail).getByText("POST"));
-    expect(requestLine).toContainElement(
-      within(detail).getByText("https://api.example.test/v1/responses?stream=true"),
-    );
-    expect(within(detail).getByText("HTTP/2 200 OK")).toBeInTheDocument();
+    expect(requestLine).toContainElement(within(detail).getByText("https://api.example.test"));
+    expect(requestLine).toContainElement(within(detail).getByText("/v1/responses?stream=true"));
+    expect(within(detail).getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
     expect(within(detail).queryByText("Query parameters")).not.toBeInTheDocument();
     await user.click(within(detail).getByRole("tab", { name: "Response" }));
     expect(screen.getByText("response body")).toBeInTheDocument();
@@ -720,7 +721,7 @@ describe("Traffic App", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(getRecord).toHaveBeenCalledTimes(2);
     expect(within(detail).queryByText("Waiting")).not.toBeInTheDocument();
-    expect(within(detail).getByText("HTTP/2 200 OK")).toBeInTheDocument();
+    expect(within(detail).getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
   });
 
   it("does not overlap active body polls", async () => {

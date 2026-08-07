@@ -9,6 +9,7 @@ import {
 
 interface RecordStatusProps {
   status: number | null;
+  httpVersion?: string | null;
   outcome: string;
   state: RecordState;
   compact?: boolean;
@@ -21,13 +22,20 @@ const TONE_CLASS: Record<RecordStatusTone, string> = {
   success: styles.success,
 };
 
-export function RecordStatus({ status, outcome, state, compact = false }: RecordStatusProps) {
+export function RecordStatus({
+  status,
+  httpVersion,
+  outcome,
+  state,
+  compact = false,
+}: RecordStatusProps) {
   const presentation = recordStatusPresentation({ status, outcome, state });
   const anomalyTitle = presentation.anomaly ? `Record outcome: ${presentation.anomaly}` : undefined;
   const noResponse = status === null && state !== "active";
 
   return (
     <span className={styles.root}>
+      {httpVersion && status !== null && <span className={styles.protocol}>{httpVersion}</span>}
       <span
         className={`${styles.value} ${TONE_CLASS[presentation.tone]}`}
         title={noResponse ? anomalyTitle : undefined}
@@ -70,12 +78,21 @@ interface RecordHeadlineStatusProps {
 
 export function RecordHeadlineStatus({ response, result, state }: RecordHeadlineStatusProps) {
   const presentation = recordHeadlinePresentation(response, result, state);
+  const visualStatusText = response
+    ? [response.status, response.reason_phrase].filter(Boolean).join(" ")
+    : presentation.statusText;
 
   return (
     <div className={styles.headline}>
       {presentation.statusText && (
-        <span className={`${styles.headlineStatus} ${TONE_CLASS[presentation.tone]}`}>
-          {presentation.statusText}
+        <span
+          className={`${styles.headlineStatus} ${TONE_CLASS[presentation.tone]}`}
+          aria-label={presentation.statusText}
+        >
+          {response?.http_version && (
+            <span className={styles.protocol}>{response.http_version}</span>
+          )}
+          <span>{visualStatusText}</span>
         </span>
       )}
       {presentation.tag && presentation.tagTone && (

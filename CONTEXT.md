@@ -96,9 +96,10 @@ Tenant's Home can be mounted into a Run.
 _Avoid_: Namespace Home, profile home
 
 **Tenant Component**:
-An optional capability installed into one Managed Tenant's Tenant Home, such
-as a Coding Agent status line or a Tenant-local toolchain. Status-line
-Components directly modify native Current Config.
+An optional capability installed into one Tenant's Tenant Home, such as a
+Coding Agent status line or a Managed Tenant-local toolchain. Status-line
+Components directly modify native Current Config; Host Tenant Components are
+limited to status lines.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration and history

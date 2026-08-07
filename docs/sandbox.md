@@ -258,8 +258,9 @@ exist locally. To support a Run, a replacement image must:
 
 For complete output, an installed Claude status-line Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the
-branch field. The Codex status line uses native TUI support and adds no image
-dependency.
+branch field. It renders the model/reasoning, full current directory, branch,
+compact context-window size, and context-used percentage in that order. The
+Codex status line uses native TUI support and adds no image dependency.
 
 Both toolchain installers require `HOME=/home/aibox`, no incompatible
 `ENTRYPOINT`, Bash, curl, and standard Unix command-line utilities including

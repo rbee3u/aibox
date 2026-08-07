@@ -1,6 +1,6 @@
 use super::*;
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn initialized_tenant() -> (tempfile::TempDir, ManagedTenant) {
     let root = tempfile::tempdir().unwrap();
@@ -9,23 +9,23 @@ fn initialized_tenant() -> (tempfile::TempDir, ManagedTenant) {
     (root, tenant)
 }
 
-fn remove_confirmed(tenant: &ManagedTenant, kind: ComponentKind) -> Result<i32> {
-    remove_from_tenant(
-        tenant,
-        kind,
-        RemovalOptions {
-            discard_changes: false,
-            skip_confirmation: true,
-        },
-    )
+fn managed_scope(tenant: &ManagedTenant) -> Tenant {
+    Tenant::Managed(tenant.clone())
 }
 
-fn remove_discarding(tenant: &ManagedTenant, kind: ComponentKind) -> Result<i32> {
+fn host_scope(root: &Path, home: &Path) -> Tenant {
+    Tenant::Host {
+        home_dir: home.to_path_buf(),
+        root_dir: root.to_path_buf(),
+    }
+}
+
+fn remove_confirmed(tenant: &ManagedTenant, kind: ComponentKind) -> Result<i32> {
+    let selected = managed_scope(tenant);
     remove_from_tenant(
-        tenant,
+        &selected,
         kind,
         RemovalOptions {
-            discard_changes: true,
             skip_confirmation: true,
         },
     )
@@ -149,7 +149,7 @@ fn claude_statusline_install_overwrites_owned_state_and_preserves_other_settings
         ComponentStatus::Modified
     );
 
-    install_claude_statusline(&tenant).unwrap();
+    install_claude_statusline(&managed_scope(&tenant)).unwrap();
 
     assert_eq!(
         inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
@@ -180,7 +180,7 @@ fn claude_statusline_install_overwrites_owned_state_and_preserves_other_settings
 
     let script_before = fs::read(claude.join("statusline.sh")).unwrap();
     let settings_before = fs::read(claude.join("settings.json")).unwrap();
-    install_claude_statusline(&tenant).unwrap();
+    install_claude_statusline(&managed_scope(&tenant)).unwrap();
     assert_eq!(
         fs::read(claude.join("statusline.sh")).unwrap(),
         script_before
@@ -197,8 +197,8 @@ fn statusline_install_creates_missing_current_configs_private() {
     use std::os::unix::fs::PermissionsExt;
 
     let (_root, tenant) = initialized_tenant();
-    install_claude_statusline(&tenant).unwrap();
-    install_codex_statusline(&tenant).unwrap();
+    install_claude_statusline(&managed_scope(&tenant)).unwrap();
+    install_codex_statusline(&managed_scope(&tenant)).unwrap();
 
     for path in [
         tenant.home_dir.join(".claude/settings.json"),
@@ -211,26 +211,326 @@ fn statusline_install_creates_missing_current_configs_private() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn host_statusline_install_initializes_agent_state_without_changing_home_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o751)).unwrap();
+    let selected = host_scope(root.path(), home.path());
+
+    install_claude_statusline(&selected).unwrap();
+    install_codex_statusline(&selected).unwrap();
+
+    assert_eq!(
+        fs::metadata(home.path()).unwrap().permissions().mode() & 0o777,
+        0o751
+    );
+    for path in [home.path().join(".claude"), home.path().join(".codex")] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    for path in [
+        home.path().join(".claude/settings.json"),
+        home.path().join(".codex/config.toml"),
+    ] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert_eq!(
+        fs::metadata(home.path().join(".claude/statusline.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert_eq!(
+        inspect(ComponentKind::ClaudeStatusline, home.path()).unwrap(),
+        ComponentStatus::Installed { version: None }
+    );
+    assert_eq!(
+        inspect(ComponentKind::CodexStatusline, home.path()).unwrap(),
+        ComponentStatus::Installed { version: None }
+    );
+}
+
+#[test]
+fn host_statusline_remove_is_idempotent_and_toolchains_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let selected = host_scope(root.path(), home.path());
+
+    assert_eq!(
+        remove(&selected, ComponentKind::CodexStatusline, true).unwrap(),
+        0
+    );
+    let error = install(&selected, &"rust@1.90.0".parse().unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unavailable to the Host Tenant"), "{error}");
+    let error = remove(&selected, ComponentKind::Rust, true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unavailable to the Host Tenant"), "{error}");
+    assert!(!home.path().join(".codex").exists());
+    assert!(!home.path().join(".rustup").exists());
+
+    install_claude_statusline(&selected).unwrap();
+    remove(&selected, ComponentKind::ClaudeStatusline, true).unwrap();
+    assert!(!home.path().join(".claude/statusline.sh").exists());
+    let settings: Value =
+        serde_json::from_slice(&fs::read(home.path().join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert!(settings.get("statusLine").is_none());
+}
+
+#[test]
+fn host_component_list_stays_read_only_when_home_is_missing() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("missing-home");
+    let selected = host_scope(root.path(), &home);
+
+    assert!(!tenant_home_exists(&selected).unwrap());
+    assert_eq!(component_catalog(&selected), &ComponentKind::STATUSLINES);
+    list(&selected).unwrap();
+    assert!(!home.exists());
+    let error = install_claude_statusline(&selected)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Host Home does not exist"), "{error}");
+    let error = remove(&selected, ComponentKind::ClaudeStatusline, true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Host Home does not exist"), "{error}");
+}
+
+#[test]
+fn codex_statusline_requires_an_explicit_false_color_setting() {
+    let (_root, tenant) = initialized_tenant();
+    let config = tenant.home_dir.join(".codex/config.toml");
+    let items = CODEX_STATUSLINE_ITEMS
+        .iter()
+        .map(|item| format!("\"{item}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(&config, format!("[tui]\nstatus_line = [{items}]\n")).unwrap();
+    assert_eq!(
+        inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+        ComponentStatus::Incomplete
+    );
+
+    fs::write(
+        &config,
+        format!("[tui]\nstatus_line = [{items}]\nstatus_line_use_colors = true\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+        ComponentStatus::Modified
+    );
+
+    fs::write(
+        &config,
+        format!("[tui]\nstatus_line = [{items}]\nstatus_line_use_colors = false\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+        ComponentStatus::Installed { version: None }
+    );
+}
+
 #[test]
 fn codex_statusline_install_preserves_unrelated_toml_and_comments() {
     let (_root, tenant) = initialized_tenant();
     let config = tenant.home_dir.join(".codex/config.toml");
     fs::write(
             &config,
-            "# keep this comment\nmodel = \"custom\"\n\n[tui]\nanimations = false\nstatus_line = [\"old\"]\nstatus_line_use_colors = false\n",
+            "# keep this comment\nmodel = \"custom\"\n\n[tui]\nanimations = false\nstatus_line = [\"old\"]\nstatus_line_use_colors = true\n",
         )
         .unwrap();
 
-    install_codex_statusline(&tenant).unwrap();
+    assert_eq!(
+        inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
+        ComponentStatus::Modified
+    );
+
+    install_codex_statusline(&managed_scope(&tenant)).unwrap();
 
     let content = fs::read_to_string(&config).unwrap();
     assert!(content.contains("# keep this comment"), "{content}");
     assert!(content.contains("model = \"custom\""), "{content}");
     assert!(content.contains("animations = false"), "{content}");
+    let document = content.parse::<toml_edit::DocumentMut>().unwrap();
+    let status_line: Vec<_> = document["tui"]["status_line"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        status_line,
+        vec![
+            "model-with-reasoning",
+            "current-dir",
+            "git-branch",
+            "context-window-size",
+            "context-used",
+        ]
+    );
+    assert_eq!(
+        document["tui"]["status_line_use_colors"].as_bool(),
+        Some(false)
+    );
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
+}
+
+#[test]
+fn claude_statusline_renders_unified_fields() {
+    assert!(!CLAUDE_STATUSLINE.contains(&0x1b));
+    assert!(!String::from_utf8_lossy(CLAUDE_STATUSLINE).contains("\\033"));
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let workspace = home.join("easymath3/workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["symbolic-ref", "HEAD", "refs/heads/main"])
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+
+    let script = root.path().join("statusline.sh");
+    fs::write(&script, CLAUDE_STATUSLINE).unwrap();
+    let input = serde_json::json!({
+        "model": {"display_name": "gpt-5.6-sol"},
+        "effort": {"level": "xhigh"},
+        "workspace": {"current_dir": workspace},
+        "context_window": {
+            "context_window_size": 258000,
+            "used_percentage": 54.8
+        }
+    });
+    let mut child = Command::new("bash")
+        .arg(&script)
+        .env("HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "gpt-5.6-sol xhigh · ~/easymath3/workspace · main · 258K window · Context 54% used\n"
+    );
+}
+
+#[test]
+fn claude_statusline_omits_missing_fields_and_branch() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let script = root.path().join("statusline.sh");
+    fs::write(&script, CLAUDE_STATUSLINE).unwrap();
+    let input = serde_json::json!({
+        "workspace": {"current_dir": workspace},
+        "context_window": {}
+    });
+    let mut child = Command::new("bash")
+        .arg(&script)
+        .env("HOME", root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "~/workspace\n");
+}
+
+#[test]
+fn claude_statusline_clamps_context_percentage() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let script = root.path().join("statusline.sh");
+    fs::write(&script, CLAUDE_STATUSLINE).unwrap();
+
+    for (percentage, expected) in [
+        (-2.0, "~/workspace · Context 0% used\n"),
+        (125.0, "~/workspace · Context 100% used\n"),
+    ] {
+        let input = serde_json::json!({
+            "workspace": {"current_dir": workspace},
+            "context_window": {"used_percentage": percentage}
+        });
+        let mut child = Command::new("bash")
+            .arg(&script)
+            .env("HOME", root.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+    }
+
+    let input = serde_json::json!({
+        "workspace": {"current_dir": workspace},
+        "context_window": {"used_percentage": "unknown"}
+    });
+    let mut child = Command::new("bash")
+        .arg(&script)
+        .env("HOME", root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "~/workspace\n");
 }
 
 #[test]
@@ -244,7 +544,9 @@ fn codex_statusline_install_rejects_an_unowned_non_table_tui() {
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::NotInstalled
     );
-    let error = install_codex_statusline(&tenant).unwrap_err().to_string();
+    let error = install_codex_statusline(&managed_scope(&tenant))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("refusing to replace unowned"), "{error}");
     assert_eq!(fs::read_to_string(config).unwrap(), original);
 }
@@ -265,7 +567,7 @@ fn partial_statusline_installations_are_incomplete() {
 
     fs::write(
         tenant.home_dir.join(".codex/config.toml"),
-        "[tui]\nstatus_line_use_colors = true\n",
+        "[tui]\nstatus_line_use_colors = false\n",
     )
     .unwrap();
     assert_eq!(
@@ -287,7 +589,7 @@ fn statusline_survives_repeated_config_applications() {
         .unwrap();
     }
 
-    install_codex_statusline(&tenant).unwrap();
+    install_codex_statusline(&managed_scope(&tenant)).unwrap();
     assert_eq!(
         inspect(ComponentKind::CodexStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
@@ -314,7 +616,7 @@ fn statusline_install_after_config_apply_needs_no_config_coordination() {
     crate::config::create_named_config(&selected, "custom").unwrap();
     crate::config::apply_named_config(&selected, "custom").unwrap();
 
-    install_claude_statusline(&tenant).unwrap();
+    install_claude_statusline(&managed_scope(&tenant)).unwrap();
     assert_eq!(
         inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
@@ -325,18 +627,18 @@ fn statusline_install_after_config_apply_needs_no_config_coordination() {
 }
 
 #[test]
-fn component_remove_is_guarded_selective_and_idempotent() {
+fn component_remove_requires_confirmation_but_not_discard_and_is_idempotent() {
     let (_root, tenant) = initialized_tenant();
     let claude = tenant.home_dir.join(".claude");
     fs::write(claude.join("settings.json"), "{\"keep\":true}\n").unwrap();
-    install_claude_statusline(&tenant).unwrap();
+    install_claude_statusline(&managed_scope(&tenant)).unwrap();
 
     if !io::stdin().is_terminal() {
+        let selected = managed_scope(&tenant);
         let error = remove_from_tenant(
-            &tenant,
+            &selected,
             ComponentKind::ClaudeStatusline,
             RemovalOptions {
-                discard_changes: false,
                 skip_confirmation: false,
             },
         )
@@ -363,16 +665,11 @@ fn component_remove_is_guarded_selective_and_idempotent() {
         inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Modified
     );
-    let error = remove_confirmed(&tenant, ComponentKind::ClaudeStatusline)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("is modified"), "{error}");
-    assert!(error.contains("--discard-changes"), "{error}");
-    remove_discarding(&tenant, ComponentKind::ClaudeStatusline).unwrap();
+    remove_confirmed(&tenant, ComponentKind::ClaudeStatusline).unwrap();
 }
 
 #[test]
-fn codex_statusline_discard_removes_only_component_owned_keys() {
+fn codex_statusline_remove_modified_state_removes_only_component_owned_keys() {
     let (_root, tenant) = initialized_tenant();
     let config = tenant.home_dir.join(".codex/config.toml");
     fs::write(
@@ -380,7 +677,7 @@ fn codex_statusline_discard_removes_only_component_owned_keys() {
         "# keep this comment\nmodel = \"custom\"\n\n[tui]\nanimations = false\n",
     )
     .unwrap();
-    install_codex_statusline(&tenant).unwrap();
+    install_codex_statusline(&managed_scope(&tenant)).unwrap();
     let mut document = fs::read_to_string(&config)
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
@@ -390,12 +687,7 @@ fn codex_statusline_discard_removes_only_component_owned_keys() {
     document["tui"]["status_line"] = toml_edit::value(customized);
     fs::write(&config, document.to_string()).unwrap();
 
-    let error = remove_confirmed(&tenant, ComponentKind::CodexStatusline)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("modified"), "{error}");
-
-    remove_discarding(&tenant, ComponentKind::CodexStatusline).unwrap();
+    remove_confirmed(&tenant, ComponentKind::CodexStatusline).unwrap();
 
     let content = fs::read_to_string(&config).unwrap();
     assert!(content.contains("# keep this comment"), "{content}");
@@ -448,12 +740,7 @@ fn toolchain_remove_preserves_user_caches_and_unrelated_commands() {
         "default_toolchain = \"nightly-x86_64-unknown-linux-gnu\"\n",
     )
     .unwrap();
-    let error = remove_confirmed(&tenant, ComponentKind::Rust)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("is unmanaged"), "{error}");
-    assert!(error.contains("--discard-changes"), "{error}");
-    remove_discarding(&tenant, ComponentKind::Rust).unwrap();
+    remove_confirmed(&tenant, ComponentKind::Rust).unwrap();
     assert!(!tenant.home_dir.join(".rustup").exists());
     assert!(!cargo_bin.join("cargo").exists());
     assert_eq!(
@@ -538,7 +825,7 @@ fn go_remove_rejects_a_symlinked_sdk_without_touching_its_target() {
     fs::write(outside.path().join("keep"), b"outside sdk").unwrap();
     symlink(outside.path(), tenant.home_dir.join(".goroot")).unwrap();
 
-    let error = remove_discarding(&tenant, ComponentKind::Go)
+    let error = remove_confirmed(&tenant, ComponentKind::Go)
         .unwrap_err()
         .to_string();
 

@@ -362,6 +362,7 @@ fn codex_apply_preserves_toml_comments_unrelated_values_and_statusline() {
     assert!(!config.contains("sandbox_mode"), "{config}");
     assert!(config.contains("keep = true"), "{config}");
     assert!(config.contains("status_line ="), "{config}");
+    assert!(config.contains("status_line_use_colors = true"), "{config}");
     let auth: Value =
         serde_json::from_str(&fs::read_to_string(selected.state_file("auth.json")).unwrap())
             .unwrap();

@@ -22,7 +22,8 @@ image, container Home, and orchestration remain shared.
 **Preserve the CLI boundary.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. `run`, `config`, and
 `session` own separately scoped `--agent`/`--tenant` options; `component` owns
-only `--tenant`; only `config` and `session` accept `--host`. `build`,
+`--tenant` and `--host` (Host supports statusline Components only); only
+`config`, `session`, and `component` accept `--host`. `build`,
 `completion`, and `tenant` accept none of them. `traffic` owns only `--listen`
 and `--allow-remote`; it does not accept selectors or pass-through arguments.
 Completion mirrors these scopes, stays read-only, and runs on the host.
@@ -74,14 +75,15 @@ status line in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
 native auth file as a whole. Every Named Config file is mode `0600`.
 
 **Keep Components optional, native, and independently owned.** Tenant
-initialization does not install status lines or toolchains. `component`
-operates only on Managed Tenants and derives state from native Tenant Home
-files without a registry. Status-line Components directly manage their script
-when applicable and their native configuration values. Status-line paths are
-not Config Fields, so Config Application preserves them without ownership or
-overlap machinery. Expose repairable partial state as `incomplete`. Component
-removal requires explicit discard for modified/unmanaged state. Rust and Go
-install through the shared image with only the Tenant Home mounted; preserve
+initialization does not install status lines or toolchains. `component` derives
+statusline state from native Managed or Host Tenant files without a registry;
+Rust and Go remain Managed Tenant-only and install through the shared image with
+only the Tenant Home mounted. Status-line Components directly manage their
+script when applicable and their native configuration values. Status-line paths
+are not Config Fields, so Config Application preserves them without ownership
+or overlap machinery. Expose repairable partial state as `incomplete`. Remove
+prompts before deleting any existing Component state and requires `--yes` in a
+non-interactive shell; it does not require a separate discard flag. Preserve
 Cargo and GOPATH user state across SDK replacement and removal.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
@@ -99,10 +101,13 @@ user-like records warn and make `session list/get` nonzero without hiding an
 otherwise readable Transcript; deletion remains strict and format-independent.
 
 **Keep missing scopes quiet.** `config list` and `session list` return empty for
-a missing Managed Tenant, and `component list` reports every Component as not
-installed. Read-only commands and completion create nothing. `run`, `config
-create`, `config edit --current`, and `component install` may initialize a
-missing Managed Tenant.
+a missing Managed Tenant, and `component list` reports its catalog as not
+installed. Host Component listing reports the two supported statuslines as not
+installed when the Host Home or Agent state is missing. Read-only commands and
+completion create nothing. `run`, `config create`, `config edit --current`,
+and Managed Tenant `component install` may initialize missing state;
+Host statusline install may initialize an Agent state directory inside an
+already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
 own interrupted filesystem work, but aibox provides no multi-process locking

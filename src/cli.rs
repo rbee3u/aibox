@@ -127,7 +127,7 @@ pub enum Command {
     Completion(CompletionArgs),
     /// Manage aibox-managed Tenants.
     Tenant(TenantArgs),
-    /// Manage optional components in a Managed Tenant.
+    /// Manage optional components in a Tenant.
     Component(ComponentArgs),
     /// Manage Tenant-local Named Configs and Current Config.
     Config(ConfigArgs),
@@ -261,33 +261,19 @@ pub enum TenantCommand {
     },
 }
 
-/// Managed Tenant Component arguments.
+/// Tenant Component arguments.
 #[derive(Debug, Args)]
 pub struct ComponentArgs {
-    /// Managed Tenant lowercase DNS label whose Components to manage (default:
-    /// `default`).
-    #[arg(
-        id = "component-tenant",
-        long = "tenant",
-        value_name = "TENANT",
-        value_parser = parse_tenant,
-        global = true
-    )]
-    pub tenant: Option<String>,
+    /// Tenant whose Components to manage.
+    #[command(flatten)]
+    pub tenant: TenantSelection,
 
     /// Component operation to perform.
     #[command(subcommand)]
     pub command: ComponentCommand,
 }
 
-impl ComponentArgs {
-    /// Selected Managed Tenant, defaulting to `default`.
-    pub fn tenant_name(&self) -> &str {
-        self.tenant.as_deref().unwrap_or("default")
-    }
-}
-
-/// Managed Tenant Component operations.
+/// Tenant Component operations.
 #[derive(Debug, Subcommand)]
 pub enum ComponentCommand {
     /// List available Components and their state in the selected Tenant.
@@ -303,9 +289,6 @@ pub enum ComponentCommand {
         /// Component to remove.
         #[arg(value_name = "COMPONENT")]
         component: crate::component::ComponentKind,
-        /// Remove modified or unmanaged Component state.
-        #[arg(long)]
-        discard_changes: bool,
         /// Skip the removal confirmation.
         #[arg(short, long)]
         yes: bool,
@@ -680,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn component_scope_is_managed_tenant_only() {
+    fn component_scope_supports_host_statuslines() {
         let cli = Cli::try_parse_from([
             "aibox",
             "component",
@@ -693,30 +676,48 @@ mod tests {
         let Command::Component(args) = cli.command else {
             panic!("expected component command");
         };
-        assert_eq!(args.tenant_name(), "work");
+        assert_eq!(args.tenant.tenant_name(), "work");
+        assert!(!args.tenant.host);
         let ComponentCommand::Install { component } = args.command else {
             panic!("expected component install");
         };
         assert_eq!(component.to_string(), "rust@1.90.0");
 
+        let cli = Cli::try_parse_from(["aibox", "component", "--host", "list"]).unwrap();
+        let Command::Component(args) = cli.command else {
+            panic!("expected component command");
+        };
+        assert!(args.tenant.host);
+        assert_eq!(args.tenant.tenant_name(), "default");
+        assert!(matches!(args.command, ComponentCommand::List));
+
+        let cli = Cli::try_parse_from([
+            "aibox",
+            "component",
+            "install",
+            "codex-statusline",
+            "--host",
+        ])
+        .unwrap();
+        let Command::Component(args) = cli.command else {
+            panic!("expected component command");
+        };
+        assert!(args.tenant.host);
+
         assert_parse_error(
-            &["aibox", "component", "--host", "list"],
-            ErrorKind::UnknownArgument,
+            &["aibox", "component", "--host", "--tenant", "work", "list"],
+            ErrorKind::ArgumentConflict,
         );
         assert_parse_error(
             &["aibox", "component", "--agent", "codex", "list"],
             ErrorKind::UnknownArgument,
         );
 
-        let cli = Cli::try_parse_from([
-            "aibox",
-            "component",
-            "remove",
-            "rust",
-            "--discard-changes",
-            "--yes",
-        ])
-        .unwrap();
+        assert_parse_error(
+            &["aibox", "component", "remove", "rust", "--discard-changes"],
+            ErrorKind::UnknownArgument,
+        );
+        let cli = Cli::try_parse_from(["aibox", "component", "remove", "rust", "--yes"]).unwrap();
         let Command::Component(args) = cli.command else {
             panic!("expected component command");
         };
@@ -724,7 +725,6 @@ mod tests {
             args.command,
             ComponentCommand::Remove {
                 component: crate::component::ComponentKind::Rust,
-                discard_changes: true,
                 yes: true,
             }
         ));

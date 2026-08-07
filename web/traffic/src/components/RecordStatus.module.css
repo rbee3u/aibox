@@ -15,6 +15,11 @@
   font-weight: 700;
   white-space: nowrap;
 }
+.protocol {
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
 .success {
   color: var(--green);
 }
@@ -59,6 +64,9 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .headlineStatus {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;

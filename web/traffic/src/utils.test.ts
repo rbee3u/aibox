@@ -7,6 +7,7 @@ import {
   decodeHeader,
   duration,
   formatTimestamp,
+  recordDetailUrl,
   recordUrl,
 } from "./utils";
 
@@ -56,6 +57,19 @@ describe("traffic display utilities", () => {
       ["api.example", "/v1?a=1"],
     );
     expect(recordUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
+      "invalid target",
+      "/raw",
+    ]);
+  });
+
+  it("derives detail labels while preserving the full origin", () => {
+    expect(
+      recordDetailUrl({
+        upstream_url: "https://api.example/v1?a=1",
+        incoming_uri: "/raw",
+      }),
+    ).toEqual(["https://api.example", "/v1?a=1"]);
+    expect(recordDetailUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
       "invalid target",
       "/raw",
     ]);

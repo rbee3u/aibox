@@ -13,6 +13,7 @@ import {
   decodeHeader,
   duration,
   formatTimestamp,
+  recordDetailUrl,
 } from "../utils";
 import styles from "./RecordDetail.module.css";
 import { RecordHeadlineStatus } from "./RecordStatus";
@@ -50,6 +51,7 @@ export function RecordDetail({
   const response = detail.response;
   const result = detail.result;
   const error = recordErrorPresentation(detail);
+  const [origin, path] = recordDetailUrl(request);
   const panelId = `record-panel-${request.id}`;
 
   useEffect(
@@ -89,7 +91,10 @@ export function RecordDetail({
       <div className={styles.header}>
         <div className={styles.requestOverview}>
           <span className={styles.method}>{request.method}</span>
-          <span className={styles.url}>{request.upstream_url ?? request.incoming_uri}</span>
+          <span className={styles.url}>
+            <strong>{origin}</strong>
+            <span>{path}</span>
+          </span>
         </div>
         <RecordHeadlineStatus response={response} result={result} state={detail.state} />
       </div>

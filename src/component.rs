@@ -1,13 +1,12 @@
-//! Optional capabilities derived from native state in a Managed Tenant Home.
+//! Optional capabilities derived from native state in a Tenant Home.
 //!
 //! Status-line Components directly edit native Current Config while
-//! toolchains own their Tenant-local SDK directories. There is no Component
-//! registry, so inspection must distinguish healthy, partial, modified, and
-//! unmanaged native state before installation or removal.
+//! toolchains own Managed Tenant-local SDK directories. There is no Component
+//! registry, so inspection derives state directly from native files.
 
 use crate::agent::AgentKind;
 use crate::cli::{ComponentArgs, ComponentCommand};
-use crate::tenant::{self, FileSnapshot, ManagedTenant, TenantAgent};
+use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::ffi::OsString;
@@ -19,12 +18,18 @@ use std::str::FromStr;
 
 const CLAUDE_STATUSLINE: &[u8] = include_bytes!("../assets/claude-statusline.sh");
 const CLAUDE_STATUSLINE_SCRIPT: &str = "statusline.sh";
-const CODEX_STATUSLINE_ITEMS: [&str; 3] = ["model-with-reasoning", "current-dir", "git-branch"];
+const CODEX_STATUSLINE_ITEMS: [&str; 5] = [
+    "model-with-reasoning",
+    "current-dir",
+    "git-branch",
+    "context-window-size",
+    "context-used",
+];
 const RUST_INSTALLER: &str = include_str!("../assets/install-rust.sh");
 const GO_INSTALLER: &str = include_str!("../assets/install-go.sh");
 const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 
-/// One optional capability that aibox can install into a Managed Tenant Home.
+/// One optional capability that aibox can install into a Tenant Home.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComponentKind {
     /// Claude Code status-line integration.
@@ -44,6 +49,7 @@ impl ComponentKind {
         Self::Rust,
         Self::Go,
     ];
+    pub(crate) const STATUSLINES: [Self; 2] = [Self::ClaudeStatusline, Self::CodexStatusline];
 
     /// Stable CLI name.
     pub fn name(self) -> &'static str {
@@ -58,9 +64,13 @@ impl ComponentKind {
     fn supports_version(self) -> bool {
         matches!(self, Self::Rust | Self::Go)
     }
+
+    fn is_statusline(self) -> bool {
+        matches!(self, Self::ClaudeStatusline | Self::CodexStatusline)
+    }
 }
 
-/// State derived from a Component's native files in one Managed Tenant Home.
+/// State derived from a Component's native files in one Tenant Home.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComponentStatus {
     /// The Component exactly matches the current aibox definition.
@@ -88,7 +98,6 @@ enum StatuslinePartState {
 
 #[derive(Clone, Copy)]
 struct RemovalOptions {
-    discard_changes: bool,
     skip_confirmation: bool,
 }
 
@@ -159,24 +168,20 @@ fn validate_stable_version(version: &str) -> Result<String, String> {
 
 /// Execute one parsed Component command.
 pub fn dispatch(args: &ComponentArgs) -> Result<i32> {
+    let root = tenant::aibox_root()?;
+    let selected = Tenant::resolve(&root, args.tenant.host, args.tenant.tenant_name())?;
     match &args.command {
-        ComponentCommand::List => list(args.tenant_name()),
-        ComponentCommand::Install { component } => install(args.tenant_name(), component),
-        ComponentCommand::Remove {
-            component,
-            discard_changes,
-            yes,
-        } => remove(args.tenant_name(), *component, *discard_changes, *yes),
+        ComponentCommand::List => list(&selected),
+        ComponentCommand::Install { component } => install(&selected, component),
+        ComponentCommand::Remove { component, yes } => remove(&selected, *component, *yes),
     }
 }
 
-fn list(tenant_name: &str) -> Result<i32> {
-    let root = tenant::aibox_root()?;
-    let tenant = ManagedTenant::resolve(&root, tenant_name)?;
-    let exists = tenant.exists()?;
-    for kind in ComponentKind::ALL {
+fn list(selected: &Tenant) -> Result<i32> {
+    let exists = tenant_home_exists(selected)?;
+    for &kind in component_catalog(selected) {
         let status = if exists {
-            inspect(kind, &tenant.home_dir)?
+            inspect(kind, selected.home_dir())?
         } else {
             ComponentStatus::NotInstalled
         };
@@ -187,74 +192,86 @@ fn list(tenant_name: &str) -> Result<i32> {
     Ok(0)
 }
 
-fn install(tenant_name: &str, component: &ComponentSpec) -> Result<i32> {
-    let root = tenant::aibox_root()?;
-    let tenant = ManagedTenant::resolve(&root, tenant_name)?;
+fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
+    reject_host_toolchain(selected, component.kind)?;
     match component.kind {
-        ComponentKind::ClaudeStatusline => install_claude_statusline(&tenant),
-        ComponentKind::CodexStatusline => install_codex_statusline(&tenant),
-        ComponentKind::Rust | ComponentKind::Go => install_toolchain(&tenant, component),
+        ComponentKind::ClaudeStatusline => install_claude_statusline(selected),
+        ComponentKind::CodexStatusline => install_codex_statusline(selected),
+        ComponentKind::Rust | ComponentKind::Go => {
+            let Tenant::Managed(tenant) = selected else {
+                unreachable!("Host toolchains are rejected above")
+            };
+            install_toolchain(tenant, component)
+        }
     }
 }
 
-fn remove(tenant_name: &str, kind: ComponentKind, discard_changes: bool, yes: bool) -> Result<i32> {
-    let root = tenant::aibox_root()?;
-    let tenant = ManagedTenant::resolve(&root, tenant_name)?;
-    if !tenant.exists()? {
+fn remove(selected: &Tenant, kind: ComponentKind, yes: bool) -> Result<i32> {
+    reject_host_toolchain(selected, kind)?;
+    if !tenant_home_exists(selected)? {
+        if matches!(selected, Tenant::Host { .. }) {
+            bail!(
+                "Host Home does not exist: {}",
+                selected.home_dir().display()
+            );
+        }
         return Ok(0);
     }
     remove_from_tenant(
-        &tenant,
+        selected,
         kind,
         RemovalOptions {
-            discard_changes,
             skip_confirmation: yes,
         },
     )
 }
 
 fn remove_from_tenant(
-    tenant: &ManagedTenant,
+    selected: &Tenant,
     kind: ComponentKind,
     options: RemovalOptions,
 ) -> Result<i32> {
-    let status = inspect(kind, &tenant.home_dir)?;
+    reject_host_toolchain(selected, kind)?;
+    let status = inspect(kind, selected.home_dir())?;
     if status == ComponentStatus::NotInstalled {
         return Ok(0);
-    }
-    if matches!(
-        status,
-        ComponentStatus::Modified | ComponentStatus::Unmanaged
-    ) && !options.discard_changes
-    {
-        bail!(
-            "{} is {}; use --discard-changes to remove it",
-            kind.name(),
-            status_label(&status)
-        );
     }
     if !options.skip_confirmation && !confirm_remove(kind)? {
         bail!("aborted");
     }
     match kind {
-        ComponentKind::ClaudeStatusline => remove_claude_statusline(tenant)?,
-        ComponentKind::CodexStatusline => remove_codex_statusline(tenant)?,
-        ComponentKind::Rust => remove_rust(&tenant.home_dir)?,
+        ComponentKind::ClaudeStatusline => remove_claude_statusline(selected)?,
+        ComponentKind::CodexStatusline => remove_codex_statusline(selected)?,
+        ComponentKind::Rust => remove_rust(selected.home_dir())?,
         ComponentKind::Go => {
-            tenant::remove_real_dir_if_exists(&tenant.home_dir.join(".goroot"), "Go root")?;
+            tenant::remove_real_dir_if_exists(&selected.home_dir().join(".goroot"), "Go root")?;
         }
     }
     Ok(0)
 }
 
-fn status_label(status: &ComponentStatus) -> &'static str {
-    match status {
-        ComponentStatus::Installed { .. } => "installed",
-        ComponentStatus::Modified => "modified",
-        ComponentStatus::Incomplete => "incomplete",
-        ComponentStatus::Unmanaged => "unmanaged",
-        ComponentStatus::NotInstalled => "not installed",
+fn component_catalog(selected: &Tenant) -> &'static [ComponentKind] {
+    match selected {
+        Tenant::Managed(_) => &ComponentKind::ALL,
+        Tenant::Host { .. } => &ComponentKind::STATUSLINES,
     }
+}
+
+fn tenant_home_exists(selected: &Tenant) -> Result<bool> {
+    match selected {
+        Tenant::Managed(tenant) => tenant.exists(),
+        Tenant::Host { home_dir, .. } => tenant::real_dir_exists(home_dir, "Host Home"),
+    }
+}
+
+fn reject_host_toolchain(selected: &Tenant, kind: ComponentKind) -> Result<()> {
+    if matches!(selected, Tenant::Host { .. }) && !kind.is_statusline() {
+        bail!(
+            "{} is unavailable to the Host Tenant; --host supports only claude-statusline and codex-statusline",
+            kind.name()
+        );
+    }
+    Ok(())
 }
 
 fn statusline_status_from_parts(
@@ -378,7 +395,7 @@ fn codex_statusline_setting(config: &FileSnapshot) -> Result<ComponentStatus> {
     };
     let colors = match tui.get("status_line_use_colors") {
         None => StatuslinePartState::Absent,
-        Some(item) if item.as_bool() == Some(true) => StatuslinePartState::Current,
+        Some(item) if item.as_bool() == Some(false) => StatuslinePartState::Current,
         Some(_) => StatuslinePartState::Modified,
     };
     Ok(statusline_status_from_parts(status_line, colors))
@@ -486,7 +503,7 @@ fn parse_json_config(snapshot: &FileSnapshot, label: &str) -> Result<Map<String,
         .with_context(|| format!("{label} must be a JSON object"))
 }
 
-fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
+fn install_claude_statusline(tenant: &Tenant) -> Result<i32> {
     let selected = prepare_statusline_install(tenant, AgentKind::Claude)?;
 
     let script_path = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
@@ -520,7 +537,7 @@ fn install_claude_statusline(tenant: &ManagedTenant) -> Result<i32> {
     Ok(0)
 }
 
-fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
+fn install_codex_statusline(tenant: &Tenant) -> Result<i32> {
     let selected = prepare_statusline_install(tenant, AgentKind::Codex)?;
 
     let path = selected.state_file(AgentKind::Codex.main_config_file());
@@ -555,7 +572,7 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
         status_line.push(item);
     }
     tui.insert("status_line", toml_edit::value(status_line));
-    tui.insert("status_line_use_colors", toml_edit::value(true));
+    tui.insert("status_line_use_colors", toml_edit::value(false));
     let desired = document.to_string();
     if !setting_matches {
         write_atomic(&path, desired.as_bytes(), config.mode.or(Some(0o600)))?;
@@ -563,9 +580,11 @@ fn install_codex_statusline(tenant: &ManagedTenant) -> Result<i32> {
     Ok(0)
 }
 
-fn prepare_statusline_install(tenant: &ManagedTenant, agent: AgentKind) -> Result<TenantAgent> {
-    tenant.ensure_initialized()?;
-    let selected = tenant.for_agent(agent);
+fn prepare_statusline_install(tenant: &Tenant, agent: AgentKind) -> Result<TenantAgent> {
+    let selected = match tenant {
+        Tenant::Managed(tenant) => tenant.for_agent(agent),
+        Tenant::Host { .. } => tenant.for_agent(agent),
+    };
     selected.ensure_agent_state_dir()?;
     Ok(selected)
 }
@@ -624,7 +643,7 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
     crate::docker::run(&run_args, &image, &command, || {})
 }
 
-fn remove_claude_statusline(tenant: &ManagedTenant) -> Result<()> {
+fn remove_claude_statusline(tenant: &Tenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Claude);
     let script = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
     tenant::remove_real_file_if_exists(&script, "Claude status-line script")?;
@@ -644,7 +663,7 @@ fn remove_claude_statusline(tenant: &ManagedTenant) -> Result<()> {
     Ok(())
 }
 
-fn remove_codex_statusline(tenant: &ManagedTenant) -> Result<()> {
+fn remove_codex_statusline(tenant: &Tenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Codex);
     let path = selected.state_file(AgentKind::Codex.main_config_file());
     let config = capture_limited(&path, "Codex configuration")?;

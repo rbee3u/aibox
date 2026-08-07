@@ -154,8 +154,9 @@ aibox session --host --agent claude list
 ```
 
 Its aibox-owned Named Config catalog lives under `$AIBOX_ROOT/<agent>/__host/`;
-native Current Config and Sessions remain in the real host Home. aibox
-does not install the Managed Tenant `.gitconfig` or any Tenant Component there.
+native Current Config and Sessions remain in the real host Home. aibox does not
+install the Managed Tenant `.gitconfig` or a toolchain there, but Host
+statusline Components can explicitly modify the native Claude and Codex files.
 
 Host Tenant operations expose or modify real host state: `config get` prints
 credentials without redaction, Config Application and `config edit --current`
@@ -214,14 +215,16 @@ toolchain installation.
 
 ## Tenant Components
 
-A Tenant Component is optional native state installed into one Managed Tenant
-Home. Components are unavailable to the Host Tenant and are not tracked in a
-separate registry. List the fixed catalog and its state without starting
-Docker or creating a missing Tenant:
+A Tenant Component is optional native state installed into one Tenant Home.
+Statusline Components support Managed and Host Tenants; Rust and Go toolchains
+support Managed Tenants only. Components are not tracked in a separate
+registry. List the fixed catalog and its state without starting Docker or
+creating a missing Tenant:
 
 ```sh
 aibox component list
 aibox component list --tenant work
+aibox component --host list
 ```
 
 Components report `installed`, `incomplete`, `modified`, `unmanaged`, or
@@ -241,12 +244,22 @@ aibox component install codex-statusline --tenant work
 
 `claude-statusline` writes `.claude/statusline.sh` and sets
 `settings.json.statusLine` to run `bash ~/.claude/statusline.sh`.
-`codex-statusline` sets `tui.status_line` and `tui.status_line_use_colors` in
-`.codex/config.toml`. Installation replaces those values with the version
-bundled into aibox while preserving unrelated native configuration. Repeating
-an installation is safe and updates modified content. Config Fields exclude
-status-line paths, so applying a Config preserves installed status-line
-configuration without coordination between the two commands.
+`codex-statusline` sets `tui.status_line` and
+`tui.status_line_use_colors = false` in `.codex/config.toml`. Installation
+replaces those values with the version bundled into aibox while preserving
+unrelated native configuration. Repeating an installation is safe and updates
+modified content. Config Fields exclude status-line paths, so applying a
+Config preserves installed status-line configuration without coordination
+between the two commands.
+
+Both integrations use this native field order: model with reasoning, current
+directory, Git branch, context-window size, and context used. The Claude script
+renders the same compact form, for example
+`gpt-5.6-sol xhigh · /workspace · dev · 258K window · Context 54% used`.
+It abbreviates the Home directory as `~`, omits unavailable fields, and always
+renders plain text. Codex statuslines are explicitly configured without native
+colors. Changing the bundled definition marks an older installation as
+`modified` until it is explicitly reinstalled.
 
 Remove a Component explicitly:
 
@@ -255,10 +268,11 @@ aibox component remove claude-statusline
 aibox component remove rust --tenant work --yes
 ```
 
-Installed and incomplete state can be removed directly. Modified or unmanaged
-state requires `--discard-changes`; `--yes` skips confirmation. Status-line
-removal deletes only the Claude script when applicable and the Component's
-native configuration keys.
+Any existing Component state can be removed directly after confirmation;
+`--yes` skips confirmation and is required in a non-interactive shell.
+Status-line removal deletes only the Claude script when applicable and the
+Component's native configuration keys. Host removal follows the same rules and
+changes only the real statusline files owned by the selected Component.
 
 ### Rust and Go
 
@@ -295,7 +309,8 @@ installation preserves `.cargo` user state. Rust removal deletes `.rustup` and
 known rustup proxies while preserving Cargo caches and unrelated commands. Go
 installation and removal preserve `.gopath`; removal deletes only `.goroot`. A
 recognizable nightly, RC, or custom SDK is `unmanaged`: installation refuses to
-replace it, and removal requires `--discard-changes`.
+replace it, while explicit removal still deletes only the Component-owned SDK
+paths.
 
 The corresponding binary directories are already on `PATH`. See
 [Sandbox and Mounts](sandbox.md) before sharing a toolchain or credentials

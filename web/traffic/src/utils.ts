@@ -61,6 +61,17 @@ export function recordUrl(
   }
 }
 
+export function recordDetailUrl(
+  record: Pick<RecordSummary, "upstream_url" | "incoming_uri">,
+): [string, string] {
+  try {
+    const url = new URL(record.upstream_url ?? "");
+    return [url.origin, `${url.pathname}${url.search}`];
+  } catch {
+    return ["invalid target", record.incoming_uri];
+  }
+}
+
 export function hex(bytesValue: Uint8Array): string {
   return Array.from(bytesValue, (value) => value.toString(16).padStart(2, "0")).join(" ");
 }

@@ -27,12 +27,27 @@
   font-weight: 700;
 }
 .url {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.5;
+}
+.url strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.url > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
 }
 .tabs {
   display: flex;

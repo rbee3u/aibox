@@ -175,10 +175,7 @@ impl CompletionContext {
             }
             if token == "--host" {
                 option_parts.insert(index);
-                if seen_host
-                    || seen_tenant
-                    || matches!(self.top, TopCommand::Run | TopCommand::Component)
-                {
+                if seen_host || seen_tenant || self.top == TopCommand::Run {
                     self.selection_valid = false;
                 }
                 seen_host = true;
@@ -269,7 +266,7 @@ enum TenantCandidates {
 fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) -> clap::Command {
     let command = add_run_completers(Cli::command(), current_dir);
     let command = add_tenant_completers(command, context.clone());
-    let command = add_component_completers(command);
+    let command = add_component_completers(command, context.clone());
     let command = add_config_completers(command, context.clone());
     add_session_completers(command, context)
 }
@@ -319,20 +316,26 @@ fn add_tenant_completers(command: clap::Command, context: CompletionContext) -> 
     })
 }
 
-fn add_component_completers(command: clap::Command) -> clap::Command {
+fn add_component_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+    let install_context = context.clone();
+    let remove_context = context;
     command.mut_subcommand("component", move |command| {
         command
-            .mut_arg("component-tenant", add_tenant_value_completer)
+            .mut_arg("tenant", add_tenant_value_completer)
             .mut_subcommand("install", |command| {
+                let context = install_context.clone();
                 command.mut_arg("component", |arg| {
-                    arg.value_hint(ValueHint::Other)
-                        .add(ArgValueCompleter::new(complete_components))
+                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
+                        move |current: &OsStr| complete_components(&context, current),
+                    ))
                 })
             })
             .mut_subcommand("remove", |command| {
+                let context = remove_context.clone();
                 command.mut_arg("component", |arg| {
-                    arg.value_hint(ValueHint::Other)
-                        .add(ArgValueCompleter::new(complete_components))
+                    arg.value_hint(ValueHint::Other).add(ArgValueCompleter::new(
+                        move |current: &OsStr| complete_components(&context, current),
+                    ))
                 })
             })
     })
@@ -384,9 +387,14 @@ fn add_tenant_value_completer(arg: clap::Arg) -> clap::Arg {
         }))
 }
 
-fn complete_components(current: &OsStr) -> Vec<CompletionCandidate> {
+fn complete_components(context: &CompletionContext, current: &OsStr) -> Vec<CompletionCandidate> {
+    let kinds: &[crate::component::ComponentKind] = if context.host {
+        &crate::component::ComponentKind::STATUSLINES
+    } else {
+        &crate::component::ComponentKind::ALL
+    };
     filter_candidates(
-        crate::component::ComponentKind::ALL.map(|kind| kind.name().to_string()),
+        kinds.iter().map(|kind| kind.name().to_string()),
         current,
         &BTreeSet::new(),
     )
@@ -641,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn component_completion_is_managed_tenant_scoped_and_static() {
+    fn component_completion_matches_tenant_scope() {
         let context = CompletionContext::from_words(&words(&[
             "aibox",
             "component",
@@ -653,11 +661,21 @@ mod tests {
         assert_eq!(context.top, TopCommand::Component);
         assert_eq!(context.tenant, "work");
         assert!(context.selection_valid);
+        assert!(!context.host);
+        let values = complete_components(&context, OsStr::new(""));
+        assert_eq!(
+            candidate_values(&values),
+            ["claude-statusline", "codex-statusline", "go", "rust"]
+        );
 
         let host = CompletionContext::from_words(&words(&["aibox", "component", "--host", "list"]));
-        assert!(!host.selection_valid);
-        let values = complete_components(OsStr::new("co"));
-        assert_eq!(candidate_values(&values), ["codex-statusline"]);
+        assert!(host.selection_valid);
+        assert!(host.host);
+        let values = complete_components(&host, OsStr::new(""));
+        assert_eq!(
+            candidate_values(&values),
+            ["claude-statusline", "codex-statusline"]
+        );
     }
 
     #[test]

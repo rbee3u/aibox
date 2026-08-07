@@ -210,6 +210,7 @@ export function RecordList({
                   <span className={styles.side}>
                     <RecordStatus
                       status={record.status}
+                      httpVersion={record.http_version}
                       outcome={record.outcome}
                       state={record.state}
                       compact

@@ -102,14 +102,18 @@ describe("RecordStatus", () => {
     );
     expect(screen.getByText("Waiting")).toHaveClass(styles.active);
 
-    rerender(<RecordStatus status={200} outcome="active" state="active" compact />);
+    rerender(
+      <RecordStatus status={200} httpVersion="HTTP/2" outcome="active" state="active" compact />,
+    );
+    expect(screen.getByText("HTTP/2")).toHaveClass(styles.protocol);
     expect(screen.getByText("200")).toHaveClass(styles.success);
     expect(screen.getByText("Streaming")).toBeInTheDocument();
   });
 
   it("renders the complete response line and specific anomaly tag", () => {
     render(<RecordHeadlineStatus response={response} result={failedResult} state="completed" />);
-    expect(screen.getByText("HTTP/2 200 OK")).toHaveClass(styles.success);
+    expect(screen.getByLabelText("HTTP/2 200 OK")).toHaveClass(styles.success);
+    expect(screen.getByText("HTTP/2")).toHaveClass(styles.protocol);
     expect(screen.getByText("Upstream stream failed")).toHaveClass(styles.errorTag);
   });
 

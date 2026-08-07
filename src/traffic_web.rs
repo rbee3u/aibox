@@ -155,6 +155,7 @@ struct RecordSummary {
     incoming_uri: String,
     upstream_url: Option<String>,
     status: Option<u16>,
+    http_version: Option<String>,
     outcome: String,
     state: String,
     total_ms: Option<u64>,
@@ -224,6 +225,10 @@ fn summary(record: &StoredRecord) -> RecordSummary {
         incoming_uri: record.request.incoming_uri.clone(),
         upstream_url: record.request.upstream_url.clone(),
         status: record.response.as_ref().map(|response| response.status),
+        http_version: record
+            .response
+            .as_ref()
+            .map(|response| response.http_version.clone()),
         outcome: outcome.to_string(),
         state: state.to_string(),
         total_ms: if record.active {
@@ -719,7 +724,42 @@ mod tests {
                 (state, outcome)
             );
             assert_eq!(record.total_ms.is_some(), has_duration);
+            assert!(record.http_version.is_none());
         }
+
+        let (responded, _) = store
+            .begin("GET", "/responded", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        store
+            .write_response(
+                &responded.directory,
+                &ResponseMetadata {
+                    format_version: crate::traffic_store::FORMAT_VERSION,
+                    source: ResponseSource::Upstream,
+                    headers_at: "2026-08-06T04:00:00Z".to_string(),
+                    status: 204,
+                    http_version: "HTTP/2".to_string(),
+                    headers: Vec::new(),
+                },
+            )
+            .unwrap();
+        store
+            .finish(
+                &responded,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Completed,
+                None,
+            )
+            .unwrap();
+        let responded_summary = list_records_inner(&store, None)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|record| record.id == responded.id)
+            .unwrap();
+        assert_eq!(responded_summary.status, Some(204));
+        assert_eq!(responded_summary.http_version.as_deref(), Some("HTTP/2"));
     }
 
     #[test]

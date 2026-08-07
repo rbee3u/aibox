@@ -2,9 +2,9 @@
 
 Status: accepted
 
-aibox models optional status-line integrations and Tenant-local toolchains as
-Tenant Components available only to Managed Tenants. Their native Tenant Home
-files are the source of truth rather than a separate registry: this keeps
-installation discoverable without adding layout versions, Host Home mutation,
-or another lifecycle to reconcile, while accepting that native user edits may
-make a Component modified or unmanaged.
+aibox models optional status-line integrations and Managed Tenant-local
+toolchains as Tenant Components. Status-line Components may target either a
+Managed Tenant Home or the existing Host Home; toolchains remain Managed
+Tenant-only. Native files are the source of truth rather than a separate
+registry, while accepting that native user edits may make a Component modified
+or unmanaged.

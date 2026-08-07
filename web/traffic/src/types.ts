@@ -75,6 +75,7 @@ export interface RecordSummary {
   incoming_uri: string;
   upstream_url: string | null;
   status: number | null;
+  http_version: string | null;
   outcome: string;
   state: RecordState;
   total_ms: number | null;
