@@ -97,12 +97,3 @@ export function concatChunks(chunks: Uint8Array[]): Uint8Array {
   }
   return output;
 }
-
-export function queryParams(urlValue: string | null): Array<[string, string]> {
-  if (!urlValue) return [];
-  try {
-    return [...new URL(urlValue).searchParams.entries()];
-  } catch {
-    return [];
-  }
-}

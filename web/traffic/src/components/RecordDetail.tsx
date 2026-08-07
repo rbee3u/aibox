@@ -1,6 +1,11 @@
 import { Check, Clipboard, Download, FileText, LoaderCircle } from "lucide-react";
-import { useMemo, useState } from "react";
-import type { RecordDetail as RecordDetailData } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type {
+  BodyKind,
+  BodyLoadStatus,
+  DetailTab,
+  RecordDetail as RecordDetailData,
+} from "../types";
 import {
   bytes,
   concatChunks,
@@ -8,127 +13,209 @@ import {
   decodeHeader,
   duration,
   formatTimestamp,
-  queryParams,
 } from "../utils";
 import styles from "./RecordDetail.module.css";
-import { RecordStatus } from "./RecordStatus";
+import { RecordHeadlineStatus } from "./RecordStatus";
+import { recordErrorPresentation } from "./statusPresentation";
+
+const TABS: Array<{ value: DetailTab; label: string }> = [
+  { value: "summary", label: "Summary" },
+  { value: "request", label: "Request" },
+  { value: "response", label: "Response" },
+];
 
 interface RecordDetailProps {
   detail: RecordDetailData;
-  bodies: { request: Uint8Array[]; response: Uint8Array[] };
-  tab: "request" | "response";
-  onTabChange: (tab: "request" | "response") => void;
-  onDownload: (kind: "request" | "response") => void;
+  bodies: Record<BodyKind, Uint8Array[]>;
+  bodyStatus: Record<BodyKind, BodyLoadStatus>;
+  tab: DetailTab;
+  onTabChange: (tab: DetailTab) => void;
+  onDownload: (kind: BodyKind) => void;
   loadingBody: boolean;
 }
 
 export function RecordDetail({
   detail,
   bodies,
+  bodyStatus,
   tab,
   onTabChange,
   onDownload,
   loadingBody,
 }: RecordDetailProps) {
-  const [copied, setCopied] = useState(false);
+  const [copiedKind, setCopiedKind] = useState<BodyKind | null>(null);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  const tabRefs = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({});
   const request = detail.request;
   const response = detail.response;
   const result = detail.result;
-  const bodyBytes = concatChunks(bodies[tab]);
-  const bodyText = decodeBytes(bodyBytes, "body");
-  const headers = tab === "request" ? request.headers : (response?.headers ?? []);
-  const params = useMemo(() => queryParams(request.upstream_url), [request.upstream_url]);
+  const error = recordErrorPresentation(detail);
+  const panelId = `record-panel-${request.id}`;
 
-  async function copyBody() {
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
+  async function copyBody(kind: BodyKind) {
+    const bodyText = decodeBytes(concatChunks(bodies[kind]), "body");
     try {
       await navigator.clipboard.writeText(bodyText);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
+      setCopiedKind(kind);
+      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopiedKind(null), 1400);
     } catch {
-      setCopied(false);
+      setCopiedKind(null);
     }
+  }
+
+  function selectAdjacentTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
+    if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = TABS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = TABS[nextIndex].value;
+    onTabChange(next);
+    tabRefs.current[next]?.focus();
   }
 
   return (
     <section className={styles.panel} aria-label="Traffic record details">
       <div className={styles.header}>
-        <div className={styles.eyebrow}>
+        <div className={styles.requestOverview}>
           <span className={styles.method}>{request.method}</span>
-          <RecordStatus
-            status={response?.status ?? null}
-            outcome={result?.outcome ?? detail.state}
-            state={detail.state}
-          />
+          <span className={styles.url}>{request.upstream_url ?? request.incoming_uri}</span>
         </div>
-        <div className={styles.url}>{request.upstream_url ?? request.incoming_uri}</div>
-        <div className={styles.chips}>
-          <span className={styles.chip}>{request.http_version}</span>
-          <span className={styles.chip}>{response?.source ?? "no response"}</span>
-        </div>
-        {params.length > 0 && (
-          <table className={styles.query}>
-            <caption>Query parameters</caption>
-            <tbody>
-              {params.map(([key, value], index) => (
-                <tr key={`${key}-${index}`}>
-                  <td>{key}</td>
-                  <td>{value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div className={styles.metrics}>
-          <Metric label="Started" value={formatTimestamp(request.started_at)} />
-          <Metric
-            label="Response headers"
-            value={response?.headers_at ? new Date(response.headers_at).toLocaleTimeString() : "—"}
-          />
-          <Metric
-            label="Ended"
-            value={result?.ended_at ? new Date(result.ended_at).toLocaleTimeString() : "—"}
-          />
-          <Metric label="TTFB" value={duration(result?.ttfb_ms ?? detail.live_ttfb_ms)} />
-          <Metric label="Total" value={duration(result?.total_ms ?? detail.live_total_ms)} />
-          <Metric label="Request body" value={bytes(detail.request_body_bytes)} />
-          <Metric label="Response body" value={bytes(detail.response_body_bytes)} />
-        </div>
+        <RecordHeadlineStatus response={response} result={result} state={detail.state} />
       </div>
       <div className={styles.tabs} role="tablist" aria-label="Record data">
-        {(["request", "response"] as const).map((value) => (
+        {TABS.map(({ value, label }, index) => (
           <button
+            ref={(element) => {
+              tabRefs.current[value] = element;
+            }}
             key={value}
+            id={`record-tab-${request.id}-${value}`}
             type="button"
             role="tab"
+            aria-controls={panelId}
             aria-selected={tab === value}
+            tabIndex={tab === value ? 0 : -1}
             className={tab === value ? styles.activeTab : ""}
             onClick={() => onTabChange(value)}
+            onKeyDown={(event) => selectAdjacentTab(event, index)}
           >
-            {value === "request" ? "Request" : "Response"}
+            {label}
           </button>
         ))}
       </div>
-      <div className={styles.viewerTools}>
+      <div
+        id={panelId}
+        className={styles.tabPanel}
+        role="tabpanel"
+        aria-labelledby={`record-tab-${request.id}-${tab}`}
+      >
+        {tab === "summary" ? (
+          <Summary detail={detail} error={error} />
+        ) : tab === "response" && !response ? (
+          <div className={styles.noResponse}>
+            <h2>No response received</h2>
+            <p>The Traffic Record does not contain response metadata.</p>
+          </div>
+        ) : (
+          <MessageData
+            kind={tab}
+            detail={detail}
+            bodyChunks={bodies[tab]}
+            bodyStatus={bodyStatus[tab]}
+            loadingBody={loadingBody}
+            copied={copiedKind === tab}
+            onCopy={() => void copyBody(tab)}
+            onDownload={() => onDownload(tab)}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Summary({
+  detail,
+  error,
+}: {
+  detail: RecordDetailData;
+  error: ReturnType<typeof recordErrorPresentation>;
+}) {
+  const total = detail.result?.total_ms ?? detail.live_total_ms;
+  return (
+    <div className={styles.summary}>
+      <section aria-labelledby="record-timing-title">
+        <h2 id="record-timing-title">Timing</h2>
+        <dl className={styles.metrics}>
+          <Metric label="Started" value={formatTimestamp(detail.request.started_at)} />
+          <Metric label="First token" value="—" />
+          <Metric label="Duration" value={duration(total)} />
+        </dl>
+      </section>
+      {error && (
+        <section className={styles.errorDetail} aria-labelledby="record-error-title">
+          <h2 id="record-error-title">Error</h2>
+          <dl>
+            <div>
+              <dt>Type</dt>
+              <dd>{error.label}</dd>
+            </div>
+            <div>
+              <dt>Message</dt>
+              <dd>{error.message}</dd>
+            </div>
+          </dl>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function MessageData({
+  kind,
+  detail,
+  bodyChunks,
+  bodyStatus,
+  loadingBody,
+  copied,
+  onCopy,
+  onDownload,
+}: {
+  kind: BodyKind;
+  detail: RecordDetailData;
+  bodyChunks: Uint8Array[];
+  bodyStatus: BodyLoadStatus;
+  loadingBody: boolean;
+  copied: boolean;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  const headers = kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
+  const bodyBytes = concatChunks(bodyChunks);
+  const bodyText = decodeBytes(bodyBytes, "body");
+  const recordedBytes = kind === "request" ? detail.request_body_bytes : detail.response_body_bytes;
+  const loaded = bodyStatus === "loaded";
+
+  return (
+    <div className={styles.messageData}>
+      <div className={styles.sectionTitle}>
         <h2>
           <FileText size={15} aria-hidden="true" /> Headers
         </h2>
-        <div>
-          <button type="button" onClick={() => void copyBody()} aria-label="Copy body">
-            {copied ? (
-              <Check size={14} aria-hidden="true" />
-            ) : (
-              <Clipboard size={14} aria-hidden="true" />
-            )}
-            {copied ? "Copied" : "Copy body"}
-          </button>
-          <button type="button" onClick={() => onDownload(tab)} aria-label="Download original body">
-            <Download size={14} aria-hidden="true" /> Download original
-          </button>
-        </div>
       </div>
       {headers.length > 0 ? (
         <table className={styles.headers}>
-          <caption className="srOnly">{tab} headers</caption>
+          <caption className="srOnly">{kind} headers</caption>
           <tbody>
             {headers.map((header, index) => (
               <tr key={`${header.name}-${index}`}>
@@ -141,24 +228,55 @@ export function RecordDetail({
       ) : (
         <p className={styles.empty}>No headers.</p>
       )}
-      <div className={styles.viewerTools}>
+      <div className={styles.sectionTitle}>
         <h2>
-          Body <span>· {bytes(bodyBytes.length)}</span>
+          Body <span>· {bytes(recordedBytes)}</span>
         </h2>
-        {loadingBody && (
-          <LoaderCircle className={styles.loading} size={15} aria-label="Loading body" />
-        )}
+        <div className={styles.bodyActions}>
+          {loadingBody && (
+            <LoaderCircle className={styles.loading} size={15} aria-label="Loading body" />
+          )}
+          <button
+            type="button"
+            onClick={onCopy}
+            disabled={!loaded}
+            aria-label={copied ? "Body copied" : "Copy body"}
+            title={copied ? "Body copied" : "Copy body"}
+          >
+            {copied ? (
+              <Check size={15} aria-hidden="true" />
+            ) : (
+              <Clipboard size={15} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onDownload}
+            aria-label="Download original body"
+            title="Download original body"
+          >
+            <Download size={15} aria-hidden="true" />
+          </button>
+        </div>
       </div>
-      <pre className={styles.body}>{bodyText || "(empty body)"}</pre>
-    </section>
+      {bodyStatus === "error" ? (
+        <p className={styles.bodyState}>Body unavailable.</p>
+      ) : bodyStatus === "idle" || bodyStatus === "loading" ? (
+        <div className={styles.bodyState} role="status">
+          <LoaderCircle className={styles.loading} size={16} aria-hidden="true" /> Loading body…
+        </div>
+      ) : (
+        <pre className={styles.body}>{bodyText || "(empty body)"}</pre>
+      )}
+    </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className={styles.metric}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
     </div>
   );
 }

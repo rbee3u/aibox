@@ -166,8 +166,10 @@ Request and response chunks are written to disk before they are forwarded.
 This preserves ordinary HTTP bodies, binary data, and SSE event bytes without
 parsing, truncation, redaction, or whole-message buffering. Disk latency
 therefore applies backpressure. A recording error aborts forwarding and returns
-507. Client disconnect, upstream stream failure, SIGINT, and SIGTERM cancel the
-remaining attempt and retain bytes already written.
+507. A client disconnect, upstream stream failure, SIGINT, or SIGTERM cancels
+the remaining attempt and retains bytes already written. For SSE, a recognized
+terminal event from Claude Messages or OpenAI Responses completes the Traffic
+Outcome even when the client closes immediately after consuming that event.
 
 Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 
@@ -175,19 +177,32 @@ Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 <UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
   request.json
   request.body
-  response.json
+  response.json          # present only after upstream response headers arrive
   response.body
-  result.json
+  response.events.jsonl  # present only for text/event-stream responses
+  summary.json
 ```
 
 The collection and Record directories are mode `0700`; files are `0600`.
-Metadata stores incoming and upstream URLs, base64 lossless header values,
-status, HTTP version, byte counts, timings, outcome, and error details. Body
-files contain the exact application-visible bytes. A missing `result.json`
-from another process lifetime appears as interrupted/incomplete. Unknown or
-structurally incomplete collection entries are ignored with warnings; selected
-reads and deletion revalidate real paths and reject symlinks or unexpected
-types.
+Metadata stores the upstream URL, base64 lossless header values, upstream
+status and HTTP version, nanosecond timing checkpoints, outcome, and
+diagnostics. Body files contain the exact application-visible bytes; their
+current lengths are derived rather than persisted. `summary.json` exists from
+Record creation and remains non-terminal if the process is interrupted. A
+matching event-stream response also has a best-effort JSONL index whose byte
+ranges point back into `response.body`; indexing never changes forwarding or
+the Traffic Outcome. Unknown, legacy, or structurally incomplete collection
+entries are ignored with warnings; selected reads and deletion revalidate real
+paths and reject symlinks or unexpected types.
+
+Traffic records HTTP semantics rather than transport frames. Downstream and
+upstream protocol negotiation are independent. Header values and repeated
+same-name values are retained, but `HeaderMap` cannot preserve cross-name wire
+order and may normalize field-name casing; HTTP/2 names are lowercase. Hop-by-
+hop and framing fields, HTTP/2 pseudo-headers, automatically generated Host
+fields, informational responses, trailers, TLS records, and HTTP/2 frames are
+not captured. Only a final upstream response is persisted. A proxy-generated
+error response is returned to the client but is not written as upstream data.
 
 There is no size limit, retention policy, redaction, database, or cross-process
 lock. Authorization values, API keys, prompts, tool data, and model output are

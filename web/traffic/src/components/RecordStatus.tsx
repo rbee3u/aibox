@@ -1,7 +1,11 @@
 import { TriangleAlert } from "lucide-react";
-import type { RecordState } from "../types";
+import type { RecordState, ResponseMetadata, ResultMetadata } from "../types";
 import styles from "./RecordStatus.module.css";
-import { recordStatusPresentation, type RecordStatusTone } from "./statusPresentation";
+import {
+  recordHeadlinePresentation,
+  recordStatusPresentation,
+  type RecordStatusTone,
+} from "./statusPresentation";
 
 interface RecordStatusProps {
   status: number | null;
@@ -32,21 +36,11 @@ export function RecordStatus({ status, outcome, state, compact = false }: Record
         {presentation.label}
         {compact && noResponse && anomalyTitle && <span className="srOnly">. {anomalyTitle}</span>}
       </span>
-      {presentation.recording &&
-        (compact ? (
-          <span
-            className={styles.compactRecording}
-            role="img"
-            aria-label="Recording active traffic"
-            title="Recording active traffic"
-          >
-            <span className={styles.dot} aria-hidden="true" />
-          </span>
-        ) : (
-          <span className={styles.recording}>
-            <span className={styles.dot} aria-hidden="true" /> recording
-          </span>
-        ))}
+      {presentation.phase && (
+        <span className={styles.phase}>
+          <span className={styles.dot} aria-hidden="true" /> {presentation.phase}
+        </span>
+      )}
       {presentation.anomaly &&
         !noResponse &&
         (compact ? (
@@ -65,5 +59,35 @@ export function RecordStatus({ status, outcome, state, compact = false }: Record
         <span className={styles.anomaly}>{presentation.anomaly}</span>
       )}
     </span>
+  );
+}
+
+interface RecordHeadlineStatusProps {
+  response: ResponseMetadata | null;
+  result: ResultMetadata | null;
+  state: RecordState;
+}
+
+export function RecordHeadlineStatus({ response, result, state }: RecordHeadlineStatusProps) {
+  const presentation = recordHeadlinePresentation(response, result, state);
+
+  return (
+    <div className={styles.headline}>
+      {presentation.statusText && (
+        <span className={`${styles.headlineStatus} ${TONE_CLASS[presentation.tone]}`}>
+          {presentation.statusText}
+        </span>
+      )}
+      {presentation.tag && presentation.tagTone && (
+        <span
+          className={`${styles.tag} ${
+            presentation.tagTone === "active" ? styles.activeTag : styles.errorTag
+          }`}
+        >
+          {presentation.tagTone === "active" && <span className={styles.dot} aria-hidden="true" />}
+          {presentation.tag}
+        </span>
+      )}
+    </div>
   );
 }

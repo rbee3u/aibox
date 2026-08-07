@@ -6,6 +6,9 @@ import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
 import { StatusBanner } from "./components/StatusBanner";
 import type {
+  BodyKind,
+  BodyLoadStatus,
+  DetailTab,
   RecordDetail as RecordDetailData,
   RecordList as RecordListData,
   RecordSummary,
@@ -17,10 +20,12 @@ import styles from "./App.module.css";
 interface AppProps {
   api?: TrafficApi;
 }
-type BodyKind = "request" | "response";
 type Dialog = { kind: "selected"; ids: string[] } | { kind: "all"; count: number } | null;
 type ErrorSource = "list" | "detail" | "action";
 type AppError = { source: ErrorSource; message: string };
+
+const LIST_POLL_INTERVAL_MS = 5000;
+const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
 
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
@@ -43,8 +48,12 @@ export function App({ api: providedApi }: AppProps) {
     request: [],
     response: [],
   });
+  const [bodyStatus, setBodyStatus] = useState<Record<BodyKind, BodyLoadStatus>>({
+    request: "idle",
+    response: "idle",
+  });
   const offsets = useRef({ request: 0, response: 0 });
-  const [tab, setTab] = useState<BodyKind>("request");
+  const [tab, setTab] = useState<DetailTab>("summary");
   const [loadingList, setLoadingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -57,7 +66,10 @@ export function App({ api: providedApi }: AppProps) {
   const listController = useRef<AbortController | null>(null);
   const pageNavigation = useRef(false);
   const detailController = useRef<AbortController | null>(null);
+  const bodyController = useRef<AbortController | null>(null);
   const activeId = detail?.state === "active" ? detail.request.id : null;
+  const detailState = detail?.state ?? null;
+  const responseAvailable = detail?.response !== null && detail?.response !== undefined;
   const reportError = useCallback((source: ErrorSource, cause: unknown) => {
     setError({
       source,
@@ -73,10 +85,12 @@ export function App({ api: providedApi }: AppProps) {
   }, []);
   const clearCurrentRecord = useCallback(() => {
     detailController.current?.abort();
+    bodyController.current?.abort();
     currentIdRef.current = null;
     setCurrentId(null);
     setCurrentState(null);
     setDetail(null);
+    setLoadingBody(false);
   }, []);
 
   const loadPage = useCallback(
@@ -153,7 +167,12 @@ export function App({ api: providedApi }: AppProps) {
   const loadBody = useCallback(
     async (id: string, kind: BodyKind, offset: number, controller: AbortController) => {
       const chunk = await api.loadBody(id, kind, offset, controller.signal);
-      if (detailController.current !== controller || controller.signal.aborted) return;
+      if (
+        bodyController.current !== controller ||
+        currentIdRef.current !== id ||
+        controller.signal.aborted
+      )
+        return;
       if (chunk.bytes.length > 0)
         setBodies((current) => ({ ...current, [kind]: [...current[kind], chunk.bytes] }));
       offsets.current[kind] = chunk.nextOffset;
@@ -164,6 +183,7 @@ export function App({ api: providedApi }: AppProps) {
   const selectRecord = useCallback(
     async (id: string) => {
       detailController.current?.abort();
+      bodyController.current?.abort();
       const controller = new AbortController();
       detailController.current = controller;
       currentIdRef.current = id;
@@ -171,8 +191,10 @@ export function App({ api: providedApi }: AppProps) {
       setCurrentState(list.records.find((record) => record.id === id)?.state ?? null);
       setDetail(null);
       setBodies({ request: [], response: [] });
+      setBodyStatus({ request: "idle", response: "idle" });
       offsets.current = { request: 0, response: 0 };
-      setTab("request");
+      setTab("summary");
+      setLoadingBody(false);
       setLoadingDetail(true);
       clearError();
       try {
@@ -180,11 +202,6 @@ export function App({ api: providedApi }: AppProps) {
         if (detailController.current !== controller || controller.signal.aborted) return;
         setDetail(record);
         setCurrentState(record.state);
-        setLoadingBody(true);
-        await Promise.all([
-          loadBody(id, "request", 0, controller),
-          loadBody(id, "response", 0, controller),
-        ]);
       } catch (cause) {
         if (
           detailController.current === controller &&
@@ -194,11 +211,10 @@ export function App({ api: providedApi }: AppProps) {
       } finally {
         if (detailController.current === controller) {
           setLoadingDetail(false);
-          setLoadingBody(false);
         }
       }
     },
-    [api, clearError, list.records, loadBody, reportError],
+    [api, clearError, list.records, reportError],
   );
 
   useEffect(() => {
@@ -210,7 +226,7 @@ export function App({ api: providedApi }: AppProps) {
     let timer: number | undefined;
     const poll = async () => {
       await loadPage(pageRef.current, true);
-      if (!disposed) timer = window.setTimeout(() => void poll(), 2500);
+      if (!disposed) timer = window.setTimeout(() => void poll(), LIST_POLL_INTERVAL_MS);
     };
     void poll();
     return () => {
@@ -220,21 +236,11 @@ export function App({ api: providedApi }: AppProps) {
     };
   }, [loadPage, selectionMode]);
 
-  useEffect(() => {
-    if (!selectionMode) return;
-    const exitOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || dialog !== null) return;
-      event.preventDefault();
-      exitSelectionMode();
-    };
-    window.addEventListener("keydown", exitOnEscape);
-    return () => window.removeEventListener("keydown", exitOnEscape);
-  }, [dialog, exitSelectionMode, selectionMode]);
-
   useEffect(
     () => () => {
       listController.current?.abort();
       detailController.current?.abort();
+      bodyController.current?.abort();
     },
     [],
   );
@@ -248,12 +254,7 @@ export function App({ api: providedApi }: AppProps) {
     let shouldContinue = true;
     const poll = async () => {
       if (disposed || detailController.current !== controller || controller.signal.aborted) return;
-      setLoadingBody(true);
       try {
-        await Promise.all([
-          loadBody(currentId, "request", offsets.current.request, controller),
-          loadBody(currentId, "response", offsets.current.response, controller),
-        ]);
         const fresh = await api.getRecord(currentId, controller.signal);
         if (disposed || detailController.current !== controller || controller.signal.aborted)
           return;
@@ -268,23 +269,94 @@ export function App({ api: providedApi }: AppProps) {
         )
           reportError("detail", cause);
       } finally {
-        if (detailController.current === controller) setLoadingBody(false);
         if (
           !disposed &&
           shouldContinue &&
           detailController.current === controller &&
           !controller.signal.aborted
         ) {
-          timer = window.setTimeout(() => void poll(), 1000);
+          timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
         }
       }
     };
-    timer = window.setTimeout(() => void poll(), 1000);
+    timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
     return () => {
       disposed = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeId, api, clearError, currentId, loadBody, loadingDetail, reportError]);
+  }, [activeId, api, clearError, currentId, loadingDetail, reportError]);
+
+  useEffect(() => {
+    bodyController.current?.abort();
+    if (loadingDetail || detailState === null || !currentId || tab === "summary") return;
+    if (tab === "response" && !responseAvailable) {
+      return;
+    }
+
+    const id = currentId;
+    const kind = tab;
+    const active = detailState === "active";
+    const controller = new AbortController();
+    bodyController.current = controller;
+    let disposed = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (disposed || bodyController.current !== controller || controller.signal.aborted) return;
+      setLoadingBody(true);
+      setBodyStatus((current) => ({
+        ...current,
+        [kind]: current[kind] === "loaded" ? "loaded" : "loading",
+      }));
+      try {
+        await loadBody(id, kind, offsets.current[kind], controller);
+        if (disposed || bodyController.current !== controller || controller.signal.aborted) return;
+        setBodyStatus((current) => ({ ...current, [kind]: "loaded" }));
+        clearError("detail");
+      } catch (cause) {
+        if (
+          bodyController.current === controller &&
+          !(cause instanceof DOMException && cause.name === "AbortError")
+        ) {
+          setBodyStatus((current) => ({
+            ...current,
+            [kind]: current[kind] === "loaded" ? "loaded" : "error",
+          }));
+          reportError("detail", cause);
+        }
+      } finally {
+        if (bodyController.current === controller) setLoadingBody(false);
+        if (
+          !disposed &&
+          active &&
+          bodyController.current === controller &&
+          !controller.signal.aborted
+        ) {
+          timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controller.abort();
+      if (bodyController.current === controller) {
+        bodyController.current = null;
+        setLoadingBody(false);
+      }
+    };
+  }, [
+    clearError,
+    currentId,
+    detailState,
+    loadBody,
+    loadingDetail,
+    reportError,
+    responseAvailable,
+    tab,
+  ]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const togglePageSelection = () => {
@@ -385,10 +457,10 @@ export function App({ api: providedApi }: AppProps) {
           <span className={styles.mark}>
             <Box size={23} strokeWidth={2.2} aria-hidden="true" />
           </span>
-          <div className={styles.brandText} title="aibox traffic · Inspect LLM API activity">
-            <strong>aibox traffic</strong>
+          <div className={styles.brandText} title="AIBox Traffic · Inspect your LLM requests">
+            <strong>AIBox Traffic</strong>
             <span className={styles.separator}>·</span>
-            <span className={styles.tagline}>Inspect LLM API activity</span>
+            <span className={styles.tagline}>Inspect your LLM requests</span>
           </div>
         </div>
         <nav className={styles.resources} aria-label="Resources">
@@ -477,6 +549,7 @@ export function App({ api: providedApi }: AppProps) {
           <RecordDetail
             detail={detail}
             bodies={bodies}
+            bodyStatus={bodyStatus}
             tab={tab}
             onTabChange={setTab}
             onDownload={(kind) => void download(kind)}
@@ -486,7 +559,6 @@ export function App({ api: providedApi }: AppProps) {
           <section className={styles.emptyDetail}>
             <Radio size={26} aria-hidden="true" />
             <h1>Select a request</h1>
-            <p>Requests appear newest first. Bodies are loaded only when selected.</p>
           </section>
         )}
       </main>

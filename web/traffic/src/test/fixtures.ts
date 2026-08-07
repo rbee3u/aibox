@@ -10,7 +10,6 @@ export const completedSummary: RecordSummary = {
   status: 200,
   outcome: "completed",
   state: "completed",
-  ttfb_ms: 100,
   total_ms: 1250,
 };
 
@@ -23,8 +22,7 @@ export const activeSummary: RecordSummary = {
   status: null,
   outcome: "active",
   state: "active",
-  ttfb_ms: null,
-  total_ms: null,
+  total_ms: 500,
 };
 
 export const recordList: RecordList = {
@@ -48,30 +46,36 @@ export const completedDetail: RecordDetail = {
     status: 200,
     source: "upstream",
     headers_at: "2026-08-06T04:00:00.100Z",
+    http_version: "HTTP/2",
+    reason_phrase: "OK",
     headers: [{ name: "content-type", value_base64: btoa("text/event-stream") }],
   },
   result: {
     ended_at: "2026-08-06T04:00:01.250Z",
     outcome: "completed",
-    ttfb_ms: 100,
     total_ms: 1250,
+    error: null,
   },
   state: "completed",
   request_body_bytes: 7,
   response_body_bytes: 8,
-  live_ttfb_ms: null,
   live_total_ms: null,
 };
 
 export const activeDetail: RecordDetail = {
   ...completedDetail,
-  request: { ...completedDetail.request, id: activeSummary.id },
+  request: {
+    ...completedDetail.request,
+    id: activeSummary.id,
+    method: activeSummary.method,
+    incoming_uri: activeSummary.incoming_uri,
+    upstream_url: activeSummary.upstream_url,
+  },
   response: null,
   result: null,
   state: "active",
   request_body_bytes: 0,
   response_body_bytes: 0,
-  live_ttfb_ms: null,
   live_total_ms: 500,
 };
 

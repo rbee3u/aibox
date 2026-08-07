@@ -92,72 +92,75 @@ export function RecordList({
     <aside className={styles.panel} aria-label="Traffic records">
       <div className={styles.listHeader}>
         {selectionMode ? (
-          <>
+          <button
+            type="button"
+            className={styles.pageSelection}
+            onClick={onTogglePage}
+            disabled={deletable.length === 0}
+          >
+            {pageSelected ? "Clear page" : "Select page"}
+          </button>
+        ) : (
+          <h2 className={styles.title}>Traffic records</h2>
+        )}
+        <div className={selectionMode ? styles.selectionActions : styles.headerActions}>
+          {selectionMode ? (
+            <span className={styles.selectionCount}>{selected.size} selected</span>
+          ) : (
+            <button
+              ref={refreshButton}
+              type="button"
+              className={styles.refreshButton}
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-label={refreshing ? "Refreshing traffic records" : "Refresh traffic records"}
+              aria-busy={refreshing}
+            >
+              <RefreshCw
+                className={refreshing ? styles.refreshing : undefined}
+                size={14}
+                aria-hidden="true"
+              />
+              Refresh
+            </button>
+          )}
+          {selectionMode ? (
             <button
               type="button"
-              className={styles.pageSelection}
-              onClick={onTogglePage}
-              disabled={deletable.length === 0}
+              className={styles.deleteSelected}
+              onClick={onDeleteSelected}
+              disabled={selected.size === 0 || deletionBusy}
+              aria-label="Delete selected"
+              title="Delete selected"
             >
-              {pageSelected ? "Clear page" : "Select page"}
+              <Trash2 size={14} aria-hidden="true" />
+              <span className={styles.deleteSelectedLabel}>Delete selected</span>
             </button>
-            <div className={styles.selectionActions}>
-              <span className={styles.selectionCount}>{selected.size} selected</span>
-              <button
-                type="button"
-                className={styles.deleteSelected}
-                onClick={onDeleteSelected}
-                disabled={selected.size === 0 || deletionBusy}
-                aria-label="Delete selected"
-                title="Delete selected"
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                <span className={styles.deleteSelectedLabel}>Delete selected</span>
-              </button>
-              <button type="button" className={styles.cancelSelection} onClick={onExitSelection}>
-                Cancel
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2 className={styles.title}>Traffic records</h2>
-            <div className={styles.headerActions}>
-              <button
-                ref={refreshButton}
-                type="button"
-                className={styles.refreshButton}
-                onClick={onRefresh}
-                disabled={refreshing}
-                aria-label={refreshing ? "Refreshing traffic records" : "Refresh traffic records"}
-                aria-busy={refreshing}
-              >
-                <RefreshCw
-                  className={refreshing ? styles.refreshing : undefined}
-                  size={14}
-                  aria-hidden="true"
-                />
-                Refresh
-              </button>
-              <button
-                type="button"
-                className={styles.selectRecords}
-                onClick={onEnterSelection}
-                disabled={deletableCount === 0 || loading || deletionBusy}
-              >
+          ) : (
+            <button
+              type="button"
+              className={styles.deleteAll}
+              onClick={onDeleteAll}
+              disabled={deletableCount === 0 || deletionBusy}
+            >
+              <Trash2 size={14} aria-hidden="true" /> Delete all
+            </button>
+          )}
+          <button
+            type="button"
+            className={selectionMode ? styles.cancelSelection : styles.selectRecords}
+            onClick={selectionMode ? onExitSelection : onEnterSelection}
+            disabled={!selectionMode && (deletableCount === 0 || loading || deletionBusy)}
+          >
+            {selectionMode ? (
+              "Cancel"
+            ) : (
+              <>
                 <ListChecks size={14} aria-hidden="true" /> Select
-              </button>
-              <button
-                type="button"
-                className={styles.deleteAll}
-                onClick={onDeleteAll}
-                disabled={deletableCount === 0 || deletionBusy}
-              >
-                <Trash2 size={14} aria-hidden="true" /> Delete all
-              </button>
-            </div>
-          </>
-        )}
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <div className={styles.records} aria-live="polite">
         {records.length === 0 ? (
@@ -170,9 +173,8 @@ export function RecordList({
             const [host, path] = recordUrl(record);
             const active = record.state === "active";
             const checked = selected.has(record.id);
-            const first = compactDuration(record.ttfb_ms);
             const totalDuration = compactDuration(record.total_ms);
-            const timingDescription = `First ${first}; Total ${totalDuration}`;
+            const timingDescription = `First token —; Duration ${totalDuration}`;
             const timingDescriptionId = `record-timing-${record.id}`;
             return (
               <div
@@ -214,7 +216,7 @@ export function RecordList({
                     />
                     <span className={styles.timestamp}>{formatTimestamp(record.started_at)}</span>
                     <span className={styles.timing} title={timingDescription}>
-                      {first} / {totalDuration}
+                      — / {totalDuration}
                     </span>
                     <span id={timingDescriptionId} className={styles.visuallyHidden}>
                       {timingDescription}

@@ -7,7 +7,6 @@ import {
   decodeHeader,
   duration,
   formatTimestamp,
-  queryParams,
   recordUrl,
 } from "./utils";
 
@@ -52,17 +51,13 @@ describe("traffic display utilities", () => {
     );
   });
 
-  it("derives list labels and repeated query parameters", () => {
+  it("derives list labels", () => {
     expect(recordUrl({ upstream_url: "https://api.example/v1?a=1", incoming_uri: "/raw" })).toEqual(
       ["api.example", "/v1?a=1"],
     );
     expect(recordUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
       "invalid target",
       "/raw",
-    ]);
-    expect(queryParams("https://api.example/v1?tag=a&tag=")).toEqual([
-      ["tag", "a"],
-      ["tag", ""],
     ]);
   });
 });

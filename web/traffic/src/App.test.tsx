@@ -22,8 +22,8 @@ describe("Traffic App", () => {
     const api = fakeApi();
     const { container } = render(<App api={api} />);
 
-    const brandName = await screen.findByText("aibox traffic");
-    const tagline = screen.getByText("Inspect LLM API activity");
+    const brandName = await screen.findByText("AIBox Traffic");
+    const tagline = screen.getByText("Inspect your LLM requests");
     expect(brandName.parentElement).toBe(tagline.parentElement);
     expect(screen.queryByText("temporary HTTP/SSE inspector")).not.toBeInTheDocument();
     expect(container.querySelector("header svg")).toHaveAttribute("aria-hidden", "true");
@@ -63,13 +63,15 @@ describe("Traffic App", () => {
     );
     expect(within(recordListPanel).getByText("2026-08-06 12:00:00")).toBeInTheDocument();
     expect(within(recordListPanel).getByText("2026-08-06 12:01:00")).toBeInTheDocument();
-    const completedTiming = within(recordListPanel).getByTitle("First 100ms; Total 1s");
-    expect(completedTiming).toHaveTextContent("100ms / 1s");
+    const completedTiming = within(recordListPanel).getByTitle("First token —; Duration 1s");
+    expect(completedTiming).toHaveTextContent("— / 1s");
     const completedRow = within(recordListPanel).getByRole("button", {
       name: "POST api.example.test",
     });
-    expect(completedRow).toHaveAccessibleDescription("First 100ms; Total 1s");
-    expect(within(recordListPanel).getByTitle("First —; Total —")).toHaveTextContent("— / —");
+    expect(completedRow).toHaveAccessibleDescription("First token —; Duration 1s");
+    expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
+      "— / 500ms",
+    );
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {
@@ -144,7 +146,7 @@ describe("Traffic App", () => {
     await act(async () => Promise.resolve());
     expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
 
-    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
@@ -199,11 +201,25 @@ describe("Traffic App", () => {
     });
     expect(activeDelete).toBeDisabled();
     expect(activeDelete.parentElement).toHaveAttribute("title", "Active records cannot be deleted");
+    const normalActions = screen.getByRole("button", {
+      name: "Refresh traffic records",
+    }).parentElement;
+    expect(
+      within(normalActions!)
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(["Refresh", "Delete all", "Select"]);
 
     await user.click(screen.getByRole("button", { name: "Select" }));
     const selectPage = screen.getByRole("button", { name: "Select page" });
     const cancel = screen.getByRole("button", { name: "Cancel" });
     expect(selectPage.parentElement).toContainElement(cancel);
+    expect(cancel.parentElement?.firstElementChild).toHaveTextContent("0 selected");
+    expect(
+      within(cancel.parentElement!)
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(["Delete selected", "Cancel"]);
     expect(screen.queryByRole("heading", { name: "Traffic records" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Refresh traffic records" }),
@@ -466,27 +482,30 @@ describe("Traffic App", () => {
     );
   });
 
-  it("clears selection when Cancel or Escape exits selection mode", async () => {
+  it("clears selection on Cancel, keeps focus safe, and ignores Escape", async () => {
     const user = userEvent.setup();
     render(<App api={fakeApi()} />);
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
     await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
     expect(screen.getByText("1 selected")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    await user.click(cancel);
 
     expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Select" }));
+    const select = screen.getByRole("button", { name: "Select" });
+    expect(select).toBe(cancel);
+    expect(select).toHaveFocus();
+    await user.click(select);
     expect(screen.getByText("0 selected")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
     fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Select" }));
-    expect(screen.getByText("0 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
-  it("lets a confirmation Escape close only the dialog", async () => {
+  it("ignores Escape in confirmation dialogs and selection mode", async () => {
     const user = userEvent.setup();
     render(<App api={fakeApi()} />);
 
@@ -496,11 +515,17 @@ describe("Traffic App", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
     fireEvent.keyDown(dialog, { key: "Escape" });
 
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
   it("keeps selection mode and selected ids when deletion fails", async () => {
@@ -557,10 +582,24 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await user.click(await screen.findByRole("button", { name: "POST api.example.test" }));
-    expect(await screen.findByText("request body")).toBeInTheDocument();
     const detail = screen.getByRole("region", { name: "Traffic record details" });
-    expect(within(detail).getByText("2026-08-06 12:00:00")).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Response" }));
+    expect(within(detail).getByRole("tab", { name: "Summary" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(within(detail).getByText("First token")).toBeInTheDocument();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(api.loadBody).not.toHaveBeenCalled();
+    await user.click(within(detail).getByRole("tab", { name: "Request" }));
+    expect(await screen.findByText("request body")).toBeInTheDocument();
+    const requestLine = within(detail).getByText("POST").parentElement;
+    expect(requestLine).toContainElement(within(detail).getByText("POST"));
+    expect(requestLine).toContainElement(
+      within(detail).getByText("https://api.example.test/v1/responses?stream=true"),
+    );
+    expect(within(detail).getByText("HTTP/2 200 OK")).toBeInTheDocument();
+    expect(within(detail).queryByText("Query parameters")).not.toBeInTheDocument();
+    await user.click(within(detail).getByRole("tab", { name: "Response" }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select" }));
     await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
@@ -676,35 +715,29 @@ describe("Traffic App", () => {
     fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
     await act(async () => Promise.resolve());
     const detail = screen.getByRole("region", { name: "Traffic record details" });
-    expect(within(detail).getByText("Active")).toBeInTheDocument();
+    expect(within(detail).getByText("Waiting")).toBeInTheDocument();
 
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(getRecord).toHaveBeenCalledTimes(2);
-    expect(within(detail).queryByText("Active")).not.toBeInTheDocument();
+    expect(within(detail).queryByText("Waiting")).not.toBeInTheDocument();
+    expect(within(detail).getByText("HTTP/2 200 OK")).toBeInTheDocument();
   });
 
   it("does not overlap active body polls", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
     let requestPoll!: (value: { bytes: Uint8Array; nextOffset: number }) => void;
-    let responsePoll!: (value: { bytes: Uint8Array; nextOffset: number }) => void;
     const requestPollResult = new Promise<{ bytes: Uint8Array; nextOffset: number }>(
       (resolve) => (requestPoll = resolve),
     );
-    const responsePollResult = new Promise<{ bytes: Uint8Array; nextOffset: number }>(
-      (resolve) => (responsePoll = resolve),
-    );
     const loadBody = vi.fn<TrafficApi["loadBody"]>().mockImplementation((_id, kind, offset) => {
       if (offset === 0) return Promise.resolve({ bytes: encoder.encode(kind), nextOffset: 1 });
-      return kind === "request" ? requestPollResult : responsePollResult;
+      return requestPollResult;
     });
     const getRecord = vi
       .fn<TrafficApi["getRecord"]>()
       .mockResolvedValueOnce(activeDetail)
-      .mockResolvedValueOnce({
-        ...completedDetail,
-        request: { ...completedDetail.request, id: activeSummary.id },
-      });
+      .mockResolvedValue(activeDetail);
     const api = fakeApi({
       listRecords: vi.fn().mockResolvedValue({
         records: [activeSummary],
@@ -720,17 +753,19 @@ describe("Traffic App", () => {
     await act(async () => Promise.resolve());
     fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
     await act(async () => Promise.resolve());
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
-    expect(loadBody).toHaveBeenCalledTimes(4);
+    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
+    await act(async () => Promise.resolve());
+    expect(loadBody).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(loadBody).toHaveBeenCalledTimes(2);
 
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
-    expect(loadBody).toHaveBeenCalledTimes(4);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(loadBody).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       requestPoll({ bytes: encoder.encode("next"), nextOffset: 5 });
-      responsePoll({ bytes: encoder.encode("next"), nextOffset: 5 });
       await Promise.resolve();
     });
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(loadBody).toHaveBeenCalledTimes(2);
   });
 });

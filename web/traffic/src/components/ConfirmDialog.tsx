@@ -34,9 +34,6 @@ export function ConfirmDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-title"
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && !busy) onCancel();
-        }}
       >
         <div className={styles.icon}>
           <AlertTriangle size={20} aria-hidden="true" />

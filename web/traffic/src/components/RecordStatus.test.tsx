@@ -1,9 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { RecordState } from "../types";
-import { RecordStatus } from "./RecordStatus";
+import type { RecordState, ResponseMetadata, ResultMetadata } from "../types";
+import { RecordHeadlineStatus, RecordStatus } from "./RecordStatus";
 import styles from "./RecordStatus.module.css";
-import { outcomeLabel, recordStatusPresentation } from "./statusPresentation";
+import {
+  errorKindLabel,
+  outcomeLabel,
+  recordErrorPresentation,
+  recordHeadlinePresentation,
+  recordStatusPresentation,
+} from "./statusPresentation";
 
 function presentation(
   status: number | null,
@@ -13,7 +19,26 @@ function presentation(
   return recordStatusPresentation({ status, outcome, state });
 }
 
-describe("recordStatusPresentation", () => {
+const response: ResponseMetadata = {
+  status: 200,
+  source: "upstream",
+  headers_at: "2026-08-06T04:00:00.100Z",
+  http_version: "HTTP/2",
+  reason_phrase: "OK",
+  headers: [],
+};
+
+const failedResult: ResultMetadata = {
+  ended_at: "2026-08-06T04:00:01Z",
+  outcome: "upstream_error",
+  total_ms: 1000,
+  error: {
+    kind: "upstream_response_failed",
+    message: "upstream response stream failed: connection reset",
+  },
+};
+
+describe("record status presentation", () => {
   it.each([
     [100, "neutral"],
     [200, "success"],
@@ -28,71 +53,69 @@ describe("recordStatusPresentation", () => {
     expect(presentation(status)).toMatchObject({ label: String(status), tone });
   });
 
-  it("keeps lifecycle anomalies separate from a successful HTTP status", () => {
-    expect(presentation(200, "client_disconnected")).toEqual({
-      label: "200",
-      tone: "success",
-      anomaly: "Client disconnected",
-      recording: false,
-    });
-  });
-
-  it("distinguishes active records from terminal records without a response", () => {
+  it("distinguishes waiting from streaming active records", () => {
     expect(presentation(null, "active", "active")).toEqual({
-      label: "Active",
+      label: "Waiting",
       tone: "active",
       anomaly: null,
-      recording: false,
+      phase: null,
     });
-    expect(presentation(null, "interrupted", "interrupted")).toEqual({
-      label: "No response",
-      tone: "error",
-      anomaly: "Interrupted",
-      recording: false,
+    expect(presentation(200, "active", "active")).toEqual({
+      label: "200",
+      tone: "success",
+      anomaly: null,
+      phase: "Streaming",
     });
   });
 
-  it("humanizes unknown outcome names", () => {
-    expect(outcomeLabel("future_transport_error")).toBe("Future transport error");
+  it("maps specific error kinds and keeps unknown values readable", () => {
+    expect(errorKindLabel("connect_timeout")).toBe("Connect timeout");
+    expect(errorKindLabel("future_transport_error")).toBe("Future transport error");
+    expect(outcomeLabel("future_outcome")).toBe("Future outcome");
+  });
+
+  it("keeps HTTP status and the terminal lifecycle error separate", () => {
+    expect(recordHeadlinePresentation(response, failedResult, "completed")).toEqual({
+      statusText: "HTTP/2 200 OK",
+      tone: "success",
+      tag: "Upstream stream failed",
+      tagTone: "error",
+    });
+    expect(recordErrorPresentation({ result: failedResult, state: "completed" })).toEqual({
+      label: "Upstream stream failed",
+      message: "upstream response stream failed: connection reset",
+    });
+  });
+
+  it("synthesizes an interrupted error without a result", () => {
+    expect(recordErrorPresentation({ result: null, state: "interrupted" })).toEqual({
+      label: "Interrupted",
+      message: "Traffic Proxy stopped before the Traffic Record was finalized.",
+    });
   });
 });
 
 describe("RecordStatus", () => {
-  it("renders a compact warning with a title and accessible name", () => {
-    render(<RecordStatus status={200} outcome="client_disconnected" state="completed" compact />);
+  it("shows Waiting and Streaming text in compact list status", () => {
+    const { rerender } = render(
+      <RecordStatus status={null} outcome="active" state="active" compact />,
+    );
+    expect(screen.getByText("Waiting")).toHaveClass(styles.active);
 
+    rerender(<RecordStatus status={200} outcome="active" state="active" compact />);
     expect(screen.getByText("200")).toHaveClass(styles.success);
-    expect(
-      screen.getByRole("img", { name: "Record outcome: Client disconnected" }),
-    ).toHaveAttribute("title", "Record outcome: Client disconnected");
+    expect(screen.getByText("Streaming")).toBeInTheDocument();
   });
 
-  it("shows the anomaly reason directly in the detail presentation", () => {
-    render(<RecordStatus status={200} outcome="recording_failed" state="completed" />);
-
-    expect(screen.getByText("200")).toHaveClass(styles.success);
-    expect(screen.getByText("Recording failed")).toHaveClass(styles.anomaly);
+  it("renders the complete response line and specific anomaly tag", () => {
+    render(<RecordHeadlineStatus response={response} result={failedResult} state="completed" />);
+    expect(screen.getByText("HTTP/2 200 OK")).toHaveClass(styles.success);
+    expect(screen.getByText("Upstream stream failed")).toHaveClass(styles.errorTag);
   });
 
-  it("renders terminal records without headers as No response", () => {
-    render(<RecordStatus status={null} outcome="upstream_error" state="completed" compact />);
-
-    const status = screen.getByTitle("Record outcome: Upstream error");
-    expect(status).toHaveTextContent("No response");
-    expect(status).toHaveClass(styles.error);
-  });
-
-  it("shows an active status and recording marker when headers have arrived", () => {
-    render(<RecordStatus status={200} outcome="active" state="active" compact />);
-
-    expect(screen.getByText("200")).toHaveClass(styles.success);
-    expect(screen.getByRole("img", { name: "Recording active traffic" })).toBeInTheDocument();
-  });
-
-  it("shows only the active state while waiting for response headers", () => {
-    render(<RecordStatus status={null} outcome="active" state="active" compact />);
-
-    expect(screen.getByText("Active")).toHaveClass(styles.active);
-    expect(screen.queryByRole("img", { name: "Recording active traffic" })).not.toBeInTheDocument();
+  it("renders Waiting before response metadata arrives", () => {
+    render(<RecordHeadlineStatus response={null} result={null} state="active" />);
+    expect(screen.getByText("Waiting")).toHaveClass(styles.activeTag);
+    expect(screen.queryByText("No response")).not.toBeInTheDocument();
   });
 });

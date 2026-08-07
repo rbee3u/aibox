@@ -3,18 +3,20 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-const FORMAT_VERSION: u32 = 1;
+pub(super) const FORMAT_VERSION: u32 = 1;
 const REQUEST_JSON: &str = "request.json";
 const REQUEST_BODY: &str = "request.body";
 const RESPONSE_JSON: &str = "response.json";
 const RESPONSE_BODY: &str = "response.body";
+const RESPONSE_EVENTS_JSONL: &str = "response.events.jsonl";
+const SUMMARY_JSON: &str = "summary.json";
 const RESULT_JSON: &str = "result.json";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -25,14 +27,45 @@ pub(super) struct RecordedHeader {
 
 impl RecordedHeader {
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Vec<Self> {
+        let connection_named: HashSet<String> = headers
+            .get_all(axum::http::header::CONNECTION)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_ascii_lowercase)
+            })
+            .collect();
         headers
             .iter()
+            .filter(|(name, _)| {
+                !is_hop_by_hop(name.as_str()) && !connection_named.contains(name.as_str())
+            })
             .map(|(name, value)| Self {
                 name: name.as_str().to_string(),
                 value_base64: base64::engine::general_purpose::STANDARD.encode(value.as_bytes()),
             })
             .collect()
     }
+}
+
+fn is_hop_by_hop(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "host"
+            | "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -90,9 +123,64 @@ impl Outcome {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ErrorMetadata {
-    pub kind: String,
+    pub kind: ErrorKind,
     pub message: String,
 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ErrorKind {
+    ClientConfiguration,
+    ClientDisconnected,
+    ConnectNotSupported,
+    ConnectTimeout,
+    DnsError,
+    EventIndexFailed,
+    InvalidTargetUrl,
+    NonPublicTarget,
+    RecordingFailed,
+    RequestBodyFailed,
+    RequestRecordingFailed,
+    ResponseRecordingFailed,
+    ServerShutdown,
+    UpgradeNotSupported,
+    UpstreamRequestFailed,
+    UpstreamResponseFailed,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(super) struct TimingMetadata {
+    pub upstream_request_started_at_ns: Option<String>,
+    pub upstream_request_body_first_byte_at_ns: Option<String>,
+    pub upstream_request_body_completed_at_ns: Option<String>,
+    pub upstream_response_headers_at_ns: Option<String>,
+    pub upstream_response_body_first_byte_at_ns: Option<String>,
+    pub upstream_response_body_completed_at_ns: Option<String>,
+    pub finished_at_ns: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct DiagnosticMetadata {
+    pub phase: String,
+    pub kind: String,
+    pub message: String,
+    pub at_ns: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct SummaryMetadata {
+    pub schema_version: u32,
+    pub record_id: String,
+    pub kind: String,
+    pub observed_at: String,
+    pub terminal: bool,
+    pub timing: TimingMetadata,
+    pub outcome: Option<Outcome>,
+    pub errors: Vec<DiagnosticMetadata>,
+    pub warnings: Vec<DiagnosticMetadata>,
+}
+
+pub(super) type SummaryHandle = Arc<Mutex<SummaryMetadata>>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ResultMetadata {
@@ -101,7 +189,6 @@ pub(super) struct ResultMetadata {
     pub request_bytes: u64,
     pub response_bytes: u64,
     pub request_body_ms: Option<u64>,
-    pub ttfb_ms: Option<u64>,
     pub total_ms: u64,
     pub outcome: Outcome,
     pub error: Option<ErrorMetadata>,
@@ -112,7 +199,6 @@ pub(super) struct RuntimeMeasurements {
     pub request_bytes: u64,
     pub response_bytes: u64,
     pub request_body_duration: Option<Duration>,
-    pub ttfb: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -126,6 +212,8 @@ pub(super) struct NewRecord {
     pub directory: PathBuf,
     pub request_body: fs::File,
     pub response_body: fs::File,
+    pub summary: SummaryHandle,
+    pub origin: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +221,7 @@ pub(super) struct StoredRecord {
     pub directory: PathBuf,
     pub request: RequestMetadata,
     pub response: Option<ResponseMetadata>,
+    pub summary: SummaryMetadata,
     pub result: Option<ResultMetadata>,
     pub request_body_bytes: u64,
     pub response_body_bytes: u64,
@@ -166,7 +255,8 @@ impl TrafficStore {
     ) -> Result<(NewRecord, RequestMetadata)> {
         crate::tenant::real_dir_exists(&self.root, "Traffic Record collection")?;
         let id = Uuid::now_v7().to_string();
-        let started_at = utc_now();
+        let observed_at = utc_now();
+        let origin = Instant::now();
         let directory_name = format!(
             "{}-{}-{id}",
             utc_basic_now(),
@@ -176,11 +266,6 @@ impl TrafficStore {
         fs::create_dir(&directory)
             .with_context(|| format!("create Traffic Record {}", directory.display()))?;
         restrict_dir(&directory)?;
-
-        // Publish the in-memory active marker before any record files become
-        // complete enough for a concurrent management scan to observe. This
-        // prevents an in-flight request from being classified as interrupted
-        // and selected for deletion during the metadata/body setup window.
         self.active
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -192,19 +277,44 @@ impl TrafficStore {
             let request = RequestMetadata {
                 format_version: FORMAT_VERSION,
                 id: id.clone(),
-                started_at,
+                started_at: observed_at.clone(),
                 method: method.to_string(),
                 incoming_uri: incoming_uri.to_string(),
                 upstream_url: upstream_url.map(str::to_string),
                 http_version: version.to_string(),
                 headers,
             };
-            atomic_write_json(&directory, REQUEST_JSON, &request)?;
+            let file = RequestFile {
+                schema_version: FORMAT_VERSION,
+                record_id: id.clone(),
+                kind: "request".to_string(),
+                method: request.method.clone(),
+                upstream_url: request.upstream_url.clone(),
+                headers: request.headers.clone(),
+            };
+            let summary = SummaryMetadata {
+                schema_version: FORMAT_VERSION,
+                record_id: id.clone(),
+                kind: "summary".to_string(),
+                observed_at,
+                terminal: false,
+                timing: TimingMetadata::default(),
+                outcome: None,
+                errors: Vec::new(),
+                warnings: Vec::new(),
+            };
+            atomic_write_json(&directory, REQUEST_JSON, &file)?;
+            atomic_write_json(&directory, SUMMARY_JSON, &summary)?;
             crate::tenant::sync_dir(&directory)?;
             crate::tenant::sync_dir(&self.root)?;
-            Ok((request_body, response_body, request))
+            Ok((
+                request_body,
+                response_body,
+                request,
+                Arc::new(Mutex::new(summary)),
+            ))
         })();
-        let (request_body, response_body, request) = match created {
+        let (request_body, response_body, request, summary) = match created {
             Ok(value) => value,
             Err(error) => {
                 self.active
@@ -221,42 +331,98 @@ impl TrafficStore {
                 directory,
                 request_body,
                 response_body,
+                summary,
+                origin,
             },
             request,
         ))
     }
 
+    pub fn checkpoint(&self, record: &NewRecord) -> Result<()> {
+        validate_record_ancestor(&self.root, &record.directory)?;
+        let summary = record
+            .summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        atomic_write_json(&record.directory, SUMMARY_JSON, &summary)
+    }
+
+    pub fn checkpoint_snapshot(&self, directory: &Path, summary: &SummaryMetadata) -> Result<()> {
+        validate_record_ancestor(&self.root, directory)?;
+        atomic_write_json(directory, SUMMARY_JSON, summary)
+    }
+
     pub fn write_response(&self, directory: &Path, metadata: &ResponseMetadata) -> Result<()> {
         validate_record_ancestor(&self.root, directory)?;
-        atomic_write_json(directory, RESPONSE_JSON, metadata)
+        let record_id = read_summary_id(directory)?;
+        let file = ResponseFile {
+            schema_version: FORMAT_VERSION,
+            record_id,
+            kind: "response".to_string(),
+            http_version: metadata.http_version.clone(),
+            status: metadata.status,
+            headers: metadata.headers.clone(),
+        };
+        atomic_write_json(directory, RESPONSE_JSON, &file)
+    }
+
+    pub fn create_event_index(&self, record: &NewRecord) -> Result<fs::File> {
+        validate_record_ancestor(&self.root, &record.directory)?;
+        create_private_file(&record.directory.join(RESPONSE_EVENTS_JSONL))
     }
 
     pub fn finish(
         &self,
         record: &NewRecord,
-        started: std::time::Instant,
+        started: Instant,
         measurements: &RuntimeMeasurements,
         outcome: Outcome,
         error: Option<ErrorMetadata>,
     ) -> Result<ResultMetadata> {
-        let result = ResultMetadata {
+        let at_ns = offset_ns(record.origin);
+        let mut summary = record
+            .summary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        summary.timing.finished_at_ns = Some(at_ns.clone());
+        summary.terminal = true;
+        summary.outcome = Some(outcome);
+        if let Some(error) = &error {
+            summary.errors.push(DiagnosticMetadata {
+                phase: error_phase(error.kind).to_string(),
+                kind: serde_json::to_string(&error.kind)
+                    .unwrap_or_else(|_| "recording_failed".to_string())
+                    .trim_matches('"')
+                    .to_string(),
+                message: error.message.clone(),
+                at_ns: at_ns.clone(),
+            });
+        }
+        let snapshot = summary.clone();
+        drop(summary);
+        atomic_write_json(&record.directory, SUMMARY_JSON, &snapshot)?;
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&record.id);
+        let total_ms = snapshot
+            .timing
+            .finished_at_ns
+            .as_deref()
+            .and_then(|value| value.parse::<u128>().ok())
+            .map(|ns| (ns / 1_000_000) as u64)
+            .unwrap_or_else(|| duration_ms(started.elapsed()));
+        Ok(ResultMetadata {
             format_version: FORMAT_VERSION,
             ended_at: utc_now(),
             request_bytes: measurements.request_bytes,
             response_bytes: measurements.response_bytes,
             request_body_ms: measurements.request_body_duration.map(duration_ms),
-            ttfb_ms: measurements.ttfb.map(duration_ms),
-            total_ms: duration_ms(started.elapsed()),
+            total_ms,
             outcome,
             error,
-        };
-        let write = atomic_write_json(&record.directory, RESULT_JSON, &result);
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&record.id);
-        write?;
-        Ok(result)
+        })
     }
 
     pub fn abandon_active(&self, id: &str) {
@@ -314,9 +480,9 @@ impl TrafficStore {
         }
         records.sort_by(|left, right| {
             right
-                .request
-                .started_at
-                .cmp(&left.request.started_at)
+                .summary
+                .observed_at
+                .cmp(&left.summary.observed_at)
                 .then_with(|| right.request.id.cmp(&left.request.id))
         });
         Ok(records)
@@ -407,44 +573,263 @@ impl TrafficStore {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct RequestFile {
+    schema_version: u32,
+    record_id: String,
+    kind: String,
+    method: String,
+    upstream_url: Option<String>,
+    headers: Vec<RecordedHeader>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResponseFile {
+    schema_version: u32,
+    record_id: String,
+    kind: String,
+    http_version: String,
+    status: u16,
+    headers: Vec<RecordedHeader>,
+}
+
 fn read_record(path: &Path, active: &HashSet<String>) -> Result<StoredRecord> {
-    let request: RequestMetadata = read_json(&path.join(REQUEST_JSON), "Traffic request metadata")?;
-    if request.format_version != FORMAT_VERSION {
-        bail!(
-            "unsupported Traffic format version {}",
-            request.format_version
-        );
+    let request_file: RequestFile =
+        read_json(&path.join(REQUEST_JSON), "Traffic request metadata")?;
+    validate_schema(request_file.schema_version, &request_file.kind, "request")?;
+    validate_id(&request_file.record_id)?;
+    validate_record_directory_name(path, &request_file.record_id)?;
+    let mut summary: SummaryMetadata =
+        read_json(&path.join(SUMMARY_JSON), "Traffic summary metadata")?;
+    validate_schema(summary.schema_version, &summary.kind, "summary")?;
+    if summary.record_id != request_file.record_id {
+        bail!("Traffic metadata record ids do not match");
     }
-    validate_id(&request.id)?;
-    validate_record_directory_name(path, &request.id)?;
-    let response: Option<ResponseMetadata> =
+    validate_summary(&summary)?;
+    append_event_index_warnings(path, &mut summary)?;
+    if crate::tenant::real_file_exists(path.join(RESULT_JSON).as_path(), "legacy result metadata")?
+    {
+        bail!("legacy result.json is unsupported");
+    }
+    let response_file: Option<ResponseFile> =
         optional_json(&path.join(RESPONSE_JSON), "Traffic response metadata")?;
-    if response
-        .as_ref()
-        .is_some_and(|metadata| metadata.format_version != FORMAT_VERSION)
-    {
-        bail!("unsupported Traffic response format version");
-    }
-    let result: Option<ResultMetadata> =
-        optional_json(&path.join(RESULT_JSON), "Traffic result metadata")?;
-    if result
-        .as_ref()
-        .is_some_and(|metadata| metadata.format_version != FORMAT_VERSION)
-    {
-        bail!("unsupported Traffic result format version");
+    if let Some(response) = &response_file {
+        validate_schema(response.schema_version, &response.kind, "response")?;
+        if response.record_id != request_file.record_id {
+            bail!("Traffic response record id does not match");
+        }
     }
     let request_body_bytes = regular_file_length(&path.join(REQUEST_BODY), "Traffic request body")?;
     let response_body_bytes =
         regular_file_length(&path.join(RESPONSE_BODY), "Traffic response body")?;
+    let request = RequestMetadata {
+        format_version: FORMAT_VERSION,
+        id: request_file.record_id.clone(),
+        started_at: summary.observed_at.clone(),
+        method: request_file.method,
+        incoming_uri: String::new(),
+        upstream_url: request_file.upstream_url,
+        http_version: String::new(),
+        headers: request_file.headers,
+    };
+    let response = response_file.map(|metadata| ResponseMetadata {
+        format_version: FORMAT_VERSION,
+        source: ResponseSource::Upstream,
+        headers_at: summary.observed_at.clone(),
+        status: metadata.status,
+        http_version: metadata.http_version,
+        headers: metadata.headers,
+    });
+    let active_record = !summary.terminal && active.contains(&request.id);
+    let result = summary.terminal.then(|| {
+        let mut result = summary_to_result(&summary);
+        result.request_bytes = request_body_bytes;
+        result.response_bytes = response_body_bytes;
+        result
+    });
     Ok(StoredRecord {
         directory: path.to_path_buf(),
-        active: result.is_none() && active.contains(&request.id),
         request,
         response,
+        summary,
         result,
         request_body_bytes,
         response_body_bytes,
+        active: active_record,
     })
+}
+
+fn validate_schema(version: u32, kind: &str, expected: &str) -> Result<()> {
+    if version != FORMAT_VERSION {
+        bail!("unsupported Traffic schema version {version}");
+    }
+    if kind != expected {
+        bail!("Traffic metadata kind is not {expected}");
+    }
+    Ok(())
+}
+
+fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
+    if summary.terminal != summary.outcome.is_some() {
+        bail!("Traffic summary terminal and outcome fields are inconsistent");
+    }
+    if summary.terminal && summary.timing.finished_at_ns.is_none() {
+        bail!("terminal Traffic summary has no finished timing");
+    }
+    for value in [
+        summary.timing.upstream_request_started_at_ns.as_deref(),
+        summary
+            .timing
+            .upstream_request_body_first_byte_at_ns
+            .as_deref(),
+        summary
+            .timing
+            .upstream_request_body_completed_at_ns
+            .as_deref(),
+        summary.timing.upstream_response_headers_at_ns.as_deref(),
+        summary
+            .timing
+            .upstream_response_body_first_byte_at_ns
+            .as_deref(),
+        summary
+            .timing
+            .upstream_response_body_completed_at_ns
+            .as_deref(),
+        summary.timing.finished_at_ns.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if value.parse::<u128>().is_err() {
+            bail!("Traffic summary timing offset is not a decimal string");
+        }
+    }
+    Ok(())
+}
+
+fn summary_to_result(summary: &SummaryMetadata) -> ResultMetadata {
+    let outcome = summary.outcome.unwrap_or(Outcome::RecordingFailed);
+    let total_ms = summary
+        .timing
+        .finished_at_ns
+        .as_deref()
+        .and_then(|value| value.parse::<u128>().ok())
+        .map(|ns| (ns / 1_000_000) as u64)
+        .unwrap_or_default();
+    let error = summary.errors.last().map(|error| ErrorMetadata {
+        kind: parse_error_kind(&error.kind),
+        message: error.message.clone(),
+    });
+    ResultMetadata {
+        format_version: FORMAT_VERSION,
+        ended_at: summary_ended_at(summary),
+        request_bytes: 0,
+        response_bytes: 0,
+        request_body_ms: None,
+        total_ms,
+        outcome,
+        error,
+    }
+}
+
+fn summary_ended_at(summary: &SummaryMetadata) -> String {
+    let Some(offset) = summary
+        .timing
+        .finished_at_ns
+        .as_deref()
+        .and_then(|value| value.parse::<i64>().ok())
+    else {
+        return summary.observed_at.clone();
+    };
+    let format = time::format_description::well_known::Rfc3339;
+    let Some(observed) = OffsetDateTime::parse(&summary.observed_at, &format).ok() else {
+        return summary.observed_at.clone();
+    };
+    (observed + time::Duration::nanoseconds(offset))
+        .format(&format)
+        .unwrap_or_else(|_| summary.observed_at.clone())
+}
+
+fn parse_error_kind(kind: &str) -> ErrorKind {
+    serde_json::from_str(&format!("\"{kind}\"")).unwrap_or(ErrorKind::RecordingFailed)
+}
+
+fn error_phase(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::ClientConfiguration
+        | ErrorKind::ConnectNotSupported
+        | ErrorKind::ConnectTimeout
+        | ErrorKind::DnsError
+        | ErrorKind::InvalidTargetUrl
+        | ErrorKind::NonPublicTarget
+        | ErrorKind::RequestBodyFailed
+        | ErrorKind::RequestRecordingFailed
+        | ErrorKind::UpgradeNotSupported
+        | ErrorKind::UpstreamRequestFailed => "request",
+        ErrorKind::ClientDisconnected
+        | ErrorKind::ResponseRecordingFailed
+        | ErrorKind::UpstreamResponseFailed => "response",
+        ErrorKind::EventIndexFailed | ErrorKind::RecordingFailed => "recording",
+        ErrorKind::ServerShutdown => "lifecycle",
+    }
+}
+
+#[derive(Deserialize)]
+struct EventIndexLine {
+    schema_version: u32,
+    record_id: String,
+    kind: String,
+    sequence: u64,
+    body_start: u64,
+    body_end: u64,
+    first_arrival_at_ns: String,
+    completed_at_ns: String,
+}
+
+fn append_event_index_warnings(path: &Path, summary: &mut SummaryMetadata) -> Result<()> {
+    let index_path = path.join(RESPONSE_EVENTS_JSONL);
+    if !crate::tenant::real_file_exists(&index_path, "Traffic SSE event index")? {
+        return Ok(());
+    }
+    let file = crate::tenant::open_real_file(&index_path, "Traffic SSE event index")?;
+    for (line_number, line) in std::io::BufReader::new(file).split(b'\n').enumerate() {
+        let warning = match line {
+            Ok(line) if line.is_empty() => continue,
+            Ok(line) => match serde_json::from_slice::<EventIndexLine>(&line) {
+                Ok(entry)
+                    if entry.schema_version == FORMAT_VERSION
+                        && entry.record_id == summary.record_id
+                        && entry.kind == "sse_event"
+                        && entry.body_start <= entry.body_end
+                        && entry.first_arrival_at_ns.parse::<u128>().is_ok()
+                        && entry.completed_at_ns.parse::<u128>().is_ok() =>
+                {
+                    let _ = entry.sequence;
+                    continue;
+                }
+                Ok(_) => "SSE event index line has invalid metadata".to_string(),
+                Err(error) => format!("cannot parse SSE event index line: {error}"),
+            },
+            Err(error) => format!("cannot read SSE event index line: {error}"),
+        };
+        summary.warnings.push(DiagnosticMetadata {
+            phase: "recording".to_string(),
+            kind: "event_index_failed".to_string(),
+            message: format!("line {}: {warning}", line_number + 1),
+            at_ns: summary
+                .timing
+                .finished_at_ns
+                .clone()
+                .unwrap_or_else(|| "0".to_string()),
+        });
+    }
+    Ok(())
+}
+
+fn read_summary_id(path: &Path) -> Result<String> {
+    let summary: SummaryMetadata = read_json(&path.join(SUMMARY_JSON), "Traffic summary metadata")?;
+    validate_schema(summary.schema_version, &summary.kind, "summary")?;
+    Ok(summary.record_id)
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path, kind: &str) -> Result<T> {
@@ -646,32 +1031,17 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+pub(super) fn offset_ns(origin: Instant) -> String {
+    origin.elapsed().as_nanos().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn finished_record(store: &TrafficStore, incoming_uri: &str) -> String {
-        let (record, _) = store
-            .begin("GET", incoming_uri, None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let id = record.id.clone();
-        store
-            .finish(
-                &record,
-                std::time::Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Rejected,
-                None,
-            )
-            .unwrap();
-        id
-    }
-
     #[test]
     fn host_slug_and_flat_record_layout_are_safe() {
-        assert_eq!(sanitize_host("API.Example.com:443"), "api.example.com-443");
-        assert_eq!(sanitize_host("////"), "invalid");
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, request) = store
@@ -685,7 +1055,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(record.directory.parent(), Some(store.root()));
-        assert_eq!(request.format_version, 1);
+        assert_eq!(request.format_version, FORMAT_VERSION);
         assert!(record
             .directory
             .file_name()
@@ -704,6 +1074,112 @@ mod tests {
                 & 0o777,
             0o600
         );
+        assert!(record.directory.join(SUMMARY_JSON).exists());
+        assert!(!record.directory.join(RESULT_JSON).exists());
+    }
+
+    #[test]
+    fn summary_is_terminal_and_legacy_result_is_derived() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        store
+            .finish(
+                &record,
+                Instant::now(),
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        let found = store.find(&record.id).unwrap();
+        assert!(found.summary.terminal);
+        let result = found.result.unwrap();
+        assert_eq!(result.outcome, Outcome::Rejected);
+        assert!(!result.ended_at.is_empty());
+    }
+
+    #[test]
+    fn derived_result_uses_the_finished_monotonic_offset() {
+        let summary = SummaryMetadata {
+            schema_version: FORMAT_VERSION,
+            record_id: "018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12".to_string(),
+            kind: "summary".to_string(),
+            observed_at: "2026-08-06T04:00:00Z".to_string(),
+            terminal: true,
+            timing: TimingMetadata {
+                finished_at_ns: Some("1500000000".to_string()),
+                ..TimingMetadata::default()
+            },
+            outcome: Some(Outcome::Completed),
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let result = summary_to_result(&summary);
+        assert!(result.ended_at.starts_with("2026-08-06T04:00:01"));
+    }
+
+    #[test]
+    fn recorded_headers_drop_connection_named_fields() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("connection", "x-hop, keep-alive".parse().unwrap());
+        headers.insert("x-hop", "secret".parse().unwrap());
+        headers.insert("x-app", "kept".parse().unwrap());
+
+        let recorded = RecordedHeader::from_headers(&headers);
+
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].name, "x-app");
+    }
+
+    #[test]
+    fn persisted_metadata_uses_the_stable_schema_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin(
+                "POST",
+                "/https://example.com/v1/responses",
+                Some("https://example.com/v1/responses"),
+                "HTTP/2",
+                vec![],
+                Some("example.com"),
+            )
+            .unwrap();
+        store
+            .write_response(
+                &record.directory,
+                &ResponseMetadata {
+                    format_version: FORMAT_VERSION,
+                    source: ResponseSource::Upstream,
+                    headers_at: utc_now(),
+                    status: 200,
+                    http_version: "HTTP/2".to_string(),
+                    headers: vec![],
+                },
+            )
+            .unwrap();
+        let request: serde_json::Value =
+            serde_json::from_reader(fs::File::open(record.directory.join(REQUEST_JSON)).unwrap())
+                .unwrap();
+        let response: serde_json::Value =
+            serde_json::from_reader(fs::File::open(record.directory.join(RESPONSE_JSON)).unwrap())
+                .unwrap();
+        let summary: serde_json::Value =
+            serde_json::from_reader(fs::File::open(record.directory.join(SUMMARY_JSON)).unwrap())
+                .unwrap();
+        assert_eq!(request["schema_version"], FORMAT_VERSION);
+        assert_eq!(request["record_id"], record.id);
+        assert_eq!(request["kind"], "request");
+        assert!(request.get("format_version").is_none());
+        assert_eq!(response["kind"], "response");
+        assert!(response.get("source").is_none());
+        assert_eq!(summary["kind"], "summary");
+        assert!(record.directory.join(RESPONSE_BODY).is_file());
+        assert!(!record.directory.join(RESULT_JSON).exists());
     }
 
     #[test]
@@ -788,7 +1264,7 @@ mod tests {
         store
             .finish(
                 &record,
-                std::time::Instant::now(),
+                Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Rejected,
                 None,
@@ -805,7 +1281,18 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         for _ in 0..2 {
-            finished_record(&store, "/bad");
+            let (record, _) = store
+                .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
+                .unwrap();
+            store
+                .finish(
+                    &record,
+                    Instant::now(),
+                    &RuntimeMeasurements::default(),
+                    Outcome::Rejected,
+                    None,
+                )
+                .unwrap();
         }
         let (active, _) = store
             .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
@@ -823,8 +1310,24 @@ mod tests {
     fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anything() {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
-        let first = finished_record(&store, "/first");
-        let second = finished_record(&store, "/second");
+        let make_finished = |uri| {
+            let (record, _) = store
+                .begin("GET", uri, None, "HTTP/1.1", Vec::new(), None)
+                .unwrap();
+            let id = record.id.clone();
+            store
+                .finish(
+                    &record,
+                    Instant::now(),
+                    &RuntimeMeasurements::default(),
+                    Outcome::Rejected,
+                    None,
+                )
+                .unwrap();
+            id
+        };
+        let first = make_finished("/first");
+        let second = make_finished("/second");
         let (active, _) = store
             .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();

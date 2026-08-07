@@ -70,7 +70,8 @@ $AIBOX_ROOT/
       request.body
       response.json
       response.body
-      result.json
+      response.events.jsonl          # only for text/event-stream responses
+      summary.json
   tenants/
     <tenant>/                      # complete Managed Tenant Home
       .gitconfig

@@ -37,10 +37,13 @@ existing management routes.
 ## Code Boundaries
 
 `src/api.ts` is the only browser-facing Traffic API client. Its TypeScript
-interfaces mirror the existing Rust JSON responses; the Rust routes, CSRF
-rules, CSP, and loopback checks are unchanged. Components receive an API
-interface so tests can use deterministic fakes without sockets.
+interfaces mirror the Rust JSON responses, including the Summary timing and
+record-outcome fields; the Rust routes, CSRF rules, CSP, and loopback checks
+remain unchanged. Components receive an API interface so tests can use
+deterministic fakes without sockets.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
-the existing 2.5-second list / 1-second active-record polling. Formatting and
-binary decoding stay in pure functions covered by Vitest.
+the 5-second list / 3-second active-record polling. The Summary is
+the default detail tab, and request/response bodies load only for the visible
+body tab. Formatting and binary decoding stay in pure functions covered by
+Vitest.

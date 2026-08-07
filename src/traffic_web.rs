@@ -1,6 +1,8 @@
 use crate::traffic::AppState;
 use crate::traffic_proxy;
-use crate::traffic_store::{StoredRecord, TrafficStore};
+use crate::traffic_store::{
+    RecordedHeader, ResponseMetadata, ResponseSource, StoredRecord, SummaryMetadata, TrafficStore,
+};
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, Method, Response, StatusCode};
@@ -155,7 +157,6 @@ struct RecordSummary {
     status: Option<u16>,
     outcome: String,
     state: String,
-    ttfb_ms: Option<u64>,
     total_ms: Option<u64>,
 }
 
@@ -225,20 +226,54 @@ fn summary(record: &StoredRecord) -> RecordSummary {
         status: record.response.as_ref().map(|response| response.status),
         outcome: outcome.to_string(),
         state: state.to_string(),
-        ttfb_ms: record.result.as_ref().and_then(|result| result.ttfb_ms),
-        total_ms: record.result.as_ref().map(|result| result.total_ms),
+        total_ms: if record.active {
+            elapsed_wall_ms(&record.request.started_at, None)
+        } else {
+            record.result.as_ref().map(|result| result.total_ms)
+        },
+    }
+}
+
+#[derive(Serialize)]
+struct ResponseDetail {
+    format_version: u32,
+    source: ResponseSource,
+    headers_at: String,
+    status: u16,
+    http_version: String,
+    reason_phrase: Option<String>,
+    headers: Vec<RecordedHeader>,
+}
+
+impl From<ResponseMetadata> for ResponseDetail {
+    fn from(metadata: ResponseMetadata) -> Self {
+        let reason_phrase = StatusCode::from_u16(metadata.status)
+            .ok()
+            .and_then(|status| status.canonical_reason())
+            .map(str::to_string);
+        Self {
+            // Keep the management response compatible with the existing
+            // viewer API; persisted files use Summary schema version 1.
+            format_version: 2,
+            source: metadata.source,
+            headers_at: metadata.headers_at,
+            status: metadata.status,
+            http_version: metadata.http_version,
+            reason_phrase,
+            headers: metadata.headers,
+        }
     }
 }
 
 #[derive(Serialize)]
 struct RecordDetail {
     request: crate::traffic_store::RequestMetadata,
-    response: Option<crate::traffic_store::ResponseMetadata>,
+    response: Option<ResponseDetail>,
     result: Option<crate::traffic_store::ResultMetadata>,
+    summary: SummaryMetadata,
     state: String,
     request_body_bytes: u64,
     response_body_bytes: u64,
-    live_ttfb_ms: Option<u64>,
     live_total_ms: Option<u64>,
 }
 
@@ -259,19 +294,29 @@ pub(super) async fn record_detail(
                 .active
                 .then(|| elapsed_wall_ms(&record.request.started_at, None))
                 .flatten();
-            let live_ttfb_ms = record.response.as_ref().and_then(|response| {
-                elapsed_wall_ms(&record.request.started_at, Some(&response.headers_at))
+            let response_headers_at = record
+                .summary
+                .timing
+                .upstream_response_headers_at_ns
+                .as_deref()
+                .and_then(|offset| anchored_at(&record.summary.observed_at, offset));
+            let response = record.response.map(|metadata| {
+                let mut detail = ResponseDetail::from(metadata);
+                if let Some(headers_at) = &response_headers_at {
+                    detail.headers_at = headers_at.clone();
+                }
+                detail
             });
             json_response(
                 StatusCode::OK,
                 &RecordDetail {
                     request: record.request,
-                    response: record.response,
+                    response,
                     result: record.result,
+                    summary: record.summary,
                     state: state_name.to_string(),
                     request_body_bytes: record.request_body_bytes,
                     response_body_bytes: record.response_body_bytes,
-                    live_ttfb_ms,
                     live_total_ms,
                 },
             )
@@ -287,6 +332,15 @@ fn elapsed_wall_ms(started: &str, ended: Option<&str>) -> Option<u64> {
         .and_then(|value| time::OffsetDateTime::parse(value, &Rfc3339).ok())
         .unwrap_or_else(time::OffsetDateTime::now_utc);
     u64::try_from((ended - started).whole_milliseconds()).ok()
+}
+
+fn anchored_at(observed_at: &str, offset_ns: &str) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+    let observed = time::OffsetDateTime::parse(observed_at, &Rfc3339).ok()?;
+    let offset = offset_ns.parse::<i64>().ok()?;
+    (observed + time::Duration::nanoseconds(offset))
+        .format(&Rfc3339)
+        .ok()
 }
 
 #[derive(Deserialize)]
@@ -642,10 +696,7 @@ mod tests {
             .finish(
                 &completed,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements {
-                    ttfb: Some(std::time::Duration::from_millis(321)),
-                    ..Default::default()
-                },
+                &crate::traffic_store::RuntimeMeasurements::default(),
                 crate::traffic_store::Outcome::Rejected,
                 None,
             )
@@ -657,18 +708,34 @@ mod tests {
 
         assert_eq!(list.total, 3);
         assert_eq!(list.deletable_count, 2);
-        for (id, state, outcome, ttfb_ms) in [
-            (active.id.as_str(), "active", "active", None),
-            (completed_id.as_str(), "completed", "rejected", Some(321)),
-            (interrupted_id.as_str(), "interrupted", "interrupted", None),
+        for (id, state, outcome, has_duration) in [
+            (active.id.as_str(), "active", "active", true),
+            (completed_id.as_str(), "completed", "rejected", true),
+            (interrupted_id.as_str(), "interrupted", "interrupted", false),
         ] {
             let record = list.records.iter().find(|record| record.id == id).unwrap();
             assert_eq!(
                 (record.state.as_str(), record.outcome.as_str()),
                 (state, outcome)
             );
-            assert_eq!(record.ttfb_ms, ttfb_ms);
+            assert_eq!(record.total_ms.is_some(), has_duration);
         }
+    }
+
+    #[test]
+    fn detail_response_adds_canonical_reason_without_mutating_raw_metadata() {
+        let detail = ResponseDetail::from(ResponseMetadata {
+            format_version: crate::traffic_store::FORMAT_VERSION,
+            source: ResponseSource::Upstream,
+            headers_at: "2026-08-06T04:00:00Z".to_string(),
+            status: 200,
+            http_version: "HTTP/2".to_string(),
+            headers: Vec::new(),
+        });
+        assert_eq!(detail.reason_phrase.as_deref(), Some("OK"));
+        let json = serde_json::to_value(detail).unwrap();
+        assert_eq!(json["reason_phrase"], "OK");
+        assert_eq!(json["format_version"], 2);
     }
 
     #[tokio::test]
