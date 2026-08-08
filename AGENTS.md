@@ -26,11 +26,16 @@ it, and pass the right side verbatim only to `run`. `run`, `config`, and
 `config`, `session`, and `component` accept `--host`. `build`,
 `completion`, and `tenant` accept none of them. `traffic` owns only `--listen`
 and `--allow-remote`; it does not accept selectors or pass-through arguments.
-Completion mirrors these scopes, stays read-only, and runs on the host.
+`config propagate-auth` defaults to Host/Codex/Current and accepts only the
+redundant compatible selectors `--host`, `--agent codex`, and `--current`.
+Completion mirrors these scopes, stays read-only, runs on the host, and hides
+`propagate-auth` after an incompatible source selector.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only with
-`--host`, cannot Run, and never appears in `tenant list` or deletion. Only
+`--host` by Tenant-scoped commands; global Credential Propagation defaults its
+source to Host Current Config and may accept a redundant `--host`. The Host
+Tenant cannot Run and never appears in `tenant list` or deletion. Only
 `tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
@@ -58,9 +63,18 @@ deletes missing fields, preserves unrelated native configuration, and retains
 no association with the Named Config afterward. Do not add activation, drift,
 reconciliation, rollback, or transaction state.
 
+**Keep Credential Propagation explicit and one-shot.** `config propagate-auth`
+copies one Host Codex Current Config `auth.json` snapshot only to older existing
+same-account ChatGPT Credentials in complete safe Named Configs and Managed
+Tenant Current Configs. It creates nothing, retains no association, never runs
+automatically, and is distinct from Config Application. It ignores non-ChatGPT
+and different-account credentials, warns on malformed candidate content, and
+fails before writing on an unsafe structural view.
+
 **Keep Current Config direct and explicit.** `config get` and `config edit`
 require either a Named Config name or `--current`; other Config commands operate
-only on Named Configs. `get` prints every native file in Agent-defined order
+only on Named Configs except for global Credential Propagation. `get` prints
+every native file in Agent-defined order
 with file headings and without credential redaction. `edit` opens and commits
 each file separately in that order. Named Config edits validate the selected
 file before committing; Current Config edits preserve arbitrary bytes without
@@ -113,8 +127,11 @@ already existing Host Home.
 own interrupted filesystem work, but aibox provides no multi-process locking
 guarantee. Config Application atomically replaces each changed file but is not
 atomic across files; rerunning it converges. Sequential Config edits likewise
-commit one file at a time without rollback. One aibox process supports only one
-active container operation: a Run or toolchain installation.
+commit one file at a time without rollback. Credential Propagation uses its
+preflight snapshots without write-time reconciliation, replaces targets
+independently, continues after individual write failures, and never rolls back
+successful targets. One aibox process supports only one active container
+operation: a Run or toolchain installation.
 
 **Keep Traffic host-side and raw.** The Traffic Proxy is global rather than
 Tenant-owned, never starts Docker, and records raw application-visible header

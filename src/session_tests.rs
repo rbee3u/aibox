@@ -306,9 +306,9 @@ fn list_title_collapses_and_truncates_to_64_chars() {
 }
 
 #[test]
-fn list_shortens_multibyte_session_ids_by_chars() {
+fn list_shows_non_uuid_session_ids_in_full() {
     let dir = tempfile::tempdir().unwrap();
-    let id = "é".repeat(10);
+    let id = "é".repeat(14);
     let path = dir.path().join(format!("{id}.jsonl"));
     std::fs::write(&path, "{\"typed\":\"bonjour\"}\n").unwrap();
     let backend = ExplicitFilesBackend::new(vec![path]);
@@ -322,11 +322,61 @@ fn list_shortens_multibyte_session_ids_by_chars() {
 
     assert_eq!(code, 0);
     assert_eq!(lines.len(), 1);
-    let mut expected_prefix = "é".repeat(8);
-    expected_prefix.push_str("  ");
     assert!(
-        lines[0].starts_with(&expected_prefix),
-        "short ids must be truncated on char boundaries, not byte boundaries: {lines:?}"
+        lines[0].starts_with(&format!("{id}  ")),
+        "non-UUID ids must be shown in full: {lines:?}"
+    );
+}
+
+#[test]
+fn list_uses_the_final_group_of_canonical_uuid_ids() {
+    for (id, expected) in [
+        ("019fded0-6b15-7163-8881-458cbf92d123", "458cbf92d123"),
+        ("019fded0-e5a1-74c1-a7dd-7cc52d16f280", "7cc52d16f280"),
+        ("019FDED0-F91B-7893-A4C9-91B8FFE164EA", "91B8FFE164EA"),
+    ] {
+        assert_eq!(list_id(id), expected);
+    }
+
+    let compact = "019fded06b1571638881458cbf92d123";
+    assert_eq!(list_id(compact), compact);
+    let malformed = "019fded0-6b15-7163-8881-458cbf92d12z";
+    assert_eq!(list_id(malformed), malformed);
+    assert_eq!(list_id("claude-session"), "claude-session");
+}
+
+#[test]
+fn list_keeps_duplicate_uuid_suffixes_fixed_at_twelve_characters() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir
+        .path()
+        .join("aaaaaaaa-aaaa-4aaa-8aaa-000000000001.jsonl");
+    let second = dir
+        .path()
+        .join("bbbbbbbb-bbbb-7bbb-8bbb-000000000001.jsonl");
+    std::fs::write(&first, "{\"typed\":\"first\"}\n").unwrap();
+    std::fs::write(&second, "{\"typed\":\"second\"}\n").unwrap();
+    let backend = ExplicitFilesBackend::new(vec![first, second]);
+    let mut lines = Vec::new();
+
+    list_with_printer(&backend, dir.path(), |line| {
+        lines.push(line.to_string());
+        Ok(true)
+    })
+    .unwrap();
+
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines.iter().all(|line| line.starts_with("000000000001  ")),
+        "colliding UUID suffixes must remain fixed-width duplicate tokens: {lines:?}"
+    );
+
+    let error = resolve(&backend, dir.path(), "000000000001")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("ambiguous id '000000000001' matches 2 sessions"),
+        "{error}"
     );
 }
 
@@ -1238,12 +1288,12 @@ fn delete_all_orders_targets_by_session_id() {
 }
 
 #[test]
-fn resolve_exact_id_wins_over_prefix_ambiguity() {
-    // An id that happens to prefix another id must still be addressable:
-    // the exact match wins instead of reading as an ambiguous prefix.
+fn resolve_exact_id_wins_over_suffix_ambiguity() {
+    // An id that is also another id's suffix must still be addressable: the
+    // exact match wins instead of reading as an ambiguous suffix.
     let dir = tempfile::tempdir().unwrap();
     let exact = write_session(dir.path(), "1111");
-    write_session(dir.path(), "11112222");
+    write_session(dir.path(), "22221111");
 
     let got = resolve(&TestBackend, dir.path(), "1111").unwrap();
 
@@ -1270,18 +1320,36 @@ fn resolve_duplicate_exact_ids_is_ambiguous() {
 }
 
 #[test]
-fn resolve_ambiguous_prefix_lists_all_candidates() {
+fn resolve_ambiguous_suffix_lists_all_candidates() {
     let dir = tempfile::tempdir().unwrap();
-    write_session(dir.path(), "11112222");
-    write_session(dir.path(), "11113333");
+    write_session(dir.path(), "22221111");
+    write_session(dir.path(), "33331111");
 
     let err = resolve(&TestBackend, dir.path(), "1111")
         .unwrap_err()
         .to_string();
 
     assert!(err.contains("ambiguous id '1111' matches 2 sessions"));
-    assert!(err.contains("11112222"));
-    assert!(err.contains("11113333"));
+    assert!(err.contains("22221111"));
+    assert!(err.contains("33331111"));
+}
+
+#[test]
+fn resolve_accepts_any_nonempty_unique_suffix_but_not_an_old_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = write_session(dir.path(), "1111222a");
+
+    assert_eq!(resolve(&TestBackend, dir.path(), "a").unwrap(), target);
+
+    let err = resolve(&TestBackend, dir.path(), "1111")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no session matches: 1111"), "{err}");
+
+    let err = resolve(&TestBackend, dir.path(), "")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unique suffix"), "{err}");
 }
 
 #[test]

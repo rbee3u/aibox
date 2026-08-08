@@ -16,6 +16,9 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
+const UUID_TEXT_LEN: usize = 36;
+const UUID_SUFFIX_LEN: usize = 12;
+const LIST_ID_MIN_WIDTH: usize = UUID_SUFFIX_LEN;
 
 fn terminal_safe(value: &str) -> String {
     terminal_safe_with(value, |_| false)
@@ -504,7 +507,7 @@ impl TranscriptDiagnostics {
 /// Every Transcript yields a summary, so Sessions with no typed prompt remain
 /// visible and deletable.
 pub(crate) struct SessionSummary {
-    /// Full session id (the row shows the first 8 chars).
+    /// Full session id (the row shows the final UUID group for canonical UUIDs).
     pub id: String,
     /// Session start timestamp (ISO-8601), or empty if none was found.
     pub start_ts: String,
@@ -718,11 +721,11 @@ pub(crate) fn dispatch(
     }
 }
 
-/// Resolve a full id or unique prefix to exactly one transcript path. A single
-/// exact id wins even when it prefixes other ids (otherwise that session could
-/// never be addressed at all), but duplicate exact ids remain ambiguous rather
-/// than selecting whichever directory the filesystem happened to visit first.
-/// Zero matches or ambiguous candidates fail with a message.
+/// Resolve a full id or unique suffix to exactly one transcript path. A single
+/// exact id wins even when it is a suffix of other ids (otherwise that session
+/// could never be addressed at all), but duplicate exact ids remain ambiguous
+/// rather than selecting whichever directory the filesystem happened to visit
+/// first. Zero matches or ambiguous candidates fail with a message.
 fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
     resolve_in(backend, &backend.files(home)?, query)
 }
@@ -731,20 +734,20 @@ fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<Pat
 /// ids (`delete a b c`) can walk the transcript tree once instead of per id.
 fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> Result<PathBuf> {
     if query.is_empty() {
-        bail!("need a session id (or unique prefix)");
+        bail!("need a session id (or unique suffix)");
     }
     let mut exact_matches: Vec<PathBuf> = Vec::new();
-    let mut prefix_matches: Vec<PathBuf> = Vec::new();
+    let mut suffix_matches: Vec<PathBuf> = Vec::new();
     for file in files {
         let id = backend.id_of(file);
         if id == query {
             exact_matches.push(file.clone());
-        } else if id.starts_with(query) {
-            prefix_matches.push(file.clone());
+        } else if id.ends_with(query) {
+            suffix_matches.push(file.clone());
         }
     }
     let candidates = if exact_matches.is_empty() {
-        prefix_matches
+        suffix_matches
     } else {
         exact_matches
     };
@@ -772,11 +775,32 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
 
 const LIST_TITLE_MAX_CHARS: usize = 64;
 
+fn is_canonical_uuid(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    bytes.len() == UUID_TEXT_LEN
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn list_id(id: &str) -> String {
+    if is_canonical_uuid(id) {
+        id[id.len() - UUID_SUFFIX_LEN..].to_string()
+    } else {
+        terminal_safe(id)
+    }
+}
+
 /// List this Tenant's Sessions, newest first: `shortid  date  title`.
 ///
 /// Every Transcript lists (tool/injected-only shells show an empty title), so
 /// nothing is hidden from `list` or `delete --all`. Columns are
-/// `%-8s  %-16s  %s`; titles are collapsed to one line and capped at 64 chars.
+/// `%-12s  %-16s  %s` for UUID ids; non-UUID ids are shown in full. Titles are
+/// collapsed to one line and capped at 64 chars.
 fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
     list_with_printer(backend, home, crate::print_line)
 }
@@ -836,11 +860,13 @@ fn list_with_printer(
         title,
     } in rows
     {
-        // Escape terminal controls before truncating: ids come from arbitrary
-        // transcript file names inside the container-writable tenant home.
-        let short_id: String = terminal_safe(&id).chars().take(8).collect();
+        // Canonical UUIDs are safe ASCII; arbitrary ids come from transcript
+        // file names inside the container-writable tenant home and are escaped.
+        let short_id = list_id(&id);
         let timestamp = fmt_ts(&start_ts);
-        if !print(&format!("{short_id:<8}  {timestamp:<16}  {title}"))? {
+        if !print(&format!(
+            "{short_id:<LIST_ID_MIN_WIDTH$}  {timestamp:<16}  {title}"
+        ))? {
             break; // reader hung up; nothing left to show
         }
     }

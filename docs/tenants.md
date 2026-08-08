@@ -160,7 +160,9 @@ statusline Components can explicitly modify the native Claude and Codex files.
 
 Host Tenant operations expose or modify real host state: `config get` prints
 credentials without redaction, Config Application and `config edit --current`
-change real Current Config, and Session deletion permanently removes real
+change real Current Config, and confirming Application after a Host Named Config
+edit does the same. Global Credential Propagation reads Host Codex Current
+Config as its default source, and Session deletion permanently removes real
 transcripts. Config operations have no backup or rollback. The Host Tenant
 cannot Run, cannot be created or deleted, and does not appear in `tenant list`.
 
@@ -172,21 +174,23 @@ exclusive.
 
 Session browsing reads Coding Agent Transcripts directly on the host and never
 starts Docker. Omitting the subcommand is the same as `list`; a full Session id
-or unique prefix selects one Transcript:
+or unique suffix selects one Transcript:
 
 ```sh
 aibox session
 aibox session --agent claude list
-aibox session get 3f2a
-aibox session delete 3f2a
+aibox session get 458cbf92d123
+aibox session delete 458cbf92d123
 aibox session delete --all --yes
 ```
 
-`list` shows newest Sessions first using a Coding Agent-generated title when
+`list` shows newest Sessions first. Canonically formatted UUID ids appear as
+their final 12 hexadecimal characters; other ids appear in full. A rare shared
+suffix remains visible on every matching row and must be disambiguated with a
+longer suffix or full id. Titles use a Coding Agent-generated title when
 available, otherwise the first recognized typed prompt. A Transcript with no
-recognized typed prompt is still listed and included by `delete --all`.
-`get` prints only the best-effort typed-prompt view, not the complete
-Transcript.
+recognized typed prompt is still listed and included by `delete --all`. `get`
+prints only the best-effort typed-prompt view, not the complete Transcript.
 
 Malformed JSONL or unsupported user-like records produce warnings and make
 `list` or `get` exit nonzero without hiding otherwise readable data. Deletion

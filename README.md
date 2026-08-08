@@ -122,14 +122,20 @@ aibox config edit custom
 aibox config apply custom
 aibox config get --current
 aibox config edit --current
+aibox config propagate-auth
 ```
 
 Application overwrites or removes every fixed Config Field and preserves
 unrelated native settings such as status-line configuration. It records no
 association, backup, or rollback state. `get` displays every native file,
 including credentials without redaction; `edit` opens and commits them one at a
-time. Read [Configs](docs/configs.md) for the exact schema, Current Config
-behavior, Host Tenant risks, file modes, and partial-write behavior.
+time. After a successful interactive Named Config edit, aibox offers to apply
+it to the selected Current Config; the default is No, and the standalone
+`config apply` command remains available. When Host Codex refreshes a ChatGPT
+login, `propagate-auth` explicitly copies that newer credential snapshot to
+older same-account existing Configs without creating a persistent relationship.
+Read [Configs](docs/configs.md) for the exact schema, Current Config behavior,
+Host Tenant risks, file modes, and partial-write behavior.
 
 ## Sessions
 
@@ -137,11 +143,13 @@ Session browsing is host-side and does not start Docker:
 
 ```sh
 aibox session
-aibox session get 3f2a
+aibox session get 458cbf92d123
 aibox session --host --agent claude list
 ```
 
-Session deletion requires explicit ids or `--all` and is irreversible.
+Canonical UUIDs are listed by their final 12 characters; `get` and `delete`
+accept a full Session id or unique suffix. Session deletion requires explicit
+ids or `--all` and is irreversible.
 Session discovery and the typed-prompt view are best-effort, but destructive
 operations refuse an incomplete filesystem view. See
 [Sessions](docs/tenants.md#sessions) for parsing warnings and traversal safety.

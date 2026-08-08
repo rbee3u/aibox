@@ -38,9 +38,10 @@ existing management routes.
 
 `src/api.ts` is the only browser-facing Traffic API client. Its TypeScript
 interfaces mirror the Rust JSON responses, including raw Summary timing,
-record-outcome fields, and the persisted Model Protocol Summary; the Rust
-routes, CSRF rules, CSP, and loopback checks remain unchanged. Components
-receive an API interface so tests can use deterministic fakes without sockets.
+record-outcome fields, the top-level Coding Agent Session ID, and the persisted
+Model Protocol Summary; the Rust routes, CSRF rules, CSP, and loopback checks
+remain unchanged. Components receive an API interface so tests can use
+deterministic fakes without sockets.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-record polling. The Summary is
@@ -49,6 +50,14 @@ body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
 
 ## Protocol Summary
+
+For recognized model requests, the Traffic Proxy also records an optional
+top-level `summary.coding_agent_session_id`. OpenAI Responses prefers the first
+nonempty UTF-8 `session-id` request-header value and falls back to
+`x-claude-code-session-id`; Claude Messages uses the reverse precedence.
+Header names are matched exactly and case-insensitively. Unknown protocols do
+not derive this value, bodies are never searched for it, and older Records are
+not backfilled.
 
 The Traffic Proxy derives model, reasoning effort, response mode, First Token,
 final Token Usage, and Provider Errors from native OpenAI Responses or Claude
@@ -65,3 +74,24 @@ falls back to a single Response body stage when a protocol has no observable
 First Token. Unknown protocols retain generic Timing and diagnostics while
 Token Usage reports unsupported. Recognized active protocols without final
 usage report waiting; terminal records without final usage report not reported.
+
+The detail Summary presents Model and Token Usage in one pale hierarchy card.
+The effective-or-requested model is the primary value, followed by a weaker
+reasoning effort and a `Streaming` or `Non-streaming` badge when those facts are
+available. Session ID remains on its own secondary row with an inline copy
+control. A missing model says `Not reported`, or `Detecting…` while active;
+missing optional qualifiers are omitted.
+
+Token Usage follows the provider billing categories in one responsive table.
+Its wider input block places three categories side by side, with a weaker Total
+input row spanning beneath them, while the narrower Output block centers its
+primary value above a lower-right Reasoning inset. OpenAI uses Input, Cached
+input, and Cache writes. Claude uses Base input, Cache hits & refreshes, and a
+Cache writes total with 5m/1h details when that breakdown is reported. Once any
+primary counter is available, missing categories remain visible as `—` and
+explicit zero remains visible; a completely empty report retains its state
+message. Metric labels and values sit together as centered inline pairs,
+including Output and the lower-right Reasoning inset. Timing keeps its stage
+timeline and metric order while using the same centered inline treatment for
+First token, Duration, and Started. Diagnostics, the Record list, and the other
+detail tabs do not use this presentation.

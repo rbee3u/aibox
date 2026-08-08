@@ -155,21 +155,20 @@ export function RecordDetail({
 }
 
 function Summary({ detail }: { detail: RecordDetailData }) {
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+  const sessionCopiedTimer = useRef<number | undefined>(undefined);
   const total = detail.result?.total_ms ?? detail.live_total_ms;
   const protocol = detail.summary.protocol;
   const resolvedModel = resolveRequestedEffective(protocol?.model);
   const resolvedReasoningEffort = resolveRequestedEffective(protocol?.reasoning_effort);
   const model = resolvedModel.value ?? (detail.state === "active" ? "Detecting…" : "Not reported");
-  const reasoningEffort = resolvedReasoningEffort.value ?? "—";
-  const modelSources = [
-    resolvedModel.source ? `${capitalize(resolvedModel.source)} model` : null,
-    resolvedReasoningEffort.source
-      ? `${capitalize(resolvedReasoningEffort.source)} reasoning effort`
-      : null,
-  ].filter((source): source is string => source !== null);
+  const reasoningEffort = resolvedReasoningEffort.value;
+  const sessionId = detail.summary.coding_agent_session_id;
+  const sessionCopied = sessionId !== null && copiedSessionId === sessionId;
   const stages = timingStages(detail);
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
-  const mode = protocol?.response_mode.requested ?? protocol?.response_mode.observed ?? "unknown";
+  const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
+  const responseMode = mode === "stream" ? "Streaming" : mode === "normal" ? "Non-streaming" : null;
   const trafficErrors = detail.summary.errors;
   const trafficWarnings = detail.summary.warnings;
   const protocolErrors = protocol?.errors ?? [];
@@ -180,30 +179,76 @@ function Summary({ detail }: { detail: RecordDetailData }) {
     trafficWarnings.length > 0 ||
     protocolWarnings.length > 0 ||
     detail.state === "interrupted";
+
+  useEffect(
+    () => () => {
+      if (sessionCopiedTimer.current !== undefined) {
+        window.clearTimeout(sessionCopiedTimer.current);
+      }
+    },
+    [],
+  );
+
+  async function copySessionId() {
+    if (!sessionId) return;
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      setCopiedSessionId(sessionId);
+      if (sessionCopiedTimer.current !== undefined) {
+        window.clearTimeout(sessionCopiedTimer.current);
+      }
+      sessionCopiedTimer.current = window.setTimeout(() => setCopiedSessionId(null), 1400);
+    } catch {
+      setCopiedSessionId(null);
+    }
+  }
+
   return (
     <div className={styles.summary}>
       <section className={styles.modelSummary} aria-labelledby="record-model-title">
-        <div className={styles.modelTitleRow}>
-          <h2 id="record-model-title">Model</h2>
-          <span className={`${styles.modeBadge} ${styles[`mode${capitalize(mode)}`]}`}>{mode}</span>
+        <h2 id="record-model-title">Model</h2>
+        <div className={styles.modelHeadline}>
+          <p className={styles.modelName} title={`Model ${model}`}>
+            <span className={styles.modelValue}>{model}</span>
+            {reasoningEffort && (
+              <>
+                <span className={styles.modelSeparator} aria-hidden="true">
+                  ·
+                </span>
+                <span className={styles.modelEffort}>{reasoningEffort}</span>
+              </>
+            )}
+          </p>
+          {responseMode && <span className={styles.modeBadge}>{responseMode}</span>}
         </div>
-        <p
-          className={styles.modelName}
-          title={`Model ${model}; Reasoning effort ${reasoningEffort}`}
-        >
-          <span>{model}</span>
-          <span className={styles.modelSeparator} aria-hidden="true">
-            ·
-          </span>
-          <span>{reasoningEffort}</span>
-        </p>
-        {modelSources.length > 0 && (
-          <p className={styles.modelSource}>{modelSources.join(" · ")}</p>
-        )}
+        <dl className={styles.sessionMeta}>
+          <div className={styles.sessionFact}>
+            <dt>Session ID</dt>
+            <dd>
+              <span className={styles.sessionValue}>{sessionId ?? "Not reported"}</span>
+              {sessionId && (
+                <button
+                  className={styles.copySession}
+                  type="button"
+                  onClick={() => void copySessionId()}
+                  aria-label={sessionCopied ? "Session ID copied" : "Copy Session ID"}
+                  title={sessionCopied ? "Session ID copied" : "Copy Session ID"}
+                >
+                  {sessionCopied ? (
+                    <Check size={14} aria-hidden="true" />
+                  ) : (
+                    <Clipboard size={14} aria-hidden="true" />
+                  )}
+                </button>
+              )}
+            </dd>
+          </div>
+        </dl>
+        <TokenUsageGroup detail={detail} usage={protocol?.token_usage ?? null} />
       </section>
       <section aria-labelledby="record-timing-title">
         <h2 id="record-timing-title">Timing</h2>
-        <dl className={styles.metrics}>
+        <dl className={`${styles.metricGrid} ${styles.timingMetrics}`}>
           <Metric label="First token" value={duration(firstToken)} />
           <Metric label="Duration" value={duration(total)} />
           <Metric label="Started" value={formatTimestamp(detail.request.started_at)} />
@@ -242,7 +287,6 @@ function Summary({ detail }: { detail: RecordDetailData }) {
           <p className={styles.sectionState}>Timing stages are not available yet.</p>
         )}
       </section>
-      <TokenUsageSection detail={detail} usage={protocol?.token_usage ?? null} />
       <section className={styles.diagnostics} aria-labelledby="record-diagnostics-title">
         <h2 id="record-diagnostics-title">Diagnostics</h2>
         {hasDiagnostics ? (
@@ -267,7 +311,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   );
 }
 
-function TokenUsageSection({
+function TokenUsageGroup({
   detail,
   usage,
 }: {
@@ -276,51 +320,115 @@ function TokenUsageSection({
 }) {
   const protocol = detail.summary.protocol;
   const state = usageState(detail);
-  const metrics: Array<{ label: string; value: number | null }> = [];
-  if (usage) {
-    metrics.push({ label: "Total input", value: usage.total_input_tokens });
-    if (protocol?.family === "claude_messages") {
-      metrics.push(
-        { label: "Base Input Tokens", value: usage.base_input_tokens },
-        { label: "Cache Hits & Refreshes", value: usage.cached_input_tokens },
-      );
-    } else {
-      metrics.push(
-        { label: "Base input", value: usage.base_input_tokens },
-        { label: "Cached input", value: usage.cached_input_tokens },
-      );
-    }
-    if (usage.cache_write_5m_tokens !== null || usage.cache_write_1h_tokens !== null) {
-      metrics.push(
-        { label: "5m Cache Writes", value: usage.cache_write_5m_tokens },
-        { label: "1h Cache Writes", value: usage.cache_write_1h_tokens },
-      );
-    } else {
-      metrics.push({ label: "Cache writes", value: usage.cache_write_tokens });
-    }
-    metrics.push({
-      label: protocol?.family === "claude_messages" ? "Output Tokens" : "Output",
-      value: usage.output_tokens,
-    });
-    metrics.push({ label: "Reasoning output", value: usage.reasoning_output_tokens });
-  }
-  const visible = metrics.filter((metric) => metric.value !== null);
+  const claude = protocol?.family === "claude_messages";
+  const hasCacheWriteBreakdown =
+    claude && (usage?.cache_write_5m_tokens != null || usage?.cache_write_1h_tokens != null);
+  const cacheWrites = hasCacheWriteBreakdown
+    ? (usage?.cache_write_5m_tokens ?? 0) + (usage?.cache_write_1h_tokens ?? 0)
+    : (usage?.cache_write_tokens ?? null);
+  const inputMetrics: Array<{
+    label: string;
+    value: number | null;
+    details?: Array<{ label: string; value: number | null }>;
+  }> = [
+    {
+      label: claude ? "Base input" : "Input",
+      value: usage?.base_input_tokens ?? null,
+    },
+    {
+      label: claude ? "Cache hits & refreshes" : "Cached input",
+      value: usage?.cached_input_tokens ?? null,
+    },
+    {
+      label: "Cache writes",
+      value: cacheWrites,
+      details: hasCacheWriteBreakdown
+        ? [
+            { label: "5m", value: usage?.cache_write_5m_tokens ?? null },
+            { label: "1h", value: usage?.cache_write_1h_tokens ?? null },
+          ]
+        : undefined,
+    },
+  ];
+  const totalInput = usage?.total_input_tokens ?? null;
+  const output = usage?.output_tokens ?? null;
+  const reasoning = output !== null ? (usage?.reasoning_output_tokens ?? null) : null;
+  const hasUsageData = [
+    usage?.total_input_tokens,
+    usage?.base_input_tokens,
+    usage?.cached_input_tokens,
+    usage?.cache_write_tokens,
+    usage?.cache_write_5m_tokens,
+    usage?.cache_write_1h_tokens,
+    usage?.output_tokens,
+  ].some((value) => value != null);
   return (
-    <section aria-labelledby="record-token-title">
-      <div className={styles.sectionHeading}>
-        <h2 id="record-token-title">Token Usage</h2>
-        <span className={`${styles.usageState} ${styles[`usage${capitalize(state)}`]}`}>
-          {usageStateLabel(state)}
-        </span>
+    <section className={styles.usageGroup} aria-labelledby="record-token-title">
+      <div className={styles.usageHeading}>
+        <h3 id="record-token-title">Token usage</h3>
       </div>
-      {visible.length > 0 ? (
-        <dl className={styles.tokenMetrics}>
-          {visible.map((metric) => (
-            <Metric key={metric.label} label={metric.label} value={tokenCount(metric.value!)} />
-          ))}
-        </dl>
+      {hasUsageData ? (
+        <div className={styles.tokenUsageGrid}>
+          <div className={styles.tokenInputBlock}>
+            <div className={styles.tokenInputMetrics} role="group" aria-label="Input tokens">
+              {inputMetrics.map((metric) => (
+                <div
+                  className={`${styles.tokenInputCell} ${
+                    metric.details ? styles.tokenInputCellDetailed : ""
+                  }`}
+                  role="group"
+                  aria-label={`${metric.label} billing category`}
+                  key={metric.label}
+                >
+                  <dl className={styles.tokenInputPrimary}>
+                    <div>
+                      <dt>{metric.label}</dt>
+                      <dd>{displayTokenCount(metric.value)}</dd>
+                    </div>
+                  </dl>
+                  {metric.details && (
+                    <dl
+                      className={styles.tokenCacheBreakdown}
+                      role="group"
+                      aria-label="Cache write TTL breakdown"
+                    >
+                      {metric.details.map((detailMetric) => (
+                        <div className={styles.tokenCacheDetail} key={detailMetric.label}>
+                          <dt>{detailMetric.label}</dt>
+                          <dd>{displayTokenCount(detailMetric.value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </div>
+              ))}
+            </div>
+            <dl className={styles.tokenTotal} role="group" aria-label="Total input tokens">
+              <div>
+                <dt>Total input</dt>
+                <dd>{displayTokenCount(totalInput)}</dd>
+              </div>
+            </dl>
+          </div>
+          <dl className={styles.tokenOutput} role="group" aria-label="Output tokens">
+            <div className={styles.tokenOutputPrimary}>
+              <dt>Output</dt>
+              <dd>{displayTokenCount(output)}</dd>
+            </div>
+            {reasoning !== null && (
+              <div
+                className={styles.tokenReasoning}
+                role="group"
+                aria-label={`Output includes ${tokenCount(reasoning)} reasoning tokens`}
+              >
+                <dt>Reasoning</dt>
+                <dd>{tokenCount(reasoning)}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
       ) : (
-        <p className={styles.sectionState}>{usageStateMessage(state)}</p>
+        <p className={styles.usageMessage}>{usageStateMessage(state)}</p>
       )}
     </section>
   );
@@ -377,15 +485,6 @@ function usageState(detail: RecordDetailData): UsageState {
   return "not_reported";
 }
 
-function usageStateLabel(state: UsageState): string {
-  return {
-    waiting: "Waiting",
-    final: "Final",
-    not_reported: "Not reported",
-    unsupported: "Unsupported",
-  }[state];
-}
-
 function usageStateMessage(state: UsageState): string {
   return {
     waiting: "Waiting for the upstream API to report token usage.",
@@ -393,6 +492,10 @@ function usageStateMessage(state: UsageState): string {
     not_reported: "The completed response did not report token usage.",
     unsupported: "Token usage is unavailable for this protocol.",
   }[state];
+}
+
+function displayTokenCount(value: number | null): string {
+  return value === null ? "—" : tokenCount(value);
 }
 
 function capitalize(value: string): string {
@@ -490,11 +593,14 @@ function MessageData({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className={styles.metric}>
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd>
+        <span className={styles.metricValue}>{value}</span>
+        {detail && <span className={styles.metricDetail}>{detail}</span>}
+      </dd>
     </div>
   );
 }

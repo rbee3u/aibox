@@ -186,10 +186,12 @@ Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 The collection and Record directories are mode `0700`; files are `0600`.
 Metadata stores the upstream URL, base64 lossless header values, upstream
 status and HTTP version, nanosecond timing checkpoints, outcome, and
-diagnostics. `summary.json` also contains the optional Model Protocol Summary:
-protocol family, response terminality, requested/effective model and reasoning
-effort, requested/observed response mode, First Token, final Token Usage, and
-provider diagnostics. Body files contain the exact application-visible bytes;
+diagnostics. `summary.json` also contains the optional top-level Coding Agent
+Session ID reported by a recognized model request and the optional Model
+Protocol Summary: protocol family, response terminality, requested/effective
+model and reasoning effort, requested/observed response mode, First Token,
+final Token Usage, and provider diagnostics. Body files contain the exact
+application-visible bytes;
 their current lengths are derived rather than persisted. `summary.json` exists
 from Record creation and remains non-terminal if the process is interrupted. A
 matching event-stream response also has a best-effort JSONL index whose byte

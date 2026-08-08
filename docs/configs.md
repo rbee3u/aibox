@@ -1,7 +1,7 @@
 # Configs
 
-The `config` command manages two distinct objects in one Tenant and Coding
-Agent scope:
+Tenant-scoped `config` commands manage two distinct objects in one Tenant and
+Coding Agent scope:
 
 - A **Named Config** is a reusable, named set of fixed Config Fields.
 - The **Current Config** is the complete native configuration read by the
@@ -9,6 +9,10 @@ Agent scope:
 
 Config Application copies fixed fields from a Named Config into Current Config
 once. It records no ongoing relationship between them.
+
+Credential Propagation is the explicit global exception: it can copy one newer
+Host ChatGPT Credentials snapshot to older same-account Codex Configs without
+creating or retaining any association.
 
 Codex is the default Coding Agent:
 
@@ -20,6 +24,7 @@ aibox config edit custom
 aibox config apply custom
 aibox config get --current
 aibox config edit --current
+aibox config propagate-auth
 ```
 
 Select Claude and another Managed Tenant in the command scope:
@@ -29,16 +34,19 @@ aibox config --agent claude --tenant work create custom
 aibox config --agent claude --tenant work edit --current
 ```
 
-Use `--host` instead of `--tenant` to manage Configs for the Host Tenant.
-`--host` and the runnable Managed Tenant named `host` are distinct and mutually
-exclusive.
+Use `--host` instead of `--tenant` to manage Configs for the Host Tenant with a
+Tenant-scoped command. `--host` and the runnable Managed Tenant named `host` are
+distinct and mutually exclusive. `propagate-auth` is global and defaults its
+source to Host/Codex/Current; it accepts redundant `--host`, `--agent codex`,
+and `--current` selectors but rejects `--tenant` and `--agent claude`.
 
 ## Commands and Files
 
-The Config commands are `list`, `get`, `create`, `edit`, `delete`, and `apply`.
-`get` and `edit` require either a Named Config name or `--current`; the other
-commands operate only on Named Configs. A Named Config called `current` remains
-valid and is selected as a positional name, not with `--current`.
+The Config commands are `list`, `get`, `create`, `edit`, `delete`, `apply`, and
+`propagate-auth`. `get` and `edit` require either a Named Config name or
+`--current`; the other Tenant-scoped commands operate only on Named Configs. A
+Named Config called `current` remains valid and is selected as a positional
+name, not with `--current`.
 
 Named Configs use the direct catalog layout outside Tenant Home:
 
@@ -90,6 +98,20 @@ order, using `$VISUAL`, then `$EDITOR`, then `vim`. Each editor process finishes
 before the next starts. A successful edit is committed immediately through a
 temporary file and rename; a later cancellation, validation error, or editor
 failure does not roll back an earlier file.
+
+After every fully successful `config edit NAME`, including an edit that leaves
+the bytes unchanged, aibox asks once whether to apply that Named Config to the
+selected Coding Agent and Tenant Current Config when stdin is a terminal. The
+prompt names the complete target and defaults to No. Only the exact answers
+`y`, `Y`, `yes`, or `YES` trigger Application. Other input, an empty line, or
+EOF leaves Current Config unchanged and exits successfully. Non-interactive
+edits silently skip the prompt. `config edit --current` and failed or partially
+committed Named Config edits never prompt.
+
+Confirming the prompt runs the same one-shot Config Application as `config
+apply NAME`. An Application failure makes the edit command fail and reports
+that the Named Config edit was already saved; neither the edit nor any Current
+Config file already replaced by Application is rolled back.
 
 Named Config edits validate the edited file before committing. Main files must
 contain only fixed fields with the documented types, and Codex `auth.json` must
@@ -210,8 +232,10 @@ before replacing any target file. It then processes every Config Field:
 
 Codex application uses structure-preserving TOML edits so unrelated comments,
 ordering, and formatting survive. Claude JSON is pretty-printed when changed.
-Application is unconditional: it has no drift check, prompt, `--force`, backup,
-deactivation, or restore operation. Runs consume Current Config without
+The standalone `config apply NAME` command is unconditional and has no prompt;
+the confirmation after a successful interactive Named Config edit is only a
+shortcut to that same operation. Application has no drift check, `--force`,
+backup, deactivation, or restore operation. Runs consume Current Config without
 consulting or reapplying Named Configs.
 
 Missing native files are treated as semantically empty. An absent file whose
@@ -225,3 +249,43 @@ is not atomic as a pair. Re-running the same application converges after an
 interruption. aibox provides no cross-process locking, Config edit rollback,
 transaction journal, backup, or restore. Host Tenant operations directly read
 or change real host configuration and credentials.
+
+## Credential Propagation
+
+Codex can refresh native `auth.json` after ChatGPT sign-in. Run the following
+after Host Current Config has refreshed to update older copies explicitly:
+
+```sh
+aibox config propagate-auth
+aibox config --host --agent codex propagate-auth --current
+```
+
+Both forms use `$HOME/.codex/auth.json` as the source. The source must be a JSON
+object with `auth_mode = "chatgpt"`, a nonempty `tokens.account_id`, and an RFC
+3339 `last_refresh`. The command scans, without creating anything:
+
+- every existing Managed Tenant Codex Current `auth.json`;
+- every complete, structurally safe Managed Tenant Codex Named Config; and
+- every complete, structurally safe Host Codex Named Config.
+
+Non-ChatGPT and different-account credentials are ignored. Malformed candidate
+content produces a warning. For the same account, an older target is replaced
+with the source file's exact bytes; a JSON-equivalent target is `unchanged`
+regardless of field order or formatting; equal timestamps with different JSON
+values are a `conflict`; and a newer target is skipped with both timestamps
+shown. `config.toml` is never read for eligibility or changed. Missing Current
+Config files, incomplete Named Configs, and orphaned catalogs remain untouched.
+
+The command validates the complete structural view before its first write.
+Symlinks, unexpected entries, unsafe Named Config permissions, and read errors
+make preflight fail with no changes. Each selected `auth.json` is then replaced
+atomically in stable target order. Current Config preserves its existing mode;
+Named Config remains mode `0600`. A write failure is reported and later targets
+continue, the command exits nonzero, and successful earlier writes are not
+rolled back.
+
+Propagation uses the source and target snapshots captured during preflight. It
+does not recheck content before each write, lock files, refresh credentials,
+run automatically, or retain a synchronization relationship. Output identifies
+targets as `tenant/<tenant>/current`, `tenant/<tenant>/config/<config>`, or
+`host/config/<config>` and never prints tokens or account ids.

@@ -162,12 +162,29 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
             component::dispatch(&args)
         }
         Command::Config(args) => {
-            let agent = args.agent.unwrap_or(AgentKind::Codex);
             reject_passthrough("config takes no pass-through args", passthrough)?;
             let root = tenant::aibox_root()?;
-            let selected =
-                TenantAgent::resolve(agent, &root, args.tenant.host, args.tenant.tenant_name())?;
-            config::dispatch(&selected, &args.command)
+            if matches!(
+                &args.command,
+                crate::cli::ConfigCommand::PropagateAuth { .. }
+            ) {
+                if args.tenant.tenant.is_some() {
+                    anyhow::bail!("config propagate-auth does not accept --tenant");
+                }
+                if args.agent == Some(AgentKind::Claude) {
+                    anyhow::bail!("config propagate-auth supports only --agent codex");
+                }
+                config::propagate_auth(&root)
+            } else {
+                let agent = args.agent.unwrap_or(AgentKind::Codex);
+                let selected = TenantAgent::resolve(
+                    agent,
+                    &root,
+                    args.tenant.host,
+                    args.tenant.tenant_name(),
+                )?;
+                config::dispatch(&selected, &args.command)
+            }
         }
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);

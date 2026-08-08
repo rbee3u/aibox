@@ -111,6 +111,7 @@ export const completedDetail: RecordDetail = {
       upstream_response_body_completed_at_ns: "1230000000",
       finished_at_ns: "1250000000",
     },
+    coding_agent_session_id: "629a8f94-d2cb-404c-9c10-a2a682478259",
     protocol: completedProtocol,
     outcome: "completed",
     errors: [],

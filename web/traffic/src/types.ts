@@ -56,6 +56,7 @@ export interface SummaryMetadata {
   observed_at: string;
   terminal: boolean;
   timing: SummaryTiming;
+  coding_agent_session_id: string | null;
   protocol: ProtocolSummary | null;
   outcome: string | null;
   errors: SummaryDiagnostic[];

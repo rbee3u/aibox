@@ -3,7 +3,7 @@
 
 use crate::agent::AgentKind;
 use crate::component::ComponentSpec;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::net::SocketAddr;
@@ -73,9 +73,139 @@ impl Cli {
         T: Into<OsString> + Clone,
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
+        reject_short_option_clusters(&args)?;
         reject_duplicate_selection_options(&args)?;
         <Self as Parser>::try_parse_from(args)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShortOptionToken {
+    NotShort,
+    BareDash,
+    Standalone,
+    Value,
+    Cluster,
+}
+
+fn reject_short_option_clusters(args: &[OsString]) -> Result<(), clap::Error> {
+    let mut command = Cli::command();
+    command.build();
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    for index in 1..end {
+        let active = active_command_at(&command, args, index);
+        if classify_short_option(active, &args[index]) == ShortOptionToken::Cluster {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::UnknownArgument,
+                format!(
+                    "short options cannot be combined in '{}'; pass each option separately",
+                    args[index].to_string_lossy()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn short_option_completion_allowed(
+    command: &clap::Command,
+    args: &[OsString],
+    index: usize,
+) -> bool {
+    if index >= args.len() || args[..index].iter().any(|arg| arg == "--") {
+        return true;
+    }
+    let active = active_command_at(command, args, index);
+    matches!(
+        classify_short_option(active, &args[index]),
+        ShortOptionToken::NotShort | ShortOptionToken::BareDash | ShortOptionToken::Value
+    )
+}
+
+fn active_command_at<'a>(
+    root: &'a clap::Command,
+    args: &[OsString],
+    target: usize,
+) -> &'a clap::Command {
+    let mut active = root;
+    let mut takes_next_value = false;
+    for token in args.iter().take(target).skip(1) {
+        if takes_next_value {
+            takes_next_value = false;
+            continue;
+        }
+        let Some(token) = token.to_str() else {
+            continue;
+        };
+        if token == "--" {
+            break;
+        }
+        if let Some(long) = token.strip_prefix("--") {
+            let (long, inline) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            takes_next_value =
+                !inline && find_long_option(active, long).is_some_and(option_takes_value);
+            continue;
+        }
+        if token.starts_with('-') {
+            if classify_short_option(active, OsStr::new(token)) == ShortOptionToken::Value {
+                let value = token.strip_prefix('-').unwrap_or_default();
+                takes_next_value = value.chars().count() == 1;
+            }
+            continue;
+        }
+        if let Some(subcommand) = active.find_subcommand(token) {
+            active = subcommand;
+        }
+    }
+    active
+}
+
+fn classify_short_option(command: &clap::Command, token: &OsStr) -> ShortOptionToken {
+    let Some(token) = token.to_str() else {
+        return ShortOptionToken::NotShort;
+    };
+    let Some(short) = token.strip_prefix('-') else {
+        return ShortOptionToken::NotShort;
+    };
+    if short.starts_with('-') {
+        return ShortOptionToken::NotShort;
+    }
+    let mut characters = short.chars();
+    let Some(first) = characters.next() else {
+        return ShortOptionToken::BareDash;
+    };
+    if find_short_option(command, first).is_some_and(option_takes_value) {
+        return ShortOptionToken::Value;
+    }
+    if characters.next().is_some() {
+        ShortOptionToken::Cluster
+    } else {
+        ShortOptionToken::Standalone
+    }
+}
+
+fn find_short_option(command: &clap::Command, short: char) -> Option<&clap::Arg> {
+    command.get_arguments().find(|arg| {
+        arg.get_short_and_visible_aliases()
+            .is_some_and(|shorts| shorts.contains(&short))
+    })
+}
+
+fn find_long_option<'a>(command: &'a clap::Command, long: &str) -> Option<&'a clap::Arg> {
+    command.get_arguments().find(|arg| {
+        arg.get_long_and_visible_aliases()
+            .is_some_and(|longs| longs.contains(&long))
+    })
+}
+
+fn option_takes_value(arg: &clap::Arg) -> bool {
+    arg.get_num_args()
+        .is_some_and(|values| values.takes_values())
 }
 
 fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
@@ -129,7 +259,7 @@ pub enum Command {
     Tenant(TenantArgs),
     /// Manage optional components in a Tenant.
     Component(ComponentArgs),
-    /// Manage Tenant-local Named Configs and Current Config.
+    /// Manage Named Configs, Current Config, and credential propagation.
     Config(ConfigArgs),
     /// Browse saved Sessions on the host without starting Docker.
     Session(SessionArgs),
@@ -320,7 +450,7 @@ impl TenantSelection {
     }
 }
 
-/// Agent- and Tenant-scoped Named Config management arguments.
+/// Config management and credential propagation arguments.
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
     /// Coding Agent whose Named Config catalog and Current Config to manage.
@@ -361,7 +491,7 @@ pub enum ConfigCommand {
         #[arg(value_parser = parse_config)]
         config: String,
     },
-    /// Edit a Named Config or the Current Config in `$VISUAL` or `$EDITOR`.
+    /// Edit Config files; interactively offer to apply successful Named Config edits.
     Edit {
         /// Named Config lowercase DNS label to edit.
         #[arg(
@@ -398,7 +528,26 @@ pub enum ConfigCommand {
         #[arg(value_parser = parse_config)]
         config: String,
     },
+    /// Propagate newer Host ChatGPT credentials to matching Codex Configs.
+    #[command(override_help = PROPAGATE_AUTH_HELP)]
+    PropagateAuth {
+        /// Explicitly select the Current Config source (the default and only source).
+        #[arg(long)]
+        current: bool,
+    },
 }
+
+const PROPAGATE_AUTH_HELP: &str = "\
+Propagate newer Host ChatGPT credentials to matching Codex Configs
+
+Usage: aibox config propagate-auth [OPTIONS]
+
+Options:
+      --agent codex  Explicitly select the Codex credential source
+      --current      Explicitly select the Current Config source
+      --host         Explicitly select the Host Tenant source
+  -h, --help         Print help
+";
 
 /// Agent- and Tenant-scoped Session browsing arguments.
 #[derive(Debug, Args)]
@@ -423,12 +572,12 @@ pub enum SessionCommand {
     List,
     /// Print the prompts typed in one Session.
     Get {
-        /// Full Session id or unique prefix.
+        /// Full Session id or unique suffix.
         id: String,
     },
     /// Delete one or more Session transcripts.
     Delete {
-        /// Full Session ids or unique prefixes.
+        /// Full Session ids or unique suffixes.
         #[arg(
             value_name = "ID",
             required_unless_present = "all",
@@ -516,6 +665,17 @@ mod tests {
     }
 
     #[test]
+    fn session_help_describes_unique_suffix_selection() {
+        for command in ["get", "delete"] {
+            let help = Cli::try_parse_from(["aibox", "session", command, "--help"]).unwrap_err();
+            assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+            let help = help.to_string();
+            assert!(help.contains("unique suffix"), "{command}: {help}");
+            assert!(!help.contains("unique prefix"), "{command}: {help}");
+        }
+    }
+
+    #[test]
     fn destructive_commands_require_explicit_selections() {
         for args in [
             vec!["aibox", "tenant", "delete"],
@@ -537,6 +697,39 @@ mod tests {
             let error = Cli::try_parse_from(args).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{args:?}");
         }
+    }
+
+    #[test]
+    fn combined_short_options_are_rejected_without_blocking_attached_values() {
+        for args in [
+            &["aibox", "build", "-ff"][..],
+            &["aibox", "tenant", "delete", "work", "-yy"][..],
+            &["aibox", "config", "delete", "custom", "-yh"][..],
+            &["aibox", "session", "delete", "session-id", "-xy"][..],
+        ] {
+            let error = Cli::try_parse_from(args).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ErrorKind::UnknownArgument,
+                "{args:?}: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("short options cannot be combined"),
+                "{args:?}: {error}"
+            );
+        }
+
+        Cli::try_parse_from(["aibox", "build", "-f"]).unwrap();
+        Cli::try_parse_from(["aibox", "tenant", "delete", "work", "-y"]).unwrap();
+
+        let cli = Cli::try_parse_from(["aibox", "run", "-w.", "-msrc:/src:ro"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.workspace.as_deref(), Some("."));
+        assert_eq!(args.mount, ["src:/src:ro"]);
     }
 
     #[test]
@@ -594,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn config_apply_is_supported_and_removed_lifecycle_commands_are_rejected() {
+    fn config_apply_and_credential_propagation_are_supported() {
         let cli = Cli::try_parse_from(["aibox", "config", "apply", "custom"]).unwrap();
         let Command::Config(args) = cli.command else {
             panic!("expected config command");
@@ -603,6 +796,27 @@ mod tests {
             args.command,
             ConfigCommand::Apply { config } if config == "custom"
         ));
+
+        for args in [
+            &["aibox", "config", "propagate-auth"][..],
+            &["aibox", "config", "--host", "propagate-auth", "--current"][..],
+            &["aibox", "config", "--agent", "codex", "propagate-auth"][..],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::Config(args) = cli.command else {
+                panic!("expected config command");
+            };
+            assert!(matches!(args.command, ConfigCommand::PropagateAuth { .. }));
+        }
+
+        let help =
+            Cli::try_parse_from(["aibox", "config", "propagate-auth", "--help"]).unwrap_err();
+        assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+        let help = help.to_string();
+        assert!(help.contains("--agent codex"), "{help}");
+        assert!(!help.contains("--tenant"), "{help}");
+        assert!(!help.contains("claude"), "{help}");
+
         for command in ["activate", "deactivate", "status", "diff", "reconcile"] {
             assert_parse_error(&["aibox", "config", command], ErrorKind::InvalidSubcommand);
         }
@@ -650,6 +864,14 @@ mod tests {
                 current: true
             }
         ));
+
+        let help = Cli::try_parse_from(["aibox", "config", "edit", "--help"]).unwrap_err();
+        assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+        assert!(
+            help.to_string()
+                .contains("interactively offer to apply successful Named Config edits"),
+            "{help}"
+        );
     }
 
     #[test]

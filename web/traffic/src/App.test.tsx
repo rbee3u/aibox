@@ -726,12 +726,12 @@ describe("Traffic App", () => {
     );
     expect(within(detail).getByText("First token")).toBeInTheDocument();
     expect(within(detail).getByText("gpt-5.6-sol")).toBeInTheDocument();
-    expect(within(detail).getByText("stream")).toBeInTheDocument();
+    expect(within(detail).getByText("Streaming")).toBeInTheDocument();
     expect(within(detail).getByRole("list", { name: "Timing stages" })).toBeInTheDocument();
     expect(
       within(detail).getByRole("listitem", { name: "Proxy setup: 100 ms" }),
     ).toBeInTheDocument();
-    expect(within(detail).getByRole("heading", { name: "Token Usage" })).toBeInTheDocument();
+    expect(within(detail).getByRole("heading", { name: "Token usage" })).toBeInTheDocument();
     expect(within(detail).getByText("12,000")).toBeInTheDocument();
     expect(within(detail).getByText("No diagnostics.")).toBeInTheDocument();
     // eslint-disable-next-line @typescript-eslint/unbound-method

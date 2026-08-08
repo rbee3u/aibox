@@ -66,14 +66,78 @@ fn current_executable(argv: &[OsString]) -> String {
 }
 
 fn supported_shells() -> Shells<'static> {
-    Shells(&[&Bash, &Zsh, &Fish])
+    Shells(&[&DynamicShell::Bash, &DynamicShell::Zsh, &DynamicShell::Fish])
 }
 
 fn shell_completer(shell: CompletionShell) -> &'static dyn EnvCompleter {
     match shell {
-        CompletionShell::Bash => &Bash,
-        CompletionShell::Zsh => &Zsh,
-        CompletionShell::Fish => &Fish,
+        CompletionShell::Bash => &DynamicShell::Bash,
+        CompletionShell::Zsh => &DynamicShell::Zsh,
+        CompletionShell::Fish => &DynamicShell::Fish,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DynamicShell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl DynamicShell {
+    fn inner(self) -> &'static dyn EnvCompleter {
+        match self {
+            Self::Bash => &Bash,
+            Self::Zsh => &Zsh,
+            Self::Fish => &Fish,
+        }
+    }
+
+    fn completion_index(self, args: &[OsString]) -> Option<usize> {
+        match self {
+            Self::Fish => args.len().checked_sub(1),
+            Self::Bash | Self::Zsh => std::env::var("_CLAP_COMPLETE_INDEX")
+                .ok()
+                .and_then(|index| index.parse().ok()),
+        }
+    }
+}
+
+impl EnvCompleter for DynamicShell {
+    fn name(&self) -> &'static str {
+        self.inner().name()
+    }
+
+    fn is(&self, name: &str) -> bool {
+        self.inner().is(name)
+    }
+
+    fn write_registration(
+        &self,
+        var: &str,
+        name: &str,
+        bin: &str,
+        completer: &str,
+        buf: &mut dyn std::io::Write,
+    ) -> Result<(), std::io::Error> {
+        self.inner()
+            .write_registration(var, name, bin, completer, buf)
+    }
+
+    fn write_complete(
+        &self,
+        cmd: &mut clap::Command,
+        args: Vec<OsString>,
+        current_dir: Option<&Path>,
+        buf: &mut dyn std::io::Write,
+    ) -> Result<(), std::io::Error> {
+        if self
+            .completion_index(&args)
+            .is_some_and(|index| !crate::cli::short_option_completion_allowed(cmd, &args, index))
+        {
+            return Ok(());
+        }
+        self.inner().write_complete(cmd, args, current_dir, buf)
     }
 }
 
@@ -94,10 +158,14 @@ struct CompletionContext {
     top: TopCommand,
     agent: AgentKind,
     tenant: String,
+    tenant_explicit: bool,
     host: bool,
     selection_valid: bool,
     all: bool,
     current: bool,
+    current_position: Option<usize>,
+    leaf: Option<String>,
+    leaf_position: Option<usize>,
     positionals: BTreeSet<String>,
 }
 
@@ -107,10 +175,14 @@ impl Default for CompletionContext {
             top: TopCommand::Root,
             agent: AgentKind::Codex,
             tenant: "default".to_string(),
+            tenant_explicit: false,
             host: false,
             selection_valid: true,
             all: false,
             current: false,
+            current_position: None,
+            leaf: None,
+            leaf_position: None,
             positionals: BTreeSet::new(),
         }
     }
@@ -157,6 +229,7 @@ impl CompletionContext {
             context.capture_selection(&values, &mut option_parts);
         }
         context.capture_positionals(&values, &option_parts);
+        context.validate_current_position();
         context
     }
 
@@ -170,6 +243,7 @@ impl CompletionContext {
             if token == "--current" {
                 option_parts.insert(index);
                 self.current = true;
+                self.current_position = Some(index);
                 index += 1;
                 continue;
             }
@@ -220,6 +294,7 @@ impl CompletionContext {
                         self.selection_valid = false;
                     }
                     seen_tenant = true;
+                    self.tenant_explicit = true;
                     if tenant::validate_name("tenant", value).is_err() {
                         self.selection_valid = false;
                     } else {
@@ -235,7 +310,15 @@ impl CompletionContext {
         let leaves: &[&str] = match self.top {
             TopCommand::Tenant => &["list", "create", "delete"],
             TopCommand::Component => &["list", "install", "remove"],
-            TopCommand::Config => &["list", "get", "create", "edit", "delete", "apply"],
+            TopCommand::Config => &[
+                "list",
+                "get",
+                "create",
+                "edit",
+                "delete",
+                "apply",
+                "propagate-auth",
+            ],
             TopCommand::Session => &["list", "get", "delete"],
             _ => return,
         };
@@ -244,6 +327,8 @@ impl CompletionContext {
         else {
             return;
         };
+        self.leaf = Some(values[leaf].to_string());
+        self.leaf_position = Some(leaf);
         for (index, value) in values.iter().enumerate().skip(leaf + 1) {
             if option_parts.contains(&index) {
                 continue;
@@ -253,6 +338,29 @@ impl CompletionContext {
             } else if !value.starts_with('-') && !value.is_empty() {
                 self.positionals.insert((*value).to_string());
             }
+        }
+    }
+
+    fn propagate_auth_available(&self) -> bool {
+        self.top == TopCommand::Config
+            && self.selection_valid
+            && !self.tenant_explicit
+            && self.agent == AgentKind::Codex
+    }
+
+    fn validate_current_position(&mut self) {
+        let Some(current) = self.current_position else {
+            return;
+        };
+        let valid_leaf = matches!(
+            self.leaf.as_deref(),
+            Some("get" | "edit" | "propagate-auth")
+        );
+        if self.top != TopCommand::Config
+            || !valid_leaf
+            || self.leaf_position.is_none_or(|leaf| current <= leaf)
+        {
+            self.selection_valid = false;
         }
     }
 }
@@ -345,9 +453,25 @@ fn add_config_completers(command: clap::Command, context: CompletionContext) -> 
     let get = context.clone();
     let edit = context.clone();
     let apply = context.clone();
+    let delete = context.clone();
+    let propagate_auth_available = context.propagate_auth_available();
+    let propagating_auth = context.leaf.as_deref() == Some("propagate-auth");
     command.mut_subcommand("config", move |command| {
         command
-            .mut_arg("tenant", add_tenant_value_completer)
+            .mut_arg("tenant", move |arg| {
+                if propagating_auth {
+                    arg.hide(true)
+                } else {
+                    add_tenant_value_completer(arg)
+                }
+            })
+            .mut_arg("agent", move |arg| {
+                if propagating_auth {
+                    arg.add(ArgValueCompleter::new(complete_codex_agent))
+                } else {
+                    arg
+                }
+            })
             .mut_subcommand("create", |command| {
                 command.mut_arg("config", |arg| arg.value_hint(ValueHint::Other))
             })
@@ -361,9 +485,20 @@ fn add_config_completers(command: clap::Command, context: CompletionContext) -> 
                 add_config_completer(command, apply, false)
             })
             .mut_subcommand("delete", move |command| {
-                add_config_completer(command, context, true)
+                add_config_completer(command, delete, true)
+            })
+            .mut_subcommand("propagate-auth", move |command| {
+                command.hide(!propagate_auth_available)
             })
     })
+}
+
+fn complete_codex_agent(current: &OsStr) -> Vec<CompletionCandidate> {
+    filter_candidates(
+        [AgentKind::Codex.tag().to_string()],
+        current,
+        &BTreeSet::new(),
+    )
 }
 
 fn add_session_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
@@ -500,7 +635,7 @@ fn complete_sessions(
         session_values_at(&root, context)
     })()
     .unwrap_or_default();
-    filter_candidates(values, current, excluded)
+    filter_session_candidates(values, current, excluded)
 }
 
 fn session_values_at(root: &Path, context: &CompletionContext) -> Result<Vec<String>> {
@@ -529,6 +664,21 @@ fn filter_candidates(
     let values: BTreeSet<_> = values
         .into_iter()
         .filter(|value| value.starts_with(current) && !excluded.contains(value))
+        .collect();
+    values.into_iter().map(CompletionCandidate::new).collect()
+}
+
+fn filter_session_candidates(
+    values: impl IntoIterator<Item = String>,
+    current: &OsStr,
+    excluded: &BTreeSet<String>,
+) -> Vec<CompletionCandidate> {
+    let Some(current) = current.to_str() else {
+        return Vec::new();
+    };
+    let values: BTreeSet<_> = values
+        .into_iter()
+        .filter(|value| value.ends_with(current) && !excluded.contains(value))
         .collect();
     values.into_iter().map(CompletionCandidate::new).collect()
 }
@@ -649,6 +799,59 @@ mod tests {
     }
 
     #[test]
+    fn propagate_auth_completion_matches_the_fixed_host_codex_current_source() {
+        for args in [
+            &["aibox", "config"][..],
+            &["aibox", "config", "--host"][..],
+            &["aibox", "config", "--agent", "codex"][..],
+            &[
+                "aibox",
+                "config",
+                "--host",
+                "--agent=codex",
+                "propagate-auth",
+                "--current",
+            ][..],
+        ] {
+            let context = CompletionContext::from_words(&words(args));
+            assert!(context.propagate_auth_available(), "{args:?}");
+            let command = completion_command(context, None);
+            let config = command.find_subcommand("config").unwrap();
+            let propagate = config.find_subcommand("propagate-auth").unwrap();
+            assert!(!propagate.is_hide_set(), "{args:?}");
+            let tenant_hidden = config
+                .get_arguments()
+                .find(|arg| arg.get_id() == "tenant")
+                .unwrap()
+                .is_hide_set();
+            assert_eq!(tenant_hidden, args.contains(&"propagate-auth"), "{args:?}");
+        }
+
+        for args in [
+            &["aibox", "config", "--tenant", "default"][..],
+            &["aibox", "config", "--agent", "claude"][..],
+            &["aibox", "config", "--host", "--tenant", "work"][..],
+            &["aibox", "config", "--current"][..],
+        ] {
+            let context = CompletionContext::from_words(&words(args));
+            assert!(!context.propagate_auth_available(), "{args:?}");
+            let command = completion_command(context, None);
+            let propagate = command
+                .find_subcommand("config")
+                .unwrap()
+                .find_subcommand("propagate-auth")
+                .unwrap();
+            assert!(propagate.is_hide_set(), "{args:?}");
+        }
+
+        assert_eq!(
+            candidate_values(&complete_codex_agent(OsStr::new(""))),
+            ["codex"]
+        );
+        assert!(complete_codex_agent(OsStr::new("cl")).is_empty());
+    }
+
+    #[test]
     fn component_completion_matches_tenant_scope() {
         let context = CompletionContext::from_words(&words(&[
             "aibox",
@@ -697,6 +900,63 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_completion_never_extends_short_flags_into_clusters() {
+        let _env_lock = crate::test_env_lock();
+        let _index = crate::testutil::EnvGuard::set("_CLAP_COMPLETE_INDEX", "5");
+        for current in ["-y", "-yh", "-x"] {
+            for shell in [DynamicShell::Bash, DynamicShell::Zsh, DynamicShell::Fish] {
+                let args = words(&["aibox", "session", "--agent", "claude", "delete", current]);
+                let context = CompletionContext::from_words(&args);
+                let mut command = completion_command(context, None);
+                command.build();
+                let mut output = Vec::new();
+                shell
+                    .write_complete(&mut command, args, None, &mut output)
+                    .unwrap();
+                assert!(
+                    output.is_empty(),
+                    "{shell:?} {current}: {}",
+                    String::from_utf8_lossy(&output)
+                );
+            }
+        }
+
+        let args = words(&["aibox", "session", "--agent", "claude", "delete", "-"]);
+        let context = CompletionContext::from_words(&args);
+        let mut command = completion_command(context, None);
+        command.build();
+        let mut output = Vec::new();
+        DynamicShell::Fish
+            .write_complete(&mut command, args, None, &mut output)
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.lines().any(|line| line.starts_with("-y\t")),
+            "{output}"
+        );
+        assert!(
+            output.lines().any(|line| line.starts_with("-h\t")),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn dynamic_completion_preserves_attached_short_option_values() {
+        let current_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(current_dir.path().join("src")).unwrap();
+        let args = words(&["aibox", "run", "-wsrc"]);
+        let context = CompletionContext::from_words(&args);
+        let mut command = completion_command(context, Some(current_dir.path().to_path_buf()));
+        command.build();
+        let mut output = Vec::new();
+        DynamicShell::Fish
+            .write_complete(&mut command, args, Some(current_dir.path()), &mut output)
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.lines().any(|line| line == "-wsrc/"), "{output}");
+    }
+
+    #[test]
     fn tenant_discovery_is_read_only() {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("missing");
@@ -738,12 +998,14 @@ mod tests {
 
     #[test]
     fn session_candidates_follow_the_selected_tenant_and_agent() {
+        let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
+        let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
         let work = ManagedTenant::resolve(root.path(), "work").unwrap();
         let other = ManagedTenant::resolve(root.path(), "other").unwrap();
         work.ensure_initialized().unwrap();
         other.ensure_initialized().unwrap();
-        let codex_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let codex_id = "019fded0-6b15-7163-8881-458cbf92d123";
         let other_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
         crate::testutil::write_jsonl(
             &work.home_dir,
@@ -765,12 +1027,42 @@ mod tests {
             "aibox", "session", "--tenant", "work", "list",
         ]));
         assert_eq!(session_values_at(root.path(), &codex).unwrap(), [codex_id]);
+        assert_eq!(
+            candidate_values(&complete_sessions(
+                &codex,
+                OsStr::new("d123"),
+                &BTreeSet::new()
+            )),
+            [codex_id],
+            "suffix input must complete to the full Session id"
+        );
+        assert!(
+            complete_sessions(&codex, OsStr::new("019fded0"), &BTreeSet::new()).is_empty(),
+            "the removed prefix contract must not leak through completion"
+        );
+        assert!(
+            complete_sessions(
+                &codex,
+                OsStr::new(""),
+                &BTreeSet::from([codex_id.to_string()])
+            )
+            .is_empty(),
+            "already selected full ids must remain excluded"
+        );
 
         let claude = CompletionContext::from_words(&words(&[
             "aibox", "session", "--agent", "claude", "--tenant", "work", "list",
         ]));
         assert_eq!(
             session_values_at(root.path(), &claude).unwrap(),
+            ["claude-session"]
+        );
+        assert_eq!(
+            candidate_values(&complete_sessions(
+                &claude,
+                OsStr::new("session"),
+                &BTreeSet::new()
+            )),
             ["claude-session"]
         );
     }

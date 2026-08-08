@@ -33,8 +33,11 @@ not provide cross-file atomicity after process interruption.
 Runs consume Current Config without consulting Named Configs. Config
 Application sets present Config Fields, removes missing Config Fields, and
 preserves unrelated native settings such as status-line configuration. Codex
-auth replaces native `auth.json` as a whole. Each file replacement is atomic,
-but Config Application and sequential edit are not atomic across files. There
-is no activation, drift tracking, rollback, migration reader, transaction
-journal, backup, or cross-process lock. Host Tenant commands can print or
-modify real credentials without redaction.
+auth replaces native `auth.json` as a whole. After a fully successful
+interactive Named Config edit, the CLI may ask for explicit confirmation to
+perform that same one-shot Application; the standalone apply command remains
+unconditional. Each file replacement is atomic, but Config Application and
+sequential edit are not atomic across files. There is no activation, drift
+tracking, rollback, migration reader, transaction journal, backup, or
+cross-process lock. Host Tenant commands can print or modify real credentials
+without redaction.

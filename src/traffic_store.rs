@@ -1,4 +1,4 @@
-use crate::traffic_interpretation::ProtocolSummary;
+use crate::traffic_interpretation::{coding_agent_session_id, ProtocolSummary};
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -177,6 +177,8 @@ pub(super) struct SummaryMetadata {
     pub terminal: bool,
     pub timing: TimingMetadata,
     #[serde(default)]
+    pub coding_agent_session_id: Option<String>,
+    #[serde(default)]
     pub protocol: Option<ProtocolSummary>,
     pub outcome: Option<Outcome>,
     pub errors: Vec<DiagnosticMetadata>,
@@ -287,6 +289,7 @@ impl TrafficStore {
         let id = Uuid::now_v7().to_string();
         let observed_at = utc_now();
         let origin = Instant::now();
+        let coding_agent_session_id = coding_agent_session_id(upstream_url, &headers);
         let directory_name = format!(
             "{}-{}-{id}",
             utc_basic_now(),
@@ -329,6 +332,7 @@ impl TrafficStore {
                 observed_at,
                 terminal: false,
                 timing: TimingMetadata::default(),
+                coding_agent_session_id,
                 protocol: Some(ProtocolSummary::for_url(upstream_url)),
                 outcome: None,
                 errors: Vec::new(),
@@ -1176,6 +1180,7 @@ mod tests {
                 finished_at_ns: Some("1500000000".to_string()),
                 ..TimingMetadata::default()
             },
+            coding_agent_session_id: None,
             protocol: None,
             outcome: Some(Outcome::Completed),
             errors: Vec::new(),
@@ -1209,7 +1214,11 @@ mod tests {
                 "/https://example.com/v1/responses",
                 Some("https://example.com/v1/responses"),
                 "HTTP/2",
-                vec![],
+                vec![RecordedHeader {
+                    name: "Session-Id".to_string(),
+                    value_base64: base64::engine::general_purpose::STANDARD
+                        .encode("opaque-session"),
+                }],
                 Some("example.com"),
             )
             .unwrap();
@@ -1242,11 +1251,37 @@ mod tests {
         assert_eq!(response["kind"], "response");
         assert!(response.get("source").is_none());
         assert_eq!(summary["kind"], "summary");
+        assert_eq!(summary["coding_agent_session_id"], "opaque-session");
         assert_eq!(summary["protocol"]["family"], "openai_responses");
         assert_eq!(summary["protocol"]["response_terminal"], false);
         assert!(summary["protocol"]["model"]["requested"].is_null());
         assert!(record.directory.join(RESPONSE_BODY).is_file());
         assert!(!record.directory.join(RESULT_JSON).exists());
+    }
+
+    #[test]
+    fn older_summaries_without_coding_agent_session_id_remain_readable() {
+        let summary = SummaryMetadata {
+            schema_version: FORMAT_VERSION,
+            record_id: "018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12".to_string(),
+            kind: "summary".to_string(),
+            observed_at: "2026-08-06T04:00:00Z".to_string(),
+            terminal: false,
+            timing: TimingMetadata::default(),
+            coding_agent_session_id: None,
+            protocol: None,
+            outcome: None,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let mut value = serde_json::to_value(summary).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("coding_agent_session_id");
+
+        let decoded: SummaryMetadata = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.coding_agent_session_id, None);
     }
 
     #[test]

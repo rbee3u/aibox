@@ -153,6 +153,14 @@ impl AgentKind {
         }
     }
 
+    /// Human-readable name used in user-facing messages.
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+        }
+    }
+
     /// Agent state directory relative to the shared Tenant Home.
     pub const fn state_dir_name(self) -> &'static str {
         match self {
@@ -259,6 +267,9 @@ mod tests {
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
+        assert_eq!(AgentKind::Claude.display_name(), "Claude");
+        assert_eq!(AgentKind::Codex.display_name(), "Codex");
+
         for (
             agent,
             tag,

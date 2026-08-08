@@ -634,6 +634,75 @@ fn config_apply_and_delete_route_to_the_selected_tenant_without_docker() {
 
 #[cfg(unix)]
 #[test]
+fn config_propagate_auth_is_global_codex_current_only_and_never_starts_docker() {
+    let fx = RunFixture::new();
+    let source_dir = fx._host_home.path().join(".codex");
+    std::fs::create_dir(&source_dir).unwrap();
+    let source = br#"{
+  "auth_mode": "chatgpt",
+  "tokens": {"account_id": "account-a", "refresh_token": "new"},
+  "last_refresh": "2026-08-08T04:22:23Z"
+}
+"#;
+    std::fs::write(source_dir.join("auth.json"), source).unwrap();
+    let tenant = ManagedTenant::resolve(fx.root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let target = tenant.for_agent(AgentKind::Codex).state_file("auth.json");
+    std::fs::write(
+        &target,
+        br#"{
+  "auth_mode": "chatgpt",
+  "tokens": {"account_id": "account-a", "refresh_token": "old"},
+  "last_refresh": "2026-08-07T04:22:23Z"
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        fx.run(&["aibox", "config", "propagate-auth"], Vec::new())
+            .unwrap(),
+        0
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), source);
+    assert_eq!(
+        fx.run(
+            &[
+                "aibox",
+                "config",
+                "--host",
+                "--agent",
+                "codex",
+                "propagate-auth",
+                "--current",
+            ],
+            Vec::new(),
+        )
+        .unwrap(),
+        0
+    );
+
+    let error = fx
+        .run(
+            &["aibox", "config", "--tenant", "work", "propagate-auth"],
+            Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not accept --tenant"), "{error}");
+    let error = fx
+        .run(
+            &["aibox", "config", "--agent", "claude", "propagate-auth"],
+            Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("supports only --agent codex"), "{error}");
+    assert_eq!(fx.log(), "");
+}
+
+#[cfg(unix)]
+#[test]
 fn session_delete_routes_to_the_selected_tenant_without_docker() {
     let fx = RunFixture::new();
     ManagedTenant::resolve(fx.root.path(), "work")

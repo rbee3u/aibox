@@ -3,6 +3,8 @@ use crate::agent::AgentKind;
 use crate::tenant::{ManagedTenant, Tenant};
 use crate::testutil::EnvGuard;
 use serde_json::Value;
+use std::cell::Cell;
+use std::io::{self, BufRead, Cursor, IsTerminal};
 use std::path::Path;
 
 fn selected(root: &Path, agent: AgentKind) -> TenantAgent {
@@ -20,6 +22,317 @@ fn replace_config_files(selected: &TenantAgent, config: &str, main: &str, auth: 
     if let Some(file) = selected.agent.native_auth_file() {
         fs::write(selected.named_config_file(config, file), auth).unwrap();
     }
+}
+
+fn chatgpt_auth(account_id: &str, last_refresh: &str, marker: &str) -> Vec<u8> {
+    let mut content = serde_json::to_vec_pretty(&serde_json::json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": format!("id-{marker}"),
+            "access_token": format!("access-{marker}"),
+            "refresh_token": format!("refresh-{marker}"),
+            "account_id": account_id,
+        },
+        "last_refresh": last_refresh,
+    }))
+    .unwrap();
+    content.push(b'\n');
+    content
+}
+
+fn install_host_source(root: &Path, home: &Path, content: &[u8]) -> TenantAgent {
+    let host = Tenant::Host {
+        home_dir: home.to_path_buf(),
+        root_dir: root.to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
+    tenant::ensure_real_dir(&host.agent_state_dir, "Agent state directory").unwrap();
+    fs::write(host.state_file("auth.json"), content).unwrap();
+    host
+}
+
+fn create_named_auth(selected: &TenantAgent, name: &str, content: &[u8]) -> std::path::PathBuf {
+    create_named_config(selected, name).unwrap();
+    let path = selected.named_config_file(name, "auth.json");
+    fs::write(&path, content).unwrap();
+    path
+}
+
+fn report_outcome<'a>(report: &'a AuthPropagationReport, label: &str) -> &'a PropagationOutcome {
+    &report
+        .entries
+        .iter()
+        .find(|entry| entry.label == label)
+        .unwrap_or_else(|| panic!("missing propagation result for {label}"))
+        .outcome
+}
+
+#[test]
+fn credential_propagation_updates_every_matching_existing_scope() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", home.path().as_os_str());
+    let source = chatgpt_auth("account-a", "2026-08-08T04:22:23.476121Z", "source");
+    let host = install_host_source(root.path(), home.path(), &source);
+
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let selected = tenant.for_agent(AgentKind::Codex);
+    let older = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "older");
+    fs::write(selected.state_file("auth.json"), &older).unwrap();
+    let current_path = selected.state_file("auth.json");
+    let named_old = create_named_auth(&selected, "old", &older);
+    create_named_auth(&selected, "same", &source);
+    create_named_auth(
+        &selected,
+        "same-reordered",
+        br#"{"tokens":{"refresh_token":"refresh-source","account_id":"account-a","access_token":"access-source","id_token":"id-source"},"last_refresh":"2026-08-08T04:22:23.476121Z","OPENAI_API_KEY":null,"auth_mode":"chatgpt"}"#,
+    );
+    create_named_auth(
+        &selected,
+        "conflict",
+        &chatgpt_auth("account-a", "2026-08-08T04:22:23.476121Z", "different"),
+    );
+    create_named_auth(
+        &selected,
+        "newer",
+        &chatgpt_auth("account-a", "2026-08-09T04:22:23Z", "newer"),
+    );
+    create_named_auth(
+        &selected,
+        "other-account",
+        &chatgpt_auth("account-b", "2026-08-07T04:22:23Z", "other"),
+    );
+    create_named_auth(
+        &selected,
+        "other-broken",
+        br#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-b"},"last_refresh":"bad"}"#,
+    );
+    create_named_auth(&selected, "api-key", br#"{"OPENAI_API_KEY":"sk-test"}"#);
+    create_named_auth(&selected, "invalid", b"not-json\n");
+    let host_old = create_named_auth(&host, "old", &older);
+
+    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+
+    assert_eq!(fs::read(&current_path).unwrap(), source);
+    assert_eq!(fs::read(&named_old).unwrap(), source);
+    assert_eq!(fs::read(&host_old).unwrap(), source);
+    assert_eq!(
+        report_outcome(&report, "tenant/work/current"),
+        &PropagationOutcome::Updated
+    );
+    assert_eq!(
+        report_outcome(&report, "tenant/work/config/old"),
+        &PropagationOutcome::Updated
+    );
+    assert_eq!(
+        report_outcome(&report, "host/config/old"),
+        &PropagationOutcome::Updated
+    );
+    assert_eq!(
+        report_outcome(&report, "tenant/work/config/same"),
+        &PropagationOutcome::Unchanged
+    );
+    assert_eq!(
+        report_outcome(&report, "tenant/work/config/same-reordered"),
+        &PropagationOutcome::Unchanged
+    );
+    assert!(matches!(
+        report_outcome(&report, "tenant/work/config/conflict"),
+        PropagationOutcome::Conflict { .. }
+    ));
+    assert!(matches!(
+        report_outcome(&report, "tenant/work/config/newer"),
+        PropagationOutcome::Newer { .. }
+    ));
+    assert!(matches!(
+        report_outcome(&report, "tenant/work/config/invalid"),
+        PropagationOutcome::Invalid { .. }
+    ));
+    assert!(report.entries.iter().all(|entry| {
+        !entry.label.ends_with("other-account")
+            && !entry.label.ends_with("other-broken")
+            && !entry.label.ends_with("api-key")
+    }));
+    assert!(report
+        .entries
+        .windows(2)
+        .all(|entries| entries[0].label < entries[1].label));
+    assert_eq!(
+        report.counts(),
+        PropagationCounts {
+            updated: 3,
+            unchanged: 2,
+            conflicts: 1,
+            newer: 1,
+            invalid: 1,
+            failed: 0,
+        }
+    );
+}
+
+#[test]
+fn credential_propagation_requires_a_valid_host_chatgpt_source() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", home.path().as_os_str());
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let target = tenant.for_agent(AgentKind::Codex).state_file("auth.json");
+    let old = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "old");
+    fs::write(&target, &old).unwrap();
+
+    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    assert!(error.contains("does not exist"), "{error}");
+
+    install_host_source(root.path(), home.path(), br#"{"OPENAI_API_KEY":"sk-test"}"#);
+    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    assert!(error.contains("not ChatGPT Credentials"), "{error}");
+
+    install_host_source(
+        root.path(),
+        home.path(),
+        br#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-a"},"last_refresh":"bad"}"#,
+    );
+    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    assert!(error.contains("invalid last_refresh"), "{error}");
+    assert_eq!(fs::read(&target).unwrap(), old);
+}
+
+#[test]
+fn credential_propagation_does_not_create_missing_or_scan_orphaned_configs() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", home.path().as_os_str());
+    let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
+    install_host_source(root.path(), home.path(), &source);
+
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let selected = tenant.for_agent(AgentKind::Codex);
+    selected.ensure_named_config_catalog().unwrap();
+    let incomplete = selected.named_config_dir("incomplete");
+    tenant::ensure_real_dir(&incomplete, "Named Config directory").unwrap();
+    let main = incomplete.join("config.toml");
+    fs::write(&main, "model = \"kept\"\n").unwrap();
+    tenant::set_600(&main).unwrap();
+
+    let orphan = root.path().join("codex/orphan/old");
+    tenant::ensure_real_dir(&orphan, "orphaned Named Config directory").unwrap();
+    let orphan_main = orphan.join("config.toml");
+    let orphan_auth = orphan.join("auth.json");
+    fs::write(&orphan_main, "model = \"orphan\"\n").unwrap();
+    fs::write(
+        &orphan_auth,
+        chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "orphan"),
+    )
+    .unwrap();
+    tenant::set_600(&orphan_main).unwrap();
+    tenant::set_600(&orphan_auth).unwrap();
+    let orphan_before = fs::read(&orphan_auth).unwrap();
+
+    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+
+    assert!(report.entries.is_empty());
+    assert!(!selected.state_file("auth.json").exists());
+    assert!(!incomplete.join("auth.json").exists());
+    assert_eq!(fs::read(orphan_auth).unwrap(), orphan_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn credential_propagation_preflight_is_structurally_strict_and_preserves_modes() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", home.path().as_os_str());
+    let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
+    install_host_source(root.path(), home.path(), &source);
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let selected = tenant.for_agent(AgentKind::Codex);
+    let older = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "older");
+    let current = selected.state_file("auth.json");
+    fs::write(&current, &older).unwrap();
+    fs::set_permissions(&current, fs::Permissions::from_mode(0o640)).unwrap();
+    let linked = create_named_auth(&selected, "linked", &older);
+    fs::remove_file(&linked).unwrap();
+    symlink(&current, &linked).unwrap();
+
+    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    assert!(error.contains("non-regular file"), "{error}");
+    assert_eq!(fs::read(&current).unwrap(), older);
+
+    fs::remove_file(&linked).unwrap();
+    fs::write(&linked, &older).unwrap();
+    tenant::set_600(&linked).unwrap();
+
+    let linked_tenant = root.path().join("tenants/linked");
+    symlink(&tenant.home_dir, &linked_tenant).unwrap();
+    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    assert!(error.contains("not a real directory"), "{error}");
+    fs::remove_file(linked_tenant).unwrap();
+
+    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+    assert_eq!(report.counts().updated, 2);
+    assert_eq!(fs::read(&current).unwrap(), source);
+    assert_eq!(
+        fs::metadata(&current).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(
+        fs::metadata(&linked).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn credential_propagation_continues_after_write_failure_and_uses_the_plan_snapshot() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", home.path().as_os_str());
+    let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
+    install_host_source(root.path(), home.path(), &source);
+    let older = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "older");
+
+    let first = ManagedTenant::resolve(root.path(), "alpha").unwrap();
+    let second = ManagedTenant::resolve(root.path(), "beta").unwrap();
+    first.ensure_initialized().unwrap();
+    second.ensure_initialized().unwrap();
+    let first_auth = first.for_agent(AgentKind::Codex).state_file("auth.json");
+    let second_auth = second.for_agent(AgentKind::Codex).state_file("auth.json");
+    fs::write(&first_auth, &older).unwrap();
+    fs::write(&second_auth, &older).unwrap();
+
+    let plan = plan_auth_propagation(root.path()).unwrap();
+    fs::remove_file(&first_auth).unwrap();
+    fs::create_dir(&first_auth).unwrap();
+    fs::write(
+        &second_auth,
+        chatgpt_auth("account-a", "2026-08-09T04:22:23Z", "concurrent-newer"),
+    )
+    .unwrap();
+
+    let report = execute_auth_propagation(plan);
+
+    assert!(matches!(
+        report_outcome(&report, "tenant/alpha/current"),
+        PropagationOutcome::Failed { .. }
+    ));
+    assert_eq!(
+        report_outcome(&report, "tenant/beta/current"),
+        &PropagationOutcome::Updated
+    );
+    assert_eq!(fs::read(&second_auth).unwrap(), source);
+    assert_eq!(report.counts().failed, 1);
+    assert_eq!(report.counts().updated, 1);
 }
 
 #[test]
@@ -216,6 +529,186 @@ fn edit_can_repair_an_invalid_complete_config() {
     assert!(fs::read_to_string(selected.state_file("config.toml"))
         .unwrap()
         .contains("model = \"repaired\""));
+}
+
+#[test]
+fn apply_after_edit_confirmation_names_the_full_target_and_requires_explicit_yes() {
+    let root = tempfile::tempdir().unwrap();
+    let managed = selected(root.path(), AgentKind::Claude);
+    let managed_prompt =
+        "Apply Named Config 'custom' to Claude Current Config for Managed Tenant 'work' now? [y/N] ";
+
+    for yes in ["y\n", "Y\n", "yes\n", " YES \n"] {
+        let mut input = Cursor::new(yes.as_bytes());
+        let mut output = Vec::new();
+        assert!(
+            read_apply_confirmation(&managed, "custom", &mut input, &mut output).unwrap(),
+            "{yes:?}"
+        );
+        assert_eq!(String::from_utf8(output).unwrap(), managed_prompt);
+    }
+
+    for no in ["", "\n", "n\n", "yeah\n", "yes please\n"] {
+        let mut input = Cursor::new(no.as_bytes());
+        let mut output = Vec::new();
+        assert!(
+            !read_apply_confirmation(&managed, "custom", &mut input, &mut output).unwrap(),
+            "{no:?}"
+        );
+        assert_eq!(String::from_utf8(output).unwrap(), managed_prompt);
+    }
+
+    let host_home = tempfile::tempdir().unwrap();
+    let host = Tenant::Host {
+        home_dir: host_home.path().to_path_buf(),
+        root_dir: root.path().to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
+    let mut input = Cursor::new(b"\n");
+    let mut output = Vec::new();
+    assert!(!read_apply_confirmation(&host, "custom", &mut input, &mut output).unwrap());
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "Apply Named Config 'custom' to Codex Current Config for Host Tenant now? [y/N] "
+    );
+}
+
+#[test]
+fn apply_after_edit_confirmation_propagates_read_errors() {
+    struct FailingInput;
+
+    impl io::Read for FailingInput {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("input failed"))
+        }
+    }
+
+    impl BufRead for FailingInput {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::other("input failed"))
+        }
+
+        fn consume(&mut self, _amount: usize) {}
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    let error = read_apply_confirmation(&selected, "custom", &mut FailingInput, &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("read Config Application confirmation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn noninteractive_edit_confirmation_skips_application() {
+    if io::stdin().is_terminal() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+
+    assert!(!confirm_apply_after_edit(&selected, "custom").unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_named_edit_applies_only_after_confirmation() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let editor_dir = tempfile::tempdir().unwrap();
+    let editor =
+        crate::testutil::write_stub_script(editor_dir.path(), "editor", "#!/bin/sh\nexit 0\n");
+    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
+    let prompted = Cell::new(false);
+
+    edit_named_config_with_apply_prompt(&selected, "custom", |_, _| {
+        prompted.set(true);
+        Ok(false)
+    })
+    .unwrap();
+
+    assert!(prompted.get());
+    assert!(!selected.state_file("config.toml").exists());
+    assert!(!selected.state_file("auth.json").exists());
+
+    edit_named_config_with_apply_prompt(&selected, "custom", |_, _| Ok(true)).unwrap();
+
+    assert!(selected.state_file("config.toml").exists());
+    assert!(selected.state_file("auth.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_named_edit_does_not_ask_to_apply() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let editor_dir = tempfile::tempdir().unwrap();
+    let editor = crate::testutil::write_stub_script(
+        editor_dir.path(),
+        "editor",
+        "#!/bin/sh\ncase \"$1\" in\n  *config.toml*) printf 'model = \"edited\"\\n' > \"$1\" ;;\n  *auth.json*) exit 7 ;;\nesac\n",
+    );
+    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
+    let prompted = Cell::new(false);
+
+    let error = edit_named_config_with_apply_prompt(&selected, "custom", |_, _| {
+        prompted.set(true);
+        Ok(true)
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("editor exited"), "{error}");
+    assert!(!prompted.get());
+    assert!(
+        fs::read_to_string(selected.named_config_file("custom", "config.toml"))
+            .unwrap()
+            .contains("model = \"edited\"")
+    );
+    assert!(!selected.state_file("config.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_failure_after_edit_keeps_the_edit_and_reports_context() {
+    let _env_lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Claude);
+    create_named_config(&selected, "custom").unwrap();
+    let named = selected.named_config_file("custom", "settings.json");
+    let edited = "{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"edited\"}}\n";
+    let editor_dir = tempfile::tempdir().unwrap();
+    let editor = crate::testutil::write_stub_script(
+        editor_dir.path(),
+        "editor",
+        "#!/bin/sh\nprintf '{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"edited\"}}\\n' > \"$1\"\n",
+    );
+    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
+    fs::write(selected.state_file("settings.json"), "not-json\n").unwrap();
+
+    let error = format!(
+        "{:#}",
+        edit_named_config_with_apply_prompt(&selected, "custom", |_, _| Ok(true)).unwrap_err()
+    );
+
+    assert!(error.contains("was edited successfully"), "{error}");
+    assert!(
+        error.contains("Claude Current Config for Managed Tenant 'work'"),
+        "{error}"
+    );
+    assert_eq!(fs::read_to_string(named).unwrap(), edited);
+    assert_eq!(
+        fs::read_to_string(selected.state_file("settings.json")).unwrap(),
+        "not-json\n"
+    );
 }
 
 #[cfg(unix)]

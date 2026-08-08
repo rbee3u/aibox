@@ -770,6 +770,33 @@ fn family_from_url(value: Option<&str>) -> ProtocolFamily {
     }
 }
 
+pub(super) fn coding_agent_session_id(
+    upstream_url: Option<&str>,
+    headers: &[RecordedHeader],
+) -> Option<String> {
+    let names = match family_from_url(upstream_url) {
+        ProtocolFamily::OpenaiResponses => ["session-id", "x-claude-code-session-id"],
+        ProtocolFamily::ClaudeMessages => ["x-claude-code-session-id", "session-id"],
+        ProtocolFamily::Unknown => return None,
+    };
+    names
+        .into_iter()
+        .find_map(|name| first_nonempty_header_text(headers, name))
+}
+
+fn first_nonempty_header_text(headers: &[RecordedHeader], name: &str) -> Option<String> {
+    headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(name))
+        .filter_map(|header| {
+            base64::engine::general_purpose::STANDARD
+                .decode(&header.value_base64)
+                .ok()
+        })
+        .filter_map(|bytes| String::from_utf8(bytes).ok())
+        .find_map(|value| nonempty(Some(value)))
+}
+
 fn header_text(headers: &[RecordedHeader], name: &str) -> Option<String> {
     headers
         .iter()
@@ -987,6 +1014,52 @@ mod tests {
     use super::*;
     use crate::traffic_store::{RequestMetadata, SummaryMetadata, TimingMetadata};
     use std::path::PathBuf;
+
+    fn header(name: &str, value: &[u8]) -> RecordedHeader {
+        RecordedHeader {
+            name: name.to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode(value),
+        }
+    }
+
+    #[test]
+    fn coding_agent_session_id_uses_protocol_specific_exact_headers() {
+        let headers = [
+            header("X-Claude-Code-Session-Id", b"claude-session"),
+            header("SESSION-ID", b"codex-session"),
+        ];
+        assert_eq!(
+            coding_agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
+            Some("codex-session")
+        );
+        assert_eq!(
+            coding_agent_session_id(Some("https://example.test/v1/messages"), &headers).as_deref(),
+            Some("claude-session")
+        );
+        assert_eq!(
+            coding_agent_session_id(Some("https://example.test/v1/responses"), &headers[..1])
+                .as_deref(),
+            Some("claude-session")
+        );
+        assert_eq!(
+            coding_agent_session_id(Some("https://example.test/health"), &headers),
+            None
+        );
+    }
+
+    #[test]
+    fn coding_agent_session_id_keeps_the_first_nonempty_utf8_value() {
+        let headers = [
+            header("session-id", b""),
+            header("session-id", b"opaque-session-value"),
+            header("session-id", &[0xff]),
+            header("x-session-id", b"ignored"),
+        ];
+        assert_eq!(
+            coding_agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
+            Some("opaque-session-value")
+        );
+    }
 
     #[test]
     fn request_metadata_maps_provider_specific_reasoning_effort() {
@@ -1280,6 +1353,7 @@ mod tests {
                 observed_at: String::new(),
                 terminal: false,
                 timing,
+                coding_agent_session_id: None,
                 protocol: Some(protocol),
                 outcome: None,
                 errors: Vec::new(),

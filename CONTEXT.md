@@ -121,6 +121,12 @@ recognized model API; raw request and response data remain the diagnostic
 evidence and are not reconstructed from this summary.
 _Avoid_: Interpretation cache, parsed body copy
 
+**Coding Agent Session ID**:
+An opaque identifier reported by a recognized model API request for the Coding
+Agent Session that issued it. It does not associate a Run, Session, and Traffic
+Record or resolve a Transcript.
+_Avoid_: Traffic Record ID, provider conversation ID, prompt cache key
+
 **Token Usage**:
 Provider-reported token counters associated with one model API response. It is
 not a local tokenizer estimate.
@@ -181,6 +187,16 @@ _Avoid_: Owned path, managed slot
 A one-time operation that sets every present Config Field and removes every
 absent Config Field from Current Config without retaining a relationship.
 _Avoid_: Activation, materialization, reconciliation
+
+**ChatGPT Credentials**:
+Codex credentials issued and refreshable through ChatGPT sign-in for one
+ChatGPT account.
+_Avoid_: API key credentials, OpenAI credentials
+
+**Credential Propagation**:
+An explicit one-time distribution of one newer ChatGPT Credentials snapshot to
+older Configs for the same ChatGPT account without retaining a relationship.
+_Avoid_: Credential Sync, activation, reconciliation
 
 **Session**:
 One interaction record created by a Coding Agent and discovered independently

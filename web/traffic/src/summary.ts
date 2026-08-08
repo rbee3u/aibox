@@ -67,7 +67,7 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
   const protocol = detail.summary.protocol;
   const firstToken = parseNs(protocol?.first_token_at_ns);
   const active = detail.state === "active";
-  const responseMode = protocol?.response_mode.requested ?? protocol?.response_mode.observed;
+  const responseMode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
   const streaming = responseMode === "stream";
   const stages: TimingStage[] = [];
   let cursor = 0n;

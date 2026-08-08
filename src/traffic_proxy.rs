@@ -614,6 +614,7 @@ fn recorded_request_stream(
         observed_at: utc_now(),
         terminal: false,
         timing: crate::traffic_store::TimingMetadata::default(),
+        coding_agent_session_id: None,
         protocol: Some(ProtocolSummary::default()),
         outcome: None,
         errors: Vec::new(),
@@ -1565,6 +1566,7 @@ mod tests {
             observed_at: utc_now(),
             terminal: false,
             timing: crate::traffic_store::TimingMetadata::default(),
+            coding_agent_session_id: None,
             protocol: Some(ProtocolSummary::for_url(Some(
                 "https://example.test/v1/responses",
             ))),
