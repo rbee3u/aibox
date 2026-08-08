@@ -1,4 +1,5 @@
 use crate::traffic::AppState;
+use crate::traffic_interpretation::{ProtocolObserver, ProtocolSummary};
 use crate::traffic_store::{
     offset_ns, utc_now, ErrorKind, ErrorMetadata, NewRecord, Outcome, RecordedHeader,
     ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore,
@@ -37,15 +38,19 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
         RecordedHeader::from_headers(&parts.headers),
         host_hint,
     );
-    let (record, _) = match begin {
+    let (record, request_metadata) = match begin {
         Ok(value) => value,
         Err(error) => return bare_error(StatusCode::INSUFFICIENT_STORAGE, &error.to_string()),
     };
     let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
+    let protocol = Arc::new(Mutex::new(ProtocolObserver::new(
+        request_metadata.upstream_url.as_deref(),
+    )));
     let mut guard = RecordGuard::new(
         state.store.clone(),
         record,
         measurements.clone(),
+        protocol.clone(),
         Instant::now(),
     );
 
@@ -155,6 +160,8 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             measurements: measurements.clone(),
             error_slot: request_error.clone(),
             summary: guard.record.summary.clone(),
+            protocol,
+            request_headers: request_metadata.headers,
             store: Some(guard.store.clone()),
             directory: guard.record.directory.clone(),
             origin: guard.record.origin,
@@ -223,11 +230,7 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
     let status = upstream_response.status();
     let version = upstream_response.version();
     let original_headers = upstream_response.headers().clone();
-    if let Err(error) = guard.mark_timing(|timing| {
-        timing.upstream_response_headers_at_ns = Some(offset_ns(guard.record.origin));
-    }) {
-        return recording_failure(&mut guard, format!("checkpoint response timing: {error:#}"));
-    }
+    let is_sse = is_event_stream(&original_headers);
     let metadata = ResponseMetadata {
         format_version: FORMAT_VERSION,
         source: ResponseSource::Upstream,
@@ -236,6 +239,12 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
         http_version: version_name(version).to_string(),
         headers: RecordedHeader::from_headers(&original_headers),
     };
+    if let Err(error) = guard.observe_response_headers(&metadata.headers, is_sse) {
+        return recording_failure(
+            &mut guard,
+            format!("checkpoint response metadata: {error:#}"),
+        );
+    }
     if let Err(error) = state
         .store
         .write_response(&guard.record.directory, &metadata)
@@ -251,7 +260,6 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
 
     let (sender, receiver) = mpsc::channel::<Result<Bytes, io::Error>>(8);
     let state_for_task = state.clone();
-    let is_sse = is_event_stream(&original_headers);
     let event_index = if is_sse {
         match state.store.create_event_index(&guard.record) {
             Ok(file) => Some(file),
@@ -269,8 +277,11 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             upstream_response.bytes_stream(),
             response_file,
             sender,
-            is_sse,
-            event_index,
+            ResponseStreamConfig {
+                is_sse,
+                status: status.as_u16(),
+                event_index,
+            },
             &mut guard,
         )
         .await;
@@ -288,6 +299,7 @@ struct RecordGuard {
     store: TrafficStore,
     record: NewRecord,
     measurements: Arc<Mutex<RuntimeMeasurements>>,
+    protocol: Arc<Mutex<ProtocolObserver>>,
     finished: bool,
 }
 
@@ -296,12 +308,14 @@ impl RecordGuard {
         store: TrafficStore,
         record: NewRecord,
         measurements: Arc<Mutex<RuntimeMeasurements>>,
+        protocol: Arc<Mutex<ProtocolObserver>>,
         _legacy_started: Instant,
     ) -> Self {
         Self {
             store,
             record,
             measurements,
+            protocol,
             finished: false,
         }
     }
@@ -310,33 +324,100 @@ impl RecordGuard {
         &self,
         update: impl FnOnce(&mut crate::traffic_store::TimingMetadata),
     ) -> anyhow::Result<()> {
-        {
-            let mut summary = self
-                .record
-                .summary
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            update(&mut summary.timing);
+        self.store
+            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+                update(&mut summary.timing);
+                true
+            })?;
+        Ok(())
+    }
+
+    fn observe_response_headers(
+        &self,
+        headers: &[RecordedHeader],
+        event_stream: bool,
+    ) -> anyhow::Result<()> {
+        let at_ns = offset_ns(self.record.origin);
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observer.observe_response_headers(headers, event_stream, at_ns.clone());
+        let protocol = observer.snapshot();
+        self.store
+            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+                summary.timing.upstream_response_headers_at_ns = Some(at_ns);
+                summary.protocol = Some(protocol);
+                true
+            })?;
+        Ok(())
+    }
+
+    fn observe_sse_events(&self, events: &[(Vec<u8>, String)]) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
         }
-        self.store.checkpoint(&self.record)
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = events.iter().fold(false, |changed, (data, at_ns)| {
+            observer.observe_sse_data(data, at_ns.clone()) | changed
+        });
+        if changed {
+            self.publish_protocol(observer.snapshot())?;
+        }
+        Ok(())
+    }
+
+    fn observe_json_response(&self, status: u16) -> anyhow::Result<()> {
+        let at_ns = offset_ns(self.record.origin);
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observer.observe_json_response(&self.record.directory.join("response.body"), status, at_ns);
+        self.publish_protocol(observer.snapshot())
+    }
+
+    fn observe_http_status(&self, status: u16) -> anyhow::Result<()> {
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if observer.observe_http_status(status, offset_ns(self.record.origin)) {
+            self.publish_protocol(observer.snapshot())?;
+        }
+        Ok(())
+    }
+
+    fn publish_protocol(&self, protocol: ProtocolSummary) -> anyhow::Result<()> {
+        self.store
+            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+                if summary.protocol.as_ref() == Some(&protocol) {
+                    return false;
+                }
+                summary.protocol = Some(protocol);
+                true
+            })?;
+        Ok(())
     }
 
     fn add_warning(&self, kind: &str, message: String) {
-        let mut summary = self
-            .record
-            .summary
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        summary
-            .warnings
-            .push(crate::traffic_store::DiagnosticMetadata {
-                phase: "recording".to_string(),
-                kind: kind.to_string(),
-                message,
-                at_ns: offset_ns(self.record.origin),
-            });
-        drop(summary);
-        if let Err(error) = self.store.checkpoint(&self.record) {
+        let result =
+            self.store
+                .update_summary(&self.record.directory, &self.record.summary, |summary| {
+                    summary
+                        .warnings
+                        .push(crate::traffic_store::DiagnosticMetadata {
+                            phase: "recording".to_string(),
+                            kind: kind.to_string(),
+                            message,
+                            at_ns: offset_ns(self.record.origin),
+                        });
+                    true
+                });
+        if let Err(error) = result {
             eprintln!("warning: cannot checkpoint Traffic summary: {error:#}");
         }
     }
@@ -379,6 +460,8 @@ struct RequestStreamContext {
     measurements: Arc<Mutex<RuntimeMeasurements>>,
     error_slot: Arc<Mutex<Option<String>>>,
     summary: SummaryHandle,
+    protocol: Arc<Mutex<ProtocolObserver>>,
+    request_headers: Vec<RecordedHeader>,
     store: Option<TrafficStore>,
     directory: std::path::PathBuf,
     origin: Instant,
@@ -394,6 +477,8 @@ fn recorded_request_stream_with_summary(
         measurements,
         error_slot,
         summary,
+        protocol,
+        request_headers,
         store,
         directory,
         origin,
@@ -401,6 +486,7 @@ fn recorded_request_stream_with_summary(
     } = context;
     let mut stream = body.into_data_stream();
     async_stream::stream! {
+        let mut body_complete = false;
         loop {
             let next = tokio::select! {
                 _ = shutdown.cancelled() => {
@@ -411,7 +497,10 @@ fn recorded_request_stream_with_summary(
                 }
                 next = stream.next() => next,
             };
-            let Some(chunk) = next else { break };
+            let Some(chunk) = next else {
+                body_complete = true;
+                break;
+            };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
@@ -435,39 +524,76 @@ fn recorded_request_stream_with_summary(
                 let mut values = measurements.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 values.request_bytes = values.request_bytes.saturating_add(chunk.len() as u64);
             }
-            let first_request_byte = {
-                let mut value = summary.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if value.timing.upstream_request_body_first_byte_at_ns.is_none() {
-                    value.timing.upstream_request_body_first_byte_at_ns = Some(offset_ns(origin));
+            let at_ns = offset_ns(origin);
+            let first_request_byte = checkpoint_summary_update(
+                store.as_ref(),
+                &directory,
+                &summary,
+                |value| {
+                    if value.timing.upstream_request_body_first_byte_at_ns.is_some() {
+                        return false;
+                    }
+                    value.timing.upstream_request_body_first_byte_at_ns = Some(at_ns);
                     true
-                } else {
-                    false
-                }
-            };
-            if first_request_byte {
-                if let Err(error) = checkpoint_summary(store.as_ref(), &directory, &summary) {
-                    *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
-                    yield Err(io::Error::other(error.to_string()));
-                    break;
-                }
+                },
+            );
+            if let Err(error) = first_request_byte {
+                *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                yield Err(io::Error::other(error.to_string()));
+                break;
             }
             yield Ok(chunk);
         }
         match file.sync_all().await {
-            Ok(()) => {
+            Ok(()) if body_complete => {
                 measurements.lock().unwrap_or_else(std::sync::PoisonError::into_inner).request_body_duration = Some(origin.elapsed());
-                summary.lock().unwrap_or_else(std::sync::PoisonError::into_inner).timing.upstream_request_body_completed_at_ns = Some(offset_ns(origin));
-                if let Err(error) = checkpoint_summary(store.as_ref(), &directory, &summary) {
+                let at_ns = offset_ns(origin);
+                let checkpoint = checkpoint_request_complete(
+                    store.as_ref(),
+                    &directory,
+                    &summary,
+                    &protocol,
+                    &request_headers,
+                    at_ns,
+                );
+                if let Err(error) = checkpoint {
                     *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
                     yield Err(io::Error::other(error.to_string()));
                 }
             }
+            Ok(()) => {}
             Err(error) => {
                 *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
-                yield Err(error);
+                if body_complete {
+                    yield Err(error);
+                }
             }
         }
     }
+}
+
+fn checkpoint_request_complete(
+    store: Option<&TrafficStore>,
+    directory: &std::path::Path,
+    summary: &SummaryHandle,
+    protocol: &Mutex<ProtocolObserver>,
+    request_headers: &[RecordedHeader],
+    at_ns: String,
+) -> anyhow::Result<bool> {
+    let mut observer = protocol
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    observer.observe_request(
+        &directory.join("request.body"),
+        request_headers,
+        at_ns.clone(),
+    );
+    let protocol_snapshot = observer.snapshot();
+    checkpoint_summary_update(store, directory, summary, |value| {
+        value.timing.upstream_request_body_completed_at_ns = Some(at_ns);
+        value.protocol = Some(protocol_snapshot);
+        true
+    })
 }
 
 // Kept as a small test helper for deterministic body-stream tests that do not
@@ -481,17 +607,18 @@ fn recorded_request_stream(
     started: Instant,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
-    let summary = Arc::new(Mutex::new(crate::traffic_store::SummaryMetadata {
+    let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata {
         schema_version: FORMAT_VERSION,
         record_id: String::new(),
         kind: "summary".to_string(),
         observed_at: utc_now(),
         terminal: false,
         timing: crate::traffic_store::TimingMetadata::default(),
+        protocol: Some(ProtocolSummary::default()),
         outcome: None,
         errors: Vec::new(),
         warnings: Vec::new(),
-    }));
+    });
     recorded_request_stream_with_summary(
         body,
         file,
@@ -499,6 +626,8 @@ fn recorded_request_stream(
             measurements,
             error_slot,
             summary,
+            protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
+            request_headers: Vec::new(),
             store: None,
             directory: std::path::PathBuf::new(),
             origin: started,
@@ -507,19 +636,16 @@ fn recorded_request_stream(
     )
 }
 
-fn checkpoint_summary(
+fn checkpoint_summary_update(
     store: Option<&TrafficStore>,
     directory: &std::path::Path,
     summary: &SummaryHandle,
-) -> anyhow::Result<()> {
-    let Some(store) = store else {
-        return Ok(());
-    };
-    let snapshot = summary
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    store.checkpoint_snapshot(directory, &snapshot)
+    update: impl FnOnce(&mut crate::traffic_store::SummaryMetadata) -> bool,
+) -> anyhow::Result<bool> {
+    match store {
+        Some(store) => store.update_summary(directory, summary, update),
+        None => Ok(summary.update(update)),
+    }
 }
 
 #[cfg(test)]
@@ -530,7 +656,24 @@ fn record_response_stream(
     sender: mpsc::Sender<Result<Bytes, io::Error>>,
     guard: &mut RecordGuard,
 ) -> impl std::future::Future<Output = ()> + '_ {
-    record_response_stream_with_index(shutdown, stream, file, sender, false, None, guard)
+    record_response_stream_with_index(
+        shutdown,
+        stream,
+        file,
+        sender,
+        ResponseStreamConfig {
+            is_sse: false,
+            status: 200,
+            event_index: None,
+        },
+        guard,
+    )
+}
+
+struct ResponseStreamConfig {
+    is_sse: bool,
+    status: u16,
+    event_index: Option<std::fs::File>,
 }
 
 async fn record_response_stream_with_index(
@@ -538,13 +681,18 @@ async fn record_response_stream_with_index(
     stream: impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
     mut file: tokio::fs::File,
     sender: mpsc::Sender<Result<Bytes, io::Error>>,
-    is_sse: bool,
-    event_index: Option<std::fs::File>,
+    config: ResponseStreamConfig,
     guard: &mut RecordGuard,
 ) {
+    let ResponseStreamConfig {
+        is_sse,
+        status: response_status,
+        event_index,
+    } = config;
     let mut stream = Box::pin(stream);
     let mut indexer = is_sse.then(|| SseIndexer::new(event_index, guard.record.id.clone()));
-    let terminal = loop {
+    let mut response_completed = false;
+    let mut terminal = loop {
         let next = tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
@@ -563,15 +711,12 @@ async fn record_response_stream_with_index(
         };
         match next {
             Ok(Some(chunk)) => {
-                if guard
-                    .record
-                    .summary
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .timing
-                    .upstream_response_body_first_byte_at_ns
-                    .is_none()
-                {
+                if guard.record.summary.read(|summary| {
+                    summary
+                        .timing
+                        .upstream_response_body_first_byte_at_ns
+                        .is_none()
+                }) {
                     if let Err(error) = guard.mark_timing(|timing| {
                         timing.upstream_response_body_first_byte_at_ns =
                             Some(offset_ns(guard.record.origin))
@@ -622,11 +767,21 @@ async fn record_response_stream_with_index(
                 }
                 if let Some(indexer) = indexer.as_mut() {
                     let body_offset = indexer.body_offset;
-                    if let Err(error) =
-                        indexer.feed(&chunk, body_offset, offset_ns(guard.record.origin))
-                    {
+                    let feed = indexer.feed(&chunk, body_offset, offset_ns(guard.record.origin));
+                    if let Err(error) = feed {
                         guard.add_warning("event_index_failed", error.to_string());
                         indexer.disable_indexing();
+                    }
+                    let events = indexer.take_protocol_events();
+                    if let Err(error) = guard.observe_sse_events(&events) {
+                        let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
+                        break (
+                            Outcome::RecordingFailed,
+                            Some(ErrorMetadata {
+                                kind: ErrorKind::ResponseRecordingFailed,
+                                message: error.to_string(),
+                            }),
+                        );
                     }
                 }
                 if sender.send(Ok(chunk)).await.is_err() {
@@ -643,19 +798,18 @@ async fn record_response_stream_with_index(
                         Ok(false) => {}
                         Err(error) => guard.add_warning("event_index_failed", error.to_string()),
                     }
+                    let events = indexer.take_protocol_events();
+                    if let Err(error) = guard.observe_sse_events(&events) {
+                        break (
+                            Outcome::RecordingFailed,
+                            Some(ErrorMetadata {
+                                kind: ErrorKind::ResponseRecordingFailed,
+                                message: error.to_string(),
+                            }),
+                        );
+                    }
                 }
-                if let Err(error) = guard.mark_timing(|timing| {
-                    timing.upstream_response_body_completed_at_ns =
-                        Some(offset_ns(guard.record.origin))
-                }) {
-                    break (
-                        Outcome::RecordingFailed,
-                        Some(ErrorMetadata {
-                            kind: ErrorKind::ResponseRecordingFailed,
-                            message: error.to_string(),
-                        }),
-                    );
-                }
+                response_completed = true;
                 break (Outcome::Completed, None);
             }
             Err(error) => {
@@ -690,10 +844,39 @@ async fn record_response_stream_with_index(
         ) {
             eprintln!("warning: cannot finalize failed Traffic Record: {finish_error:#}");
         }
-    } else if let Err(error) = guard.finish(terminal.0, terminal.1) {
-        let message = format!("finalize Traffic Record: {error:#}");
-        let _ = sender.send(Err(io::Error::other(message.clone()))).await;
-        eprintln!("warning: {message}");
+    } else {
+        let semantic_result = if response_completed && !is_sse {
+            guard.observe_json_response(response_status)
+        } else {
+            guard.observe_http_status(response_status)
+        };
+        if let Err(error) = semantic_result {
+            terminal = (
+                Outcome::RecordingFailed,
+                Some(ErrorMetadata {
+                    kind: ErrorKind::ResponseRecordingFailed,
+                    message: error.to_string(),
+                }),
+            );
+        }
+        if response_completed {
+            if let Err(error) = guard.mark_timing(|timing| {
+                timing.upstream_response_body_completed_at_ns = Some(offset_ns(guard.record.origin))
+            }) {
+                terminal = (
+                    Outcome::RecordingFailed,
+                    Some(ErrorMetadata {
+                        kind: ErrorKind::ResponseRecordingFailed,
+                        message: error.to_string(),
+                    }),
+                );
+            }
+        }
+        if let Err(error) = guard.finish(terminal.0, terminal.1) {
+            let message = format!("finalize Traffic Record: {error:#}");
+            let _ = sender.send(Err(io::Error::other(message.clone()))).await;
+            eprintln!("warning: {message}");
+        }
     }
 }
 
@@ -857,6 +1040,7 @@ struct SseIndexer {
     data_seen: bool,
     event_name: Option<Vec<u8>>,
     data: Vec<u8>,
+    protocol_events: Vec<(Vec<u8>, String)>,
     terminal_seen: bool,
     sequence: u64,
     indexing_disabled: bool,
@@ -876,6 +1060,7 @@ impl SseIndexer {
             data_seen: false,
             event_name: None,
             data: Vec::new(),
+            protocol_events: Vec::new(),
             terminal_seen: false,
             sequence: 0,
             indexing_disabled: false,
@@ -889,6 +1074,10 @@ impl SseIndexer {
 
     fn terminal_seen(&self) -> bool {
         self.terminal_seen
+    }
+
+    fn take_protocol_events(&mut self) -> Vec<(Vec<u8>, String)> {
+        std::mem::take(&mut self.protocol_events)
     }
 
     fn feed(&mut self, chunk: &[u8], body_start: u64, at_ns: String) -> anyhow::Result<()> {
@@ -936,6 +1125,10 @@ impl SseIndexer {
             if line.is_empty() {
                 if is_terminal_sse_event(self.event_name.as_deref(), &self.data) {
                     self.terminal_seen = true;
+                }
+                if self.data_seen {
+                    self.protocol_events
+                        .push((self.data.clone(), at_ns.clone()));
                 }
                 if self.data_seen && !self.indexing_disabled {
                     if let Some(file) = self.file.as_mut() {
@@ -1348,6 +1541,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_request_body_is_not_marked_complete_or_interpreted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("request.body");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        let body = Body::from_stream(futures_util::stream::iter([
+            Ok(Bytes::from_static(br#"{"model":"partial""#)),
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "client body failed",
+            )),
+        ]));
+        let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata {
+            schema_version: FORMAT_VERSION,
+            record_id: String::new(),
+            kind: "summary".to_string(),
+            observed_at: utc_now(),
+            terminal: false,
+            timing: crate::traffic_store::TimingMetadata::default(),
+            protocol: Some(ProtocolSummary::for_url(Some(
+                "https://example.test/v1/responses",
+            ))),
+            outcome: None,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        });
+        let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
+        let error = Arc::new(Mutex::new(None));
+        let stream = recorded_request_stream_with_summary(
+            body,
+            tokio::fs::File::from_std(file),
+            RequestStreamContext {
+                measurements: measurements.clone(),
+                error_slot: error.clone(),
+                summary: summary.clone(),
+                protocol: Arc::new(Mutex::new(ProtocolObserver::new(Some(
+                    "https://example.test/v1/responses",
+                )))),
+                request_headers: Vec::new(),
+                store: None,
+                directory: temp.path().to_path_buf(),
+                origin: Instant::now(),
+                shutdown: CancellationToken::new(),
+            },
+        );
+        futures_util::pin_mut!(stream);
+
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_err());
+        assert!(stream.next().await.is_none());
+
+        summary.read(|value| {
+            assert!(value.timing.upstream_request_body_completed_at_ns.is_none());
+            assert!(value.protocol.as_ref().unwrap().model.requested.is_none());
+        });
+        assert!(measurements
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .request_body_duration
+            .is_none());
+        assert_eq!(
+            error
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
+            Some("client body failed")
+        );
+    }
+
+    #[tokio::test]
     async fn sse_chunks_reach_disk_before_the_client_without_a_socket() {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
@@ -1365,7 +1633,16 @@ mod tests {
         let response_path = record.directory.join("response.body");
         let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
-        let guard = RecordGuard::new(store.clone(), record, measurements, Instant::now());
+        let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
+            "https://example.com/v1/responses",
+        ))));
+        let guard = RecordGuard::new(
+            store.clone(),
+            record,
+            measurements,
+            protocol,
+            Instant::now(),
+        );
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -1404,14 +1681,17 @@ mod tests {
         assert_eq!(result.response_bytes, 27);
     }
 
-    async fn run_client_close_after_terminal_sse(body: &'static [u8]) -> Outcome {
+    async fn run_client_close_after_terminal_sse(
+        upstream_url: &'static str,
+        body: &'static [u8],
+    ) -> (Outcome, ProtocolSummary) {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, _) = store
             .begin(
                 "POST",
-                "/https://example.com/v1/messages",
-                Some("https://example.com/v1/messages"),
+                upstream_url,
+                Some(upstream_url),
                 "HTTP/1.1",
                 Vec::new(),
                 Some("example.com"),
@@ -1427,7 +1707,14 @@ mod tests {
             .open(record.directory.join("response.events.jsonl"))
             .unwrap();
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
-        let guard = RecordGuard::new(store.clone(), record, measurements, Instant::now());
+        let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url))));
+        let guard = RecordGuard::new(
+            store.clone(),
+            record,
+            measurements,
+            protocol,
+            Instant::now(),
+        );
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -1438,8 +1725,11 @@ mod tests {
                 ReceiverStream::new(upstream_receiver),
                 response_file,
                 client_sender,
-                true,
-                Some(event_index),
+                ResponseStreamConfig {
+                    is_sse: true,
+                    status: 200,
+                    event_index: Some(event_index),
+                },
                 &mut guard,
             )
             .await;
@@ -1453,40 +1743,54 @@ mod tests {
         drop(client_receiver);
         task.await.unwrap();
 
-        store.find(&id).unwrap().result.unwrap().outcome
+        let record = store.find(&id).unwrap();
+        (
+            record.result.unwrap().outcome,
+            record.summary.protocol.unwrap(),
+        )
     }
 
     #[tokio::test]
     async fn client_close_after_claude_terminal_event_is_completed() {
-        let outcome = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_terminal_sse(
+            "https://example.com/v1/messages",
             b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
+        assert!(!protocol.response_terminal);
 
-        let outcome = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_terminal_sse(
+            "https://example.com/v1/messages",
             b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
+        assert!(protocol.response_terminal);
     }
 
     #[tokio::test]
     async fn client_close_after_codex_terminal_event_is_completed() {
-        let outcome = run_client_close_after_terminal_sse(
-            b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+        let (outcome, protocol) = run_client_close_after_terminal_sse(
+            "https://example.com/v1/responses",
+            b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n",
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
+        assert!(protocol.response_terminal);
+        assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
     }
 
     #[tokio::test]
     async fn client_close_before_sse_terminal_event_is_disconnected() {
-        let outcome = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_terminal_sse(
+            "https://example.com/v1/messages",
             b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n",
         )
         .await;
         assert_eq!(outcome, Outcome::ClientDisconnected);
+        assert!(!protocol.response_terminal);
+        assert!(protocol.token_usage.is_none());
     }
 
     #[test]
@@ -1519,7 +1823,16 @@ mod tests {
         let id = record.id.clone();
         let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
-        let guard = RecordGuard::new(store.clone(), record, measurements, Instant::now());
+        let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
+            "https://example.com/v1/responses",
+        ))));
+        let guard = RecordGuard::new(
+            store.clone(),
+            record,
+            measurements,
+            protocol,
+            Instant::now(),
+        );
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(1);
         let (client_sender, client_receiver) = mpsc::channel(1);

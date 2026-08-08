@@ -1,7 +1,8 @@
+use crate::traffic_interpretation::ProtocolSummary;
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -175,12 +176,41 @@ pub(super) struct SummaryMetadata {
     pub observed_at: String,
     pub terminal: bool,
     pub timing: TimingMetadata,
+    #[serde(default)]
+    pub protocol: Option<ProtocolSummary>,
     pub outcome: Option<Outcome>,
     pub errors: Vec<DiagnosticMetadata>,
     pub warnings: Vec<DiagnosticMetadata>,
 }
 
-pub(super) type SummaryHandle = Arc<Mutex<SummaryMetadata>>;
+#[derive(Clone)]
+pub(super) struct SummaryHandle {
+    inner: Arc<Mutex<SummaryMetadata>>,
+}
+
+impl SummaryHandle {
+    pub(super) fn new(summary: SummaryMetadata) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(summary)),
+        }
+    }
+
+    pub(super) fn update<R>(&self, update: impl FnOnce(&mut SummaryMetadata) -> R) -> R {
+        let mut summary = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        update(&mut summary)
+    }
+
+    pub(super) fn read<R>(&self, read: impl FnOnce(&SummaryMetadata) -> R) -> R {
+        let summary = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        read(&summary)
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ResultMetadata {
@@ -204,7 +234,7 @@ pub(super) struct RuntimeMeasurements {
 #[derive(Clone)]
 pub(super) struct TrafficStore {
     root: PathBuf,
-    active: Arc<Mutex<HashSet<String>>>,
+    active: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 pub(super) struct NewRecord {
@@ -236,7 +266,7 @@ impl TrafficStore {
         restrict_dir(&root)?;
         Ok(Self {
             root,
-            active: Arc::new(Mutex::new(HashSet::new())),
+            active: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -269,7 +299,7 @@ impl TrafficStore {
         self.active
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.clone());
+            .insert(id.clone(), origin);
 
         let created = (|| -> Result<_> {
             let request_body = create_private_file(&directory.join(REQUEST_BODY))?;
@@ -299,6 +329,7 @@ impl TrafficStore {
                 observed_at,
                 terminal: false,
                 timing: TimingMetadata::default(),
+                protocol: Some(ProtocolSummary::for_url(upstream_url)),
                 outcome: None,
                 errors: Vec::new(),
                 warnings: Vec::new(),
@@ -311,7 +342,7 @@ impl TrafficStore {
                 request_body,
                 response_body,
                 request,
-                Arc::new(Mutex::new(summary)),
+                SummaryHandle::new(summary),
             ))
         })();
         let (request_body, response_body, request, summary) = match created {
@@ -338,19 +369,22 @@ impl TrafficStore {
         ))
     }
 
-    pub fn checkpoint(&self, record: &NewRecord) -> Result<()> {
-        validate_record_ancestor(&self.root, &record.directory)?;
-        let summary = record
-            .summary
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        atomic_write_json(&record.directory, SUMMARY_JSON, &summary)
-    }
-
-    pub fn checkpoint_snapshot(&self, directory: &Path, summary: &SummaryMetadata) -> Result<()> {
+    pub fn update_summary(
+        &self,
+        directory: &Path,
+        handle: &SummaryHandle,
+        update: impl FnOnce(&mut SummaryMetadata) -> bool,
+    ) -> Result<bool> {
         validate_record_ancestor(&self.root, directory)?;
-        atomic_write_json(directory, SUMMARY_JSON, summary)
+        let mut summary = handle
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = update(&mut summary);
+        if changed {
+            atomic_write_json(directory, SUMMARY_JSON, &*summary)?;
+        }
+        Ok(changed)
     }
 
     pub fn write_response(&self, directory: &Path, metadata: &ResponseMetadata) -> Result<()> {
@@ -383,6 +417,7 @@ impl TrafficStore {
         let at_ns = offset_ns(record.origin);
         let mut summary = record
             .summary
+            .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         summary.timing.finished_at_ns = Some(at_ns.clone());
@@ -399,9 +434,9 @@ impl TrafficStore {
                 at_ns: at_ns.clone(),
             });
         }
+        atomic_write_json(&record.directory, SUMMARY_JSON, &*summary)?;
         let snapshot = summary.clone();
         drop(summary);
-        atomic_write_json(&record.directory, SUMMARY_JSON, &snapshot)?;
         self.active
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -496,6 +531,15 @@ impl TrafficStore {
             .with_context(|| format!("Traffic Record not found: {id}"))
     }
 
+    pub fn live_elapsed_ns(&self, id: &str) -> Option<String> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .copied()
+            .map(offset_ns)
+    }
+
     pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
         let record = self.find(id)?;
         let path = record.directory.join(if response {
@@ -526,7 +570,7 @@ impl TrafficStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        if ids.iter().any(|id| active.contains(id)) {
+        if ids.iter().any(|id| active.contains_key(id)) {
             bail!("active Traffic Records cannot be deleted");
         }
         let records = self.scan()?;
@@ -593,7 +637,7 @@ struct ResponseFile {
     headers: Vec<RecordedHeader>,
 }
 
-fn read_record(path: &Path, active: &HashSet<String>) -> Result<StoredRecord> {
+fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredRecord> {
     let request_file: RequestFile =
         read_json(&path.join(REQUEST_JSON), "Traffic request metadata")?;
     validate_schema(request_file.schema_version, &request_file.kind, "request")?;
@@ -640,7 +684,7 @@ fn read_record(path: &Path, active: &HashSet<String>) -> Result<StoredRecord> {
         http_version: metadata.http_version,
         headers: metadata.headers,
     });
-    let active_record = !summary.terminal && active.contains(&request.id);
+    let active_record = !summary.terminal && active.contains_key(&request.id);
     let result = summary.terminal.then(|| {
         let mut result = summary_to_result(&summary);
         result.request_bytes = request_body_bytes;
@@ -676,6 +720,24 @@ fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
     if summary.terminal && summary.timing.finished_at_ns.is_none() {
         bail!("terminal Traffic summary has no finished timing");
     }
+    if summary
+        .protocol
+        .as_ref()
+        .is_some_and(|protocol| protocol.token_usage.is_some() && !protocol.response_terminal)
+    {
+        bail!("Traffic protocol summary has final Token Usage before a terminal response");
+    }
+    let protocol_offsets = summary.protocol.as_ref().into_iter().flat_map(|protocol| {
+        std::iter::once(protocol.first_token_at_ns.as_deref())
+            .chain(
+                protocol
+                    .errors
+                    .iter()
+                    .chain(&protocol.warnings)
+                    .map(|diagnostic| diagnostic.at_ns.as_deref()),
+            )
+            .flatten()
+    });
     for value in [
         summary.timing.upstream_request_started_at_ns.as_deref(),
         summary
@@ -699,6 +761,7 @@ fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
     ]
     .into_iter()
     .flatten()
+    .chain(protocol_offsets)
     {
         if value.parse::<u128>().is_err() {
             bail!("Traffic summary timing offset is not a decimal string");
@@ -1113,6 +1176,7 @@ mod tests {
                 finished_at_ns: Some("1500000000".to_string()),
                 ..TimingMetadata::default()
             },
+            protocol: None,
             outcome: Some(Outcome::Completed),
             errors: Vec::new(),
             warnings: Vec::new(),
@@ -1178,8 +1242,128 @@ mod tests {
         assert_eq!(response["kind"], "response");
         assert!(response.get("source").is_none());
         assert_eq!(summary["kind"], "summary");
+        assert_eq!(summary["protocol"]["family"], "openai_responses");
+        assert_eq!(summary["protocol"]["response_terminal"], false);
+        assert!(summary["protocol"]["model"]["requested"].is_null());
         assert!(record.directory.join(RESPONSE_BODY).is_file());
         assert!(!record.directory.join(RESULT_JSON).exists());
+    }
+
+    #[test]
+    fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin(
+                "POST",
+                "/https://example.com/v1/responses",
+                Some("https://example.com/v1/responses"),
+                "HTTP/2",
+                vec![],
+                Some("example.com"),
+            )
+            .unwrap();
+        store
+            .update_summary(&record.directory, &record.summary, |summary| {
+                summary.protocol.as_mut().unwrap().model.requested =
+                    Some("gpt-requested".to_string());
+                true
+            })
+            .unwrap();
+
+        let restarted = TrafficStore::open(temp.path()).unwrap();
+        let found = restarted.find(&record.id).unwrap();
+        assert_eq!(
+            found
+                .summary
+                .protocol
+                .as_ref()
+                .unwrap()
+                .model
+                .requested
+                .as_deref(),
+            Some("gpt-requested")
+        );
+
+        let summary_path = record.directory.join(SUMMARY_JSON);
+        let mut legacy: serde_json::Value =
+            serde_json::from_reader(fs::File::open(&summary_path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("protocol");
+        fs::write(&summary_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+        let before_read = fs::read(&summary_path).unwrap();
+
+        let legacy_store = TrafficStore::open(temp.path()).unwrap();
+        assert!(legacy_store
+            .find(&record.id)
+            .unwrap()
+            .summary
+            .protocol
+            .is_none());
+        assert_eq!(fs::read(summary_path).unwrap(), before_read);
+    }
+
+    #[test]
+    fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin(
+                "POST",
+                "/https://example.com/v1/responses",
+                Some("https://example.com/v1/responses"),
+                "HTTP/2",
+                vec![],
+                Some("example.com"),
+            )
+            .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let directory = record.directory.clone();
+        let summary = record.summary.clone();
+        let first_store = store.clone();
+        let first_barrier = barrier.clone();
+        let first = std::thread::spawn(move || {
+            first_barrier.wait();
+            first_store
+                .update_summary(&directory, &summary, |value| {
+                    value.timing.upstream_request_body_completed_at_ns = Some("10".to_string());
+                    true
+                })
+                .unwrap();
+        });
+        let directory = record.directory.clone();
+        let summary = record.summary.clone();
+        let second_store = store.clone();
+        let second_barrier = barrier.clone();
+        let second = std::thread::spawn(move || {
+            second_barrier.wait();
+            second_store
+                .update_summary(&directory, &summary, |value| {
+                    value.protocol.as_mut().unwrap().model.effective =
+                        Some("gpt-effective".to_string());
+                    true
+                })
+                .unwrap();
+        });
+        barrier.wait();
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let persisted = TrafficStore::open(temp.path())
+            .unwrap()
+            .find(&record.id)
+            .unwrap()
+            .summary;
+        assert_eq!(
+            persisted
+                .timing
+                .upstream_request_body_completed_at_ns
+                .as_deref(),
+            Some("10")
+        );
+        assert_eq!(
+            persisted.protocol.unwrap().model.effective.as_deref(),
+            Some("gpt-effective")
+        );
     }
 
     #[test]

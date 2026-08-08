@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { elapsedNsMs, resolveRequestedEffective } from "../summary";
 import type { RecordSummary } from "../types";
 import { compactDuration, formatTimestamp, recordUrl } from "../utils";
 import styles from "./RecordList.module.css";
@@ -170,12 +171,19 @@ export function RecordList({
           </div>
         ) : (
           records.map((record) => {
-            const [host, path] = recordUrl(record);
+            const target = recordUrl(record);
             const active = record.state === "active";
             const checked = selected.has(record.id);
+            const model = resolveRequestedEffective(record.protocol?.model).value ?? "—";
+            const reasoningEffort =
+              resolveRequestedEffective(record.protocol?.reasoning_effort).value ?? "—";
+            const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
-            const timingDescription = `First token —; Duration ${totalDuration}`;
-            const timingDescriptionId = `record-timing-${record.id}`;
+            const started = formatTimestamp(record.started_at);
+            const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
+            const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
+            const metadataDescription = `${modelDescription}; ${timingDescription}; Started ${started}`;
+            const metadataDescriptionId = `record-metadata-${record.id}`;
             return (
               <div
                 key={record.id}
@@ -195,32 +203,38 @@ export function RecordList({
                   disabled={selectionMode && active}
                   aria-label={
                     selectionMode
-                      ? `${checked ? "Deselect" : "Select"} ${record.method} ${host}`
-                      : `${record.method} ${host}`
+                      ? `${checked ? "Deselect" : "Select"} ${record.method} ${target.label}`
+                      : `${record.method} ${target.label}`
                   }
                   aria-pressed={selectionMode ? checked : undefined}
-                  aria-describedby={timingDescriptionId}
+                  aria-describedby={metadataDescriptionId}
                   onClick={() => (selectionMode ? onToggle(record.id) : onSelect(record.id))}
                 >
                   <span className={styles.method}>{record.method}</span>
-                  <span className={styles.main}>
-                    <strong>{host}</strong>
-                    <span>{path}</span>
+                  <span className={styles.target} title={target.title}>
+                    <strong className={styles.targetHost}>{target.host}</strong>
+                    <span className={styles.targetPath}>{target.path}</span>
                   </span>
-                  <span className={styles.side}>
+                  <span className={styles.status}>
                     <RecordStatus
                       status={record.status}
-                      httpVersion={record.http_version}
                       outcome={record.outcome}
                       state={record.state}
                       compact
                     />
-                    <span className={styles.timestamp}>{formatTimestamp(record.started_at)}</span>
-                    <span className={styles.timing} title={timingDescription}>
-                      — / {totalDuration}
+                  </span>
+                  <span className={styles.metadata}>
+                    <span className={styles.modelMetadata} title={modelDescription}>
+                      {model} · {reasoningEffort}
                     </span>
-                    <span id={timingDescriptionId} className={styles.visuallyHidden}>
-                      {timingDescription}
+                    <span className={styles.timing} title={timingDescription}>
+                      {firstToken} / {totalDuration}
+                    </span>
+                    <span className={styles.timestamp} title={`Started ${started}`}>
+                      {started}
+                    </span>
+                    <span id={metadataDescriptionId} className={styles.visuallyHidden}>
+                      {metadataDescription}
                     </span>
                   </span>
                   {selectionMode && (
@@ -245,13 +259,13 @@ export function RecordList({
                       disabled={active || deletionBusy}
                       aria-label={
                         active
-                          ? `Cannot delete active ${record.method} ${host}`
+                          ? `Cannot delete active ${record.method} ${target.label}`
                           : deletingRecordId === record.id
-                            ? `Deleting ${record.method} ${host}`
-                            : `Delete ${record.method} ${host}`
+                            ? `Deleting ${record.method} ${target.label}`
+                            : `Delete ${record.method} ${target.label}`
                       }
                       aria-busy={deletingRecordId === record.id}
-                      title={active ? undefined : `Delete ${record.method} ${host}`}
+                      title={active ? undefined : `Delete ${record.method} ${target.label}`}
                     >
                       {deletingRecordId === record.id ? (
                         <LoaderCircle className={styles.deleting} size={15} aria-hidden="true" />

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import listStyles from "./components/RecordList.module.css";
 import {
   activeDetail,
   activeSummary,
@@ -63,17 +64,104 @@ describe("Traffic App", () => {
     );
     expect(within(recordListPanel).getByText("2026-08-06 12:00:00")).toBeInTheDocument();
     expect(within(recordListPanel).getByText("2026-08-06 12:01:00")).toBeInTheDocument();
-    const completedTiming = within(recordListPanel).getByTitle("First token —; Duration 1s");
-    expect(completedTiming).toHaveTextContent("— / 1s");
     const completedRow = within(recordListPanel).getByRole("button", {
-      name: "POST api.example.test",
+      name: "POST api.example.test/v1/responses",
     });
-    expect(within(completedRow).getByText("HTTP/2")).toBeInTheDocument();
+    const completedModel = within(completedRow).getByTitle(
+      "Model gpt-5.6-sol; Reasoning effort high",
+    );
+    const completedTiming = within(completedRow).getByTitle("First token 900ms; Duration 1s");
+    const completedStarted = within(completedRow).getByTitle("Started 2026-08-06 12:00:00");
+    expect(completedModel).toHaveTextContent("gpt-5.6-sol · high");
+    expect(completedTiming).toHaveTextContent("900ms / 1s");
+    const completedTarget = within(completedRow).getByTitle(
+      "https://api.example.test/v1/responses?stream=true",
+    );
+    expect(within(completedTarget).getByText("api.example.test")).toHaveClass(
+      listStyles.targetHost,
+    );
+    expect(within(completedTarget).getByText("/v1/responses")).toHaveClass(listStyles.targetPath);
+    expect(completedTarget).toHaveTextContent("api.example.test/v1/responses");
+    expect(within(completedRow).queryByText(/stream=true/)).not.toBeInTheDocument();
+    expect(completedModel.parentElement).toBe(completedTiming.parentElement);
+    expect(completedModel.parentElement).toBe(completedStarted.parentElement);
+    expect(
+      Array.from(completedModel.parentElement!.children)
+        .slice(0, 3)
+        .map((element) => element.textContent),
+    ).toEqual(["gpt-5.6-sol · high", "900ms / 1s", "2026-08-06 12:00:00"]);
+    expect(within(completedRow).queryByText("HTTP/2")).not.toBeInTheDocument();
     expect(within(completedRow).getByText("200")).toBeInTheDocument();
-    expect(completedRow).toHaveAccessibleDescription("First token —; Duration 1s");
+    expect(completedRow).toHaveAccessibleDescription(
+      "Model gpt-5.6-sol; Reasoning effort high; First token 900ms; Duration 1s; Started 2026-08-06 12:00:00",
+    );
     expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
       "— / 500ms",
     );
+  });
+
+  it("prefers effective list metadata and preserves placeholders", async () => {
+    const effective = {
+      ...completedSummary,
+      id: "effective-record",
+      incoming_uri: "/https://api.example.test/effective",
+      upstream_url: "https://api.example.test/effective",
+      protocol: {
+        ...completedSummary.protocol!,
+        model: { requested: "requested-model", effective: "effective-model" },
+        reasoning_effort: { requested: "low", effective: "xhigh" },
+      },
+    };
+    const requestedFallback = {
+      ...completedSummary,
+      id: "requested-record",
+      incoming_uri: "/https://api.example.test/requested",
+      upstream_url: "https://api.example.test/requested",
+      total_ms: null,
+      protocol: {
+        ...completedSummary.protocol!,
+        model: { requested: null, effective: null },
+        reasoning_effort: { requested: "medium", effective: null },
+        first_token_at_ns: null,
+      },
+    };
+    const legacy = {
+      ...completedSummary,
+      id: "legacy-record",
+      incoming_uri: "/https://api.example.test/legacy",
+      upstream_url: "https://api.example.test/legacy",
+      protocol: null,
+    };
+    render(
+      <App
+        api={fakeApi({
+          listRecords: vi.fn().mockResolvedValue({
+            records: [effective, requestedFallback, legacy],
+            total: 3,
+            deletable_count: 3,
+            next_cursor: null,
+          }),
+        })}
+      />,
+    );
+
+    const effectiveRow = await screen.findByRole("button", {
+      name: "POST api.example.test/effective",
+    });
+    expect(
+      within(effectiveRow).getByTitle("Model effective-model; Reasoning effort xhigh"),
+    ).toHaveTextContent("effective-model · xhigh");
+
+    const requestedRow = screen.getByRole("button", {
+      name: "POST api.example.test/requested",
+    });
+    expect(within(requestedRow).getByTitle("Model —; Reasoning effort medium")).toHaveTextContent(
+      "— · medium",
+    );
+    expect(within(requestedRow).getByTitle("First token —; Duration —")).toHaveTextContent("— / —");
+
+    const legacyRow = screen.getByRole("button", { name: "POST api.example.test/legacy" });
+    expect(within(legacyRow).getByTitle("Model —; Reasoning effort —")).toHaveTextContent("— · —");
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {
@@ -89,7 +177,9 @@ describe("Traffic App", () => {
 
     expect(screen.getByRole("button", { name: /Refresh/ })).toBeEnabled();
     resolveList(recordList);
-    expect(await screen.findByText("api.example.test")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
   });
 
   it("marks the list refresh busy until a manual refresh completes", async () => {
@@ -104,7 +194,7 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={fakeApi({ listRecords })} />);
 
-    await screen.findByText("api.example.test");
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
     const refreshButton = screen.getByRole("button", {
       name: "Refresh traffic records",
     });
@@ -191,15 +281,21 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    expect(await screen.findByText("api.example.test")).toBeInTheDocument();
-    expect(screen.getByText("stream.example.test")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "GET stream.example.test/events" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Page 1 · 2 shown · 2 total")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select page" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    ).toBeEnabled();
     const activeDelete = screen.getByRole("button", {
-      name: "Cannot delete active GET stream.example.test",
+      name: "Cannot delete active GET stream.example.test/events",
     });
     expect(activeDelete).toBeDisabled();
     expect(activeDelete.parentElement).toHaveAttribute("title", "Active records cannot be deleted");
@@ -228,21 +324,27 @@ describe("Traffic App", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete all" })).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Delete POST api.example.test" }),
+      screen.queryByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
-    const activeSelection = screen.getByRole("button", { name: "Select GET stream.example.test" });
+    const activeSelection = screen.getByRole("button", {
+      name: "Select GET stream.example.test/events",
+    });
     expect(activeSelection).toBeDisabled();
     expect(activeSelection.lastElementChild).toHaveAttribute("aria-hidden", "true");
     expect(activeSelection.lastElementChild?.querySelector("svg")).not.toBeInTheDocument();
 
-    const completed = screen.getByRole("button", { name: "Select POST api.example.test" });
+    const completed = screen.getByRole("button", {
+      name: "Select POST api.example.test/v1/responses",
+    });
     expect(completed).toHaveAttribute("aria-pressed", "false");
     expect(completed.lastElementChild).toHaveAttribute("aria-hidden", "true");
     expect(completed.lastElementChild?.querySelector("svg")).not.toBeInTheDocument();
     await user.click(completed);
 
-    const selected = screen.getByRole("button", { name: "Deselect POST api.example.test" });
+    const selected = screen.getByRole("button", {
+      name: "Deselect POST api.example.test/v1/responses",
+    });
     expect(selected).toHaveAttribute("aria-pressed", "true");
     expect(selected.lastElementChild).toHaveAttribute("aria-hidden", "true");
     expect(selected.lastElementChild?.querySelector("svg")).toBeInTheDocument();
@@ -283,7 +385,9 @@ describe("Traffic App", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
 
     expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
@@ -292,7 +396,7 @@ describe("Traffic App", () => {
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Deselect POST second.example.test" }),
+      screen.getByRole("button", { name: "Deselect POST second.example.test/v1/messages" }),
     ).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Clear page" }));
 
@@ -351,19 +455,26 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={fakeApi({ listRecords, deleteRecords })} />);
 
-    await user.click(await screen.findByRole("button", { name: "POST api.example.test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    );
     expect(
       await screen.findByRole("region", { name: "Traffic record details" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    );
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Deleting POST api.example.test" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Deleting POST api.example.test" })).toHaveAttribute(
-      "aria-busy",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Delete POST second.example.test" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Deleting POST api.example.test/v1/responses" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Deleting POST api.example.test/v1/responses" }),
+    ).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.getByRole("button", { name: "Delete POST second.example.test/v1/responses" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Select" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete all" })).toBeDisabled();
 
@@ -371,13 +482,15 @@ describe("Traffic App", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "POST api.example.test" }),
+        screen.queryByRole("button", { name: "POST api.example.test/v1/responses" }),
       ).not.toBeInTheDocument(),
     );
     expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id]);
     expect(screen.getByText("Page 1 · 1 shown · 1 total")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Select a request" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete POST second.example.test" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Delete POST second.example.test/v1/responses" }),
+    ).toHaveFocus();
     expect(screen.queryByText("Record deleted")).not.toBeInTheDocument();
   });
 
@@ -388,12 +501,18 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={fakeApi({ deleteRecords })} />);
 
-    await user.click(await screen.findByRole("button", { name: "Delete POST api.example.test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot delete record");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "POST api.example.test" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    ).toBeEnabled();
   });
 
   it("returns to the previous page when immediate deletion empties the current page", async () => {
@@ -438,11 +557,15 @@ describe("Traffic App", () => {
 
     await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(
-      await screen.findByRole("button", { name: "Delete POST second.example.test" }),
+      await screen.findByRole("button", {
+        name: "Delete POST second.example.test/v1/responses",
+      }),
     );
 
     expect(await screen.findByText("Page 1 · 1 shown · 1 total")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete POST api.example.test" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    ).toHaveFocus();
   });
 
   it("preserves the selected count across record pages", async () => {
@@ -472,16 +595,19 @@ describe("Traffic App", () => {
     render(<App api={fakeApi({ listRecords })} />);
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     await user.click(screen.getByRole("button", { name: /Next/ }));
 
-    expect(await screen.findByText("second.example.test")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select POST second.example.test" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(
+      screen.getByRole("button", { name: "Select POST second.example.test/v1/responses" }),
+    ).toHaveAttribute("aria-pressed", "false");
   });
 
   it("clears selection on Cancel, keeps focus safe, and ignores Escape", async () => {
@@ -489,7 +615,9 @@ describe("Traffic App", () => {
     render(<App api={fakeApi()} />);
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     await user.click(cancel);
@@ -500,7 +628,9 @@ describe("Traffic App", () => {
     expect(select).toHaveFocus();
     await user.click(select);
     expect(screen.getByText("0 selected")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
@@ -512,7 +642,9 @@ describe("Traffic App", () => {
     render(<App api={fakeApi()} />);
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     await user.click(screen.getByRole("button", { name: "Delete selected" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
     fireEvent.keyDown(dialog, { key: "Escape" });
@@ -536,7 +668,9 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     await user.click(screen.getByRole("button", { name: "Delete selected" }));
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
 
@@ -545,10 +679,9 @@ describe("Traffic App", () => {
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Deselect POST api.example.test" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Deselect POST api.example.test/v1/responses" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("pauses list polling during selection and refreshes immediately after exit", async () => {
@@ -583,13 +716,24 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    await user.click(await screen.findByRole("button", { name: "POST api.example.test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    );
     const detail = screen.getByRole("region", { name: "Traffic record details" });
     expect(within(detail).getByRole("tab", { name: "Summary" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
     expect(within(detail).getByText("First token")).toBeInTheDocument();
+    expect(within(detail).getByText("gpt-5.6-sol")).toBeInTheDocument();
+    expect(within(detail).getByText("stream")).toBeInTheDocument();
+    expect(within(detail).getByRole("list", { name: "Timing stages" })).toBeInTheDocument();
+    expect(
+      within(detail).getByRole("listitem", { name: "Proxy setup: 100 ms" }),
+    ).toBeInTheDocument();
+    expect(within(detail).getByRole("heading", { name: "Token Usage" })).toBeInTheDocument();
+    expect(within(detail).getByText("12,000")).toBeInTheDocument();
+    expect(within(detail).getByText("No diagnostics.")).toBeInTheDocument();
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(api.loadBody).not.toHaveBeenCalled();
     await user.click(within(detail).getByRole("tab", { name: "Request" }));
@@ -603,7 +747,9 @@ describe("Traffic App", () => {
     await user.click(within(detail).getByRole("tab", { name: "Response" }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select" }));
-    await user.click(screen.getByRole("button", { name: "Select POST api.example.test" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
+    );
     expect(screen.getByText("response body")).toBeInTheDocument();
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const getRecordMock = api.getRecord as unknown as { mock: { calls: unknown[][] } };
@@ -621,7 +767,7 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    await user.click(await screen.findByRole("button", { name: "GET stream.example.test" }));
+    await user.click(await screen.findByRole("button", { name: "GET stream.example.test/events" }));
     await user.click(screen.getByRole("button", { name: "Delete all" }));
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
 
@@ -643,7 +789,9 @@ describe("Traffic App", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot scan Traffic Records");
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("api.example.test")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
   });
 
   it("keeps a post-delete list refresh failure visible", async () => {
@@ -682,14 +830,20 @@ describe("Traffic App", () => {
 
     await act(async () => Promise.resolve());
     rerender(<App api={replacementApi} />);
-    expect(await screen.findByText("api.example.test")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       resolveInitial(recordList);
       await initial;
     });
-    expect(screen.getByText("api.example.test")).toBeInTheDocument();
-    expect(screen.queryByText("stream.example.test")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "GET stream.example.test/events" }),
+    ).not.toBeInTheDocument();
   });
 
   it("polls an active detail until it completes", async () => {
@@ -713,14 +867,14 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await act(async () => Promise.resolve());
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
+    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
     await act(async () => Promise.resolve());
     const detail = screen.getByRole("region", { name: "Traffic record details" });
-    expect(within(detail).getByText("Waiting")).toBeInTheDocument();
+    expect(within(detail).getAllByText("Waiting").length).toBeGreaterThan(0);
 
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(getRecord).toHaveBeenCalledTimes(2);
-    expect(within(detail).queryByText("Waiting")).not.toBeInTheDocument();
+    expect(within(detail).queryAllByText("Waiting")).toHaveLength(0);
     expect(within(detail).getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
   });
 
@@ -752,7 +906,7 @@ describe("Traffic App", () => {
     render(<App api={api} />);
 
     await act(async () => Promise.resolve());
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test" }));
+    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
     await act(async () => Promise.resolve());
     fireEvent.click(screen.getByRole("tab", { name: "Request" }));
     await act(async () => Promise.resolve());

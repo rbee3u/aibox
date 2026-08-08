@@ -54,12 +54,19 @@ describe("traffic display utilities", () => {
 
   it("derives list labels", () => {
     expect(recordUrl({ upstream_url: "https://api.example/v1?a=1", incoming_uri: "/raw" })).toEqual(
-      ["api.example", "/v1?a=1"],
+      {
+        host: "api.example",
+        path: "/v1",
+        label: "api.example/v1",
+        title: "https://api.example/v1?a=1",
+      },
     );
-    expect(recordUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
-      "invalid target",
-      "/raw",
-    ]);
+    expect(recordUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual({
+      host: "invalid target",
+      path: "/raw",
+      label: "invalid target /raw",
+      title: "/raw",
+    });
   });
 
   it("derives detail labels while preserving the full origin", () => {

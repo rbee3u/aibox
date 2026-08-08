@@ -1,4 +1,4 @@
-# Record upstream HTTP semantics with stable raw files
+# Record upstream HTTP semantics with raw evidence and a protocol summary
 
 Status: accepted
 
@@ -19,21 +19,33 @@ stream loop also recognizes the terminal events used by Claude Messages and
 OpenAI Responses so an Agent's normal close immediately after a complete SSE
 response is not recorded as a failed client disconnect.
 
+For OpenAI Responses and Claude Messages, the write path also materializes a
+best-effort Model Protocol Summary inside `summary.json`. It records stable
+requested and effective values separately, accumulates Token Usage in memory
+until the protocol response is terminal, and checkpoints newly established
+facts without changing the raw bodies. Protocol interpretation failures become
+deduplicated warnings and do not affect forwarding or the Traffic Outcome; a
+failure to publish canonical `summary.json` remains a recording failure.
+
 ## Considered Options
 
 Wire capture would preserve header spelling, cross-name order, informational
 responses, trailers, and transport frames, but it would require owning both
 protocol stacks and TLS termination details. Persisting parsed SSE payloads
-would simplify one current viewer, but would duplicate and reinterpret source
-data. The selected format instead keeps raw application-visible bytes and
-records its fidelity limits explicitly: header values and same-name duplicates
-are retained, while field-name casing and cross-name order may be normalized by
-the HTTP library.
+would duplicate source data. Deriving protocol facts on every list or detail
+read would keep `summary.json` purely observational but would repeatedly open
+and parse bodies, make list presentation expensive, and defer known facts until
+a viewer asks for them. The selected format keeps raw application-visible bytes
+as evidence while materializing only the stable overview needed by management
+APIs. Header values and same-name duplicates are retained, while field-name
+casing and cross-name order may be normalized by the HTTP library.
 
 ## Consequences
 
-The schema is intentionally replaced rather than migrated because Traffic
-Records are temporary diagnostics and the project has no compatibility burden.
-Legacy records are ignored as unsupported. Later presentation layers can derive
-durations, body sizes, status lines, and SSE views without changing the raw
-record layout.
+Traffic Records remain temporary diagnostics without a migration mechanism.
+Incompatible schema versions are ignored as unsupported. The optional protocol
+object is an additive version-1 field: older version-1 Records remain readable
+with no protocol overview and are neither parsed nor rewritten to backfill it.
+Later presentation layers can derive durations, body sizes, status lines, and
+SSE views without changing the raw record layout or reopening bodies for the
+protocol overview.

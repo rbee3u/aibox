@@ -9,7 +9,6 @@ import {
 
 interface RecordStatusProps {
   status: number | null;
-  httpVersion?: string | null;
   outcome: string;
   state: RecordState;
   compact?: boolean;
@@ -22,20 +21,13 @@ const TONE_CLASS: Record<RecordStatusTone, string> = {
   success: styles.success,
 };
 
-export function RecordStatus({
-  status,
-  httpVersion,
-  outcome,
-  state,
-  compact = false,
-}: RecordStatusProps) {
+export function RecordStatus({ status, outcome, state, compact = false }: RecordStatusProps) {
   const presentation = recordStatusPresentation({ status, outcome, state });
   const anomalyTitle = presentation.anomaly ? `Record outcome: ${presentation.anomaly}` : undefined;
   const noResponse = status === null && state !== "active";
 
   return (
     <span className={styles.root}>
-      {httpVersion && status !== null && <span className={styles.protocol}>{httpVersion}</span>}
       <span
         className={`${styles.value} ${TONE_CLASS[presentation.tone]}`}
         title={noResponse ? anomalyTitle : undefined}

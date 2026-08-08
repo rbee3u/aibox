@@ -90,7 +90,7 @@
 .main {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(340px, 31%) minmax(0, 1fr);
+  grid-template-columns: clamp(440px, 31vw, 520px) minmax(0, 1fr);
   gap: 1px;
   min-height: 0;
   overflow: hidden;

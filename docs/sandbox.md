@@ -186,14 +186,30 @@ Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 The collection and Record directories are mode `0700`; files are `0600`.
 Metadata stores the upstream URL, base64 lossless header values, upstream
 status and HTTP version, nanosecond timing checkpoints, outcome, and
-diagnostics. Body files contain the exact application-visible bytes; their
-current lengths are derived rather than persisted. `summary.json` exists from
-Record creation and remains non-terminal if the process is interrupted. A
+diagnostics. `summary.json` also contains the optional Model Protocol Summary:
+protocol family, response terminality, requested/effective model and reasoning
+effort, requested/observed response mode, First Token, final Token Usage, and
+provider diagnostics. Body files contain the exact application-visible bytes;
+their current lengths are derived rather than persisted. `summary.json` exists
+from Record creation and remains non-terminal if the process is interrupted. A
 matching event-stream response also has a best-effort JSONL index whose byte
 ranges point back into `response.body`; indexing never changes forwarding or
-the Traffic Outcome. Unknown, legacy, or structurally incomplete collection
-entries are ignored with warnings; selected reads and deletion revalidate real
-paths and reject symlinks or unexpected types.
+the Traffic Outcome. Unknown, incompatible, or structurally incomplete
+collection entries are ignored with warnings; selected reads and deletion
+revalidate real paths and reject symlinks or unexpected types.
+
+The Traffic Proxy best-effort materializes the protocol overview for OpenAI
+Responses and Claude Messages as stable facts become available. Partial Token
+Usage stays in memory until the model protocol reports a terminal response.
+Protocol parsing failures add warnings without changing forwarding or the
+Traffic Outcome. First Token requires a complete output-bearing SSE event with
+valid event timing and is never inferred from response headers or the first
+response body byte.
+
+The raw request, response, and SSE index remain the diagnostic evidence. List
+and detail APIs read the persisted protocol overview without opening model
+bodies. Unknown HTTP remains readable, and older version-1 Records without the
+optional protocol object are not reparsed, backfilled, or rewritten.
 
 Traffic records HTTP semantics rather than transport frames. Downstream and
 upstream protocol negotiation are independent. Header values and repeated

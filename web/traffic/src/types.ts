@@ -56,9 +56,53 @@ export interface SummaryMetadata {
   observed_at: string;
   terminal: boolean;
   timing: SummaryTiming;
+  protocol: ProtocolSummary | null;
   outcome: string | null;
   errors: SummaryDiagnostic[];
   warnings: SummaryDiagnostic[];
+}
+
+export type ProtocolFamily = "openai_responses" | "claude_messages" | "unknown";
+export type ResponseModeValue = "stream" | "normal";
+export type UsageState = "waiting" | "final" | "not_reported" | "unsupported";
+
+export interface RequestedEffective<T> {
+  requested: T | null;
+  effective: T | null;
+}
+
+export interface RequestedObserved<T> {
+  requested: T | null;
+  observed: T | null;
+}
+
+export interface TokenUsage {
+  total_input_tokens: number | null;
+  base_input_tokens: number | null;
+  cached_input_tokens: number | null;
+  cache_write_tokens: number | null;
+  cache_write_5m_tokens: number | null;
+  cache_write_1h_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_output_tokens: number | null;
+}
+
+export interface ProtocolDiagnostic {
+  kind: string;
+  message: string;
+  at_ns: string | null;
+}
+
+export interface ProtocolSummary {
+  family: ProtocolFamily;
+  response_terminal: boolean;
+  model: RequestedEffective<string>;
+  reasoning_effort: RequestedEffective<string>;
+  response_mode: RequestedObserved<ResponseModeValue>;
+  first_token_at_ns: string | null;
+  token_usage: TokenUsage | null;
+  errors: ProtocolDiagnostic[];
+  warnings: ProtocolDiagnostic[];
 }
 
 export interface ResultMetadata {
@@ -79,6 +123,7 @@ export interface RecordSummary {
   outcome: string;
   state: RecordState;
   total_ms: number | null;
+  protocol: ProtocolSummary | null;
 }
 
 export interface RecordList {
@@ -92,11 +137,12 @@ export interface RecordDetail {
   request: RequestMetadata;
   response: ResponseMetadata | null;
   result: ResultMetadata | null;
-  summary?: SummaryMetadata;
+  summary: SummaryMetadata;
   state: RecordState;
   request_body_bytes: number;
   response_body_bytes: number;
   live_total_ms: number | null;
+  timeline_end_at_ns: string | null;
 }
 
 export interface TrafficApi {

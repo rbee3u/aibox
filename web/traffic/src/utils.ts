@@ -50,14 +50,30 @@ export function bytes(value: number | null | undefined): string {
   return `${(value / 1048576).toFixed(1)} MB`;
 }
 
-export function recordUrl(
-  record: Pick<RecordSummary, "upstream_url" | "incoming_uri">,
-): [string, string] {
+export function recordUrl(record: Pick<RecordSummary, "upstream_url" | "incoming_uri">): {
+  host: string;
+  path: string;
+  label: string;
+  title: string;
+} {
   try {
-    const url = new URL(record.upstream_url ?? "");
-    return [url.host, `${url.pathname}${url.search}`];
+    const target = record.upstream_url ?? "";
+    const url = new URL(target);
+    return {
+      host: url.host,
+      path: url.pathname,
+      label: `${url.host}${url.pathname}`,
+      title: target,
+    };
   } catch {
-    return ["invalid target", record.incoming_uri];
+    const host = "invalid target";
+    const path = record.incoming_uri;
+    return {
+      host,
+      path,
+      label: [host, path].filter(Boolean).join(" "),
+      title: record.incoming_uri,
+    };
   }
 }
 

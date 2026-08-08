@@ -102,10 +102,8 @@ describe("RecordStatus", () => {
     );
     expect(screen.getByText("Waiting")).toHaveClass(styles.active);
 
-    rerender(
-      <RecordStatus status={200} httpVersion="HTTP/2" outcome="active" state="active" compact />,
-    );
-    expect(screen.getByText("HTTP/2")).toHaveClass(styles.protocol);
+    rerender(<RecordStatus status={200} outcome="active" state="active" compact />);
+    expect(screen.queryByText("HTTP/2")).not.toBeInTheDocument();
     expect(screen.getByText("200")).toHaveClass(styles.success);
     expect(screen.getByText("Streaming")).toBeInTheDocument();
   });

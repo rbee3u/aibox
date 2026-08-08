@@ -22,6 +22,7 @@ mod tenant;
 #[cfg(test)]
 mod testutil;
 mod traffic;
+mod traffic_interpretation;
 mod traffic_proxy;
 mod traffic_store;
 mod traffic_web;

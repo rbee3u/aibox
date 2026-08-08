@@ -39,10 +39,10 @@ global to aibox and independent of every Tenant and Coding Agent.
 _Avoid_: Router, Routing service, packet capture
 
 **Traffic Record**:
-The raw observable request, upstream response, and timing data from one
-Traffic Proxy upstream request attempt. It can exist without an upstream
-response and may be incomplete after cancellation, recording failure, or
-process interruption.
+The raw observable request, upstream response, and timing data from one Traffic
+Proxy upstream request attempt, together with its checkpointed Model Protocol
+Summary. It can exist without an upstream response and may be incomplete after
+cancellation, recording failure, or process interruption.
 _Avoid_: Session, Transcript, Run History
 
 **SSE Event**:
@@ -70,8 +70,66 @@ _Avoid_: TTFB, response-header time
 
 **First Token**:
 The elapsed time from Traffic Record start until a protocol parser observes the
-first output-bearing model delta. A delta may contain multiple tokenizer tokens.
+first output-bearing model delta. For SSE, the delta is observed when its
+complete dispatchable event is available; a delta may contain multiple
+tokenizer tokens.
 _Avoid_: TTFB, response-header time
+
+**Timing Stage**:
+One observable interval within a Traffic Record's timing breakdown, such as
+request upload, response wait, or model output.
+_Avoid_: Traffic Phase, network phase
+
+**Requested Model Response Mode**:
+Whether a model API request asks for incremental event-stream output or one
+complete response.
+_Avoid_: Observed Model Response Mode, request-body streaming, Traffic Phase
+
+**Observed Model Response Mode**:
+Whether the upstream model API responds with an event stream or one normal
+response, as observed from its response metadata.
+_Avoid_: Requested Model Response Mode, Traffic Phase
+
+**Model Response Terminality**:
+Whether a recognized model protocol has reported its terminal response. It is
+independent of Traffic Outcome and may remain unobserved after a disconnect,
+shutdown, or missing terminal event.
+_Avoid_: Traffic Outcome, HTTP status
+
+**Effective Model**:
+The model identity reported by an upstream response as having produced it.
+_Avoid_: Requested Model, configured model
+
+**Requested Model**:
+The model identity supplied in a model API request.
+_Avoid_: Effective Model, configured model
+
+**Requested Reasoning Effort**:
+The provider-native reasoning-effort value explicitly supplied in a model API
+request. No provider default is inferred when it is absent.
+_Avoid_: Effective Reasoning Effort, Reasoning Output Tokens
+
+**Effective Reasoning Effort**:
+The reasoning-effort value explicitly reported by an upstream model API as
+having been applied. No provider default is inferred when it is absent.
+_Avoid_: Requested Reasoning Effort, Reasoning Output Tokens
+
+**Model Protocol Summary**:
+The best-effort, checkpointed stable model-protocol facts materialized in a
+Traffic Record Summary. Its family remains Unknown when the request is not a
+recognized model API; raw request and response data remain the diagnostic
+evidence and are not reconstructed from this summary.
+_Avoid_: Interpretation cache, parsed body copy
+
+**Token Usage**:
+Provider-reported token counters associated with one model API response. It is
+not a local tokenizer estimate.
+_Avoid_: Token estimate, Traffic size
+
+**Provider Error**:
+A structured failure reported by a recognized model API response, distinct
+from the Traffic Outcome and HTTP response status.
+_Avoid_: Traffic Outcome, HTTP error status
 
 ### Persistent identity
 

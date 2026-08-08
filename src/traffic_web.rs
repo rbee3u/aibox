@@ -1,4 +1,5 @@
 use crate::traffic::AppState;
+use crate::traffic_interpretation::{timeline_end_at_ns, ProtocolSummary};
 use crate::traffic_proxy;
 use crate::traffic_store::{
     RecordedHeader, ResponseMetadata, ResponseSource, StoredRecord, SummaryMetadata, TrafficStore,
@@ -159,6 +160,7 @@ struct RecordSummary {
     outcome: String,
     state: String,
     total_ms: Option<u64>,
+    protocol: Option<ProtocolSummary>,
 }
 
 #[derive(Serialize)]
@@ -236,6 +238,7 @@ fn summary(record: &StoredRecord) -> RecordSummary {
         } else {
             record.result.as_ref().map(|result| result.total_ms)
         },
+        protocol: record.summary.protocol.clone(),
     }
 }
 
@@ -280,6 +283,7 @@ struct RecordDetail {
     request_body_bytes: u64,
     response_body_bytes: u64,
     live_total_ms: Option<u64>,
+    timeline_end_at_ns: Option<String>,
 }
 
 pub(super) async fn record_detail(
@@ -299,6 +303,8 @@ pub(super) async fn record_detail(
                 .active
                 .then(|| elapsed_wall_ms(&record.request.started_at, None))
                 .flatten();
+            let live_elapsed_ns = state.store.live_elapsed_ns(&id);
+            let timeline_end_at_ns = timeline_end_at_ns(&record, live_elapsed_ns);
             let response_headers_at = record
                 .summary
                 .timing
@@ -323,6 +329,7 @@ pub(super) async fn record_detail(
                     request_body_bytes: record.request_body_bytes,
                     response_body_bytes: record.response_body_bytes,
                     live_total_ms,
+                    timeline_end_at_ns,
                 },
             )
         }
@@ -725,6 +732,7 @@ mod tests {
             );
             assert_eq!(record.total_ms.is_some(), has_duration);
             assert!(record.http_version.is_none());
+            assert!(record.protocol.is_some());
         }
 
         let (responded, _) = store
@@ -763,6 +771,42 @@ mod tests {
     }
 
     #[test]
+    fn record_list_returns_persisted_protocol_without_interpreting_bodies() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (mut record, _) = store
+            .begin(
+                "POST",
+                "/https://example.test/v1/responses",
+                Some("https://example.test/v1/responses"),
+                "HTTP/1.1",
+                Vec::new(),
+                Some("example.test"),
+            )
+            .unwrap();
+        record.request_body.write_all(b"not request json").unwrap();
+        record
+            .response_body
+            .write_all(b"not response json")
+            .unwrap();
+        store
+            .update_summary(&record.directory, &record.summary, |summary| {
+                summary.protocol.as_mut().unwrap().model.requested =
+                    Some("persisted-list-model".to_string());
+                true
+            })
+            .unwrap();
+
+        let list = list_records_inner(&store, None).unwrap();
+        let protocol = list.records[0].protocol.as_ref().unwrap();
+        assert_eq!(
+            protocol.model.requested.as_deref(),
+            Some("persisted-list-model")
+        );
+        assert!(protocol.warnings.is_empty());
+    }
+
+    #[test]
     fn detail_response_adds_canonical_reason_without_mutating_raw_metadata() {
         let detail = ResponseDetail::from(ResponseMetadata {
             format_version: crate::traffic_store::FORMAT_VERSION,
@@ -776,6 +820,64 @@ mod tests {
         let json = serde_json::to_value(detail).unwrap();
         assert_eq!(json["reason_phrase"], "OK");
         assert_eq!(json["format_version"], 2);
+    }
+
+    #[tokio::test]
+    async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (mut record, _) = state
+            .store
+            .begin(
+                "POST",
+                "/https://example.test/v1/responses",
+                Some("https://example.test/v1/responses"),
+                "HTTP/1.1",
+                Vec::new(),
+                Some("example.test"),
+            )
+            .unwrap();
+        record.request_body.write_all(b"not request json").unwrap();
+        record
+            .response_body
+            .write_all(b"not response json")
+            .unwrap();
+        state
+            .store
+            .update_summary(&record.directory, &record.summary, |summary| {
+                let protocol = summary.protocol.as_mut().unwrap();
+                protocol.model.requested = Some("persisted-model".to_string());
+                protocol.response_terminal = true;
+                true
+            })
+            .unwrap();
+        let id = record.id.clone();
+        state
+            .store
+            .finish(
+                &record,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Completed,
+                None,
+            )
+            .unwrap();
+
+        let response = record_detail(State(state), Path(id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["state"], "completed");
+        assert!(json["timeline_end_at_ns"].as_str().is_some());
+        assert!(json.get("interpretation").is_none());
+        assert_eq!(json["summary"]["protocol"]["family"], "openai_responses");
+        assert_eq!(
+            json["summary"]["protocol"]["model"]["requested"],
+            "persisted-model"
+        );
+        assert_eq!(json["summary"]["protocol"]["response_terminal"], true);
+        assert!(json["summary"]["timing"]["finished_at_ns"]
+            .as_str()
+            .is_some());
     }
 
     #[tokio::test]
