@@ -49,6 +49,53 @@ the default detail tab, and request/response bodies load only for the visible
 body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
 
+## Body Views
+
+The Request and Response tabs open in `Pretty` when the complete decoded Body
+has a renderer. The viewer keeps three deliberately separate representations:
+
+- The Traffic Record and the existing `request-body` / `response-body` routes
+  contain the exact original application-visible bytes. Download always uses
+  these routes and preserves those bytes.
+- `Source` is the unformatted content after applying the supported HTTP
+  `Content-Encoding`. The top-level Copy action copies this text regardless of
+  the selected view.
+- `Pretty` is derived in the browser from Source. It never changes or persists
+  a Traffic Record.
+
+The read-only `request-body-decoded` and `response-body-decoded` management
+routes accept no coding, an empty coding, `identity`, or one case-insensitive
+`zstd` coding. Rust streams zstd decoding from a blocking worker; unsupported
+or combined codings do not alter the raw Body. An active encoded Body must be
+complete before it can be decoded. Source can show a partially received
+identity Body, while an incomplete zstd Body is explicitly shown as encoded
+hex until decoding is possible.
+
+JSON uses a lossless parser so Pretty and per-value Copy retain the source
+spelling of numbers outside JavaScript's safe range. Duplicate object keys,
+invalid JSON, invalid UTF-8, unsupported coding, and decode failures fall back
+to Source or encoded hex without hiding the original download. The JSON root
+opens initially, nested objects and arrays start folded, and strings longer
+than 200 Unicode characters start truncated. A decoded Body over 5 MiB starts
+in Source and requires the explicit `Render Pretty` action; this is a UI guard,
+not a hard rendering or recording limit.
+
+For an event-stream response, Pretty derives complete `SSE Event` cards from
+decoded Source. It handles the UTF-8 BOM, CR/LF/CRLF delimiters, multiline
+`data`, comments, and the default `message` event type. Only an empty-line
+terminated block with at least one `data` field is an SSE Event. A partial tail
+is identified separately, and text such as `[DONE]` remains visible rather
+than being treated as JSON.
+
+The `response-event-timings` route reads the existing best-effort
+`response.events.jsonl` index on demand and returns only each sequence and its
+complete-receipt offset. The browser joins those offsets to independently
+parsed SSE Events by sequence. A missing, truncated, or partly malformed index
+shows `Time unavailable` plus one warning and never suppresses Event data.
+Active views request later sequences during their normal poll. Event time is
+shown relative to Record start at millisecond precision, with the absolute
+timestamp in a tooltip using the viewer's existing timezone convention.
+
 ## Protocol Summary
 
 For recognized model requests, the Traffic Proxy also records an optional

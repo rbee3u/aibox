@@ -1,6 +1,7 @@
 import { BookOpen, Box, GitFork, LoaderCircle, Radio } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTrafficApi } from "./api";
+import { bodyComplete, contentCoding, isSseResponse } from "./bodyPresentation";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
@@ -8,7 +9,9 @@ import { StatusBanner } from "./components/StatusBanner";
 import type {
   BodyKind,
   BodyLoadStatus,
+  DecodedBodyState,
   DetailTab,
+  EventTimingIndex,
   RecordDetail as RecordDetailData,
   RecordList as RecordListData,
   RecordSummary,
@@ -26,6 +29,7 @@ type AppError = { source: ErrorSource; message: string };
 
 const LIST_POLL_INTERVAL_MS = 5000;
 const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
+const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, status: "idle", message: null };
 
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
@@ -52,7 +56,14 @@ export function App({ api: providedApi }: AppProps) {
     request: "idle",
     response: "idle",
   });
+  const [decodedBodies, setDecodedBodies] = useState<Record<BodyKind, DecodedBodyState>>({
+    request: EMPTY_DECODED_BODY,
+    response: EMPTY_DECODED_BODY,
+  });
+  const [eventTimings, setEventTimings] = useState<EventTimingIndex | null>(null);
+  const timingNextSequence = useRef(0);
   const offsets = useRef({ request: 0, response: 0 });
+  const decodedLoaded = useRef({ request: false, response: false });
   const [tab, setTab] = useState<DetailTab>("summary");
   const [loadingList, setLoadingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -90,6 +101,10 @@ export function App({ api: providedApi }: AppProps) {
     setCurrentId(null);
     setCurrentState(null);
     setDetail(null);
+    setDecodedBodies({ request: EMPTY_DECODED_BODY, response: EMPTY_DECODED_BODY });
+    setEventTimings(null);
+    timingNextSequence.current = 0;
+    decodedLoaded.current = { request: false, response: false };
     setLoadingBody(false);
   }, []);
 
@@ -192,6 +207,10 @@ export function App({ api: providedApi }: AppProps) {
       setDetail(null);
       setBodies({ request: [], response: [] });
       setBodyStatus({ request: "idle", response: "idle" });
+      setDecodedBodies({ request: EMPTY_DECODED_BODY, response: EMPTY_DECODED_BODY });
+      setEventTimings(null);
+      timingNextSequence.current = 0;
+      decodedLoaded.current = { request: false, response: false };
       offsets.current = { request: 0, response: 0 };
       setTab("summary");
       setLoadingBody(false);
@@ -296,6 +315,11 @@ export function App({ api: providedApi }: AppProps) {
     const id = currentId;
     const kind = tab;
     const active = detailState === "active";
+    const headers =
+      kind === "request" ? detail?.request.headers : (detail?.response?.headers ?? []);
+    const coding = contentCoding(headers ?? []);
+    const complete = detail ? bodyComplete(detail, kind) : false;
+    const shouldLoadTimings = kind === "response" && detail !== null && isSseResponse(detail);
     const controller = new AbortController();
     bodyController.current = controller;
     let disposed = false;
@@ -312,6 +336,80 @@ export function App({ api: providedApi }: AppProps) {
         await loadBody(id, kind, offsets.current[kind], controller);
         if (disposed || bodyController.current !== controller || controller.signal.aborted) return;
         setBodyStatus((current) => ({ ...current, [kind]: "loaded" }));
+        if (coding.kind === "unsupported") {
+          setDecodedBodies((current) => ({
+            ...current,
+            [kind]: { bytes: null, status: "unsupported", message: coding.message },
+          }));
+        } else if (coding.kind === "zstd" && !complete) {
+          setDecodedBodies((current) => ({
+            ...current,
+            [kind]: {
+              bytes: null,
+              status: "waiting",
+              message: "Waiting for the complete zstd body before decoding.",
+            },
+          }));
+        } else if (coding.kind === "zstd" && !decodedLoaded.current[kind]) {
+          decodedLoaded.current[kind] = true;
+          setDecodedBodies((current) => ({
+            ...current,
+            [kind]: { bytes: null, status: "loading", message: null },
+          }));
+          try {
+            const decoded = await api.loadDecodedBody(id, kind, controller.signal);
+            if (
+              disposed ||
+              bodyController.current !== controller ||
+              controller.signal.aborted ||
+              currentIdRef.current !== id
+            )
+              return;
+            setDecodedBodies((current) => ({
+              ...current,
+              [kind]: { bytes: decoded, status: "loaded", message: null },
+            }));
+          } catch (cause) {
+            if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+              setDecodedBodies((current) => ({
+                ...current,
+                [kind]: {
+                  bytes: null,
+                  status: "error",
+                  message: `Decoded Source unavailable: ${errorMessage(cause)}`,
+                },
+              }));
+            }
+          }
+        } else if (coding.kind === "identity") {
+          setDecodedBodies((current) => ({
+            ...current,
+            [kind]: { bytes: null, status: "loaded", message: null },
+          }));
+        }
+
+        if (shouldLoadTimings) {
+          try {
+            const timing = await api.loadEventTimings(
+              id,
+              timingNextSequence.current,
+              controller.signal,
+            );
+            if (disposed || bodyController.current !== controller || controller.signal.aborted)
+              return;
+            timingNextSequence.current = Math.max(timingNextSequence.current, timing.next_sequence);
+            setEventTimings((current) => mergeEventTimings(current, timing));
+          } catch (cause) {
+            if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+              setEventTimings((current) => ({
+                state: "unavailable",
+                events: current?.events ?? [],
+                next_sequence: timingNextSequence.current,
+                warning: `SSE Event timing unavailable: ${errorMessage(cause)}`,
+              }));
+            }
+          }
+        }
         clearError("detail");
       } catch (cause) {
         if (
@@ -350,7 +448,9 @@ export function App({ api: providedApi }: AppProps) {
   }, [
     clearError,
     currentId,
+    detail,
     detailState,
+    api,
     loadBody,
     loadingDetail,
     reportError,
@@ -547,9 +647,12 @@ export function App({ api: providedApi }: AppProps) {
           </section>
         ) : detail ? (
           <RecordDetail
+            key={detail.request.id}
             detail={detail}
             bodies={bodies}
             bodyStatus={bodyStatus}
+            decodedBodies={decodedBodies}
+            eventTimings={eventTimings}
             tab={tab}
             onTabChange={setTab}
             onDownload={(kind) => void download(kind)}
@@ -589,6 +692,23 @@ function LoaderIcon() {
 }
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Traffic management request failed";
+}
+
+function mergeEventTimings(
+  current: EventTimingIndex | null,
+  incoming: EventTimingIndex,
+): EventTimingIndex {
+  const bySequence = new Map(
+    (current?.events ?? []).map((event) => [event.sequence, event] as const),
+  );
+  for (const event of incoming.events) bySequence.set(event.sequence, event);
+  return {
+    state:
+      current?.state === "partial" || incoming.state === "partial" ? "partial" : incoming.state,
+    events: [...bySequence.values()].sort((left, right) => left.sequence - right.sequence),
+    next_sequence: Math.max(current?.next_sequence ?? 0, incoming.next_sequence),
+    warning: incoming.warning ?? current?.warning ?? null,
+  };
 }
 
 function focusTargetAfterDelete(

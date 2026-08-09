@@ -1,5 +1,7 @@
 use crate::traffic::AppState;
-use crate::traffic_interpretation::{timeline_end_at_ns, ProtocolSummary};
+use crate::traffic_interpretation::{
+    body_content_coding, timeline_end_at_ns, BodyContentCoding, ProtocolSummary,
+};
 use crate::traffic_proxy;
 use crate::traffic_store::{
     RecordedHeader, ResponseMetadata, ResponseSource, StoredRecord, SummaryMetadata, TrafficStore,
@@ -10,10 +12,13 @@ use axum::http::{header, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::Next;
 use axum::Json;
 use base64::Engine as _;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::io::Read as _;
 use std::net::SocketAddr;
 use tokio::io::AsyncReadExt as _;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
 
 const PAGE_SIZE: usize = 50;
@@ -377,6 +382,20 @@ pub(super) async fn response_body(
     body_response(&state.store, &id, true, query.offset).await
 }
 
+pub(super) async fn decoded_request_body(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    decoded_body_response(&state.store, &id, false).await
+}
+
+pub(super) async fn decoded_response_body(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    decoded_body_response(&state.store, &id, true).await
+}
+
 async fn body_response(
     store: &TrafficStore,
     id: &str,
@@ -407,6 +426,158 @@ async fn body_response(
         HeaderValue::from_str(&length.to_string()).expect("body offset is a valid header"),
     );
     response
+}
+
+async fn decoded_body_response(store: &TrafficStore, id: &str, response: bool) -> Response<Body> {
+    let record = match store.find(id) {
+        Ok(record) => record,
+        Err(error) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+    };
+    let completed = if response {
+        record
+            .summary
+            .timing
+            .upstream_response_body_completed_at_ns
+            .is_some()
+    } else {
+        record
+            .summary
+            .timing
+            .upstream_request_body_completed_at_ns
+            .is_some()
+    };
+    if record.active && !completed {
+        return json_error(
+            StatusCode::CONFLICT,
+            if response {
+                "the response body is still being recorded"
+            } else {
+                "the request body is still being recorded"
+            },
+        );
+    }
+    let headers = if response {
+        record
+            .response
+            .as_ref()
+            .map(|metadata| metadata.headers.as_slice())
+            .unwrap_or_default()
+    } else {
+        &record.request.headers
+    };
+    let coding = match body_content_coding(headers) {
+        Ok(coding) => coding,
+        Err(error) => return json_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, &error.to_string()),
+    };
+    let (file, length) = match store.open_record_body(&record, response, 0) {
+        Ok(value) => value,
+        Err(error) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+    };
+    let (body, length) = match coding {
+        BodyContentCoding::Identity => {
+            let file = tokio::fs::File::from_std(file).take(length);
+            (Body::from_stream(ReaderStream::new(file)), Some(length))
+        }
+        BodyContentCoding::Zstd => (zstd_body(file), None),
+    };
+    let mut response = Response::new(body);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    if let Some(length) = length {
+        response.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&length.to_string()).expect("body length is a valid header"),
+        );
+    }
+    response
+}
+
+fn zstd_body(file: std::fs::File) -> Body {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    const CHANNEL_CAPACITY: usize = 4;
+    let (sender, receiver) = tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
+    tokio::task::spawn_blocking(move || {
+        let mut decoder = match zstd::stream::read::Decoder::new(file) {
+            Ok(decoder) => decoder,
+            Err(error) => {
+                let _ = sender.blocking_send(Err(error));
+                return;
+            }
+        };
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+        loop {
+            match decoder.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(read) => {
+                    if sender
+                        .blocking_send(Ok(Bytes::copy_from_slice(&buffer[..read])))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.blocking_send(Err(error));
+                    return;
+                }
+            }
+        }
+    });
+    Body::from_stream(ReceiverStream::new(receiver))
+}
+
+#[derive(Deserialize)]
+pub(super) struct EventTimingQuery {
+    #[serde(default)]
+    after_sequence: u64,
+}
+
+#[derive(Serialize)]
+struct EventTimingEntry {
+    sequence: u64,
+    completed_at_ns: String,
+}
+
+#[derive(Serialize)]
+struct EventTimingResponse {
+    state: &'static str,
+    events: Vec<EventTimingEntry>,
+    next_sequence: u64,
+    warning: Option<String>,
+}
+
+pub(super) async fn response_event_timings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<EventTimingQuery>,
+) -> Response<Body> {
+    match state.store.read_event_timings(&id, query.after_sequence) {
+        Ok(timings) => json_response(
+            StatusCode::OK,
+            &EventTimingResponse {
+                state: if !timings.available {
+                    "unavailable"
+                } else if timings.partial {
+                    "partial"
+                } else {
+                    "available"
+                },
+                events: timings
+                    .events
+                    .into_iter()
+                    .map(|entry| EventTimingEntry {
+                        sequence: entry.sequence,
+                        completed_at_ns: entry.completed_at_ns,
+                    })
+                    .collect(),
+                next_sequence: timings.next_sequence,
+                warning: timings.warning,
+            },
+        ),
+        Err(error) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -532,6 +703,13 @@ mod tests {
             )
             .unwrap();
         id
+    }
+
+    fn recorded_header(name: &str, value: &str) -> RecordedHeader {
+        RecordedHeader {
+            name: name.to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode(value),
+        }
     }
 
     async fn response_json(response: Response<Body>) -> serde_json::Value {
@@ -906,6 +1084,244 @@ mod tests {
         assert_eq!(invalid_range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
         let missing = body_response(&store, &Uuid::now_v7().to_string(), false, 0).await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn decoded_body_api_handles_identity_and_zstd_without_changing_raw_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let identity_id = finished_record(&store, "/identity", b"plain request", b"");
+        let identity = decoded_body_response(&store, &identity_id, false).await;
+        assert_eq!(identity.status(), StatusCode::OK);
+        assert_eq!(
+            identity.into_body().collect().await.unwrap().to_bytes(),
+            "plain request"
+        );
+
+        let request_source = br#"{"model":"compressed-request"}"#;
+        let response_source = br#"{"result":"compressed-response"}"#;
+        let request_compressed = zstd::stream::encode_all(request_source.as_slice(), 0).unwrap();
+        let response_compressed = zstd::stream::encode_all(response_source.as_slice(), 0).unwrap();
+        let (mut record, _) = store
+            .begin(
+                "POST",
+                "/zstd",
+                None,
+                "HTTP/1.1",
+                vec![recorded_header("content-encoding", " ZsTd ")],
+                None,
+            )
+            .unwrap();
+        record.request_body.write_all(&request_compressed).unwrap();
+        record
+            .response_body
+            .write_all(&response_compressed)
+            .unwrap();
+        store
+            .write_response(
+                &record.directory,
+                &ResponseMetadata {
+                    format_version: crate::traffic_store::FORMAT_VERSION,
+                    source: ResponseSource::Upstream,
+                    headers_at: "2026-08-09T00:00:00Z".to_string(),
+                    status: 200,
+                    http_version: "HTTP/2".to_string(),
+                    headers: vec![recorded_header("content-encoding", "zstd")],
+                },
+            )
+            .unwrap();
+        let id = record.id.clone();
+        store
+            .finish(
+                &record,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Completed,
+                None,
+            )
+            .unwrap();
+
+        for (response_body, expected) in [
+            (false, request_source.as_slice()),
+            (true, response_source.as_slice()),
+        ] {
+            let decoded = decoded_body_response(&store, &id, response_body).await;
+            assert_eq!(decoded.status(), StatusCode::OK);
+            assert_eq!(
+                decoded.into_body().collect().await.unwrap().to_bytes(),
+                expected
+            );
+            let raw = body_response(&store, &id, response_body, 0).await;
+            let expected_raw = if response_body {
+                &response_compressed
+            } else {
+                &request_compressed
+            };
+            assert_eq!(
+                raw.into_body().collect().await.unwrap().to_bytes(),
+                expected_raw.as_slice()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn decoded_body_api_rejects_incomplete_unsupported_and_corrupt_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (mut active, _) = store
+            .begin(
+                "POST",
+                "/active",
+                None,
+                "HTTP/1.1",
+                vec![recorded_header("content-encoding", "zstd")],
+                None,
+            )
+            .unwrap();
+        active.request_body.write_all(b"partial").unwrap();
+        let waiting = decoded_body_response(&store, &active.id, false).await;
+        assert_eq!(waiting.status(), StatusCode::CONFLICT);
+
+        let (mut unsupported, _) = store
+            .begin(
+                "POST",
+                "/unsupported",
+                None,
+                "HTTP/1.1",
+                vec![recorded_header("content-encoding", "gzip, zstd")],
+                None,
+            )
+            .unwrap();
+        unsupported.request_body.write_all(b"encoded").unwrap();
+        let unsupported_id = unsupported.id.clone();
+        store
+            .finish(
+                &unsupported,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        let response = decoded_body_response(&store, &unsupported_id, false).await;
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        let (mut corrupt, _) = store
+            .begin(
+                "POST",
+                "/corrupt",
+                None,
+                "HTTP/1.1",
+                vec![recorded_header("content-encoding", "zstd")],
+                None,
+            )
+            .unwrap();
+        corrupt.request_body.write_all(b"not zstd").unwrap();
+        let corrupt_id = corrupt.id.clone();
+        store
+            .finish(
+                &corrupt,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        let response = decoded_body_response(&store, &corrupt_id, false).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.into_body().collect().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (record, _) = state
+            .store
+            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let mut index = state.store.create_event_index(&record).unwrap();
+        for (sequence, completed_at_ns) in [(0, "1000000"), (1, "2500000")] {
+            writeln!(
+                index,
+                "{}",
+                json!({
+                    "schema_version": crate::traffic_store::FORMAT_VERSION,
+                    "record_id": record.id,
+                    "kind": "sse_event",
+                    "sequence": sequence,
+                    "body_start": sequence * 10,
+                    "body_end": sequence * 10 + 9,
+                    "first_arrival_at_ns": completed_at_ns,
+                    "completed_at_ns": completed_at_ns,
+                })
+            )
+            .unwrap();
+        }
+        writeln!(index, "not json").unwrap();
+        index.flush().unwrap();
+        let id = record.id.clone();
+        state
+            .store
+            .finish(
+                &record,
+                std::time::Instant::now(),
+                &crate::traffic_store::RuntimeMeasurements::default(),
+                crate::traffic_store::Outcome::Completed,
+                None,
+            )
+            .unwrap();
+
+        let response = response_event_timings(
+            State(state),
+            Path(id),
+            Query(EventTimingQuery { after_sequence: 1 }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "partial");
+        assert_eq!(body["next_sequence"], 2);
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+        assert_eq!(body["events"][0]["sequence"], 1);
+        assert!(body["warning"].as_str().unwrap().contains("line 3"));
+    }
+
+    #[test]
+    fn active_event_timing_reader_ignores_an_unterminated_tail() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let mut index = store.create_event_index(&record).unwrap();
+        write!(index, "{{\"schema_version\":1").unwrap();
+        index.flush().unwrap();
+
+        let timings = store.read_event_timings(&record.id, 0).unwrap();
+        assert!(timings.available);
+        assert!(!timings.partial);
+        assert!(timings.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn event_timing_api_reports_a_missing_index_as_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let id = finished_record(&state.store, "/without-events", b"", b"");
+
+        let response = response_event_timings(
+            State(state),
+            Path(id),
+            Query(EventTimingQuery { after_sequence: 7 }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "unavailable");
+        assert_eq!(body["events"], json!([]));
+        assert_eq!(body["next_sequence"], 7);
+        assert!(body["warning"].as_str().unwrap().contains("unavailable"));
     }
 
     #[tokio::test]

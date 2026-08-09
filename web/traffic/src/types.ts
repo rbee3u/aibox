@@ -1,7 +1,27 @@
 export type RecordState = "active" | "completed" | "interrupted";
 export type BodyKind = "request" | "response";
 export type BodyLoadStatus = "idle" | "loading" | "loaded" | "error";
+export type DecodedBodyStatus = "idle" | "waiting" | "loading" | "loaded" | "unsupported" | "error";
 export type DetailTab = "summary" | BodyKind;
+export type EventTimingState = "available" | "unavailable" | "partial";
+
+export interface EventTimingEntry {
+  sequence: number;
+  completed_at_ns: string;
+}
+
+export interface EventTimingIndex {
+  state: EventTimingState;
+  events: EventTimingEntry[];
+  next_sequence: number;
+  warning: string | null;
+}
+
+export interface DecodedBodyState {
+  bytes: Uint8Array | null;
+  status: DecodedBodyStatus;
+  message: string | null;
+}
 
 export interface HeaderValue {
   name: string;
@@ -155,6 +175,12 @@ export interface TrafficApi {
     offset: number,
     signal?: AbortSignal,
   ): Promise<{ bytes: Uint8Array; nextOffset: number }>;
+  loadDecodedBody(id: string, kind: BodyKind, signal?: AbortSignal): Promise<Uint8Array>;
+  loadEventTimings(
+    id: string,
+    afterSequence: number,
+    signal?: AbortSignal,
+  ): Promise<EventTimingIndex>;
   deleteRecords(ids: string[], signal?: AbortSignal): Promise<number>;
   deleteAll(expectedDeletableCount: number, signal?: AbortSignal): Promise<number>;
 }

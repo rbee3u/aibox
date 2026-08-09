@@ -24,6 +24,12 @@ pub(super) enum ResponseModeValue {
     Normal,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BodyContentCoding {
+    Identity,
+    Zstd,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct RequestedEffective<T> {
     pub requested: Option<T>,
@@ -746,17 +752,43 @@ fn merge_option(target: &mut Option<u64>, value: Option<u64>) {
 
 fn parse_request(path: &Path, headers: &[RecordedHeader]) -> Result<RequestEnvelope> {
     let file = crate::tenant::open_real_file(path, "Traffic request body")?;
-    let encoding = header_text(headers, "content-encoding");
-    match encoding.as_deref().map(str::trim) {
-        None | Some("") | Some("identity") => serde_json::from_reader(file),
-        Some("zstd") => {
+    match body_content_coding(headers)? {
+        BodyContentCoding::Identity => serde_json::from_reader(file),
+        BodyContentCoding::Zstd => {
             let decoder =
                 zstd::stream::read::Decoder::new(file).context("create zstd request decoder")?;
             serde_json::from_reader(decoder)
         }
-        Some(value) => bail!("unsupported request Content-Encoding {value:?}"),
     }
     .context("parse request JSON")
+}
+
+pub(super) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyContentCoding> {
+    let mut codings = Vec::new();
+    for header in headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("content-encoding"))
+    {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&header.value_base64)
+            .context("decode Content-Encoding header")?;
+        let value = std::str::from_utf8(&bytes).context("Content-Encoding header is not UTF-8")?;
+        codings.extend(
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|coding| !coding.is_empty())
+                .map(str::to_ascii_lowercase),
+        );
+    }
+    if codings.is_empty() {
+        return Ok(BodyContentCoding::Identity);
+    }
+    match codings.as_slice() {
+        [coding] if coding == "identity" => Ok(BodyContentCoding::Identity),
+        [coding] if coding == "zstd" => Ok(BodyContentCoding::Zstd),
+        _ => bail!("unsupported Content-Encoding {:?}", codings.join(", ")),
+    }
 }
 
 fn family_from_url(value: Option<&str>) -> ProtocolFamily {
@@ -1028,6 +1060,24 @@ mod tests {
     }
 
     #[test]
+    fn body_content_coding_accepts_identity_and_one_case_insensitive_zstd_only() {
+        assert_eq!(
+            body_content_coding(&[]).unwrap(),
+            BodyContentCoding::Identity
+        );
+        assert_eq!(
+            body_content_coding(&[header("Content-Encoding", b"  ")]).unwrap(),
+            BodyContentCoding::Identity
+        );
+        assert_eq!(
+            body_content_coding(&[header("CONTENT-ENCODING", b" ZsTd ")]).unwrap(),
+            BodyContentCoding::Zstd
+        );
+        assert!(body_content_coding(&[header("content-encoding", b"identity, zstd")]).is_err());
+        assert!(body_content_coding(&[header("content-encoding", b"gzip")]).is_err());
+    }
+
+    #[test]
     fn coding_agent_session_id_uses_protocol_specific_exact_headers() {
         let headers = [
             header("X-Claude-Code-Session-Id", b"claude-session"),
@@ -1114,7 +1164,7 @@ mod tests {
         fs::write(&path, compressed).unwrap();
         let headers = [RecordedHeader {
             name: "content-encoding".to_string(),
-            value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
+            value_base64: base64::engine::general_purpose::STANDARD.encode(" ZsTd "),
         }];
         let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
 

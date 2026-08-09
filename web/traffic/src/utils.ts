@@ -21,6 +21,20 @@ export function formatTimestamp(value: string): string {
   ].join(" ");
 }
 
+export function formatTimestampWithMilliseconds(value: string): string {
+  if (!EXPLICIT_TIME_ZONE.test(value)) return "—";
+  const parsed = new Date(value);
+  const timestamp = parsed.getTime();
+  if (!Number.isFinite(timestamp)) return "—";
+
+  const eastEight = new Date(timestamp + UTC_PLUS_EIGHT_MS);
+  if (!Number.isFinite(eastEight.getTime())) return "—";
+  return [
+    `${eastEight.getUTCFullYear()}-${twoDigits(eastEight.getUTCMonth() + 1)}-${twoDigits(eastEight.getUTCDate())}`,
+    `${twoDigits(eastEight.getUTCHours())}:${twoDigits(eastEight.getUTCMinutes())}:${twoDigits(eastEight.getUTCSeconds())}.${eastEight.getUTCMilliseconds().toString().padStart(3, "0")}`,
+  ].join(" ");
+}
+
 export function compactDuration(ms: number | null | undefined): string {
   if (ms == null) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -101,6 +115,8 @@ export function decodeBytes(bytesValue: Uint8Array, label: string): string {
 }
 
 export function decodeHeader(header: HeaderValue): string {
+  const decoded = tryDecodeHeader(header);
+  if (decoded !== null) return decoded;
   let binary: string;
   try {
     binary = window.atob(header.value_base64);
@@ -108,10 +124,21 @@ export function decodeHeader(header: HeaderValue): string {
     return "[invalid base64 header value]";
   }
   const bytesValue = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return `[hex] ${hex(bytesValue)}`;
+}
+
+export function tryDecodeHeader(header: HeaderValue): string | null {
+  let binary: string;
+  try {
+    binary = window.atob(header.value_base64);
+  } catch {
+    return null;
+  }
+  const bytesValue = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytesValue);
   } catch {
-    return `[hex] ${hex(bytesValue)}`;
+    return null;
   }
 }
 

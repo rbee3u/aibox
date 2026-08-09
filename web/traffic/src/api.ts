@@ -1,4 +1,4 @@
-import type { RecordDetail, RecordList, TrafficApi } from "./types";
+import type { BodyKind, EventTimingIndex, RecordDetail, RecordList, TrafficApi } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -62,6 +62,22 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
       return { bytes, nextOffset: Number(header ?? offset + bytes.length) };
     },
 
+    async loadDecodedBody(id, kind, signal) {
+      const response = await request(
+        `/_aibox/traffic/api/records/${encodeURIComponent(id)}/${decodedBodyPath(kind)}`,
+        { signal },
+      );
+      return new Uint8Array(await response.arrayBuffer());
+    },
+
+    async loadEventTimings(id, afterSequence, signal) {
+      const response = await request(
+        `/_aibox/traffic/api/records/${encodeURIComponent(id)}/response-event-timings?after_sequence=${afterSequence}`,
+        { signal },
+      );
+      return (await response.json()) as EventTimingIndex;
+    },
+
     async deleteRecords(ids, signal) {
       const response = await request("/_aibox/traffic/api/records/delete", {
         method: "POST",
@@ -84,4 +100,8 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
       return payload.deleted;
     },
   };
+}
+
+function decodedBodyPath(kind: BodyKind): string {
+  return kind === "request" ? "request-body-decoded" : "response-body-decoded";
 }

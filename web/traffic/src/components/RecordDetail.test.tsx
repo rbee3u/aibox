@@ -497,4 +497,99 @@ describe("Traffic Record Summary", () => {
     );
     expect(screen.getByText("The upstream API reported no token counters.")).toBeInTheDocument();
   });
+
+  it("defaults JSON Bodies to Pretty, folds nested values, and copies losslessly", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const source = '{"nested":{"big":900719925474099312345},"text":"' + `${"界".repeat(201)}"}`;
+    render(
+      <RecordDetail
+        detail={{ ...completedDetail, request_body_bytes: new TextEncoder().encode(source).length }}
+        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
+        bodyStatus={{ request: "loaded", response: "idle" }}
+        tab="request"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Expand nested" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("900719925474099312345")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand nested" }));
+    expect(screen.getByText("900719925474099312345")).toBeInTheDocument();
+    const stringToggle = screen.getByRole("button", { name: "Show all" });
+    expect(stringToggle.nextElementSibling).toHaveAccessibleName("Copy string value");
+
+    const nestedSummary = screen.getByText("Object · 1 item");
+    expect(nestedSummary.nextElementSibling).toHaveAccessibleName("Copy object value");
+
+    await user.click(screen.getByRole("button", { name: "Copy decoded Body Source" }));
+    expect(writeText).toHaveBeenLastCalledWith(source);
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.getByText(source)).toBeInTheDocument();
+    expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the real fallback reason when declared JSON cannot be rendered", () => {
+    const source = '{"broken":';
+    render(
+      <RecordDetail
+        detail={{ ...completedDetail, request_body_bytes: source.length }}
+        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
+        bodyStatus={{ request: "loaded", response: "idle" }}
+        tab="request"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Pretty unavailable:");
+  });
+
+  it("shows SSE Event type, completion time, partial timing warning, and Event data copy", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    const source =
+      'event: transport.delta\ndata: {"type":"answer.delta","value":900719925474099312345}\n\n' +
+      "data: [DONE]\n\n";
+    render(
+      <RecordDetail
+        detail={{ ...completedDetail, response_body_bytes: source.length }}
+        bodies={{ request: [], response: [new TextEncoder().encode(source)] }}
+        bodyStatus={{ request: "idle", response: "loaded" }}
+        eventTimings={{
+          state: "partial",
+          events: [{ sequence: 0, completed_at_ns: "1250500000" }],
+          next_sequence: 1,
+          warning: "SSE Event timing index is incomplete.",
+        }}
+        tab="response"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    expect(screen.getByText("SSE Event timing index is incomplete.")).toBeInTheDocument();
+    const first = screen.getByRole("button", { name: /answer.delta/ });
+    expect(first).toHaveTextContent("transport.delta");
+    expect(screen.getByText("+1.251 s")).toHaveAttribute("title", "2026-08-06 12:00:01.251");
+    expect(screen.getByText("Time unavailable")).toBeInTheDocument();
+    await user.click(first);
+    expect(screen.getByText("900719925474099312345")).toBeInTheDocument();
+    const copyButtons = screen.getAllByRole("button", { name: "Copy SSE Event data" });
+    await user.click(copyButtons[0]);
+    expect(writeText).toHaveBeenLastCalledWith(
+      '{\n  "type": "answer.delta",\n  "value": 900719925474099312345\n}',
+    );
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
+  });
 });

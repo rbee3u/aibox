@@ -260,6 +260,21 @@ pub(super) struct StoredRecord {
     pub active: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct StoredEventTiming {
+    pub sequence: u64,
+    pub completed_at_ns: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct StoredEventTimings {
+    pub available: bool,
+    pub partial: bool,
+    pub events: Vec<StoredEventTiming>,
+    pub next_sequence: u64,
+    pub warning: Option<String>,
+}
+
 impl TrafficStore {
     pub fn open(aibox_root: &Path) -> Result<Self> {
         crate::tenant::ensure_real_dir(aibox_root, "aibox root")?;
@@ -546,6 +561,16 @@ impl TrafficStore {
 
     pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
         let record = self.find(id)?;
+        self.open_record_body(&record, response, offset)
+    }
+
+    pub fn open_record_body(
+        &self,
+        record: &StoredRecord,
+        response: bool,
+        offset: u64,
+    ) -> Result<(fs::File, u64)> {
+        validate_record_ancestor(&self.root, &record.directory)?;
         let path = record.directory.join(if response {
             RESPONSE_BODY
         } else {
@@ -559,6 +584,77 @@ impl TrafficStore {
         }
         file.seek(SeekFrom::Start(offset))?;
         Ok((file, length))
+    }
+
+    pub fn read_event_timings(&self, id: &str, after_sequence: u64) -> Result<StoredEventTimings> {
+        let record = self.find(id)?;
+        validate_record_ancestor(&self.root, &record.directory)?;
+        let path = record.directory.join(RESPONSE_EVENTS_JSONL);
+        if !crate::tenant::real_file_exists(&path, "Traffic SSE event index")? {
+            return Ok(StoredEventTimings {
+                available: false,
+                partial: false,
+                events: Vec::new(),
+                next_sequence: after_sequence,
+                warning: Some("SSE Event timing index is unavailable".to_string()),
+            });
+        }
+
+        let file = crate::tenant::open_real_file(&path, "Traffic SSE event index")?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut events = Vec::new();
+        let mut warnings = Vec::new();
+        let mut next_sequence = after_sequence;
+        let mut line_number = 0usize;
+        loop {
+            let mut line = Vec::new();
+            let read = reader.read_until(b'\n', &mut line)?;
+            if read == 0 {
+                break;
+            }
+            line_number += 1;
+            let terminated = line.last() == Some(&b'\n');
+            if terminated {
+                line.pop();
+            } else if record.active {
+                break;
+            }
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_slice::<EventIndexLine>(&line) {
+                Ok(entry) if event_index_entry_valid(&entry, &record.request.id) => {
+                    next_sequence = next_sequence.max(entry.sequence.saturating_add(1));
+                    if entry.sequence >= after_sequence {
+                        events.push(StoredEventTiming {
+                            sequence: entry.sequence,
+                            completed_at_ns: entry.completed_at_ns,
+                        });
+                    }
+                }
+                Ok(_) => warnings.push(format!(
+                    "line {line_number}: SSE Event timing index line has invalid metadata"
+                )),
+                Err(error) => warnings.push(format!(
+                    "line {line_number}: cannot parse SSE Event timing index line: {error}"
+                )),
+            }
+        }
+        let warning = match warnings.as_slice() {
+            [] => None,
+            [warning] => Some(warning.clone()),
+            [first, ..] => Some(format!(
+                "{first}; {} additional timing index lines are invalid",
+                warnings.len() - 1
+            )),
+        };
+        Ok(StoredEventTimings {
+            available: true,
+            partial: warning.is_some(),
+            events,
+            next_sequence,
+            warning,
+        })
     }
 
     pub fn delete_ids(&self, ids: &[String]) -> Result<usize> {
@@ -853,6 +949,15 @@ struct EventIndexLine {
     completed_at_ns: String,
 }
 
+fn event_index_entry_valid(entry: &EventIndexLine, record_id: &str) -> bool {
+    entry.schema_version == FORMAT_VERSION
+        && entry.record_id == record_id
+        && entry.kind == "sse_event"
+        && entry.body_start <= entry.body_end
+        && entry.first_arrival_at_ns.parse::<u128>().is_ok()
+        && entry.completed_at_ns.parse::<u128>().is_ok()
+}
+
 fn append_event_index_warnings(path: &Path, summary: &mut SummaryMetadata) -> Result<()> {
     let index_path = path.join(RESPONSE_EVENTS_JSONL);
     if !crate::tenant::real_file_exists(&index_path, "Traffic SSE event index")? {
@@ -863,14 +968,7 @@ fn append_event_index_warnings(path: &Path, summary: &mut SummaryMetadata) -> Re
         let warning = match line {
             Ok(line) if line.is_empty() => continue,
             Ok(line) => match serde_json::from_slice::<EventIndexLine>(&line) {
-                Ok(entry)
-                    if entry.schema_version == FORMAT_VERSION
-                        && entry.record_id == summary.record_id
-                        && entry.kind == "sse_event"
-                        && entry.body_start <= entry.body_end
-                        && entry.first_arrival_at_ns.parse::<u128>().is_ok()
-                        && entry.completed_at_ns.parse::<u128>().is_ok() =>
-                {
+                Ok(entry) if event_index_entry_valid(&entry, &summary.record_id) => {
                     let _ = entry.sequence;
                     continue;
                 }

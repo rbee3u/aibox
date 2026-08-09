@@ -1,26 +1,22 @@
-import { Check, Clipboard, Download, FileText, LoaderCircle } from "lucide-react";
+import { Check, Clipboard, FileText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type {
   BodyKind,
   BodyLoadStatus,
+  DecodedBodyState,
   DetailTab,
+  EventTimingIndex,
   ProtocolDiagnostic,
   RecordDetail as RecordDetailData,
   SummaryDiagnostic,
   TokenUsage,
   UsageState,
 } from "../types";
+import { createBodyViewMemory, type BodyViewMemory } from "../bodyViewMemory";
 import { elapsedNsMs, resolveRequestedEffective, timingStages, tokenCount } from "../summary";
-import {
-  bytes,
-  concatChunks,
-  decodeBytes,
-  decodeHeader,
-  duration,
-  formatTimestamp,
-  recordDetailUrl,
-} from "../utils";
+import { decodeHeader, duration, formatTimestamp, recordDetailUrl } from "../utils";
+import { BodyViewer } from "./BodyViewer";
 import styles from "./RecordDetail.module.css";
 import { RecordHeadlineStatus } from "./RecordStatus";
 import { errorKindLabel } from "./statusPresentation";
@@ -35,6 +31,8 @@ interface RecordDetailProps {
   detail: RecordDetailData;
   bodies: Record<BodyKind, Uint8Array[]>;
   bodyStatus: Record<BodyKind, BodyLoadStatus>;
+  decodedBodies?: Record<BodyKind, DecodedBodyState>;
+  eventTimings?: EventTimingIndex | null;
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
   onDownload: (kind: BodyKind) => void;
@@ -45,38 +43,26 @@ export function RecordDetail({
   detail,
   bodies,
   bodyStatus,
+  decodedBodies = {
+    request: { bytes: null, status: "loaded", message: null },
+    response: { bytes: null, status: "loaded", message: null },
+  },
+  eventTimings = null,
   tab,
   onTabChange,
   onDownload,
   loadingBody,
 }: RecordDetailProps) {
-  const [copiedKind, setCopiedKind] = useState<BodyKind | null>(null);
-  const copiedTimer = useRef<number | undefined>(undefined);
+  const [bodyViews, setBodyViews] = useState<Record<BodyKind, BodyViewMemory>>({
+    request: createBodyViewMemory(),
+    response: createBodyViewMemory(),
+  });
   const tabRefs = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({});
   const request = detail.request;
   const response = detail.response;
   const result = detail.result;
   const [origin, path] = recordDetailUrl(request);
   const panelId = `record-panel-${request.id}`;
-
-  useEffect(
-    () => () => {
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-
-  async function copyBody(kind: BodyKind) {
-    const bodyText = decodeBytes(concatChunks(bodies[kind]), "body");
-    try {
-      await navigator.clipboard.writeText(bodyText);
-      setCopiedKind(kind);
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setCopiedKind(null), 1400);
-    } catch {
-      setCopiedKind(null);
-    }
-  }
 
   function selectAdjacentTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
@@ -143,9 +129,11 @@ export function RecordDetail({
             detail={detail}
             bodyChunks={bodies[tab]}
             bodyStatus={bodyStatus[tab]}
+            decoded={decodedBodies[tab]}
+            timings={tab === "response" ? eventTimings : null}
             loadingBody={loadingBody}
-            copied={copiedKind === tab}
-            onCopy={() => void copyBody(tab)}
+            memory={bodyViews[tab]}
+            onMemoryChange={(memory) => setBodyViews((current) => ({ ...current, [tab]: memory }))}
             onDownload={() => onDownload(tab)}
           />
         )}
@@ -507,25 +495,25 @@ function MessageData({
   detail,
   bodyChunks,
   bodyStatus,
+  decoded,
+  timings,
   loadingBody,
-  copied,
-  onCopy,
+  memory,
+  onMemoryChange,
   onDownload,
 }: {
   kind: BodyKind;
   detail: RecordDetailData;
   bodyChunks: Uint8Array[];
   bodyStatus: BodyLoadStatus;
+  decoded: DecodedBodyState;
+  timings: EventTimingIndex | null;
   loadingBody: boolean;
-  copied: boolean;
-  onCopy: () => void;
+  memory: BodyViewMemory;
+  onMemoryChange: (memory: BodyViewMemory) => void;
   onDownload: () => void;
 }) {
   const headers = kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
-  const bodyBytes = concatChunks(bodyChunks);
-  const bodyText = decodeBytes(bodyBytes, "body");
-  const recordedBytes = kind === "request" ? detail.request_body_bytes : detail.response_body_bytes;
-  const loaded = bodyStatus === "loaded";
 
   return (
     <div className={styles.messageData}>
@@ -549,46 +537,18 @@ function MessageData({
       ) : (
         <p className={styles.empty}>No headers.</p>
       )}
-      <div className={styles.sectionTitle}>
-        <h2>
-          Body <span>· {bytes(recordedBytes)}</span>
-        </h2>
-        <div className={styles.bodyActions}>
-          {loadingBody && (
-            <LoaderCircle className={styles.loading} size={15} aria-label="Loading body" />
-          )}
-          <button
-            type="button"
-            onClick={onCopy}
-            disabled={!loaded}
-            aria-label={copied ? "Body copied" : "Copy body"}
-            title={copied ? "Body copied" : "Copy body"}
-          >
-            {copied ? (
-              <Check size={15} aria-hidden="true" />
-            ) : (
-              <Clipboard size={15} aria-hidden="true" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onDownload}
-            aria-label="Download original body"
-            title="Download original body"
-          >
-            <Download size={15} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-      {bodyStatus === "error" ? (
-        <p className={styles.bodyState}>Body unavailable.</p>
-      ) : bodyStatus === "idle" || bodyStatus === "loading" ? (
-        <div className={styles.bodyState} role="status">
-          <LoaderCircle className={styles.loading} size={16} aria-hidden="true" /> Loading body…
-        </div>
-      ) : (
-        <pre className={styles.body}>{bodyText || "(empty body)"}</pre>
-      )}
+      <BodyViewer
+        kind={kind}
+        detail={detail}
+        bodyChunks={bodyChunks}
+        bodyStatus={bodyStatus}
+        decoded={decoded}
+        timings={timings}
+        loadingBody={loadingBody}
+        memory={memory}
+        onMemoryChange={onMemoryChange}
+        onDownload={onDownload}
+      />
     </div>
   );
 }

@@ -161,6 +161,13 @@ export function fakeApi(overrides: Partial<TrafficApi> = {}): TrafficApi {
     listRecords: vi.fn().mockResolvedValue(recordList),
     getRecord: vi.fn().mockResolvedValue(completedDetail),
     loadBody: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 }),
+    loadDecodedBody: vi.fn().mockResolvedValue(new Uint8Array()),
+    loadEventTimings: vi.fn().mockResolvedValue({
+      state: "unavailable",
+      events: [],
+      next_sequence: 0,
+      warning: null,
+    }),
     deleteRecords: vi.fn().mockResolvedValue(0),
     deleteAll: vi.fn().mockResolvedValue(0),
     ...overrides,

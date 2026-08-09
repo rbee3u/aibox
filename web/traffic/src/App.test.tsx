@@ -708,8 +708,8 @@ describe("Traffic App", () => {
     const api = fakeApi({
       loadBody: vi.fn<TrafficApi["loadBody"]>().mockImplementation((_id, kind) =>
         Promise.resolve({
-          bytes: encoder.encode(kind === "request" ? "request body" : "response body"),
-          nextOffset: kind === "request" ? 12 : 13,
+          bytes: encoder.encode(kind === "request" ? "request body" : "data: response body\n\n"),
+          nextOffset: kind === "request" ? 12 : 21,
         }),
       ),
     });
@@ -745,6 +745,7 @@ describe("Traffic App", () => {
     expect(within(detail).getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
     expect(within(detail).queryByText("Query parameters")).not.toBeInTheDocument();
     await user.click(within(detail).getByRole("tab", { name: "Response" }));
+    await user.click(await screen.findByRole("button", { name: /message/ }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select" }));
     await user.click(
@@ -755,6 +756,45 @@ describe("Traffic App", () => {
     const getRecordMock = api.getRecord as unknown as { mock: { calls: unknown[][] } };
     expect(getRecordMock.mock.calls).toHaveLength(1);
     expect(getRecordMock.mock.calls[0]).toEqual([completedSummary.id, expect.any(AbortSignal)]);
+  });
+
+  it("loads zstd decoded Source only after the complete raw Body is available", async () => {
+    const encoded = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
+    const decoded = new TextEncoder().encode('{"model":"gpt-5.6-sol"}');
+    const detail = {
+      ...completedDetail,
+      request: {
+        ...completedDetail.request,
+        headers: [
+          ...completedDetail.request.headers,
+          { name: "Content-Encoding", value_base64: btoa(" ZsTd ") },
+        ],
+      },
+      request_body_bytes: encoded.length,
+    };
+    const loadDecodedBody = vi.fn<TrafficApi["loadDecodedBody"]>().mockResolvedValue(decoded);
+    const api = fakeApi({
+      getRecord: vi.fn().mockResolvedValue(detail),
+      loadBody: vi.fn().mockResolvedValue({ bytes: encoded, nextOffset: encoded.length }),
+      loadDecodedBody,
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "Request" }));
+
+    await waitFor(() => expect(loadDecodedBody).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("tabpanel").textContent).toContain('"model"'));
+    expect(screen.getByText('"gpt-5.6-sol"')).toBeInTheDocument();
+    expect(loadDecodedBody).toHaveBeenCalledWith(
+      completedSummary.id,
+      "request",
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("keeps an active selection while its detail is still loading during delete-all", async () => {

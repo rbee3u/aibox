@@ -165,6 +165,18 @@ fn router(state: AppState) -> Router {
             get(crate::traffic_web::response_body),
         )
         .route(
+            "/_aibox/traffic/api/records/{id}/request-body-decoded",
+            get(crate::traffic_web::decoded_request_body),
+        )
+        .route(
+            "/_aibox/traffic/api/records/{id}/response-body-decoded",
+            get(crate::traffic_web::decoded_response_body),
+        )
+        .route(
+            "/_aibox/traffic/api/records/{id}/response-event-timings",
+            get(crate::traffic_web::response_event_timings),
+        )
+        .route(
             "/_aibox/traffic/{*path}",
             get(crate::traffic_web::not_found),
         )

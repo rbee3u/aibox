@@ -53,4 +53,38 @@ describe("Traffic API client", () => {
       "/_aibox/traffic/api/records/record%2Fid/response-body?offset=7",
     );
   });
+
+  it("loads decoded Body bytes without a raw offset", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
+    const api = createTrafficApi(fetchMock);
+
+    await expect(api.loadDecodedBody("record/id", "request")).resolves.toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/_aibox/traffic/api/records/record%2Fid/request-body-decoded",
+    );
+  });
+
+  it("loads SSE Event timings incrementally", async () => {
+    const payload = {
+      state: "partial",
+      events: [{ sequence: 3, completed_at_ns: "123000000" }],
+      next_sequence: 4,
+      warning: "index is incomplete",
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const api = createTrafficApi(fetchMock);
+
+    await expect(api.loadEventTimings("record/id", 3)).resolves.toEqual(payload);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/_aibox/traffic/api/records/record%2Fid/response-event-timings?after_sequence=3",
+    );
+  });
 });
