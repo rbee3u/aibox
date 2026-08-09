@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.19.0 <25"
   },
   "scripts": {
     "format": "prettier --write .",
@@ -12,8 +12,8 @@
     "test": "vitest run",
     "test:chrome": "playwright test --project=desktop-chrome",
     "test:browsers": "playwright test --project=desktop-firefox --project=desktop-webkit",
-    "lint": "eslint src vite.config.ts",
-    "check": "prettier --check . && tsc --noEmit && npm run build && node --check ../../assets/traffic.js && npm run test && npm run lint"
+    "lint": "eslint .",
+    "check": "prettier --check . && tsc && npm run build && node --check ../../assets/traffic.js && npm run test && npm run lint"
   },
   "dependencies": {
     "lossless-json": "^4.3.0",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",
@@ -33,7 +34,7 @@
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "prettier": "^3.9.6",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.66.0",

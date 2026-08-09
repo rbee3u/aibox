@@ -4,7 +4,7 @@
 #[cfg(test)]
 use crate::agent::AgentKind;
 use crate::platform;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 
 const CONTAINER_HOME: &str = "/home/aibox";

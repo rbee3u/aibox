@@ -5,6 +5,7 @@
 //! embedding API.
 
 #![warn(missing_docs)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 mod agent;
 mod cli;
@@ -27,29 +28,61 @@ mod traffic_proxy;
 mod traffic_store;
 mod traffic_web;
 
-#[cfg(test)]
-pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 use agent::AgentKind;
 use anyhow::{Context, Result};
 use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::ExitCode;
 use tenant::{ManagedTenant, Tenant, TenantAgent};
 
-pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
-    match std::env::var(name) {
-        Ok(value) if value.is_empty() => anyhow::bail!("{name} is set but empty"),
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            anyhow::bail!("{name} is not valid UTF-8")
+enum DockerSource {
+    System,
+    #[cfg(test)]
+    Injected(docker::DockerCli),
+}
+
+impl DockerSource {
+    fn build(&self, dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
+        match self {
+            Self::System => docker::build_image(dockerfile, image, cache),
+            #[cfg(test)]
+            Self::Injected(docker) => docker::build_image_with(docker, dockerfile, image, cache),
         }
+    }
+
+    fn image_exists(&self, image: &str) -> Result<bool> {
+        match self {
+            Self::System => docker::image_exists(image),
+            #[cfg(test)]
+            Self::Injected(docker) => docker::image_exists_with(docker, image),
+        }
+    }
+
+    fn run(&self, run_args: &[String], image: &str, command: &[OsString]) -> Result<i32> {
+        match self {
+            Self::System => docker::run(run_args, image, command, || {}),
+            #[cfg(test)]
+            Self::Injected(docker) => docker::run_with(docker, run_args, image, command, || {}),
+        }
+    }
+}
+
+pub(crate) fn env_override(name: &str) -> Result<Option<String>> {
+    env_override_from(name, std::env::var_os(name).as_deref())
+}
+
+pub(crate) fn env_override_from(name: &str, value: Option<&OsStr>) -> Result<Option<String>> {
+    match value {
+        Some(value) if value.is_empty() => anyhow::bail!("{name} is set but empty"),
+        Some(value) => Ok(Some(
+            value
+                .to_str()
+                .with_context(|| format!("{name} is not valid UTF-8"))?
+                .to_string(),
+        )),
+        None => Ok(None),
     }
 }
 
@@ -124,16 +157,6 @@ fn write_bytes(out: &mut impl std::io::Write, bytes: &[u8]) -> Result<bool> {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
         Err(e) => Err(e).context("write to stdout"),
     }
-}
-
-/// Execute one parsed aibox command with UTF-8 agent pass-through arguments.
-///
-/// Use [`run_os`] when arguments collected from the operating system must be
-/// forwarded without requiring UTF-8.
-#[cfg(test)]
-fn run(cli: Cli, passthrough: Vec<String>) -> Result<i32> {
-    let passthrough: Vec<_> = passthrough.into_iter().map(OsString::from).collect();
-    run_os(cli, &passthrough)
 }
 
 /// Execute one parsed aibox command, preserving opaque operating-system
@@ -219,7 +242,15 @@ fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()>
 
 fn run_build(args: &BuildArgs) -> Result<i32> {
     let image_override = env_override("AIBOX_IMAGE")?;
-    let image = image_for(image_override.as_deref())?;
+    run_build_with(args, image_override.as_deref(), DockerSource::System)
+}
+
+fn run_build_with(
+    args: &BuildArgs,
+    image_override: Option<&str>,
+    docker: DockerSource,
+) -> Result<i32> {
+    let image = image_for(image_override)?;
     let cache = if args.force {
         BuildCache::NoCachePull
     } else {
@@ -230,27 +261,47 @@ fn run_build(args: &BuildArgs) -> Result<i32> {
     } else {
         eprintln!(">> building {image} (cache enabled) ...");
     }
-    docker::build_image(docker::DOCKERFILE, &image, cache).context("build aibox image")?;
+    docker
+        .build(docker::DOCKERFILE, &image, cache)
+        .context("build aibox image")?;
 
     Ok(0)
 }
 
 fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Result<i32> {
     let image_override = env_override("AIBOX_IMAGE")?;
-    let image = image_for(image_override.as_deref())?;
+    let root = tenant::aibox_root()?;
+    run_agent_with(
+        agent,
+        run,
+        passthrough,
+        &root,
+        image_override.as_deref(),
+        DockerSource::System,
+    )
+}
+
+fn run_agent_with(
+    agent: AgentKind,
+    run: &RunArgs,
+    passthrough: &[OsString],
+    root: &Path,
+    image_override: Option<&str>,
+    docker: DockerSource,
+) -> Result<i32> {
+    let image = image_for(image_override)?;
     if image_override.is_some() {
         eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
     }
 
-    let root = tenant::aibox_root()?;
-    let tenant = ManagedTenant::resolve(&root, run.tenant_name())?;
+    let tenant = ManagedTenant::resolve(root, run.tenant_name())?;
 
     let workspace = runspec::resolve_workspace(run.workspace.as_deref())?;
     let mounts = runspec::resolve_mounts(&run.mount)?;
     runspec::validate_extra_mount_targets(&mounts)?;
-    runspec::validate_aibox_mount_sources(&workspace, &mounts, &root)?;
+    runspec::validate_aibox_mount_sources(&workspace, &mounts, root)?;
 
-    if !docker::image_exists(&image)? {
+    if !docker.image_exists(&image)? {
         anyhow::bail!("{image} is not present locally; build it first with `aibox build`");
     }
 
@@ -262,7 +313,100 @@ fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Resul
     let agent_command = agent.build_command(passthrough);
     let run_args = runspec::assemble_run_args(&workspace, &home_dir, &mounts);
 
-    docker::run(&run_args, &image, &agent_command, || {})
+    docker.run(&run_args, &image, &agent_command)
+}
+
+#[cfg(test)]
+struct TestCommandContext<'a> {
+    root: &'a Path,
+    host_home: &'a Path,
+    image_override: Option<&'a OsStr>,
+    docker: &'a docker::DockerCli,
+}
+
+#[cfg(test)]
+fn run_with_context(
+    cli: Cli,
+    passthrough: &[OsString],
+    context: TestCommandContext<'_>,
+) -> Result<i32> {
+    let image_override = env_override_from("AIBOX_IMAGE", context.image_override)?;
+    match cli.command {
+        Command::Run(args) => run_agent_with(
+            args.agent.unwrap_or(AgentKind::Codex),
+            &args,
+            passthrough,
+            context.root,
+            image_override.as_deref(),
+            DockerSource::Injected(context.docker.clone()),
+        ),
+        Command::Build(args) => {
+            reject_passthrough("build takes no pass-through args", passthrough)?;
+            run_build_with(
+                &args,
+                image_override.as_deref(),
+                DockerSource::Injected(context.docker.clone()),
+            )
+        }
+        Command::Completion(args) => {
+            reject_passthrough("completion takes no pass-through args", passthrough)?;
+            completion::dispatch(&args)
+        }
+        Command::Tenant(args) => {
+            reject_passthrough("tenant takes no pass-through args", passthrough)?;
+            tenant::dispatch_at(context.root, &args.command)
+        }
+        Command::Component(args) => {
+            reject_passthrough("component takes no pass-through args", passthrough)?;
+            component::dispatch_with(
+                &args,
+                context.root,
+                context.host_home,
+                image_override.as_deref(),
+                context.docker,
+            )
+        }
+        Command::Config(args) => {
+            reject_passthrough("config takes no pass-through args", passthrough)?;
+            if matches!(
+                &args.command,
+                crate::cli::ConfigCommand::PropagateAuth { .. }
+            ) {
+                if args.tenant.tenant.is_some() {
+                    anyhow::bail!("config propagate-auth does not accept --tenant");
+                }
+                if args.agent == Some(AgentKind::Claude) {
+                    anyhow::bail!("config propagate-auth supports only --agent codex");
+                }
+                config::propagate_auth_from(context.root, context.host_home)
+            } else {
+                let selected = TenantAgent::resolve_with_home(
+                    args.agent.unwrap_or(AgentKind::Codex),
+                    context.root,
+                    args.tenant.host,
+                    args.tenant.tenant_name(),
+                    context.host_home,
+                )?;
+                config::dispatch(&selected, &args.command)
+            }
+        }
+        Command::Session(args) => {
+            reject_passthrough("session takes no pass-through args", passthrough)?;
+            let tenant = Tenant::resolve_with_home(
+                context.root,
+                args.tenant.host,
+                args.tenant.tenant_name(),
+                context.host_home,
+            )?;
+            tenant.validate_session_home()?;
+            let selected = tenant.for_agent(args.agent.unwrap_or(AgentKind::Codex));
+            session::dispatch(selected.agent, selected.home_dir(), args.command.as_ref())
+        }
+        Command::Traffic(args) => {
+            reject_passthrough("traffic takes no pass-through args", passthrough)?;
+            traffic::dispatch(&args)
+        }
+    }
 }
 
 #[cfg(test)]

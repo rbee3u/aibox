@@ -1,7 +1,6 @@
 use super::*;
 use crate::agent::AgentKind;
 use crate::tenant::{ManagedTenant, Tenant};
-use crate::testutil::EnvGuard;
 use serde_json::Value;
 use std::cell::Cell;
 use std::io::{self, BufRead, Cursor, IsTerminal};
@@ -70,10 +69,8 @@ fn report_outcome<'a>(report: &'a AuthPropagationReport, label: &str) -> &'a Pro
 
 #[test]
 fn credential_propagation_updates_every_matching_existing_scope() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let _home = EnvGuard::set("HOME", home.path().as_os_str());
     let source = chatgpt_auth("account-a", "2026-08-08T04:22:23.476121Z", "source");
     let host = install_host_source(root.path(), home.path(), &source);
 
@@ -114,7 +111,8 @@ fn credential_propagation_updates_every_matching_existing_scope() {
     create_named_auth(&selected, "invalid", b"not-json\n");
     let host_old = create_named_auth(&host, "old", &older);
 
-    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+    let report =
+        execute_auth_propagation(plan_auth_propagation_from(root.path(), home.path()).unwrap());
 
     assert_eq!(fs::read(&current_path).unwrap(), source);
     assert_eq!(fs::read(&named_old).unwrap(), source);
@@ -156,10 +154,12 @@ fn credential_propagation_updates_every_matching_existing_scope() {
             && !entry.label.ends_with("other-broken")
             && !entry.label.ends_with("api-key")
     }));
-    assert!(report
-        .entries
-        .windows(2)
-        .all(|entries| entries[0].label < entries[1].label));
+    assert!(
+        report
+            .entries
+            .windows(2)
+            .all(|entries| entries[0].label < entries[1].label)
+    );
     assert_eq!(
         report.counts(),
         PropagationCounts {
@@ -175,21 +175,23 @@ fn credential_propagation_updates_every_matching_existing_scope() {
 
 #[test]
 fn credential_propagation_requires_a_valid_host_chatgpt_source() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let _home = EnvGuard::set("HOME", home.path().as_os_str());
     let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
     tenant.ensure_initialized().unwrap();
     let target = tenant.for_agent(AgentKind::Codex).state_file("auth.json");
     let old = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "old");
     fs::write(&target, &old).unwrap();
 
-    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    let error = plan_auth_propagation_from(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("does not exist"), "{error}");
 
     install_host_source(root.path(), home.path(), br#"{"OPENAI_API_KEY":"sk-test"}"#);
-    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    let error = plan_auth_propagation_from(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("not ChatGPT Credentials"), "{error}");
 
     install_host_source(
@@ -197,17 +199,17 @@ fn credential_propagation_requires_a_valid_host_chatgpt_source() {
         home.path(),
         br#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-a"},"last_refresh":"bad"}"#,
     );
-    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    let error = plan_auth_propagation_from(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("invalid last_refresh"), "{error}");
     assert_eq!(fs::read(&target).unwrap(), old);
 }
 
 #[test]
 fn credential_propagation_does_not_create_missing_or_scan_orphaned_configs() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let _home = EnvGuard::set("HOME", home.path().as_os_str());
     let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
     install_host_source(root.path(), home.path(), &source);
 
@@ -235,7 +237,8 @@ fn credential_propagation_does_not_create_missing_or_scan_orphaned_configs() {
     tenant::set_600(&orphan_auth).unwrap();
     let orphan_before = fs::read(&orphan_auth).unwrap();
 
-    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+    let report =
+        execute_auth_propagation(plan_auth_propagation_from(root.path(), home.path()).unwrap());
 
     assert!(report.entries.is_empty());
     assert!(!selected.state_file("auth.json").exists());
@@ -246,12 +249,10 @@ fn credential_propagation_does_not_create_missing_or_scan_orphaned_configs() {
 #[cfg(unix)]
 #[test]
 fn credential_propagation_preflight_is_structurally_strict_and_preserves_modes() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let _home = EnvGuard::set("HOME", home.path().as_os_str());
     let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
     install_host_source(root.path(), home.path(), &source);
     let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
@@ -265,7 +266,9 @@ fn credential_propagation_preflight_is_structurally_strict_and_preserves_modes()
     fs::remove_file(&linked).unwrap();
     symlink(&current, &linked).unwrap();
 
-    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    let error = plan_auth_propagation_from(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("non-regular file"), "{error}");
     assert_eq!(fs::read(&current).unwrap(), older);
 
@@ -275,11 +278,14 @@ fn credential_propagation_preflight_is_structurally_strict_and_preserves_modes()
 
     let linked_tenant = root.path().join("tenants/linked");
     symlink(&tenant.home_dir, &linked_tenant).unwrap();
-    let error = plan_auth_propagation(root.path()).unwrap_err().to_string();
+    let error = plan_auth_propagation_from(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("not a real directory"), "{error}");
     fs::remove_file(linked_tenant).unwrap();
 
-    let report = execute_auth_propagation(plan_auth_propagation(root.path()).unwrap());
+    let report =
+        execute_auth_propagation(plan_auth_propagation_from(root.path(), home.path()).unwrap());
     assert_eq!(report.counts().updated, 2);
     assert_eq!(fs::read(&current).unwrap(), source);
     assert_eq!(
@@ -294,10 +300,8 @@ fn credential_propagation_preflight_is_structurally_strict_and_preserves_modes()
 
 #[test]
 fn credential_propagation_continues_after_write_failure_and_uses_the_plan_snapshot() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let _home = EnvGuard::set("HOME", home.path().as_os_str());
     let source = chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source");
     install_host_source(root.path(), home.path(), &source);
     let older = chatgpt_auth("account-a", "2026-08-07T04:22:23Z", "older");
@@ -311,7 +315,7 @@ fn credential_propagation_continues_after_write_failure_and_uses_the_plan_snapsh
     fs::write(&first_auth, &older).unwrap();
     fs::write(&second_auth, &older).unwrap();
 
-    let plan = plan_auth_propagation(root.path()).unwrap();
+    let plan = plan_auth_propagation_from(root.path(), home.path()).unwrap();
     fs::remove_file(&first_auth).unwrap();
     fs::create_dir(&first_auth).unwrap();
     fs::write(
@@ -518,7 +522,6 @@ fn invalid_complete_configs_are_visible_readable_and_rejected_by_apply() {
 #[cfg(unix)]
 #[test]
 fn edit_can_repair_an_invalid_complete_config() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, "broken").unwrap();
@@ -538,22 +541,21 @@ fn edit_can_repair_an_invalid_complete_config() {
         "editor",
         "#!/bin/sh\ncase \"$1\" in\n  *config.toml*) printf 'model = \"repaired\"\\n' > \"$1\" ;;\n  *auth.json*) printf '{}\\n' > \"$1\" ;;\nesac\n",
     );
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
-
-    edit_named_config(&selected, "broken").unwrap();
+    edit_named_config_with_editor(&selected, "broken", editor.as_os_str()).unwrap();
     apply_named_config(&selected, "broken").unwrap();
 
-    assert!(fs::read_to_string(selected.state_file("config.toml"))
-        .unwrap()
-        .contains("model = \"repaired\""));
+    assert!(
+        fs::read_to_string(selected.state_file("config.toml"))
+            .unwrap()
+            .contains("model = \"repaired\"")
+    );
 }
 
 #[test]
 fn apply_after_edit_confirmation_names_the_full_target_and_requires_explicit_yes() {
     let root = tempfile::tempdir().unwrap();
     let managed = selected(root.path(), AgentKind::Claude);
-    let managed_prompt =
-        "Apply Named Config 'custom' to Claude Current Config for Managed Tenant 'work' now? [y/N] ";
+    let managed_prompt = "Apply Named Config 'custom' to Claude Current Config for Managed Tenant 'work' now? [y/N] ";
 
     for yes in ["y\n", "Y\n", "yes\n", " YES \n"] {
         let mut input = Cursor::new(yes.as_bytes());
@@ -634,27 +636,36 @@ fn noninteractive_edit_confirmation_skips_application() {
 #[cfg(unix)]
 #[test]
 fn successful_named_edit_applies_only_after_confirmation() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, "custom").unwrap();
     let editor_dir = tempfile::tempdir().unwrap();
     let editor =
         crate::testutil::write_stub_script(editor_dir.path(), "editor", "#!/bin/sh\nexit 0\n");
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
     let prompted = Cell::new(false);
 
-    edit_named_config_with_apply_prompt(&selected, "custom", |_, _| {
-        prompted.set(true);
-        Ok(false)
-    })
+    edit_named_config_with_editor_and_apply_prompt(
+        &selected,
+        "custom",
+        editor.as_os_str(),
+        |_, _| {
+            prompted.set(true);
+            Ok(false)
+        },
+    )
     .unwrap();
 
     assert!(prompted.get());
     assert!(!selected.state_file("config.toml").exists());
     assert!(!selected.state_file("auth.json").exists());
 
-    edit_named_config_with_apply_prompt(&selected, "custom", |_, _| Ok(true)).unwrap();
+    edit_named_config_with_editor_and_apply_prompt(
+        &selected,
+        "custom",
+        editor.as_os_str(),
+        |_, _| Ok(true),
+    )
+    .unwrap();
 
     assert!(selected.state_file("config.toml").exists());
     assert!(selected.state_file("auth.json").exists());
@@ -663,7 +674,6 @@ fn successful_named_edit_applies_only_after_confirmation() {
 #[cfg(unix)]
 #[test]
 fn failed_named_edit_does_not_ask_to_apply() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, "custom").unwrap();
@@ -673,13 +683,17 @@ fn failed_named_edit_does_not_ask_to_apply() {
         "editor",
         "#!/bin/sh\ncase \"$1\" in\n  *config.toml*) printf 'model = \"edited\"\\n' > \"$1\" ;;\n  *auth.json*) exit 7 ;;\nesac\n",
     );
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
     let prompted = Cell::new(false);
 
-    let error = edit_named_config_with_apply_prompt(&selected, "custom", |_, _| {
-        prompted.set(true);
-        Ok(true)
-    })
+    let error = edit_named_config_with_editor_and_apply_prompt(
+        &selected,
+        "custom",
+        editor.as_os_str(),
+        |_, _| {
+            prompted.set(true);
+            Ok(true)
+        },
+    )
     .unwrap_err()
     .to_string();
 
@@ -696,7 +710,6 @@ fn failed_named_edit_does_not_ask_to_apply() {
 #[cfg(unix)]
 #[test]
 fn apply_failure_after_edit_keeps_the_edit_and_reports_context() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Claude);
     create_named_config(&selected, "custom").unwrap();
@@ -708,12 +721,17 @@ fn apply_failure_after_edit_keeps_the_edit_and_reports_context() {
         "editor",
         "#!/bin/sh\nprintf '{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"edited\"}}\\n' > \"$1\"\n",
     );
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
     fs::write(selected.state_file("settings.json"), "not-json\n").unwrap();
 
     let error = format!(
         "{:#}",
-        edit_named_config_with_apply_prompt(&selected, "custom", |_, _| Ok(true)).unwrap_err()
+        edit_named_config_with_editor_and_apply_prompt(
+            &selected,
+            "custom",
+            editor.as_os_str(),
+            |_, _| Ok(true),
+        )
+        .unwrap_err()
     );
 
     assert!(error.contains("was edited successfully"), "{error}");
@@ -733,7 +751,6 @@ fn apply_failure_after_edit_keeps_the_edit_and_reports_context() {
 fn edit_current_initializes_missing_state_and_preserves_raw_invalid_content() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let tenant = ManagedTenant::resolve(root.path(), "new").unwrap();
     let selected = tenant.for_agent(AgentKind::Codex);
@@ -743,9 +760,7 @@ fn edit_current_initializes_missing_state_and_preserves_raw_invalid_content() {
         "editor",
         "#!/bin/sh\ncase \"$1\" in\n  *config.toml*) printf 'not toml' > \"$1\" ;;\n  *auth.json*) printf 'not json' > \"$1\" ;;\nesac\n",
     );
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
-
-    edit_current_config(&selected).unwrap();
+    edit_current_config_with_editor(&selected, editor.as_os_str()).unwrap();
 
     assert_eq!(
         fs::read(selected.state_file("config.toml")).unwrap(),
@@ -770,7 +785,6 @@ fn edit_current_initializes_missing_state_and_preserves_raw_invalid_content() {
 #[cfg(unix)]
 #[test]
 fn edit_current_keeps_an_earlier_commit_when_the_next_editor_fails() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     fs::write(selected.state_file("config.toml"), "old-main\n").unwrap();
@@ -781,9 +795,9 @@ fn edit_current_keeps_an_earlier_commit_when_the_next_editor_fails() {
         "editor",
         "#!/bin/sh\ncase \"$1\" in\n  *config.toml*) printf 'new-main' > \"$1\" ;;\n  *auth.json*) exit 7 ;;\nesac\n",
     );
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
-
-    let error = edit_current_config(&selected).unwrap_err().to_string();
+    let error = edit_current_config_with_editor(&selected, editor.as_os_str())
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("editor exited"), "{error}");
     assert_eq!(
@@ -835,9 +849,11 @@ fn claude_apply_sets_and_removes_fixed_fields_without_touching_statusline() {
     assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], "https://new");
     assert_eq!(settings["env"]["KEEP"], "yes");
     assert!(settings["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
-    assert!(settings["env"]
-        .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-        .is_none());
+    assert!(
+        settings["env"]
+            .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+            .is_none()
+    );
     assert_eq!(settings["permissions"]["defaultMode"], "bypassPermissions");
     assert_eq!(settings["statusLine"]["command"], "keep");
 }
@@ -904,9 +920,11 @@ fn empty_config_keeps_missing_agent_files_absent() {
 
         apply_named_config(&selected, agent.tag()).unwrap();
 
-        assert!(!selected
-            .state_file(selected.agent.main_config_file())
-            .exists());
+        assert!(
+            !selected
+                .state_file(selected.agent.main_config_file())
+                .exists()
+        );
         if let Some(auth) = selected.agent.native_auth_file() {
             assert!(!selected.state_file(auth).exists());
         }
@@ -953,10 +971,12 @@ fn apply_preserves_existing_modes_and_uses_0600_for_new_files() {
     apply_named_config(&codex, "empty").unwrap();
 
     assert!(codex.state_file("config.toml").is_file());
-    assert!(fs::read_to_string(codex.state_file("config.toml"))
-        .unwrap()
-        .trim()
-        .is_empty());
+    assert!(
+        fs::read_to_string(codex.state_file("config.toml"))
+            .unwrap()
+            .trim()
+            .is_empty()
+    );
     assert_eq!(
         fs::read_to_string(codex.state_file("auth.json")).unwrap(),
         "{}\n"
@@ -1143,7 +1163,6 @@ fn config_catalog_permissions_are_private() {
 fn host_apply_preserves_existing_home_and_file_modes() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let agent_dir = home.path().join(".claude");
@@ -1152,10 +1171,11 @@ fn host_apply_preserves_existing_home_and_file_modes() {
     let settings = agent_dir.join("settings.json");
     fs::write(&settings, "{\"theme\":\"dark\"}\n").unwrap();
     fs::set_permissions(&settings, fs::Permissions::from_mode(0o640)).unwrap();
-    let _home = EnvGuard::set("HOME", home.path());
-    let selected = Tenant::resolve(root.path(), true, "default")
-        .unwrap()
-        .for_agent(AgentKind::Claude);
+    let selected = Tenant::Host {
+        home_dir: home.path().to_path_buf(),
+        root_dir: root.path().to_path_buf(),
+    }
+    .for_agent(AgentKind::Claude);
 
     create_named_config(&selected, "custom").unwrap();
     apply_named_config(&selected, "custom").unwrap();
@@ -1176,7 +1196,6 @@ fn host_apply_preserves_existing_home_and_file_modes() {
 fn host_current_edit_preserves_existing_home_and_file_modes() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let agent_dir = home.path().join(".claude");
@@ -1191,13 +1210,13 @@ fn host_current_edit_preserves_existing_home_and_file_modes() {
         "editor",
         "#!/bin/sh\nprintf 'new raw content' > \"$1\"\n",
     );
-    let _home = EnvGuard::set("HOME", home.path());
-    let _visual = EnvGuard::set("VISUAL", editor.as_os_str());
-    let selected = Tenant::resolve(root.path(), true, "default")
-        .unwrap()
-        .for_agent(AgentKind::Claude);
+    let selected = Tenant::Host {
+        home_dir: home.path().to_path_buf(),
+        root_dir: root.path().to_path_buf(),
+    }
+    .for_agent(AgentKind::Claude);
 
-    edit_current_config(&selected).unwrap();
+    edit_current_config_with_editor(&selected, editor.as_os_str()).unwrap();
 
     assert_eq!(fs::read(&settings).unwrap(), b"new raw content");
     assert_eq!(

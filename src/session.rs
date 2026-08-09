@@ -6,7 +6,7 @@
 
 use crate::agent::AgentKind;
 use crate::cli::SessionCommand;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -277,6 +277,9 @@ fn open_session_transcript_at(
     use std::os::fd::{AsRawFd, FromRawFd};
 
     let file_name = os_str_c_string(file_name)?;
+    // SAFETY: `parent` owns a valid directory descriptor and `file_name` is a
+    // live NUL-terminated string. `openat` retains neither pointer, and its
+    // return value is checked before it is treated as an owned descriptor.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -297,6 +300,8 @@ fn open_session_transcript_at(
         }
         return Err(error).with_context(|| format!("open session transcript {}", safe_path(path)));
     }
+    // SAFETY: `fd` is nonnegative and newly returned by `openat`; ownership is
+    // transferred exactly once to `File`, which will close it on drop.
     let file = unsafe { fs::File::from_raw_fd(fd) };
     let metadata = file
         .metadata()
@@ -326,6 +331,8 @@ fn remove_session_transcript(home: &Path, path: &Path) -> Result<()> {
     // this deletion by swapping an ancestor for a symlink after discovery.
     drop(open_session_transcript_at(&parent, &file_name, path)?);
     let file_name = os_str_c_string(&file_name)?;
+    // SAFETY: `parent` owns a valid directory descriptor and `file_name`
+    // remains a live NUL-terminated string for the duration of the call.
     let result = unsafe { libc::unlinkat(parent.as_raw_fd(), file_name.as_ptr(), 0) };
     if result == 0 {
         Ok(())
@@ -369,6 +376,8 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
 
     let home_path = std::ffi::CString::new(home.as_os_str().as_bytes())
         .with_context(|| format!("tenant home contains a NUL byte: {}", safe_path(home)))?;
+    // SAFETY: `home_path` is NUL-terminated and live for the call. `open`
+    // retains no pointer, and its return value is checked before ownership.
     let home_fd = unsafe {
         libc::open(
             home_path.as_ptr(),
@@ -379,10 +388,15 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
         return Err(io::Error::last_os_error())
             .with_context(|| format!("open tenant home {}", safe_path(home)));
     }
+    // SAFETY: `home_fd` is nonnegative and newly returned by `open`; ownership
+    // is transferred exactly once to `OwnedFd`.
     let mut parent = unsafe { OwnedFd::from_raw_fd(home_fd) };
 
     for component in components {
         let component_c = os_str_c_string(&component)?;
+        // SAFETY: `parent` owns a valid directory descriptor and `component_c`
+        // is NUL-terminated and live for the call. The result is checked before
+        // it is treated as an owned descriptor.
         let next_fd = unsafe {
             libc::openat(
                 parent.as_raw_fd(),
@@ -394,6 +408,9 @@ fn open_session_parent(home: &Path, path: &Path) -> Result<(std::os::fd::OwnedFd
             return Err(io::Error::last_os_error())
                 .with_context(|| format!("open session path {}", safe_path(path)));
         }
+        // SAFETY: `next_fd` is nonnegative and newly returned by `openat`;
+        // ownership is transferred exactly once, replacing and closing the
+        // previous parent descriptor.
         parent = unsafe { OwnedFd::from_raw_fd(next_fd) };
     }
 
@@ -619,10 +636,10 @@ pub(crate) trait SessionBackend {
             if first_typed.is_none() {
                 first_typed = typed;
             }
-            if let Some(candidate) = self.title_of(value) {
-                if !candidate.is_empty() {
-                    title = Some(candidate);
-                }
+            if let Some(candidate) = self.title_of(value)
+                && !candidate.is_empty()
+            {
+                title = Some(candidate);
             }
             Ok(true)
         })?;

@@ -1,14 +1,9 @@
-//! Shared test helpers for environment isolation, executable stubs, argv
-//! assertions, and JSONL fixtures.
-//!
-//! Env vars are process-global, so a test that installs a guard must also hold
-//! [`crate::test_env_lock`] to keep a parallel test from observing the change.
+//! Shared test helpers for executable stubs, argv assertions, filesystem
+//! permissions, and JSONL fixtures.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-/// Write `body` to `dir/name` as an executable stub, returning its path. Used to
-/// put a fake `docker` on `$PATH` (with [`EnvGuard::prepend_path`]).
+/// Write `body` to `dir/name` as an executable stub, returning its path.
 #[cfg(unix)]
 pub(crate) fn write_stub_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -98,40 +93,5 @@ impl Drop for UnreadableDir {
         use std::os::unix::fs::PermissionsExt;
 
         let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
-    }
-}
-
-/// Sets (or removes) one env var, restoring the previous value on drop.
-pub(crate) struct EnvGuard {
-    name: &'static str,
-    old: Option<OsString>,
-}
-
-impl EnvGuard {
-    pub(crate) fn set(name: &'static str, value: impl Into<OsString>) -> Self {
-        let old = std::env::var_os(name);
-        std::env::set_var(name, value.into());
-        Self { name, old }
-    }
-
-    /// Put `dir` first on `$PATH`, so a stub `docker` there wins over a real one.
-    pub(crate) fn prepend_path(dir: &Path) -> Self {
-        let old = std::env::var_os("PATH");
-        let mut paths = vec![dir.to_path_buf()];
-        if let Some(old_path) = &old {
-            paths.extend(std::env::split_paths(old_path));
-        }
-        let joined = std::env::join_paths(paths).expect("join PATH");
-        std::env::set_var("PATH", joined);
-        Self { name: "PATH", old }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match &self.old {
-            Some(value) => std::env::set_var(self.name, value),
-            None => std::env::remove_var(self.name),
-        }
     }
 }

@@ -7,7 +7,8 @@ continues to embed the generated files in `assets/traffic.html`,
 
 ## Requirements
 
-Use Node 24, matching the bundled aibox development image (`v24.4.0`). The
+Use Node 24, matching the bundled aibox development image (`v24.19.0`). With
+`nvm`, install and select it with `nvm install 24.19.0` and `nvm use 24.19.0`. The
 repository commits `package-lock.json`, so install the exact dependency tree
 with:
 

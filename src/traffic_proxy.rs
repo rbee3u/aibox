@@ -3,13 +3,12 @@ use crate::traffic_interpretation::{
     ProtocolFamily, ProtocolObserver, ProtocolSummary, ResponseModeValue,
 };
 use crate::traffic_store::{
-    offset_ns, utc_now, ErrorKind, ErrorMetadata, NewRecord, Outcome, RecordedHeader,
-    ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore,
-    FORMAT_VERSION,
+    ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRecord, Outcome, RecordedHeader, ResponseMetadata,
+    ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore, offset_ns, utc_now,
 };
 use anyhow::Context as _;
 use axum::body::Body;
-use axum::http::{header, HeaderMap, Method, Request, Response, StatusCode, Version};
+use axum::http::{HeaderMap, Method, Request, Response, StatusCode, Version, header};
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
 use serde::Serialize;
@@ -871,20 +870,18 @@ async fn record_response_stream_with_index(
                         .timing
                         .upstream_response_body_first_byte_at_ns
                         .is_none()
+                }) && let Err(error) = guard.mark_timing(|timing| {
+                    timing.upstream_response_body_first_byte_at_ns =
+                        Some(offset_ns(guard.record.origin))
                 }) {
-                    if let Err(error) = guard.mark_timing(|timing| {
-                        timing.upstream_response_body_first_byte_at_ns =
-                            Some(offset_ns(guard.record.origin))
-                    }) {
-                        let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
-                        break (
-                            Outcome::RecordingFailed,
-                            Some(ErrorMetadata {
-                                kind: ErrorKind::ResponseRecordingFailed,
-                                message: error.to_string(),
-                            }),
-                        );
-                    }
+                    let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
+                    break (
+                        Outcome::RecordingFailed,
+                        Some(ErrorMetadata {
+                            kind: ErrorKind::ResponseRecordingFailed,
+                            message: error.to_string(),
+                        }),
+                    );
                 }
                 if let Err(error) = file.write_all(&chunk).await {
                     let message = format!("record response body: {error}");
@@ -996,18 +993,18 @@ async fn record_response_stream_with_index(
                 }),
             );
         }
-        if response_completed {
-            if let Err(error) = guard.mark_timing(|timing| {
+        if response_completed
+            && let Err(error) = guard.mark_timing(|timing| {
                 timing.upstream_response_body_completed_at_ns = Some(offset_ns(guard.record.origin))
-            }) {
-                terminal = (
-                    Outcome::RecordingFailed,
-                    Some(ErrorMetadata {
-                        kind: ErrorKind::ResponseRecordingFailed,
-                        message: error.to_string(),
-                    }),
-                );
-            }
+            })
+        {
+            terminal = (
+                Outcome::RecordingFailed,
+                Some(ErrorMetadata {
+                    kind: ErrorKind::ResponseRecordingFailed,
+                    message: error.to_string(),
+                }),
+            );
         }
         if let Err(error) = guard.finish(terminal.0, terminal.1) {
             let message = format!("finalize Traffic Record: {error:#}");
@@ -1335,26 +1332,27 @@ impl SseIndexer {
                     self.protocol_events
                         .push((self.data.clone(), at_ns.clone()));
                 }
-                if self.data_seen && !self.indexing_disabled {
-                    if let Some(file) = self.file.as_mut() {
-                        let entry = SseEventIndexEntry {
-                            schema_version: FORMAT_VERSION,
-                            record_id: self.record_id.clone(),
-                            kind: "sse_event".to_string(),
-                            sequence: self.sequence,
-                            body_start: self.event_start.unwrap_or(self.buffer_start),
-                            body_end: absolute_end,
-                            first_arrival_at_ns: self
-                                .first_arrival_at_ns
-                                .clone()
-                                .unwrap_or_else(|| at_ns.clone()),
-                            completed_at_ns: at_ns.clone(),
-                        };
-                        serde_json::to_writer(&mut *file, &entry)?;
-                        file.write_all(b"\n")?;
-                        file.flush()?;
-                        self.sequence = self.sequence.saturating_add(1);
-                    }
+                if self.data_seen
+                    && !self.indexing_disabled
+                    && let Some(file) = self.file.as_mut()
+                {
+                    let entry = SseEventIndexEntry {
+                        schema_version: FORMAT_VERSION,
+                        record_id: self.record_id.clone(),
+                        kind: "sse_event".to_string(),
+                        sequence: self.sequence,
+                        body_start: self.event_start.unwrap_or(self.buffer_start),
+                        body_end: absolute_end,
+                        first_arrival_at_ns: self
+                            .first_arrival_at_ns
+                            .clone()
+                            .unwrap_or_else(|| at_ns.clone()),
+                        completed_at_ns: at_ns.clone(),
+                    };
+                    serde_json::to_writer(&mut *file, &entry)?;
+                    file.write_all(b"\n")?;
+                    file.flush()?;
+                    self.sequence = self.sequence.saturating_add(1);
                 }
                 self.event_start = None;
                 self.first_arrival_at_ns = None;
@@ -1753,10 +1751,12 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(measurements.request_bytes, 13);
         assert!(measurements.request_body_duration.is_some());
-        assert!(error
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_none());
+        assert!(
+            error
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1821,11 +1821,13 @@ mod tests {
             assert!(value.timing.upstream_request_body_completed_at_ns.is_none());
             assert!(value.protocol.as_ref().unwrap().model.requested.is_none());
         });
-        assert!(measurements
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .request_body_duration
-            .is_none());
+        assert!(
+            measurements
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .request_body_duration
+                .is_none()
+        );
         assert_eq!(
             error
                 .lock()

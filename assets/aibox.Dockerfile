@@ -90,7 +90,7 @@ RUN set -eux; \
 # you intentionally want to upgrade Node.
 # Installed under /usr/local so Node and the global agent CLIs are image-owned
 # rather than persisted in a Tenant Home; upgrade them by rebuilding the image.
-ARG NODE_VERSION=v24.4.0
+ARG NODE_VERSION=v24.19.0
 RUN set -eux; \
     version="${NODE_VERSION}"; \
     [ -n "$version" ]; \

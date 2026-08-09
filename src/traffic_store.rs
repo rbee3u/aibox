@@ -1,5 +1,5 @@
-use crate::traffic_interpretation::{coding_agent_session_id, ProtocolSummary};
-use anyhow::{bail, Context, Result};
+use crate::traffic_interpretation::{ProtocolSummary, coding_agent_session_id};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1152,7 +1152,7 @@ fn restrict_dir(path: &Path) -> Result<()> {
 }
 
 pub(super) fn utc_now() -> String {
-    let format = time::format_description::parse(
+    let format = time::format_description::parse_borrowed::<1>(
         "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z",
     )
     .expect("static Traffic timestamp format is valid");
@@ -1162,7 +1162,7 @@ pub(super) fn utc_now() -> String {
 }
 
 fn utc_basic_now() -> String {
-    let format = time::format_description::parse(
+    let format = time::format_description::parse_borrowed::<1>(
         "[year][month][day]T[hour][minute][second].[subsecond digits:3]Z",
     )
     .expect("static UTC filename format is valid");
@@ -1221,12 +1221,14 @@ mod tests {
             .unwrap();
         assert_eq!(record.directory.parent(), Some(store.root()));
         assert_eq!(request.format_version, FORMAT_VERSION);
-        assert!(record
-            .directory
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .contains("example.com"));
+        assert!(
+            record
+                .directory
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("example.com")
+        );
         assert_eq!(
             fs::metadata(store.root()).unwrap().permissions().mode() & 0o777,
             0o700
@@ -1426,12 +1428,14 @@ mod tests {
         let before_read = fs::read(&summary_path).unwrap();
 
         let legacy_store = TrafficStore::open(temp.path()).unwrap();
-        assert!(legacy_store
-            .find(&record.id)
-            .unwrap()
-            .summary
-            .protocol
-            .is_none());
+        assert!(
+            legacy_store
+                .find(&record.id)
+                .unwrap()
+                .summary
+                .protocol
+                .is_none()
+        );
         assert_eq!(fs::read(summary_path).unwrap(), before_read);
     }
 

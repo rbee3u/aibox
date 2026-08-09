@@ -3,16 +3,16 @@
 use crate::agent::AgentKind;
 use crate::cli::ConfigCommand;
 use crate::config_model::NamedConfigDefinition;
-use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent, TENANTS_DIR};
-use anyhow::{bail, Context, Result};
+use crate::tenant::{self, FileSnapshot, ManagedTenant, TENANTS_DIR, Tenant, TenantAgent};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 const MAX_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -155,14 +155,23 @@ pub fn dispatch(selected: &TenantAgent, command: &ConfigCommand) -> Result<i32> 
 
 /// Propagate newer Host ChatGPT credentials to every matching existing Codex Config.
 pub fn propagate_auth(root: &Path) -> Result<i32> {
-    let plan = plan_auth_propagation(root)?;
+    let host_home = tenant::host_home()?;
+    propagate_auth_from(root, &host_home)
+}
+
+pub(crate) fn propagate_auth_from(root: &Path, host_home: &Path) -> Result<i32> {
+    let plan = plan_auth_propagation_from(root, host_home)?;
     let report = execute_auth_propagation(plan);
     report.print()?;
     Ok(i32::from(report.counts().failed > 0))
 }
 
-fn plan_auth_propagation(root: &Path) -> Result<AuthPropagationPlan> {
-    let host = Tenant::resolve(root, true, "default")?.for_agent(AgentKind::Codex);
+fn plan_auth_propagation_from(root: &Path, host_home: &Path) -> Result<AuthPropagationPlan> {
+    let host = Tenant::Host {
+        home_dir: host_home.to_path_buf(),
+        root_dir: root.to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
     let source_file = host
         .agent
         .native_auth_file()
@@ -339,10 +348,10 @@ fn discover_named_auth_candidates(
                 &selected.named_config_file(&config, selected.agent.main_config_file()),
             )?;
         }
-        if let Some(auth_file) = selected.agent.native_auth_file() {
-            if layout.auth {
-                validate_private_file(&selected.named_config_file(&config, auth_file))?;
-            }
+        if let Some(auth_file) = selected.agent.native_auth_file()
+            && layout.auth
+        {
+            validate_private_file(&selected.named_config_file(&config, auth_file))?;
         }
         if !layout.complete(selected) {
             continue;
@@ -402,7 +411,7 @@ fn classify_auth(content: &[u8], expected_account_id: Option<&str>) -> AuthConte
         Err(error) => {
             return AuthContent::Invalid(format!(
                 "chatgpt credentials have invalid last_refresh: {error}"
-            ))
+            ));
         }
     };
     AuthContent::ChatGpt(ChatGptCredentials {
@@ -649,14 +658,16 @@ pub fn get_current_config(selected: &TenantAgent) -> Result<Vec<u8>> {
     Ok(render_config_files(&files))
 }
 
-/// Edit every Named Config file in native order, committing each independently.
-pub fn edit_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
+fn edit_named_config_with_editor(
+    selected: &TenantAgent,
+    config: &str,
+    editor: &OsStr,
+) -> Result<()> {
     ensure_complete_named_config(selected, config)?;
-    let editor = configured_editor();
     for file in selected.agent.config_files() {
         let path = selected.named_config_file(config, file);
         let current = read_regular_bytes(&path)?;
-        edit_file(&path, &current, 0o600, &editor, |content| {
+        edit_file(&path, &current, 0o600, editor, |content| {
             let content = std::str::from_utf8(content)
                 .with_context(|| format!("edited Named Config {file} is not valid UTF-8"))?;
             NamedConfigDefinition::validate_file(selected.agent, file, content)
@@ -668,6 +679,11 @@ pub fn edit_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
 
 /// Edit every Current Config file in native order without parsing its content.
 pub fn edit_current_config(selected: &TenantAgent) -> Result<()> {
+    let editor = configured_editor();
+    edit_current_config_with_editor(selected, &editor)
+}
+
+fn edit_current_config_with_editor(selected: &TenantAgent, editor: &OsStr) -> Result<()> {
     selected.ensure_agent_state_dir()?;
     let snapshots = selected
         .agent
@@ -675,7 +691,6 @@ pub fn edit_current_config(selected: &TenantAgent) -> Result<()> {
         .iter()
         .map(|file| capture_optional_agent_file(selected, file).map(|snapshot| (*file, snapshot)))
         .collect::<Result<Vec<_>>>()?;
-    let editor = configured_editor();
     for (file, snapshot) in snapshots {
         let content = if snapshot.present {
             snapshot.content
@@ -691,7 +706,7 @@ pub fn edit_current_config(selected: &TenantAgent) -> Result<()> {
             &selected.state_file(file),
             &content,
             snapshot.mode.unwrap_or(0o600),
-            &editor,
+            editor,
             |_| Ok(()),
         )?;
     }
@@ -706,7 +721,20 @@ fn edit_named_config_with_apply_prompt<F>(
 where
     F: FnOnce(&TenantAgent, &str) -> Result<bool>,
 {
-    edit_named_config(selected, config)?;
+    let editor = configured_editor();
+    edit_named_config_with_editor_and_apply_prompt(selected, config, &editor, confirm)
+}
+
+fn edit_named_config_with_editor_and_apply_prompt<F>(
+    selected: &TenantAgent,
+    config: &str,
+    editor: &OsStr,
+    confirm: F,
+) -> Result<()>
+where
+    F: FnOnce(&TenantAgent, &str) -> Result<bool>,
+{
+    edit_named_config_with_editor(selected, config, editor)?;
     if confirm(selected, config)? {
         let target = current_config_target(selected);
         apply_named_config(selected, config).with_context(|| {

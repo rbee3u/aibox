@@ -18,7 +18,7 @@ persistent in named Tenants.
 ## Quick Start
 
 aibox supports Linux and macOS hosts with a working Docker CLI and daemon.
-Building the Rust wrapper requires Rust 1.85 or newer. The bundled image
+Building the Rust wrapper requires Rust 1.97 or newer. The bundled image
 supports Linux `amd64` and `arm64`.
 
 ```sh

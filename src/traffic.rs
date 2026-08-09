@@ -1,10 +1,10 @@
 use crate::cli::TrafficArgs;
 use crate::traffic_store::TrafficStore;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use axum::Router;
 use axum::extract::State;
 use axum::middleware;
 use axum::routing::{get, post};
-use axum::Router;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::future::IntoFuture as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -198,9 +198,9 @@ async fn proxy_fallback(
 }
 
 fn bind_listeners(requested: SocketAddr) -> Result<Vec<TcpListener>> {
-    let mut listeners =
-        vec![bind_listener(requested)
-            .with_context(|| format!("bind Traffic listener {requested}"))?];
+    let mut listeners = vec![
+        bind_listener(requested).with_context(|| format!("bind Traffic listener {requested}"))?,
+    ];
     if needs_canonical_loopback(requested.ip()) {
         let canonical = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), requested.port());
         listeners.push(bind_listener(canonical).with_context(|| {
@@ -255,7 +255,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::extract::ConnectInfo;
-    use axum::http::{header, HeaderValue, Request, Response, StatusCode};
+    use axum::http::{HeaderValue, Request, Response, StatusCode, header};
     use axum::routing::{get, post};
     use bytes::Bytes;
     use http_body_util::BodyExt as _;
@@ -451,10 +451,10 @@ mod tests {
     async fn wait_for_terminal(state: &AppState) -> crate::traffic_store::StoredRecord {
         for _ in 0..100 {
             let records = state.store.scan().unwrap();
-            if let Some(record) = records.into_iter().next() {
-                if record.result.is_some() {
-                    return record;
-                }
+            if let Some(record) = records.into_iter().next()
+                && record.result.is_some()
+            {
+                return record;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

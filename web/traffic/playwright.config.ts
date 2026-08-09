@@ -2,12 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  outputDir: "./test-results",
-  fullyParallel: false,
-  workers: 1,
   use: {
     baseURL: "http://127.0.0.1:4173/_aibox/traffic/",
-    reducedMotion: "reduce",
+    contextOptions: { reducedMotion: "reduce" },
     trace: "retain-on-failure",
   },
   projects: [
@@ -30,8 +27,6 @@ export default defineConfig({
   webServer: {
     command: "npm exec vite -- --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173/_aibox/traffic/",
-    reuseExistingServer: true,
     stdout: "pipe",
-    stderr: "pipe",
   },
 });

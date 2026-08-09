@@ -6,7 +6,8 @@
 
 use crate::agent::AgentKind;
 use crate::cli::TenantCommand;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -149,6 +150,23 @@ impl Tenant {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn resolve_with_home(
+        root: &Path,
+        host: bool,
+        tenant: &str,
+        host_home: &Path,
+    ) -> Result<Self> {
+        if host {
+            Ok(Self::Host {
+                home_dir: host_home.to_path_buf(),
+                root_dir: root.to_path_buf(),
+            })
+        } else {
+            Ok(Self::Managed(ManagedTenant::resolve(root, tenant)?))
+        }
+    }
+
     /// Select one Coding Agent in this Tenant.
     pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         let home = self.home_dir().to_path_buf();
@@ -196,6 +214,17 @@ impl TenantAgent {
     /// Resolve a Tenant and select a Coding Agent without creating data.
     pub fn resolve(agent: AgentKind, root: &Path, host: bool, tenant: &str) -> Result<Self> {
         Ok(Tenant::resolve(root, host, tenant)?.for_agent(agent))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resolve_with_home(
+        agent: AgentKind,
+        root: &Path,
+        host: bool,
+        tenant: &str,
+        host_home: &Path,
+    ) -> Result<Self> {
+        Ok(Tenant::resolve_with_home(root, host, tenant, host_home)?.for_agent(agent))
     }
 
     /// Home containing the selected Current Config and Sessions.
@@ -271,18 +300,22 @@ impl TenantAgent {
 /// Execute one parsed Tenant management command.
 pub fn dispatch(command: &TenantCommand) -> Result<i32> {
     let root = aibox_root()?;
+    dispatch_at(&root, command)
+}
+
+pub(crate) fn dispatch_at(root: &Path, command: &TenantCommand) -> Result<i32> {
     match command {
         TenantCommand::List => {
-            for tenant in list_tenants(&root)? {
+            for tenant in list_tenants(root)? {
                 if !crate::print_line(&tenant)? {
                     break;
                 }
             }
         }
         TenantCommand::Create { tenant } => {
-            ManagedTenant::resolve(&root, tenant)?.ensure_initialized()?;
+            ManagedTenant::resolve(root, tenant)?.ensure_initialized()?;
         }
-        TenantCommand::Delete { tenants, all, yes } => delete_tenants(&root, tenants, *all, *yes)?,
+        TenantCommand::Delete { tenants, all, yes } => delete_tenants(root, tenants, *all, *yes)?,
     }
     Ok(0)
 }
@@ -424,20 +457,50 @@ fn ensure_home_baseline(home: &Path) -> Result<()> {
 
 /// Resolve `$AIBOX_ROOT`, defaulting to `$HOME/.aibox`.
 pub fn aibox_root() -> Result<PathBuf> {
-    let root = match std::env::var_os("AIBOX_ROOT") {
-        Some(value) if value.is_empty() => bail!("AIBOX_ROOT is set but empty"),
-        Some(value) => PathBuf::from(value),
-        None => host_home()?.join(".aibox"),
-    };
+    let root = aibox_root_path(
+        std::env::var_os("AIBOX_ROOT").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )?;
     absolutize(&root)
 }
 
+fn aibox_root_path(
+    configured_root: Option<&OsStr>,
+    configured_home: Option<&OsStr>,
+) -> Result<PathBuf> {
+    match configured_root {
+        Some(value) if value.is_empty() => bail!("AIBOX_ROOT is set but empty"),
+        Some(value) => Ok(PathBuf::from(value)),
+        None => Ok(host_home_path(configured_home)?.join(".aibox")),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn aibox_root_from(
+    configured_root: Option<&OsStr>,
+    configured_home: Option<&OsStr>,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    let root = aibox_root_path(configured_root, configured_home)?;
+    absolutize_from(&root, cwd)
+}
+
 pub(crate) fn host_home() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let home = host_home_path(std::env::var_os("HOME").as_deref())?;
+    absolutize(&home)
+}
+
+fn host_home_path(home: Option<&OsStr>) -> Result<PathBuf> {
+    let home = home.context("HOME is not set")?;
     if home.is_empty() {
         bail!("HOME is set but empty");
     }
-    absolutize(Path::new(&home))
+    Ok(PathBuf::from(home))
+}
+
+#[cfg(test)]
+pub(crate) fn host_home_from(home: Option<&OsStr>, cwd: &Path) -> Result<PathBuf> {
+    absolutize_from(&host_home_path(home)?, cwd)
 }
 
 fn require_host_home(home: &Path) -> Result<()> {
@@ -448,10 +511,18 @@ fn require_host_home(home: &Path) -> Result<()> {
 }
 
 fn absolutize(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        absolutize_from(path, Path::new(""))
+    } else {
+        absolutize_from(path, &std::env::current_dir()?)
+    }
+}
+
+fn absolutize_from(path: &Path, cwd: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()?.join(path)
+        cwd.join(path)
     };
     let mut resolved = PathBuf::new();
     for component in absolute.components() {
@@ -751,6 +822,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn root_and_home_resolution_use_only_explicit_inputs() {
+        let cwd = Path::new("/workspace/project");
+        assert_eq!(
+            aibox_root_from(Some(OsStr::new("../state")), None, cwd).unwrap(),
+            Path::new("/workspace/state")
+        );
+        assert_eq!(
+            aibox_root_from(None, Some(OsStr::new("/host/home")), cwd).unwrap(),
+            Path::new("/host/home/.aibox")
+        );
+        assert!(
+            aibox_root_from(Some(OsStr::new("")), Some(OsStr::new("/host/home")), cwd)
+                .unwrap_err()
+                .to_string()
+                .contains("AIBOX_ROOT is set but empty")
+        );
+        assert!(
+            host_home_from(None, cwd)
+                .unwrap_err()
+                .to_string()
+                .contains("HOME is not set")
+        );
+    }
+
+    #[test]
     fn names_are_lowercase_dns_labels() {
         for valid in ["a", "work-1", &"a".repeat(63)] {
             assert!(is_safe_name(valid), "{valid}");
@@ -897,9 +993,11 @@ mod tests {
     fn listing_is_read_only_and_ignores_unrecognized_entries() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("unrelated")).unwrap();
-        assert!(list_tenants(&root.path().join("missing"))
-            .unwrap()
-            .is_empty());
+        assert!(
+            list_tenants(&root.path().join("missing"))
+                .unwrap()
+                .is_empty()
+        );
         fs::create_dir(root.path().join(TENANTS_DIR)).unwrap();
         fs::write(root.path().join("tenants/not-a-dir"), b"x").unwrap();
         fs::create_dir(root.path().join("tenants/bad_name")).unwrap();

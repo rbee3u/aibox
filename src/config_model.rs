@@ -1,7 +1,7 @@
 //! Fixed Named Config schema validation and one-time application.
 
 use crate::agent::{AgentKind, ConfigField, ConfigValueKind};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use std::str::FromStr;
 use toml_edit::{DocumentMut, Item, Table, TableLike};

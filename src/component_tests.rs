@@ -1,6 +1,23 @@
 use super::*;
+use std::ffi::OsString;
 use std::fs;
 use std::process::{Command, Stdio};
+
+#[cfg(unix)]
+fn isolated_docker(
+    bin: &Path,
+    env: impl IntoIterator<Item = (&'static str, OsString)>,
+) -> crate::docker::DockerCli {
+    let mut isolated_env = vec![
+        (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+        (OsString::from("LC_ALL"), OsString::from("C")),
+    ];
+    isolated_env.extend(
+        env.into_iter()
+            .map(|(name, value)| (OsString::from(name), value)),
+    );
+    crate::docker::DockerCli::isolated(bin.join("docker"), isolated_env)
+}
 
 fn initialized_tenant() -> (tempfile::TempDir, ManagedTenant) {
     let root = tempfile::tempdir().unwrap();
@@ -403,18 +420,22 @@ fn claude_statusline_renders_unified_fields() {
     let home = root.path().join("home");
     let workspace = home.join("easymath3/workspace");
     fs::create_dir_all(&workspace).unwrap();
-    assert!(Command::new("git")
-        .args(["init", "--quiet"])
-        .current_dir(&workspace)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["symbolic-ref", "HEAD", "refs/heads/main"])
-        .current_dir(&workspace)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&workspace)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["symbolic-ref", "HEAD", "refs/heads/main"])
+            .current_dir(&workspace)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let script = root.path().join("statusline.sh");
     fs::write(&script, CLAUDE_STATUSLINE).unwrap();
@@ -992,30 +1013,52 @@ exit 99
 }
 
 #[cfg(unix)]
-fn run_installer(script: &str, home: &Path, bin: &Path, version: &str) -> std::process::Output {
-    let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))
-    .unwrap();
-    Command::new("bash")
+fn run_installer(
+    script: &str,
+    home: &Path,
+    bin: &Path,
+    version: &str,
+    env: impl IntoIterator<Item = (&'static str, OsString)>,
+) -> std::process::Output {
+    let path = std::env::join_paths([bin, Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let mut command = Command::new("bash");
+    command
         .arg(script)
         .arg(version)
+        .env_clear()
         .env("HOME", home)
         .env("PATH", path)
+        .env("LC_ALL", "C")
+        .envs(env);
+    command.output().unwrap()
+}
+
+#[cfg(unix)]
+fn expose_host_command(bin: &Path, name: &str) {
+    use std::os::unix::fs::symlink;
+
+    let output = Command::new("sh")
+        .args(["-c", &format!("command -v {name}")])
         .output()
-        .unwrap()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "required test command {name} is missing"
+    );
+    let target = String::from_utf8(output.stdout).unwrap();
+    symlink(target.trim(), bin.join(name)).unwrap();
 }
 
 #[cfg(unix)]
 #[test]
 fn rust_installer_skips_same_version_and_uninstalls_before_switching() {
-    let _env_lock = crate::test_env_lock();
     let scratch = tempfile::tempdir().unwrap();
     let home = scratch.path().join("home");
     let bin = scratch.path().join("bin");
     let log = scratch.path().join("rustup.log");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&bin).unwrap();
+    expose_host_command(&bin, "python3");
     crate::testutil::write_stub_script(
         &bin,
         "curl",
@@ -1060,15 +1103,19 @@ EOF
 esac
 "#,
     );
-    let _rustup =
-        crate::testutil::EnvGuard::set("AIBOX_FAKE_RUSTUP", bin.join("fake-rustup").as_os_str());
-    let _log = crate::testutil::EnvGuard::set("AIBOX_FAKE_RUSTUP_LOG", log.as_os_str());
+    let installer_env = || {
+        [
+            ("AIBOX_FAKE_RUSTUP", bin.join("fake-rustup").into()),
+            ("AIBOX_FAKE_RUSTUP_LOG", log.as_os_str().into()),
+        ]
+    };
 
     let first = run_installer(
         &format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR")),
         &home,
         &bin,
         "1.90.0",
+        installer_env(),
     );
     assert!(
         first.status.success(),
@@ -1082,6 +1129,7 @@ esac
         &home,
         &bin,
         "1.90.0",
+        installer_env(),
     );
     assert!(
         same.status.success(),
@@ -1100,6 +1148,7 @@ esac
         &home,
         &bin,
         "1.89.0",
+        installer_env(),
     );
     assert!(
         switch.status.success(),
@@ -1116,7 +1165,6 @@ esac
 #[cfg(unix)]
 #[test]
 fn go_installer_verifies_and_replaces_only_goroot() {
-    let _env_lock = crate::test_env_lock();
     let scratch = tempfile::tempdir().unwrap();
     let home = scratch.path().join("home");
     let bin = scratch.path().join("bin");
@@ -1156,6 +1204,8 @@ fn go_installer_verifies_and_replaces_only_goroot() {
         )
         .unwrap();
     fs::create_dir_all(&bin).unwrap();
+    expose_host_command(&bin, "python3");
+    expose_host_command(&bin, "sha256sum");
     crate::testutil::write_stub_script(&bin, "dpkg", "#!/bin/sh\nprintf 'amd64\n'\n");
     crate::testutil::write_stub_script(
         &bin,
@@ -1176,14 +1226,15 @@ case "$url" in
 esac
 "#,
     );
-    let _metadata = crate::testutil::EnvGuard::set("AIBOX_FAKE_GO_METADATA", metadata.as_os_str());
-    let _archive = crate::testutil::EnvGuard::set("AIBOX_FAKE_GO_ARCHIVE", archive.as_os_str());
-
     let output = run_installer(
         &format!("{}/assets/install-go.sh", env!("CARGO_MANIFEST_DIR")),
         &home,
         &bin,
         "1.25.6",
+        [
+            ("AIBOX_FAKE_GO_METADATA", metadata.as_os_str().into()),
+            ("AIBOX_FAKE_GO_ARCHIVE", archive.as_os_str().into()),
+        ],
     );
     assert!(
         output.status.success(),
@@ -1205,6 +1256,10 @@ esac
         &home,
         &bin,
         "1.25.6",
+        [
+            ("AIBOX_FAKE_GO_METADATA", metadata.as_os_str().into()),
+            ("AIBOX_FAKE_GO_ARCHIVE", archive.as_os_str().into()),
+        ],
     );
     assert!(
         same.status.success(),
@@ -1217,18 +1272,21 @@ esac
 #[cfg(unix)]
 #[test]
 fn toolchain_install_uses_the_shared_image_and_home_only_mount() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let bin = tempfile::tempdir().unwrap();
     let log = root.path().join("docker.log");
     write_fake_docker(bin.path());
-    let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
-    let _path = crate::testutil::EnvGuard::prepend_path(bin.path());
-    let _log = crate::testutil::EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log.as_os_str());
+    let docker = isolated_docker(
+        bin.path(),
+        [("AIBOX_FAKE_DOCKER_LOG", log.as_os_str().into())],
+    );
     let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
     let component = "rust@1.90.0".parse::<ComponentSpec>().unwrap();
 
-    assert_eq!(install_toolchain(&tenant, &component).unwrap(), 0);
+    assert_eq!(
+        install_toolchain_with(&tenant, &component, None, &docker).unwrap(),
+        0
+    );
 
     let log = fs::read_to_string(log).unwrap();
     assert!(log.contains("image inspect"), "{log}");
@@ -1246,17 +1304,14 @@ fn toolchain_install_uses_the_shared_image_and_home_only_mount() {
 #[cfg(unix)]
 #[test]
 fn missing_image_does_not_initialize_a_toolchain_tenant() {
-    let _env_lock = crate::test_env_lock();
     let root = tempfile::tempdir().unwrap();
     let bin = tempfile::tempdir().unwrap();
     write_fake_docker(bin.path());
-    let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
-    let _path = crate::testutil::EnvGuard::prepend_path(bin.path());
-    let _mode = crate::testutil::EnvGuard::set("AIBOX_FAKE_DOCKER_MODE", "missing");
+    let docker = isolated_docker(bin.path(), [("AIBOX_FAKE_DOCKER_MODE", "missing".into())]);
     let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
     let component = "go@1.25.6".parse::<ComponentSpec>().unwrap();
 
-    let error = install_toolchain(&tenant, &component)
+    let error = install_toolchain_with(&tenant, &component, None, &docker)
         .unwrap_err()
         .to_string();
 

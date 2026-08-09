@@ -180,6 +180,10 @@ For Rust changes, run all of these:
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
 
-For embedded Traffic UI changes, also run:
+For embedded Traffic UI changes, also run the complete socket-free frontend
+check:
 
-- `node --check assets/traffic.js`
+- `make traffic-check`
+
+Keep the real-browser Playwright checks explicit and optional because they bind
+a loopback listener.

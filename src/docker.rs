@@ -24,7 +24,7 @@
 //! toolchain installation. Cleanup is best-effort for uncatchable termination
 //! such as SIGKILL.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -41,6 +41,40 @@ pub const DOCKERFILE: &str = include_str!("../assets/aibox.Dockerfile");
 
 const CONTAINER_CREATE_WAIT: Duration = Duration::from_secs(1);
 const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+#[derive(Clone, Debug)]
+pub(crate) struct DockerCli {
+    program: OsString,
+    isolated_env: Option<Vec<(OsString, OsString)>>,
+}
+
+impl DockerCli {
+    pub(crate) fn system() -> Self {
+        Self {
+            program: "docker".into(),
+            isolated_env: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn isolated(
+        program: impl Into<OsString>,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            isolated_env: Some(env.into_iter().collect()),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        if let Some(env) = &self.isolated_env {
+            command.env_clear().envs(env.iter().cloned());
+        }
+        command
+    }
+}
 
 /// Cache policy for a Docker build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,9 +105,18 @@ impl BuildCache {
 /// It must therefore be context-free and cannot use `COPY` or `ADD` for local
 /// sources.
 pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
+    build_image_with(&DockerCli::system(), dockerfile, image, cache)
+}
+
+pub(crate) fn build_image_with(
+    docker: &DockerCli,
+    dockerfile: &str,
+    image: &str,
+    cache: BuildCache,
+) -> Result<()> {
     let ctx = tempfile::tempdir().context("create empty build context")?;
 
-    let mut cmd = Command::new("docker");
+    let mut cmd = docker.command();
     cmd.arg("build");
     cmd.args(cache.docker_args());
     cmd.args(["-f", "-", "-t", image]);
@@ -106,7 +149,12 @@ pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<(
 /// if Docker cannot complete either query, the daemon error is returned rather
 /// than treating the image as absent.
 pub fn image_exists(image: &str) -> Result<bool> {
-    let inspect = Command::new("docker")
+    image_exists_with(&DockerCli::system(), image)
+}
+
+pub(crate) fn image_exists_with(docker: &DockerCli, image: &str) -> Result<bool> {
+    let inspect = docker
+        .command()
         .args(["image", "inspect", "--format", "{{.Id}}", image])
         .output()
         .context("inspect docker image (is docker installed?)")?;
@@ -115,7 +163,8 @@ pub fn image_exists(image: &str) -> Result<bool> {
     }
 
     let list_ref = image_ref_for_exact_ls(image);
-    let list = Command::new("docker")
+    let list = docker
+        .command()
         .args(["image", "ls", "--quiet", "--no-trunc", &list_ref])
         .output()
         .context("list docker image (is docker installed?)")?;
@@ -169,6 +218,22 @@ pub fn run(
     cmd: &[OsString],
     after_container_created: impl FnOnce(),
 ) -> Result<i32> {
+    run_with(
+        &DockerCli::system(),
+        run_args,
+        image,
+        cmd,
+        after_container_created,
+    )
+}
+
+pub(crate) fn run_with(
+    docker: &DockerCli,
+    run_args: &[String],
+    image: &str,
+    cmd: &[OsString],
+    after_container_created: impl FnOnce(),
+) -> Result<i32> {
     let mut after_container_created = Some(after_container_created);
     // Docker refuses to reuse an existing cidfile, so ask for a fresh path
     // inside a temp dir. The id it holds is not a secret; if a signal kills us
@@ -179,8 +244,9 @@ pub fn run(
     // Register the cidfile *before* spawning: a signal landing between spawn
     // and registration could otherwise find neither a pid nor a container id,
     // leaving the container running unsupervised.
-    set_cidfile(&cid_path)?;
-    let spawned = Command::new("docker")
+    set_cidfile(&cid_path, docker)?;
+    let spawned = docker
+        .command()
         .arg("run")
         .arg("--cidfile")
         .arg(&cid_path)
@@ -400,9 +466,18 @@ static CHILD_PID: AtomicI32 = AtomicI32::new(0);
 /// the container id from it to stop the container through the daemon — the one
 /// route that works whether or not the docker CLI has a TTY attached.
 static CIDFILE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static ACTIVE_DOCKER: OnceLock<Mutex<Option<DockerCli>>> = OnceLock::new();
 
 fn cidfile() -> &'static Mutex<Option<PathBuf>> {
     CIDFILE.get_or_init(|| Mutex::new(None))
+}
+
+fn active_docker() -> &'static Mutex<Option<DockerCli>> {
+    ACTIVE_DOCKER.get_or_init(|| Mutex::new(None))
+}
+
+fn current_docker() -> Option<DockerCli> {
+    active_docker().lock().ok()?.clone()
 }
 
 /// Register the `--cidfile` of an upcoming `docker run` for signal handling.
@@ -412,16 +487,19 @@ fn cidfile() -> &'static Mutex<Option<PathBuf>> {
 /// with no child pid recorded yet. If spawning fails, call [`clear_child`];
 /// otherwise register the child with [`set_child`] and finish it with
 /// [`finish_child`]. A second registration is rejected while a run is active.
-fn set_cidfile(cidfile_path: &Path) -> Result<()> {
+fn set_cidfile(cidfile_path: &Path, docker: &DockerCli) -> Result<()> {
     install_signal_handler()?;
     let mut registered_cidfile = cidfile().lock().unwrap();
-    if RUN_STATE
-        .compare_exchange(RUN_IDLE, RUN_ACTIVE, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    let mut registered_docker = active_docker().lock().unwrap();
+    if RUN_STATE.load(Ordering::SeqCst) != RUN_IDLE {
         anyhow::bail!("another docker run is already registered in this process");
     }
     *registered_cidfile = Some(cidfile_path.to_path_buf());
+    *registered_docker = Some(docker.clone());
+    // Publish the active state only after both cleanup handles are visible. A
+    // signal can now either observe idle, or observe active and wait for these
+    // locks before reading a complete registration.
+    RUN_STATE.store(RUN_ACTIVE, Ordering::SeqCst);
     Ok(())
 }
 
@@ -442,6 +520,7 @@ fn clear_child() {
     CHILD_PID.store(0, Ordering::SeqCst);
     RUN_STATE.store(RUN_IDLE, Ordering::SeqCst);
     *registered_cidfile = None;
+    *active_docker().lock().unwrap() = None;
 }
 
 /// Finish a successfully spawned child after `wait` returns. An attached Docker
@@ -459,6 +538,7 @@ fn finish_child() -> bool {
     match RUN_STATE.compare_exchange(RUN_ACTIVE, RUN_IDLE, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) | Err(RUN_IDLE) => {
             *registered_cidfile = None;
+            *active_docker().lock().unwrap() = None;
             stopped_lingering_container
         }
         Err(RUN_SIGNALLED) => {
@@ -494,7 +574,10 @@ fn stop_container_left_by_child() -> bool {
     let Some(cid) = current_cid() else {
         return false;
     };
-    match container_state(&cid) {
+    let Some(docker) = current_docker() else {
+        return true;
+    };
+    match container_state(&docker, &cid) {
         ContainerState::Stopped => return false,
         ContainerState::Running => {
             eprintln!(
@@ -508,7 +591,7 @@ fn stop_container_left_by_child() -> bool {
         }
     }
 
-    let _ = docker_quiet(&["kill", &cid], DOCKER_KILL_TIMEOUT);
+    let _ = docker_quiet(&docker, &["kill", &cid], DOCKER_KILL_TIMEOUT);
     true
 }
 
@@ -522,9 +605,9 @@ fn signal_child(sig: i32) {
         return;
     };
     let rsig = match sig {
-        s if s == signal_hook::consts::SIGINT => rustix::process::Signal::Int,
-        s if s == signal_hook::consts::SIGHUP => rustix::process::Signal::Hup,
-        _ => rustix::process::Signal::Term,
+        s if s == signal_hook::consts::SIGINT => rustix::process::Signal::INT,
+        s if s == signal_hook::consts::SIGHUP => rustix::process::Signal::HUP,
+        _ => rustix::process::Signal::TERM,
     };
     let _ = rustix::process::kill_process(pid, rsig);
 }
@@ -572,7 +655,12 @@ enum CommandOutcome {
 /// Docker may be wedged and must not prevent the wrapper from re-raising the
 /// fatal signal. A fast non-zero exit is distinguished from a timeout so
 /// callers can tell "definitively no" from "no answer yet".
+#[cfg(test)]
 fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutcome {
+    command_quiet_with(Command::new(program), args, timeout)
+}
+
+fn command_quiet_with(mut command: Command, args: &[&str], timeout: Duration) -> CommandOutcome {
     // A pipe can remain open in a subprocess descendant after the command we
     // spawned has exited, making a post-wait `read_to_end` block forever.
     // Capture into a regular temporary file instead: reading a snapshot of a
@@ -583,7 +671,7 @@ fn command_quiet(program: &str, args: &[&str], timeout: Duration) -> CommandOutc
     let Ok(child_stdout) = output.reopen() else {
         return CommandOutcome::Unfinished;
     };
-    let spawned = Command::new(program)
+    let spawned = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(child_stdout))
@@ -651,8 +739,8 @@ fn kill_and_reap_in_background(mut child: Child) {
 /// Run `docker <args>` silently, returning stdout on success. The watcher's
 /// container-stopping calls are all best-effort: a dead daemon or an
 /// already-removed container just means there is nothing left to stop.
-fn docker_quiet(args: &[&str], timeout: Duration) -> Option<String> {
-    match command_quiet("docker", args, timeout) {
+fn docker_quiet(docker: &DockerCli, args: &[&str], timeout: Duration) -> Option<String> {
+    match command_quiet_with(docker.command(), args, timeout) {
         CommandOutcome::Succeeded(out) => Some(out),
         CommandOutcome::Failed | CommandOutcome::Unfinished => None,
     }
@@ -681,13 +769,22 @@ fn parse_container_state(outcome: &CommandOutcome) -> ContainerState {
     }
 }
 
+fn parse_container_list_after_failed_inspect(outcome: CommandOutcome) -> ContainerState {
+    match outcome {
+        CommandOutcome::Succeeded(output) if output.trim().is_empty() => ContainerState::Stopped,
+        CommandOutcome::Succeeded(_) | CommandOutcome::Failed | CommandOutcome::Unfinished => {
+            ContainerState::Unknown
+        }
+    }
+}
+
 /// The daemon's view of the container. A wedged daemon is unknown, not stopped:
 /// treating it as "done" can leave the container alive. A fast non-zero
 /// `inspect` is ambiguous — the id may be gone, or the daemon may be failing —
 /// so an exact `container ls` query distinguishes those cases.
-fn container_state(cid: &str) -> ContainerState {
-    let outcome = command_quiet(
-        "docker",
+fn container_state(docker: &DockerCli, cid: &str) -> ContainerState {
+    let outcome = command_quiet_with(
+        docker.command(),
         &["inspect", "-f", "{{.State.Running}}", cid],
         DOCKER_INSPECT_TIMEOUT,
     );
@@ -697,8 +794,8 @@ fn container_state(cid: &str) -> ContainerState {
     }
 
     let filter = format!("id={cid}");
-    match command_quiet(
-        "docker",
+    parse_container_list_after_failed_inspect(command_quiet_with(
+        docker.command(),
         &[
             "container",
             "ls",
@@ -709,12 +806,7 @@ fn container_state(cid: &str) -> ContainerState {
             &filter,
         ],
         DOCKER_INSPECT_TIMEOUT,
-    ) {
-        CommandOutcome::Succeeded(output) if output.trim().is_empty() => ContainerState::Stopped,
-        CommandOutcome::Succeeded(_) | CommandOutcome::Failed | CommandOutcome::Unfinished => {
-            ContainerState::Unknown
-        }
-    }
+    ))
 }
 
 /// Stop the active run without letting a slow cidfile create window orphan the
@@ -722,15 +814,19 @@ fn container_state(cid: &str) -> ContainerState {
 /// yet, signal the Docker CLI child, then keep polling briefly for a late
 /// cidfile so a just-created TTY container still gets killed through the daemon.
 fn stop_active_run(sig: i32) {
+    let Some(docker) = current_docker() else {
+        signal_child(sig);
+        return;
+    };
     if let Some(cid) = wait_current_cid(CIDFILE_WAIT) {
-        stop_container_id(sig, &cid);
+        stop_container_id(&docker, sig, &cid);
         signal_child(sig);
         return;
     }
 
     signal_child(sig);
     if let Some(cid) = wait_current_cid(LATE_CIDFILE_WAIT) {
-        stop_container_id(sig, &cid);
+        stop_container_id(&docker, sig, &cid);
     }
 }
 
@@ -744,14 +840,18 @@ fn stop_active_run(sig: i32) {
 /// while the watcher performs this escalation; that is why the watcher stops
 /// the container *before* touching the CLI child. The post-wait orphan check
 /// takes a separate immediate-kill path because no attached client remains.
-fn stop_container_id(sig: i32, cid: &str) {
+fn stop_container_id(docker: &DockerCli, sig: i32, cid: &str) {
     let name = match sig {
         s if s == signal_hook::consts::SIGINT => "INT",
         s if s == signal_hook::consts::SIGHUP => "HUP",
         _ => "TERM",
     };
-    let _ = docker_quiet(&["kill", "--signal", name, cid], DOCKER_KILL_TIMEOUT);
-    if container_state(cid) == ContainerState::Stopped {
+    let _ = docker_quiet(
+        docker,
+        &["kill", "--signal", name, cid],
+        DOCKER_KILL_TIMEOUT,
+    );
+    if container_state(docker, cid) == ContainerState::Stopped {
         return;
     }
     // Say what the silence is (the grace wait), and how to cut it short: a
@@ -766,11 +866,11 @@ fn stop_container_id(sig: i32, cid: &str) {
             break;
         }
         std::thread::sleep(CONTAINER_POLL_INTERVAL);
-        if container_state(cid) == ContainerState::Stopped {
+        if container_state(docker, cid) == ContainerState::Stopped {
             return;
         }
     }
-    let _ = docker_quiet(&["kill", cid], DOCKER_KILL_TIMEOUT);
+    let _ = docker_quiet(docker, &["kill", cid], DOCKER_KILL_TIMEOUT);
 }
 
 /// True if `sig` is currently ignored (SIG_IGN). Watching an ignored signal
@@ -778,6 +878,9 @@ fn stop_container_id(sig: i32, cid: &str) {
 /// under `nohup` (which sets SIGHUP to SIG_IGN) the watcher would turn a
 /// survivable hangup back into a death. Read-only `sigaction` query.
 fn signal_is_ignored(sig: i32) -> bool {
+    // SAFETY: `sig` is one of the platform signal constants selected below;
+    // `old` is valid writable storage, and a null action makes this a read-only
+    // query whose return value is checked before inspecting the result.
     unsafe {
         let mut old: libc::sigaction = std::mem::zeroed();
         libc::sigaction(sig, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN
@@ -806,6 +909,9 @@ fn install_signal_handler() -> Result<()> {
     // woken, RUN_STATE already records the signal that woke it.
     let mut registrations = Vec::new();
     for &sig in &watched {
+        // SAFETY: the handler performs only lock-free atomic operations, which
+        // are async-signal-safe, captures no borrowed state, and leaves all
+        // allocation, I/O, locking, and Docker cleanup to the watcher thread.
         let registration = unsafe {
             signal_hook::low_level::register(sig, move || {
                 LAST_SIGNAL.store(sig, Ordering::SeqCst);

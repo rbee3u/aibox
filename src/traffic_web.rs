@@ -1,16 +1,16 @@
 use crate::traffic::AppState;
 use crate::traffic_interpretation::{
-    body_content_coding, timeline_end_at_ns, BodyContentCoding, ProtocolSummary,
+    BodyContentCoding, ProtocolSummary, body_content_coding, timeline_end_at_ns,
 };
 use crate::traffic_proxy;
 use crate::traffic_store::{
     RecordedHeader, ResponseMetadata, ResponseSource, StoredRecord, SummaryMetadata, TrafficStore,
 };
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
-use axum::http::{header, HeaderValue, Method, Response, StatusCode};
+use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::Next;
-use axum::Json;
 use base64::Engine as _;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -63,10 +63,9 @@ fn validate_management_request(
         .headers()
         .get("sec-fetch-site")
         .and_then(|value| value.to_str().ok())
+        && !matches!(site, "none" | "same-origin")
     {
-        if !matches!(site, "none" | "same-origin") {
-            return Err("cross-site management requests are not accepted".to_string());
-        }
+        return Err("cross-site management requests are not accepted".to_string());
     }
     let origin = request
         .headers()
@@ -1053,9 +1052,11 @@ mod tests {
             "persisted-model"
         );
         assert_eq!(json["summary"]["protocol"]["response_terminal"], true);
-        assert!(json["summary"]["timing"]["finished_at_ns"]
-            .as_str()
-            .is_some());
+        assert!(
+            json["summary"]["timing"]["finished_at_ns"]
+                .as_str()
+                .is_some()
+        );
     }
 
     #[tokio::test]

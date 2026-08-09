@@ -800,6 +800,8 @@ fn get_rejects_fifo_replacement_without_blocking() {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("11111111.jsonl");
     let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `fifo_path` is a live NUL-terminated path and the mode contains
+    // only permission bits; the return value is checked before using the path.
     let result = unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) };
     assert_eq!(result, 0, "create FIFO: {}", io::Error::last_os_error());
     let backend = ExplicitFilesBackend::new(vec![fifo]);

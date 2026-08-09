@@ -1,5 +1,5 @@
 use crate::traffic_store::{RecordedHeader, StoredRecord};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -640,19 +640,18 @@ impl ProtocolObserver {
                     .cache_write_5m_tokens
                     .unwrap_or(0)
                     .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0));
-                if let (Some(total), Some(split)) = (self.usage.cache_creation_tokens, split) {
-                    if (self.usage.cache_write_5m_tokens.is_some()
+                if let (Some(total), Some(split)) = (self.usage.cache_creation_tokens, split)
+                    && (self.usage.cache_write_5m_tokens.is_some()
                         || self.usage.cache_write_1h_tokens.is_some())
-                        && total != split
-                    {
-                        return self.summary.add_warning(
-                            "cache_write_breakdown_inconsistent",
-                            format!(
-                                "Claude cache write total ({total}) does not match the reported 5m/1h breakdown ({split})"
-                            ),
-                            at_ns,
-                        );
-                    }
+                    && total != split
+                {
+                    return self.summary.add_warning(
+                        "cache_write_breakdown_inconsistent",
+                        format!(
+                            "Claude cache write total ({total}) does not match the reported 5m/1h breakdown ({split})"
+                        ),
+                        at_ns,
+                    );
                 }
             }
             ProtocolFamily::Unknown => {}

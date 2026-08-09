@@ -7,8 +7,8 @@
 use crate::agent::AgentKind;
 use crate::cli::{ComponentArgs, ComponentCommand};
 use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Map, Value};
+use anyhow::{Context, Result, bail};
+use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
@@ -177,6 +177,25 @@ pub fn dispatch(args: &ComponentArgs) -> Result<i32> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn dispatch_with(
+    args: &ComponentArgs,
+    root: &Path,
+    host_home: &Path,
+    image_override: Option<&str>,
+    docker: &crate::docker::DockerCli,
+) -> Result<i32> {
+    let selected =
+        Tenant::resolve_with_home(root, args.tenant.host, args.tenant.tenant_name(), host_home)?;
+    match &args.command {
+        ComponentCommand::List => list(&selected),
+        ComponentCommand::Install { component } => {
+            install_with(&selected, component, image_override, docker)
+        }
+        ComponentCommand::Remove { component, yes } => remove(&selected, *component, *yes),
+    }
+}
+
 fn list(selected: &Tenant) -> Result<i32> {
     let exists = tenant_home_exists(selected)?;
     for &kind in component_catalog(selected) {
@@ -204,6 +223,36 @@ fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
             install_toolchain(tenant, component)
         }
     }
+}
+
+#[cfg(test)]
+fn install_with(
+    selected: &Tenant,
+    component: &ComponentSpec,
+    image_override: Option<&str>,
+    docker: &crate::docker::DockerCli,
+) -> Result<i32> {
+    reject_host_toolchain(selected, component.kind)?;
+    match component.kind {
+        ComponentKind::ClaudeStatusline => install_claude_statusline(selected),
+        ComponentKind::CodexStatusline => install_codex_statusline(selected),
+        ComponentKind::Rust | ComponentKind::Go => {
+            let Tenant::Managed(tenant) = selected else {
+                unreachable!("Host toolchains are rejected above")
+            };
+            install_toolchain_with(tenant, component, image_override, docker)
+        }
+    }
+}
+
+fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Result<i32> {
+    let image_override = crate::env_override("AIBOX_IMAGE")?;
+    install_toolchain_with(
+        tenant,
+        component,
+        image_override.as_deref(),
+        &crate::docker::DockerCli::system(),
+    )
 }
 
 fn remove(selected: &Tenant, kind: ComponentKind, yes: bool) -> Result<i32> {
@@ -589,23 +638,28 @@ fn prepare_statusline_install(tenant: &Tenant, agent: AgentKind) -> Result<Tenan
     Ok(selected)
 }
 
-fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Result<i32> {
+fn install_toolchain_with(
+    tenant: &ManagedTenant,
+    component: &ComponentSpec,
+    image_override: Option<&str>,
+    docker: &crate::docker::DockerCli,
+) -> Result<i32> {
     let existing = if tenant.exists()? {
         inspect(component.kind, &tenant.home_dir)?
     } else {
         ComponentStatus::NotInstalled
     };
-    if let Some(requested) = &component.version {
-        if matches!(
+    if let Some(requested) = &component.version
+        && matches!(
             existing,
             ComponentStatus::Installed { version: Some(ref current) } if current == requested
-        ) {
-            eprintln!(
-                ">> {} {requested} is already installed; skipping",
-                component.kind.name()
-            );
-            return Ok(0);
-        }
+        )
+    {
+        eprintln!(
+            ">> {} {requested} is already installed; skipping",
+            component.kind.name()
+        );
+        return Ok(0);
     }
     if existing == ComponentStatus::Unmanaged {
         bail!(
@@ -614,12 +668,11 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
         );
     }
 
-    let image_override = crate::env_override("AIBOX_IMAGE")?;
-    let image = crate::image_for(image_override.as_deref())?;
+    let image = crate::image_for(image_override)?;
     if image_override.is_some() {
         eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
     }
-    if !crate::docker::image_exists(&image)? {
+    if !crate::docker::image_exists_with(docker, &image)? {
         bail!("{image} is not present locally; build it first with `aibox build`");
     }
 
@@ -640,7 +693,7 @@ fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Resul
         OsString::from(format!("aibox-{}-installer", component.kind.name())),
         OsString::from(component.version.as_deref().unwrap_or("")),
     ];
-    crate::docker::run(&run_args, &image, &command, || {})
+    crate::docker::run_with(docker, &run_args, &image, &command, || {})
 }
 
 fn remove_claude_statusline(tenant: &Tenant) -> Result<()> {

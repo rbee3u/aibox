@@ -1,5 +1,4 @@
 use super::*;
-use crate::testutil::EnvGuard;
 
 #[cfg(unix)]
 fn write_successful_run_docker(dir: &std::path::Path) {
@@ -78,48 +77,95 @@ printf '\nEND\n' >> "$log"
 
 #[cfg(unix)]
 struct RunFixture {
-    // Fields drop in declaration order. Restore env before deleting stub
-    // dirs, and release the env lock last so parallel tests can't observe a
-    // half-restored PATH.
-    _guards: Vec<EnvGuard>,
-    _docker_dir: tempfile::TempDir,
-    _host_home: tempfile::TempDir,
+    docker_dir: tempfile::TempDir,
+    host_home: tempfile::TempDir,
     root: tempfile::TempDir,
     docker_log: std::path::PathBuf,
     _run_lock: std::sync::MutexGuard<'static, ()>,
-    _env_lock: std::sync::MutexGuard<'static, ()>,
 }
 
 #[cfg(unix)]
 impl RunFixture {
     fn new() -> Self {
-        let env_lock = test_env_lock();
         let run_lock = crate::docker::run_registry_test_lock();
         let root = tempfile::tempdir().unwrap();
         let host_home = tempfile::tempdir().unwrap();
         let docker_dir = tempfile::tempdir().unwrap();
         let docker_log = docker_dir.path().join("docker.log");
         write_successful_run_docker(docker_dir.path());
-        let guards = vec![
-            EnvGuard::prepend_path(docker_dir.path()),
-            EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", docker_log.as_os_str()),
-            EnvGuard::set("AIBOX_ROOT", root.path().as_os_str()),
-            EnvGuard::set("HOME", host_home.path().as_os_str()),
-        ];
         Self {
-            _guards: guards,
-            _docker_dir: docker_dir,
-            _host_home: host_home,
+            docker_dir,
+            host_home,
             root,
             docker_log,
             _run_lock: run_lock,
-            _env_lock: env_lock,
         }
     }
 
     fn run(&self, argv: &[&str], passthrough: Vec<String>) -> Result<i32> {
+        self.run_with(argv, passthrough, None, &[])
+    }
+
+    fn run_with(
+        &self,
+        argv: &[&str],
+        passthrough: Vec<String>,
+        image_override: Option<&std::ffi::OsStr>,
+        docker_env: &[(&str, &str)],
+    ) -> Result<i32> {
+        self.run_at(
+            self.root.path(),
+            argv,
+            passthrough,
+            image_override,
+            docker_env,
+        )
+    }
+
+    fn run_at(
+        &self,
+        root: &std::path::Path,
+        argv: &[&str],
+        passthrough: Vec<String>,
+        image_override: Option<&std::ffi::OsStr>,
+        docker_env: &[(&str, &str)],
+    ) -> Result<i32> {
+        let passthrough: Vec<_> = passthrough.into_iter().map(OsString::from).collect();
+        self.run_os_at(root, argv, &passthrough, image_override, docker_env)
+    }
+
+    fn run_os_at(
+        &self,
+        root: &std::path::Path,
+        argv: &[&str],
+        passthrough: &[OsString],
+        image_override: Option<&std::ffi::OsStr>,
+        docker_env: &[(&str, &str)],
+    ) -> Result<i32> {
         let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
-        run(cli, passthrough)
+        let mut env = vec![
+            (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+            (
+                OsString::from("AIBOX_FAKE_DOCKER_LOG"),
+                self.docker_log.as_os_str().to_owned(),
+            ),
+        ];
+        env.extend(
+            docker_env
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        );
+        let docker = crate::docker::DockerCli::isolated(self.docker_dir.path().join("docker"), env);
+        run_with_context(
+            cli,
+            passthrough,
+            TestCommandContext {
+                root,
+                host_home: self.host_home.path(),
+                image_override,
+                docker: &docker,
+            },
+        )
     }
 
     fn log(&self) -> String {
@@ -130,18 +176,24 @@ impl RunFixture {
 #[test]
 fn image_ref_validation_rejects_bad_refs() {
     validate_image_ref("aibox:latest").unwrap();
-    assert!(validate_image_ref("")
-        .unwrap_err()
-        .to_string()
-        .contains("empty"));
-    assert!(validate_image_ref("--bad")
-        .unwrap_err()
-        .to_string()
-        .contains("must not start"));
-    assert!(validate_image_ref("bad image")
-        .unwrap_err()
-        .to_string()
-        .contains("whitespace"));
+    assert!(
+        validate_image_ref("")
+            .unwrap_err()
+            .to_string()
+            .contains("empty")
+    );
+    assert!(
+        validate_image_ref("--bad")
+            .unwrap_err()
+            .to_string()
+            .contains("must not start")
+    );
+    assert!(
+        validate_image_ref("bad image")
+            .unwrap_err()
+            .to_string()
+            .contains("whitespace")
+    );
 }
 
 #[cfg(unix)]
@@ -153,10 +205,14 @@ fn invalid_image_override_is_rejected_before_docker_lookup() {
         ("--bad", "must not start"),
     ] {
         let fx = RunFixture::new();
-        let _image = EnvGuard::set("AIBOX_IMAGE", image);
 
         let err = fx
-            .run(&["aibox", "run"], Vec::new())
+            .run_with(
+                &["aibox", "run"],
+                Vec::new(),
+                Some(std::ffi::OsStr::new(image)),
+                &[],
+            )
             .unwrap_err()
             .to_string();
 
@@ -180,10 +236,9 @@ fn non_utf8_image_override_is_rejected_before_docker_lookup() {
 
     let fx = RunFixture::new();
     let image = OsString::from_vec(vec![b'a', b'i', b'b', b'o', b'x', 0xff]);
-    let _image = EnvGuard::set("AIBOX_IMAGE", image);
 
     let err = fx
-        .run(&["aibox", "run"], Vec::new())
+        .run_with(&["aibox", "run"], Vec::new(), Some(image.as_os_str()), &[])
         .unwrap_err()
         .to_string();
 
@@ -199,16 +254,35 @@ fn non_utf8_image_override_is_rejected_before_docker_lookup() {
 #[cfg(unix)]
 #[test]
 fn build_uses_single_image_and_aibox_image_override() {
-    let _env_lock = test_env_lock();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("docker-build.log");
     write_successful_build_docker(dir.path());
-    let _path = EnvGuard::prepend_path(dir.path());
-    let _log = EnvGuard::set("AIBOX_FAKE_DOCKER_LOG", log.as_os_str());
-    let _image = EnvGuard::set("AIBOX_IMAGE", "local/aibox:dev");
+    let docker = crate::docker::DockerCli::isolated(
+        dir.path().join("docker"),
+        [
+            (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+            (
+                OsString::from("AIBOX_FAKE_DOCKER_LOG"),
+                log.as_os_str().to_owned(),
+            ),
+        ],
+    );
 
     let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
-    let code = run(cli, Vec::new()).unwrap();
+    let passthrough = Vec::new();
+    let root = tempfile::tempdir().unwrap();
+    let host_home = tempfile::tempdir().unwrap();
+    let code = run_with_context(
+        cli,
+        &passthrough,
+        TestCommandContext {
+            root: root.path(),
+            host_home: host_home.path(),
+            image_override: Some(std::ffi::OsStr::new("local/aibox:dev")),
+            docker: &docker,
+        },
+    )
+    .unwrap();
 
     assert_eq!(code, 0);
     let log = std::fs::read_to_string(log).unwrap();
@@ -234,11 +308,12 @@ fn default_run_uses_codex_managed_tenant_home_without_config_injection() {
         "{log}"
     );
     assert!(fx.root.path().join("tenants/default/.codex").is_dir());
-    assert!(!fx
-        .root
-        .path()
-        .join("tenants/default/.claude/statusline.sh")
-        .exists());
+    assert!(
+        !fx.root
+            .path()
+            .join("tenants/default/.claude/statusline.sh")
+            .exists()
+    );
     assert!(fx.root.path().join("tenants/default/.gitconfig").is_file());
     assert!(!fx.root.path().join("codex/default").exists());
     assert!(!fx.root.path().join("claude/default").exists());
@@ -250,10 +325,14 @@ fn default_run_uses_codex_managed_tenant_home_without_config_injection() {
 #[test]
 fn nonzero_agent_exit_still_leaves_the_validated_tenant_initialized() {
     let fx = RunFixture::new();
-    let _status = EnvGuard::set("AIBOX_FAKE_DOCKER_RUN_STATUS", "23");
 
     let code = fx
-        .run(&["aibox", "run", "--tenant", "failed-run"], Vec::new())
+        .run_with(
+            &["aibox", "run", "--tenant", "failed-run"],
+            Vec::new(),
+            None,
+            &[("AIBOX_FAKE_DOCKER_RUN_STATUS", "23")],
+        )
         .unwrap();
 
     assert_eq!(code, 23);
@@ -274,9 +353,10 @@ fn run_resolves_a_symlinked_aibox_root_before_mounting_tenant_home() {
     std::fs::create_dir(&real_root).unwrap();
     symlink(&real_parent, &parent_link).unwrap();
     let configured_root = parent_link.join("aibox-root");
-    let _root = EnvGuard::set("AIBOX_ROOT", configured_root.as_os_str());
 
-    let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
+    let code = fx
+        .run_at(&configured_root, &["aibox", "run"], Vec::new(), None, &[])
+        .unwrap();
 
     assert_eq!(code, 0);
     let log = fx.log();
@@ -295,9 +375,15 @@ fn run_resolves_a_symlinked_aibox_root_before_mounting_tenant_home() {
 #[test]
 fn run_uses_a_valid_image_override_for_lookup_and_launch() {
     let fx = RunFixture::new();
-    let _image = EnvGuard::set("AIBOX_IMAGE", "registry.example/aibox:test");
 
-    let code = fx.run(&["aibox", "run"], Vec::new()).unwrap();
+    let code = fx
+        .run_with(
+            &["aibox", "run"],
+            Vec::new(),
+            Some(std::ffi::OsStr::new("registry.example/aibox:test")),
+            &[],
+        )
+        .unwrap();
 
     assert_eq!(code, 0);
     let log = fx.log();
@@ -390,9 +476,15 @@ fn run_os_preserves_non_utf8_agent_arguments_through_docker_spawn() {
 
     let fx = RunFixture::new();
     let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
-    let cli = Cli::try_parse_from(["aibox", "run"]).unwrap();
-
-    let code = run_os(cli, std::slice::from_ref(&opaque)).unwrap();
+    let code = fx
+        .run_os_at(
+            fx.root.path(),
+            &["aibox", "run"],
+            std::slice::from_ref(&opaque),
+            None,
+            &[],
+        )
+        .unwrap();
 
     assert_eq!(code, 0);
     let log = std::fs::read(&fx.docker_log).unwrap();
@@ -415,20 +507,22 @@ fn claude_run_does_not_install_the_optional_statusline_component() {
     assert!(log.contains(&format!("<{}:/home/aibox>", expected_home.display())));
     assert!(log.contains("<aibox:latest> <claude>"), "{log}");
     assert!(!log.contains("<--dangerously-skip-permissions>"), "{log}");
-    assert!(!fx
-        .root
-        .path()
-        .join("tenants/default/.claude/statusline.sh")
-        .exists());
+    assert!(
+        !fx.root
+            .path()
+            .join("tenants/default/.claude/statusline.sh")
+            .exists()
+    );
     assert!(fx.root.path().join("tenants/default/.codex").is_dir());
     assert!(fx.root.path().join("tenants/default/.gitconfig").is_file());
     assert!(!fx.root.path().join("codex/default").exists());
     assert!(!fx.root.path().join("claude/default").exists());
-    assert!(!fx
-        .root
-        .path()
-        .join("tenants/default/.claude/settings.json")
-        .exists());
+    assert!(
+        !fx.root
+            .path()
+            .join("tenants/default/.claude/settings.json")
+            .exists()
+    );
 }
 
 #[cfg(unix)]
@@ -518,16 +612,18 @@ fn config_command_agent_selects_the_agent_tenant_catalog() {
         .unwrap();
 
     assert_eq!(code, 0);
-    assert!(fx
-        .root
-        .path()
-        .join("claude/default/anthropic/settings.json")
-        .is_file());
-    assert!(!fx
-        .root
-        .path()
-        .join("claude/default/anthropic/auth.json")
-        .exists());
+    assert!(
+        fx.root
+            .path()
+            .join("claude/default/anthropic/settings.json")
+            .is_file()
+    );
+    assert!(
+        !fx.root
+            .path()
+            .join("claude/default/anthropic/auth.json")
+            .exists()
+    );
     assert!(
         !fx.root.path().join("codex/default/anthropic").exists(),
         "a command-level --agent claude must not create a Codex config"
@@ -636,7 +732,7 @@ fn config_apply_and_delete_route_to_the_selected_tenant_without_docker() {
 #[test]
 fn config_propagate_auth_is_global_codex_current_only_and_never_starts_docker() {
     let fx = RunFixture::new();
-    let source_dir = fx._host_home.path().join(".codex");
+    let source_dir = fx.host_home.path().join(".codex");
     std::fs::create_dir(&source_dir).unwrap();
     let source = br#"{
   "auth_mode": "chatgpt",
@@ -780,10 +876,14 @@ fn invalid_run_mount_does_not_create_tenant_home() {
 #[test]
 fn missing_image_does_not_initialize_tenant_or_run_container() {
     let fx = RunFixture::new();
-    let _mode = EnvGuard::set("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing");
 
     let err = fx
-        .run(&["aibox", "run"], Vec::new())
+        .run_with(
+            &["aibox", "run"],
+            Vec::new(),
+            None,
+            &[("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing")],
+        )
         .unwrap_err()
         .to_string();
 

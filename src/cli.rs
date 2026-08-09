@@ -230,13 +230,13 @@ fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Err
                 None => (None, false),
             },
         };
-        if let Some(name) = name {
-            if !seen.insert(name) {
-                return Err(clap::Error::raw(
-                    clap::error::ErrorKind::ArgumentConflict,
-                    format!("{name} must be provided only once in a command scope"),
-                ));
-            }
+        if let Some(name) = name
+            && !seen.insert(name)
+        {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                format!("{name} must be provided only once in a command scope"),
+            ));
         }
         index += usize::from(takes_next) + 1;
     }

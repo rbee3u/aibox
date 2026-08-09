@@ -1,29 +1,27 @@
 import react from "@vitejs/plugin-react";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   base: "/_aibox/traffic/",
+  publicDir: false,
   plugins: [react()],
   build: {
     outDir: "../../assets",
+    // The shared assets directory also contains non-Vite inputs such as the Dockerfile.
     emptyOutDir: false,
-    assetsDir: ".",
-    rollupOptions: {
-      input: {
-        traffic: "./index.html",
-      },
+    assetsInlineLimit: () => true,
+    cssCodeSplit: false,
+    rolldownOptions: {
       output: {
+        codeSplitting: false,
         entryFileNames: "traffic.js",
-        chunkFileNames: "traffic-[name].js",
-        assetFileNames: (assetInfo) =>
-          assetInfo.name?.endsWith(".css") ? "traffic.css" : "traffic-[name][extname]",
+        assetFileNames: "traffic.css",
       },
     },
   },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    css: true,
-    exclude: [...configDefaults.exclude, "e2e/**"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

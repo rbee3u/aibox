@@ -101,6 +101,22 @@ impl DynamicShell {
                 .and_then(|index| index.parse().ok()),
         }
     }
+
+    fn write_complete_with_index(
+        self,
+        cmd: &mut clap::Command,
+        args: Vec<OsString>,
+        current_dir: Option<&Path>,
+        completion_index: Option<usize>,
+        buf: &mut dyn std::io::Write,
+    ) -> Result<(), std::io::Error> {
+        if completion_index
+            .is_some_and(|index| !crate::cli::short_option_completion_allowed(cmd, &args, index))
+        {
+            return Ok(());
+        }
+        self.inner().write_complete(cmd, args, current_dir, buf)
+    }
 }
 
 impl EnvCompleter for DynamicShell {
@@ -131,13 +147,8 @@ impl EnvCompleter for DynamicShell {
         current_dir: Option<&Path>,
         buf: &mut dyn std::io::Write,
     ) -> Result<(), std::io::Error> {
-        if self
-            .completion_index(&args)
-            .is_some_and(|index| !crate::cli::short_option_completion_allowed(cmd, &args, index))
-        {
-            return Ok(());
-        }
-        self.inner().write_complete(cmd, args, current_dir, buf)
+        let completion_index = self.completion_index(&args);
+        self.write_complete_with_index(cmd, args, current_dir, completion_index, buf)
     }
 }
 
@@ -611,14 +622,24 @@ fn complete_named_configs(
     current: &OsStr,
     excluded: &BTreeSet<String>,
 ) -> Vec<CompletionCandidate> {
+    let root = tenant::aibox_root().ok();
+    root.as_deref().map_or_else(Vec::new, |root| {
+        complete_named_configs_at(root, context, current, excluded)
+    })
+}
+
+fn complete_named_configs_at(
+    root: &Path,
+    context: &CompletionContext,
+    current: &OsStr,
+    excluded: &BTreeSet<String>,
+) -> Vec<CompletionCandidate> {
     if !context.selection_valid {
         return Vec::new();
     }
-    let values = (|| -> Result<Vec<String>> {
-        let root = tenant::aibox_root()?;
-        crate::config::list_named_configs(&selected_at(&root, context)?)
-    })()
-    .unwrap_or_default();
+    let values = selected_at(root, context)
+        .and_then(|selected| crate::config::list_named_configs(&selected))
+        .unwrap_or_default();
     filter_candidates(values, current, excluded)
 }
 
@@ -627,14 +648,22 @@ fn complete_sessions(
     current: &OsStr,
     excluded: &BTreeSet<String>,
 ) -> Vec<CompletionCandidate> {
+    let root = tenant::aibox_root().ok();
+    root.as_deref().map_or_else(Vec::new, |root| {
+        complete_sessions_at(root, context, current, excluded)
+    })
+}
+
+fn complete_sessions_at(
+    root: &Path,
+    context: &CompletionContext,
+    current: &OsStr,
+    excluded: &BTreeSet<String>,
+) -> Vec<CompletionCandidate> {
     if !context.selection_valid {
         return Vec::new();
     }
-    let values = (|| -> Result<Vec<String>> {
-        let root = tenant::aibox_root()?;
-        session_values_at(&root, context)
-    })()
-    .unwrap_or_default();
+    let values = session_values_at(root, context).unwrap_or_default();
     filter_session_candidates(values, current, excluded)
 }
 
@@ -901,8 +930,6 @@ mod tests {
 
     #[test]
     fn dynamic_completion_never_extends_short_flags_into_clusters() {
-        let _env_lock = crate::test_env_lock();
-        let _index = crate::testutil::EnvGuard::set("_CLAP_COMPLETE_INDEX", "5");
         for current in ["-y", "-yh", "-x"] {
             for shell in [DynamicShell::Bash, DynamicShell::Zsh, DynamicShell::Fish] {
                 let args = words(&["aibox", "session", "--agent", "claude", "delete", current]);
@@ -911,7 +938,7 @@ mod tests {
                 command.build();
                 let mut output = Vec::new();
                 shell
-                    .write_complete(&mut command, args, None, &mut output)
+                    .write_complete_with_index(&mut command, args, None, Some(5), &mut output)
                     .unwrap();
                 assert!(
                     output.is_empty(),
@@ -969,9 +996,7 @@ mod tests {
 
     #[test]
     fn config_candidates_are_tenant_local() {
-        let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
-        let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
         let selected = tenant.for_agent(AgentKind::Codex);
@@ -980,27 +1005,34 @@ mod tests {
         let context = CompletionContext::from_words(&words(&[
             "aibox", "config", "--tenant", "work", "apply", "",
         ]));
-        let values = complete_named_configs(&context, OsStr::new(""), &BTreeSet::new());
+        let values =
+            complete_named_configs_at(root.path(), &context, OsStr::new(""), &BTreeSet::new());
         assert_eq!(candidate_values(&values), ["custom", "second"]);
 
         let deleting = CompletionContext::from_words(&words(&[
             "aibox", "config", "--tenant", "work", "delete", "custom", "",
         ]));
         assert_eq!(deleting.positionals, BTreeSet::from(["custom".to_string()]));
-        let values = complete_named_configs(&deleting, OsStr::new(""), &deleting.positionals);
+        let values = complete_named_configs_at(
+            root.path(),
+            &deleting,
+            OsStr::new(""),
+            &deleting.positionals,
+        );
         assert_eq!(candidate_values(&values), ["second"]);
 
         let current =
             CompletionContext::from_words(&words(&["aibox", "config", "get", "--current", ""]));
         assert!(current.current);
-        assert!(complete_named_configs(&current, OsStr::new(""), &BTreeSet::new()).is_empty());
+        assert!(
+            complete_named_configs_at(root.path(), &current, OsStr::new(""), &BTreeSet::new(),)
+                .is_empty()
+        );
     }
 
     #[test]
     fn session_candidates_follow_the_selected_tenant_and_agent() {
-        let _env_lock = crate::test_env_lock();
         let root = tempfile::tempdir().unwrap();
-        let _root = crate::testutil::EnvGuard::set("AIBOX_ROOT", root.path().as_os_str());
         let work = ManagedTenant::resolve(root.path(), "work").unwrap();
         let other = ManagedTenant::resolve(root.path(), "other").unwrap();
         work.ensure_initialized().unwrap();
@@ -1028,7 +1060,8 @@ mod tests {
         ]));
         assert_eq!(session_values_at(root.path(), &codex).unwrap(), [codex_id]);
         assert_eq!(
-            candidate_values(&complete_sessions(
+            candidate_values(&complete_sessions_at(
+                root.path(),
                 &codex,
                 OsStr::new("d123"),
                 &BTreeSet::new()
@@ -1037,11 +1070,18 @@ mod tests {
             "suffix input must complete to the full Session id"
         );
         assert!(
-            complete_sessions(&codex, OsStr::new("019fded0"), &BTreeSet::new()).is_empty(),
+            complete_sessions_at(
+                root.path(),
+                &codex,
+                OsStr::new("019fded0"),
+                &BTreeSet::new(),
+            )
+            .is_empty(),
             "the removed prefix contract must not leak through completion"
         );
         assert!(
-            complete_sessions(
+            complete_sessions_at(
+                root.path(),
                 &codex,
                 OsStr::new(""),
                 &BTreeSet::from([codex_id.to_string()])
@@ -1058,7 +1098,8 @@ mod tests {
             ["claude-session"]
         );
         assert_eq!(
-            candidate_values(&complete_sessions(
+            candidate_values(&complete_sessions_at(
+                root.path(),
                 &claude,
                 OsStr::new("session"),
                 &BTreeSet::new()
