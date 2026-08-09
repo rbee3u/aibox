@@ -10,7 +10,7 @@ fn schema_accepts_only_fixed_fields_and_types() {
     .unwrap();
     NamedConfigDefinition::parse(
         AgentKind::Codex,
-        "model = \"gpt\"\n[model_providers.custom]\nrequires_openai_auth = true\n",
+        "model = \"gpt\"\nopenai_base_url = \"https://api.openai.com/v1\"\n[model_providers.custom]\nrequires_openai_auth = true\n",
         Some(r#"{"tokens":{"access":"secret"}}"#),
     )
     .unwrap();
@@ -23,6 +23,14 @@ fn schema_accepts_only_fixed_fields_and_types() {
         .unwrap_err()
         .to_string();
     assert!(wrong_type.contains("must be a string"), "{wrong_type}");
+    let wrong_base_url_type =
+        NamedConfigDefinition::parse(AgentKind::Codex, "openai_base_url = true", Some("{}"))
+            .unwrap_err()
+            .to_string();
+    assert!(
+        wrong_base_url_type.contains("/config/openai_base_url must be a string"),
+        "{wrong_base_url_type}"
+    );
     let unknown_provider = NamedConfigDefinition::parse(
         AgentKind::Codex,
         "[model_providers.other]\nname = \"other\"\n",
@@ -120,6 +128,37 @@ fn codex_application_preserves_comments_and_replaces_whole_auth() {
     assert!(main.contains("status_line"), "{main}");
     let auth: Value = serde_json::from_str(result.auth.as_deref().unwrap()).unwrap();
     assert_eq!(auth, serde_json::json!({"OPENAI_API_KEY": "new"}));
+}
+
+#[test]
+fn codex_openai_base_url_sets_replaces_and_removes() {
+    let configured = NamedConfigDefinition::parse(
+        AgentKind::Codex,
+        "openai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\"\n",
+        Some("{}"),
+    )
+    .unwrap();
+    let result = configured
+        .apply(
+            Some("# endpoint\nopenai_base_url = \"https://api.openai.com/v1\"\nkeep = true\n"),
+            None,
+        )
+        .unwrap();
+    let main = result.main.unwrap();
+    assert!(main.contains("# endpoint"), "{main}");
+    assert!(
+        main.contains(
+            "openai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\""
+        ),
+        "{main}"
+    );
+    assert!(main.contains("keep = true"), "{main}");
+
+    let omitted = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
+    let result = omitted.apply(Some(&main), None).unwrap();
+    let main = result.main.unwrap();
+    assert!(!main.contains("openai_base_url"), "{main}");
+    assert!(main.contains("keep = true"), "{main}");
 }
 
 #[test]

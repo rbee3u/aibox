@@ -179,7 +179,14 @@ Traffic viewer development commands and the embedded asset workflow are
 documented in [Traffic UI Development](docs/traffic-ui.md).
 
 Point a model provider at the proxy by placing its complete upstream base URL
-after the local address. For Codex inside an aibox container:
+after the local address. For Codex's built-in OpenAI provider inside an aibox
+container, remove any custom `model_provider` selection and set:
+
+```toml
+openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
+```
+
+For a custom Codex provider:
 
 ```toml
 [model_providers.hezubus]

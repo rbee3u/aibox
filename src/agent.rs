@@ -79,6 +79,10 @@ const CODEX_CONFIG_FIELDS: &[ConfigField] = &[
         value_kind: ConfigValueKind::String,
     },
     ConfigField {
+        path: &["openai_base_url"],
+        value_kind: ConfigValueKind::String,
+    },
+    ConfigField {
         path: &["model_provider"],
         value_kind: ConfigValueKind::String,
     },
@@ -101,6 +105,10 @@ sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
 model = "gpt-5.6-sol"
+# ChatGPT authentication:
+# openai_base_url = "https://chatgpt.com/backend-api/codex"
+# API key authentication:
+# openai_base_url = "https://api.openai.com/v1"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -333,6 +341,7 @@ mod tests {
                     (&["model_reasoning_effort"][..], ConfigValueKind::String),
                     (&["plan_mode_reasoning_effort"][..], ConfigValueKind::String),
                     (&["model"][..], ConfigValueKind::String),
+                    (&["openai_base_url"][..], ConfigValueKind::String),
                     (&["model_provider"][..], ConfigValueKind::String),
                     (
                         &["model_providers", "custom", "name"][..],

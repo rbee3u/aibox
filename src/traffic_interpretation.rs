@@ -307,23 +307,28 @@ impl ProtocolObserver {
     pub(super) fn observe_response_headers(
         &mut self,
         headers: &[RecordedHeader],
-        event_stream: bool,
+        event_stream: Option<bool>,
         at_ns: String,
     ) -> bool {
-        let mut changed = self.summary.set_observed_mode(
-            Some(if event_stream {
-                ResponseModeValue::Stream
-            } else {
-                ResponseModeValue::Normal
-            }),
-            Some(at_ns.clone()),
-        );
+        let mut changed = event_stream
+            .is_some_and(|event_stream| self.observe_response_mode(event_stream, at_ns.clone()));
         let model =
             header_text(headers, "openai-model").or_else(|| header_text(headers, "x-openai-model"));
         changed |= self
             .summary
             .set_effective_model(nonempty(model), Some(at_ns));
         changed
+    }
+
+    pub(super) fn observe_response_mode(&mut self, event_stream: bool, at_ns: String) -> bool {
+        self.summary.set_observed_mode(
+            Some(if event_stream {
+                ResponseModeValue::Stream
+            } else {
+                ResponseModeValue::Normal
+            }),
+            Some(at_ns),
+        )
     }
 
     pub(super) fn observe_sse_data(&mut self, data: &[u8], at_ns: String) -> bool {
@@ -1140,7 +1145,7 @@ mod tests {
             value_base64: "aGVhZGVyLW1vZGVs".to_string(),
         }];
         let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
-        assert!(observer.observe_response_headers(&headers, false, "10".to_string()));
+        assert!(observer.observe_response_headers(&headers, Some(false), "10".to_string()));
         assert!(observer.observe_json_response(&response_path, 200, "20".to_string()));
         let summary = observer.snapshot();
         assert_eq!(summary.model.effective.as_deref(), Some("header-model"));

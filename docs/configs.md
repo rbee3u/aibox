@@ -159,14 +159,19 @@ Codex `config.toml` supports:
 | `model_reasoning_effort` | string |
 | `plan_mode_reasoning_effort` | string |
 | `model` | string |
+| `openai_base_url` | string |
 | `model_provider` | string |
 | `model_providers.custom.name` | string |
 | `model_providers.custom.base_url` | string |
 | `model_providers.custom.requires_openai_auth` | boolean |
 
-The provider table name is fixed as `custom`. Codex Named Config `auth.json`
-may be any JSON object and replaces the complete native Current Config
-`auth.json` object during application.
+`openai_base_url` overrides the Base URL of Codex's built-in `openai` provider
+and has no effect while `model_provider` selects `custom`. When it is unset,
+Codex uses `https://chatgpt.com/backend-api/codex` for ChatGPT authentication
+and `https://api.openai.com/v1` for API key authentication. The provider table
+name for the separate custom Config Field group is fixed as `custom`. Codex
+Named Config `auth.json` may be any JSON object and replaces the complete native
+Current Config `auth.json` object during application.
 
 ## Built-in Templates
 
@@ -178,6 +183,10 @@ sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
 model = "gpt-5.6-sol"
+# ChatGPT authentication:
+# openai_base_url = "https://chatgpt.com/backend-api/codex"
+# API key authentication:
+# openai_base_url = "https://api.openai.com/v1"
 model_provider = "custom"
 
 [model_providers.custom]

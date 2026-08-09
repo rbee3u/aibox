@@ -353,6 +353,23 @@ fn create_uses_templates_and_rejects_a_complete_existing_config() {
 
     let main = fs::read_to_string(selected.named_config_file("custom", "config.toml")).unwrap();
     assert!(main.contains("name = \"custom\""), "{main}");
+    let model = main.find("model = \"gpt-5.6-sol\"").unwrap();
+    let chatgpt_auth = main.find("# ChatGPT authentication:").unwrap();
+    let chatgpt_base_url = main
+        .find("# openai_base_url = \"https://chatgpt.com/backend-api/codex\"")
+        .unwrap();
+    let api_key_auth = main.find("# API key authentication:").unwrap();
+    let api_base_url = main
+        .find("# openai_base_url = \"https://api.openai.com/v1\"")
+        .unwrap();
+    let provider = main.find("model_provider = \"custom\"").unwrap();
+    assert!(
+        model < chatgpt_auth
+            && chatgpt_auth < chatgpt_base_url
+            && chatgpt_base_url < api_key_auth
+            && api_key_auth < api_base_url
+            && api_base_url < provider
+    );
     assert_eq!(
         fs::read_to_string(selected.named_config_file("custom", "auth.json")).unwrap(),
         "{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"
@@ -833,12 +850,12 @@ fn codex_apply_preserves_toml_comments_unrelated_values_and_statusline() {
     replace_config_files(
         &selected,
         "partial",
-        "model = \"new\"\n\n[model_providers.custom]\nname = \"custom\"\n",
+        "model = \"new\"\nopenai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\"\n\n[model_providers.custom]\nname = \"custom\"\n",
         "{\"OPENAI_API_KEY\":\"new\"}\n",
     );
     fs::write(
         selected.state_file("config.toml"),
-        "# keep comment\nmodel = \"old\"\nsandbox_mode = \"workspace-write\"\nkeep = true\n\n[tui]\nstatus_line = [\"model\"]\nstatus_line_use_colors = true\n",
+        "# keep comment\nmodel = \"old\"\nopenai_base_url = \"https://api.openai.com/v1\"\nsandbox_mode = \"workspace-write\"\nkeep = true\n\n[tui]\nstatus_line = [\"model\"]\nstatus_line_use_colors = true\n",
     )
     .unwrap();
     fs::write(
@@ -852,6 +869,12 @@ fn codex_apply_preserves_toml_comments_unrelated_values_and_statusline() {
     let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
     assert!(config.contains("# keep comment"), "{config}");
     assert!(config.contains("model = \"new\""), "{config}");
+    assert!(
+        config.contains(
+            "openai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\""
+        ),
+        "{config}"
+    );
     assert!(!config.contains("sandbox_mode"), "{config}");
     assert!(config.contains("keep = true"), "{config}");
     assert!(config.contains("status_line ="), "{config}");

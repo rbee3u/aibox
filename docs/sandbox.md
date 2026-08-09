@@ -133,7 +133,14 @@ requests, and invalid per-start CSRF tokens. It sends no CORS permission.
 
 Docker Desktop provides `host.docker.internal`. aibox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
-`0.0.0.0` plus `--allow-remote`. For example:
+`0.0.0.0` plus `--allow-remote`. Codex's built-in OpenAI provider can use:
+
+```toml
+openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
+```
+
+A custom provider uses the same complete-upstream encoding in its provider
+table:
 
 ```toml
 base_url = "http://host.docker.internal:9923/https://hezubus.ai/v1"

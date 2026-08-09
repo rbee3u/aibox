@@ -1,5 +1,7 @@
 use crate::traffic::AppState;
-use crate::traffic_interpretation::{ProtocolObserver, ProtocolSummary};
+use crate::traffic_interpretation::{
+    ProtocolFamily, ProtocolObserver, ProtocolSummary, ResponseModeValue,
+};
 use crate::traffic_store::{
     offset_ns, utc_now, ErrorKind, ErrorMetadata, NewRecord, Outcome, RecordedHeader,
     ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore,
@@ -230,7 +232,8 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
     let status = upstream_response.status();
     let version = upstream_response.version();
     let original_headers = upstream_response.headers().clone();
-    let is_sse = is_event_stream(&original_headers);
+    let response_stream_mode =
+        response_stream_mode(&original_headers, status, &guard.protocol_summary());
     let metadata = ResponseMetadata {
         format_version: FORMAT_VERSION,
         source: ResponseSource::Upstream,
@@ -239,7 +242,10 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
         http_version: version_name(version).to_string(),
         headers: RecordedHeader::from_headers(&original_headers),
     };
-    if let Err(error) = guard.observe_response_headers(&metadata.headers, is_sse) {
+    if let Err(error) = guard.observe_response_headers(
+        &metadata.headers,
+        response_stream_mode.observed_event_stream(),
+    ) {
         return recording_failure(
             &mut guard,
             format!("checkpoint response metadata: {error:#}"),
@@ -260,17 +266,6 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
 
     let (sender, receiver) = mpsc::channel::<Result<Bytes, io::Error>>(8);
     let state_for_task = state.clone();
-    let event_index = if is_sse {
-        match state.store.create_event_index(&guard.record) {
-            Ok(file) => Some(file),
-            Err(error) => {
-                guard.add_warning("event_index_failed", error.to_string());
-                None
-            }
-        }
-    } else {
-        None
-    };
     state.response_tasks.spawn(async move {
         record_response_stream_with_index(
             state_for_task.shutdown.clone(),
@@ -278,9 +273,8 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             response_file,
             sender,
             ResponseStreamConfig {
-                is_sse,
+                mode: response_stream_mode,
                 status: status.as_u16(),
-                event_index,
             },
             &mut guard,
         )
@@ -335,7 +329,7 @@ impl RecordGuard {
     fn observe_response_headers(
         &self,
         headers: &[RecordedHeader],
-        event_stream: bool,
+        event_stream: Option<bool>,
     ) -> anyhow::Result<()> {
         let at_ns = offset_ns(self.record.origin);
         let mut observer = self
@@ -351,6 +345,24 @@ impl RecordGuard {
                 true
             })?;
         Ok(())
+    }
+
+    fn observe_response_mode(&self, event_stream: bool) -> anyhow::Result<()> {
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if observer.observe_response_mode(event_stream, offset_ns(self.record.origin)) {
+            self.publish_protocol(observer.snapshot())?;
+        }
+        Ok(())
+    }
+
+    fn protocol_summary(&self) -> ProtocolSummary {
+        self.protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot()
     }
 
     fn observe_sse_events(&self, events: &[(Vec<u8>, String)]) -> anyhow::Result<()> {
@@ -663,18 +675,144 @@ fn record_response_stream(
         file,
         sender,
         ResponseStreamConfig {
-            is_sse: false,
+            mode: ResponseStreamMode::Normal,
             status: 200,
-            event_index: None,
         },
         guard,
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseStreamMode {
+    Normal,
+    EventStream,
+    Detect,
+}
+
+impl ResponseStreamMode {
+    fn observed_event_stream(self) -> Option<bool> {
+        match self {
+            Self::Normal => Some(false),
+            Self::EventStream => Some(true),
+            Self::Detect => None,
+        }
+    }
+}
+
 struct ResponseStreamConfig {
-    is_sse: bool,
+    mode: ResponseStreamMode,
     status: u16,
-    event_index: Option<std::fs::File>,
+}
+
+enum ResponseBodyTracker {
+    Normal,
+    EventStream(SseIndexer),
+    Detect {
+        sniffer: SsePrefixSniffer,
+        pending: Vec<(Bytes, String)>,
+    },
+}
+
+impl ResponseBodyTracker {
+    fn new(mode: ResponseStreamMode, guard: &RecordGuard) -> Self {
+        match mode {
+            ResponseStreamMode::Normal => Self::Normal,
+            ResponseStreamMode::EventStream => Self::EventStream(new_sse_indexer(guard)),
+            ResponseStreamMode::Detect => Self::Detect {
+                sniffer: SsePrefixSniffer::default(),
+                pending: Vec::new(),
+            },
+        }
+    }
+
+    fn observe_chunk(
+        &mut self,
+        chunk: &Bytes,
+        at_ns: String,
+        guard: &RecordGuard,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Normal => Ok(()),
+            Self::EventStream(indexer) => feed_sse_chunk(indexer, chunk, at_ns, guard),
+            Self::Detect { sniffer, pending } => {
+                pending.push((chunk.clone(), at_ns));
+                match sniffer.observe(chunk) {
+                    PrefixSniff::Pending => Ok(()),
+                    PrefixSniff::Normal => {
+                        guard.observe_response_mode(false)?;
+                        *self = Self::Normal;
+                        Ok(())
+                    }
+                    PrefixSniff::EventStream => {
+                        guard.observe_response_mode(true)?;
+                        let buffered = std::mem::take(pending);
+                        let mut indexer = new_sse_indexer(guard);
+                        for (buffered_chunk, buffered_at_ns) in buffered {
+                            feed_sse_chunk(&mut indexer, &buffered_chunk, buffered_at_ns, guard)?;
+                        }
+                        *self = Self::EventStream(indexer);
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self, guard: &RecordGuard) -> anyhow::Result<()> {
+        match self {
+            Self::Normal => Ok(()),
+            Self::Detect { .. } => {
+                guard.observe_response_mode(false)?;
+                *self = Self::Normal;
+                Ok(())
+            }
+            Self::EventStream(indexer) => {
+                match indexer.finish() {
+                    Ok(true) => guard.add_warning(
+                        "event_index_failed",
+                        "truncated SSE event was not indexed".to_string(),
+                    ),
+                    Ok(false) => {}
+                    Err(error) => guard.add_warning("event_index_failed", error.to_string()),
+                }
+                let events = indexer.take_protocol_events();
+                guard.observe_sse_events(&events)
+            }
+        }
+    }
+
+    fn is_event_stream(&self) -> bool {
+        matches!(self, Self::EventStream(_))
+    }
+
+    fn terminal_seen(&self) -> bool {
+        matches!(self, Self::EventStream(indexer) if indexer.terminal_seen())
+    }
+}
+
+fn new_sse_indexer(guard: &RecordGuard) -> SseIndexer {
+    let event_index = match guard.store.create_event_index(&guard.record) {
+        Ok(file) => Some(file),
+        Err(error) => {
+            guard.add_warning("event_index_failed", error.to_string());
+            None
+        }
+    };
+    SseIndexer::new(event_index, guard.record.id.clone())
+}
+
+fn feed_sse_chunk(
+    indexer: &mut SseIndexer,
+    chunk: &Bytes,
+    at_ns: String,
+    guard: &RecordGuard,
+) -> anyhow::Result<()> {
+    let body_offset = indexer.body_offset;
+    if let Err(error) = indexer.feed(chunk, body_offset, at_ns) {
+        guard.add_warning("event_index_failed", error.to_string());
+        indexer.disable_indexing();
+    }
+    guard.observe_sse_events(&indexer.take_protocol_events())
 }
 
 async fn record_response_stream_with_index(
@@ -686,12 +824,11 @@ async fn record_response_stream_with_index(
     guard: &mut RecordGuard,
 ) {
     let ResponseStreamConfig {
-        is_sse,
+        mode,
         status: response_status,
-        event_index,
     } = config;
     let mut stream = Box::pin(stream);
-    let mut indexer = is_sse.then(|| SseIndexer::new(event_index, guard.record.id.clone()));
+    let mut tracker = ResponseBodyTracker::new(mode, guard);
     let mut response_completed = false;
     let mut terminal = loop {
         let next = tokio::select! {
@@ -707,7 +844,7 @@ async fn record_response_stream_with_index(
             // disconnect solely because the downstream body was dropped first.
             next = stream.try_next() => next,
             _ = sender.closed() => {
-                break client_closed_terminal(indexer.as_ref());
+                break client_closed_terminal(&tracker);
             }
         };
         match next {
@@ -766,49 +903,31 @@ async fn record_response_stream_with_index(
                     values.response_bytes =
                         values.response_bytes.saturating_add(chunk.len() as u64);
                 }
-                if let Some(indexer) = indexer.as_mut() {
-                    let body_offset = indexer.body_offset;
-                    let feed = indexer.feed(&chunk, body_offset, offset_ns(guard.record.origin));
-                    if let Err(error) = feed {
-                        guard.add_warning("event_index_failed", error.to_string());
-                        indexer.disable_indexing();
-                    }
-                    let events = indexer.take_protocol_events();
-                    if let Err(error) = guard.observe_sse_events(&events) {
-                        let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
-                        break (
-                            Outcome::RecordingFailed,
-                            Some(ErrorMetadata {
-                                kind: ErrorKind::ResponseRecordingFailed,
-                                message: error.to_string(),
-                            }),
-                        );
-                    }
+                if let Err(error) =
+                    tracker.observe_chunk(&chunk, offset_ns(guard.record.origin), guard)
+                {
+                    let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
+                    break (
+                        Outcome::RecordingFailed,
+                        Some(ErrorMetadata {
+                            kind: ErrorKind::ResponseRecordingFailed,
+                            message: error.to_string(),
+                        }),
+                    );
                 }
                 if sender.send(Ok(chunk)).await.is_err() {
-                    break client_closed_terminal(indexer.as_ref());
+                    break client_closed_terminal(&tracker);
                 }
             }
             Ok(None) => {
-                if let Some(indexer) = indexer.as_mut() {
-                    match indexer.finish() {
-                        Ok(true) => guard.add_warning(
-                            "event_index_failed",
-                            "truncated SSE event was not indexed".to_string(),
-                        ),
-                        Ok(false) => {}
-                        Err(error) => guard.add_warning("event_index_failed", error.to_string()),
-                    }
-                    let events = indexer.take_protocol_events();
-                    if let Err(error) = guard.observe_sse_events(&events) {
-                        break (
-                            Outcome::RecordingFailed,
-                            Some(ErrorMetadata {
-                                kind: ErrorKind::ResponseRecordingFailed,
-                                message: error.to_string(),
-                            }),
-                        );
-                    }
+                if let Err(error) = tracker.finish(guard) {
+                    break (
+                        Outcome::RecordingFailed,
+                        Some(ErrorMetadata {
+                            kind: ErrorKind::ResponseRecordingFailed,
+                            message: error.to_string(),
+                        }),
+                    );
                 }
                 response_completed = true;
                 break (Outcome::Completed, None);
@@ -846,7 +965,7 @@ async fn record_response_stream_with_index(
             eprintln!("warning: cannot finalize failed Traffic Record: {finish_error:#}");
         }
     } else {
-        let semantic_result = if response_completed && !is_sse {
+        let semantic_result = if response_completed && !tracker.is_event_stream() {
             guard.observe_json_response(response_status)
         } else {
             guard.observe_http_status(response_status)
@@ -881,8 +1000,8 @@ async fn record_response_stream_with_index(
     }
 }
 
-fn client_closed_terminal(indexer: Option<&SseIndexer>) -> (Outcome, Option<ErrorMetadata>) {
-    if indexer.is_some_and(SseIndexer::terminal_seen) {
+fn client_closed_terminal(tracker: &ResponseBodyTracker) -> (Outcome, Option<ErrorMetadata>) {
+    if tracker.terminal_seen() {
         return (Outcome::Completed, None);
     }
     (
@@ -1016,6 +1135,66 @@ fn is_event_stream(headers: &HeaderMap) -> bool {
         .filter_map(|value| value.to_str().ok())
         .filter_map(|value| value.split(';').next())
         .any(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+fn response_stream_mode(
+    headers: &HeaderMap,
+    status: StatusCode,
+    protocol: &ProtocolSummary,
+) -> ResponseStreamMode {
+    if is_event_stream(headers) {
+        return ResponseStreamMode::EventStream;
+    }
+    if !headers.contains_key(header::CONTENT_TYPE)
+        && status.is_success()
+        && protocol.family != ProtocolFamily::Unknown
+        && protocol.response_mode.requested == Some(ResponseModeValue::Stream)
+    {
+        return ResponseStreamMode::Detect;
+    }
+    ResponseStreamMode::Normal
+}
+
+#[derive(Default)]
+struct SsePrefixSniffer {
+    prefix: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrefixSniff {
+    Pending,
+    EventStream,
+    Normal,
+}
+
+impl SsePrefixSniffer {
+    fn observe(&mut self, chunk: &[u8]) -> PrefixSniff {
+        const MAX_PREFIX_LEN: usize = 9;
+        let remaining = MAX_PREFIX_LEN.saturating_sub(self.prefix.len());
+        self.prefix
+            .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        classify_sse_prefix(&self.prefix)
+    }
+}
+
+fn classify_sse_prefix(bytes: &[u8]) -> PrefixSniff {
+    const BOM: &[u8] = b"\xef\xbb\xbf";
+    const SSE_PREFIXES: &[&[u8]] = &[b"event:", b"data:", b"id:", b"retry:", b":"];
+
+    let bytes = if bytes.starts_with(BOM) {
+        &bytes[BOM.len()..]
+    } else if BOM.starts_with(bytes) {
+        return PrefixSniff::Pending;
+    } else {
+        bytes
+    };
+    if SSE_PREFIXES.iter().any(|prefix| bytes.starts_with(prefix)) {
+        return PrefixSniff::EventStream;
+    }
+    if SSE_PREFIXES.iter().any(|prefix| prefix.starts_with(bytes)) {
+        return PrefixSniff::Pending;
+    }
+    PrefixSniff::Normal
 }
 
 #[derive(Serialize)]
@@ -1683,9 +1862,10 @@ mod tests {
         assert_eq!(result.response_bytes, 27);
     }
 
-    async fn run_client_close_after_terminal_sse(
+    async fn run_client_close_after_response(
         upstream_url: &'static str,
-        body: &'static [u8],
+        chunks: &[&'static [u8]],
+        mode: ResponseStreamMode,
     ) -> (Outcome, ProtocolSummary) {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
@@ -1701,13 +1881,6 @@ mod tests {
             .unwrap();
         let id = record.id.clone();
         let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
-        let event_index = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open(record.directory.join("response.events.jsonl"))
-            .unwrap();
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url))));
         let guard = RecordGuard::new(
@@ -1727,21 +1900,19 @@ mod tests {
                 ReceiverStream::new(upstream_receiver),
                 response_file,
                 client_sender,
-                ResponseStreamConfig {
-                    is_sse: true,
-                    status: 200,
-                    event_index: Some(event_index),
-                },
+                ResponseStreamConfig { mode, status: 200 },
                 &mut guard,
             )
             .await;
         });
 
-        upstream_sender
-            .send(Ok(Bytes::from_static(body)))
-            .await
-            .unwrap();
-        assert_eq!(client_receiver.recv().await.unwrap().unwrap(), body);
+        for chunk in chunks {
+            upstream_sender
+                .send(Ok(Bytes::from_static(chunk)))
+                .await
+                .unwrap();
+            assert_eq!(client_receiver.recv().await.unwrap().unwrap(), *chunk);
+        }
         drop(client_receiver);
         task.await.unwrap();
 
@@ -1754,17 +1925,19 @@ mod tests {
 
     #[tokio::test]
     async fn client_close_after_claude_terminal_event_is_completed() {
-        let (outcome, protocol) = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/messages",
-            b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+            &[b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"],
+            ResponseStreamMode::EventStream,
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
         assert!(!protocol.response_terminal);
 
-        let (outcome, protocol) = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/messages",
-            b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            &[b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"],
+            ResponseStreamMode::EventStream,
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
@@ -1773,9 +1946,10 @@ mod tests {
 
     #[tokio::test]
     async fn client_close_after_codex_terminal_event_is_completed() {
-        let (outcome, protocol) = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/responses",
-            b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n",
+            &[b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n"],
+            ResponseStreamMode::EventStream,
         )
         .await;
         assert_eq!(outcome, Outcome::Completed);
@@ -1785,14 +1959,162 @@ mod tests {
 
     #[tokio::test]
     async fn client_close_before_sse_terminal_event_is_disconnected() {
-        let (outcome, protocol) = run_client_close_after_terminal_sse(
+        let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/messages",
-            b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n",
+            &[b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n"],
+            ResponseStreamMode::EventStream,
         )
         .await;
         assert_eq!(outcome, Outcome::ClientDisconnected);
         assert!(!protocol.response_terminal);
         assert!(protocol.token_usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn headerless_split_sse_is_completed_when_client_closes_after_terminal_event() {
+        let (outcome, protocol) = run_client_close_after_response(
+            "https://example.com/v1/responses",
+            &[
+                b"eve",
+                b"nt: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n",
+            ],
+            ResponseStreamMode::Detect,
+        )
+        .await;
+
+        assert_eq!(outcome, Outcome::Completed);
+        assert_eq!(
+            protocol.response_mode.observed,
+            Some(ResponseModeValue::Stream)
+        );
+        assert!(protocol.response_terminal);
+        assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
+    }
+
+    #[tokio::test]
+    async fn headerless_json_response_remains_normal_and_keeps_usage() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let upstream_url = "https://example.com/v1/responses";
+        let (record, _) = store
+            .begin(
+                "POST",
+                upstream_url,
+                Some(upstream_url),
+                "HTTP/1.1",
+                Vec::new(),
+                Some("example.com"),
+            )
+            .unwrap();
+        let id = record.id.clone();
+        let event_index_path = record.directory.join("response.events.jsonl");
+        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
+        let guard = RecordGuard::new(
+            store.clone(),
+            record,
+            Arc::new(Mutex::new(RuntimeMeasurements::default())),
+            Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
+            Instant::now(),
+        );
+        let body = Bytes::from_static(
+            br#"{"object":"response","model":"gpt-test","usage":{"input_tokens":12,"output_tokens":4}}"#,
+        );
+        let expected_body = body.clone();
+        let (client_sender, mut client_receiver) = mpsc::channel(2);
+        let task = tokio::spawn(async move {
+            let mut guard = guard;
+            record_response_stream_with_index(
+                CancellationToken::new(),
+                futures_util::stream::iter([Ok(body.clone())]),
+                response_file,
+                client_sender,
+                ResponseStreamConfig {
+                    mode: ResponseStreamMode::Detect,
+                    status: 200,
+                },
+                &mut guard,
+            )
+            .await;
+        });
+
+        assert_eq!(
+            client_receiver.recv().await.unwrap().unwrap(),
+            expected_body
+        );
+        task.await.unwrap();
+        assert!(client_receiver.recv().await.is_none());
+
+        let record = store.find(&id).unwrap();
+        assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
+        assert_eq!(
+            record
+                .summary
+                .protocol
+                .as_ref()
+                .unwrap()
+                .response_mode
+                .observed,
+            Some(ResponseModeValue::Normal)
+        );
+        assert!(record.summary.protocol.as_ref().unwrap().response_terminal);
+        assert_eq!(
+            record
+                .summary
+                .protocol
+                .unwrap()
+                .token_usage
+                .unwrap()
+                .output_tokens,
+            Some(4)
+        );
+        assert!(!event_index_path.exists());
+    }
+
+    #[test]
+    fn response_stream_mode_only_sniffs_successful_requested_streams_without_content_type() {
+        let mut protocol = ProtocolSummary::for_url(Some("https://example.com/v1/responses"));
+        protocol.response_mode.requested = Some(ResponseModeValue::Stream);
+        let mut headers = HeaderMap::new();
+
+        assert_eq!(
+            response_stream_mode(&headers, StatusCode::OK, &protocol),
+            ResponseStreamMode::Detect
+        );
+        assert_eq!(
+            response_stream_mode(&headers, StatusCode::UNAUTHORIZED, &protocol),
+            ResponseStreamMode::Normal
+        );
+
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        assert_eq!(
+            response_stream_mode(&headers, StatusCode::OK, &protocol),
+            ResponseStreamMode::Normal
+        );
+        headers.insert(
+            header::CONTENT_TYPE,
+            "text/event-stream; charset=utf-8".parse().unwrap(),
+        );
+        assert_eq!(
+            response_stream_mode(&headers, StatusCode::OK, &protocol),
+            ResponseStreamMode::EventStream
+        );
+    }
+
+    #[test]
+    fn sse_prefix_sniffer_handles_split_bom_and_rejects_json() {
+        let mut sniffer = SsePrefixSniffer::default();
+        assert_eq!(sniffer.observe(b"\xef"), PrefixSniff::Pending);
+        assert_eq!(sniffer.observe(b"\xbb\xbfeve"), PrefixSniff::Pending);
+        assert_eq!(
+            sniffer.observe(b"nt: response.created\n"),
+            PrefixSniff::EventStream
+        );
+
+        let mut json = SsePrefixSniffer::default();
+        assert_eq!(
+            json.observe(br#"{"object":"response"}"#),
+            PrefixSniff::Normal
+        );
     }
 
     #[test]
@@ -1805,7 +2127,8 @@ mod tests {
             .unwrap();
 
         assert!(indexer.terminal_seen());
-        assert_eq!(client_closed_terminal(Some(&indexer)).0, Outcome::Completed);
+        let tracker = ResponseBodyTracker::EventStream(indexer);
+        assert_eq!(client_closed_terminal(&tracker).0, Outcome::Completed);
     }
 
     #[tokio::test]
