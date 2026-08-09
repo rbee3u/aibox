@@ -109,7 +109,7 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
 
   if (streaming && firstToken !== null) {
     if (add("First-token wait", "wait", firstToken) !== "advanced") return stages;
-    if (add("Model output", "model", responseCompleted) !== "advanced") return stages;
+    if (add("Response stream", "model", responseCompleted) !== "advanced") return stages;
   } else if (streaming && active) {
     add("First-token wait", "wait", null);
     return stages;

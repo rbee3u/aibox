@@ -69,15 +69,15 @@ no known terminal duration.
 _Avoid_: TTFB, response-header time
 
 **First Token**:
-The elapsed time from Traffic Record start until a protocol parser observes the
-first output-bearing model delta. For SSE, the delta is observed when its
-complete dispatchable event is available; a delta may contain multiple
-tokenizer tokens.
-_Avoid_: TTFB, response-header time
+The elapsed time from Traffic Record start until a recognized streaming model
+response completes its first trim-nonempty SSE `data` line that does not start
+with `[DONE]`. This relay-compatible latency does not imply that the data
+contains a tokenizer token or semantic model output.
+_Avoid_: First Output, TTFB, response-header time
 
 **Timing Stage**:
 One observable interval within a Traffic Record's timing breakdown, such as
-request upload, response wait, or model output.
+request upload, response wait, or response stream.
 _Avoid_: Traffic Phase, network phase
 
 **Requested Model Response Mode**:

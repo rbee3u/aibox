@@ -115,12 +115,25 @@ Older version-1 Records without the object remain readable and are never lazily
 backfilled. Raw bodies and the best-effort SSE index remain available for
 diagnosis.
 
+For a recognized streaming response, First Token is the offset at which the
+first trim-nonempty SSE `data:` line not beginning with `[DONE]` is completely
+received. It is deliberately compatible with common relay accounting rather
+than a claim that tokenizer or semantic output has arrived: ping, error,
+malformed JSON, empty-delta JSON, Claude `message_start`, and OpenAI
+`response.created` data all qualify. Comments, other SSE fields, blank data,
+and `[DONE]` prefixes do not. A line split across body chunks uses the arrival
+time of its terminator; an unterminated final line uses the last body arrival
+time at EOF. Unknown protocols and non-streaming responses have no First Token.
+
 The browser never parses model bodies for Summary. It receives decimal
 nanosecond offsets, uses `BigInt` to build Timing Stages on a shared axis, and
 falls back to a single Response body stage when a protocol has no observable
 First Token. Unknown protocols retain generic Timing and diagnostics while
 Token Usage reports unsupported. Recognized active protocols without final
 usage report waiting; terminal records without final usage report not reported.
+For streaming responses with First Token, the interval after that checkpoint
+is named `Response stream` rather than implying that every byte is model
+output.
 
 The detail Summary presents Model and Token Usage in one pale hierarchy card.
 The effective-or-requested model is the primary value, followed by a weaker

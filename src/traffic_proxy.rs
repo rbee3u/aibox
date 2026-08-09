@@ -382,6 +382,17 @@ impl RecordGuard {
         Ok(())
     }
 
+    fn observe_first_token(&self, at_ns: String) -> anyhow::Result<()> {
+        let mut observer = self
+            .protocol
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if observer.observe_first_token(at_ns) {
+            self.publish_protocol(observer.snapshot())?;
+        }
+        Ok(())
+    }
+
     fn observe_json_response(&self, status: u16) -> anyhow::Result<()> {
         let at_ns = offset_ns(self.record.origin);
         let mut observer = self
@@ -775,6 +786,9 @@ impl ResponseBodyTracker {
                     Ok(false) => {}
                     Err(error) => guard.add_warning("event_index_failed", error.to_string()),
                 }
+                if let Some(at_ns) = indexer.take_first_token_at_ns() {
+                    guard.observe_first_token(at_ns)?;
+                }
                 let events = indexer.take_protocol_events();
                 guard.observe_sse_events(&events)
             }
@@ -811,6 +825,9 @@ fn feed_sse_chunk(
     if let Err(error) = indexer.feed(chunk, body_offset, at_ns) {
         guard.add_warning("event_index_failed", error.to_string());
         indexer.disable_indexing();
+    }
+    if let Some(at_ns) = indexer.take_first_token_at_ns() {
+        guard.observe_first_token(at_ns)?;
     }
     guard.observe_sse_events(&indexer.take_protocol_events())
 }
@@ -1221,6 +1238,8 @@ struct SseIndexer {
     event_name: Option<Vec<u8>>,
     data: Vec<u8>,
     protocol_events: Vec<(Vec<u8>, String)>,
+    first_token_seen: bool,
+    first_token_at_ns: Option<String>,
     terminal_seen: bool,
     sequence: u64,
     indexing_disabled: bool,
@@ -1241,6 +1260,8 @@ impl SseIndexer {
             event_name: None,
             data: Vec::new(),
             protocol_events: Vec::new(),
+            first_token_seen: false,
+            first_token_at_ns: None,
             terminal_seen: false,
             sequence: 0,
             indexing_disabled: false,
@@ -1258,6 +1279,10 @@ impl SseIndexer {
 
     fn take_protocol_events(&mut self) -> Vec<(Vec<u8>, String)> {
         std::mem::take(&mut self.protocol_events)
+    }
+
+    fn take_first_token_at_ns(&mut self) -> Option<String> {
+        self.first_token_at_ns.take()
     }
 
     fn feed(&mut self, chunk: &[u8], body_start: u64, at_ns: String) -> anyhow::Result<()> {
@@ -1339,6 +1364,10 @@ impl SseIndexer {
             } else if let Some(value) = sse_field_value(line, b"event") {
                 self.event_name = Some(value.to_vec());
             } else if let Some(value) = sse_field_value(line, b"data") {
+                if !self.first_token_seen && is_first_token_data(value) {
+                    self.first_token_seen = true;
+                    self.first_token_at_ns = Some(at_ns.clone());
+                }
                 if self.data_seen {
                     self.data.push(b'\n');
                 }
@@ -1363,6 +1392,16 @@ impl SseIndexer {
             file.sync_all()?;
         }
         Ok(self.event_start.is_some() || !self.buffer.is_empty())
+    }
+}
+
+fn is_first_token_data(value: &[u8]) -> bool {
+    match std::str::from_utf8(value) {
+        Ok(value) => {
+            let value = value.trim();
+            !value.is_empty() && !value.starts_with("[DONE]")
+        }
+        Err(_) => true,
     }
 }
 
@@ -1424,7 +1463,7 @@ fn find_sse_line_end(bytes: &[u8], final_input: bool) -> Option<(usize, usize)> 
             _ => {}
         }
     }
-    None
+    (final_input && !bytes.is_empty()).then_some((bytes.len(), 0))
 }
 
 pub(super) fn bare_error(status: StatusCode, message: &str) -> Response<Body> {
@@ -1958,6 +1997,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initial_protocol_events_publish_first_token_and_still_parse_metadata() {
+        for (url, event, model) in [
+            (
+                "https://example.com/v1/responses",
+                b"data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-test\"}}\n\n"
+                    .as_slice(),
+                "gpt-test",
+            ),
+            (
+                "https://example.com/v1/messages",
+                b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\"}}\n\n"
+                    .as_slice(),
+                "claude-test",
+            ),
+        ] {
+            let (outcome, protocol) =
+                run_client_close_after_response(url, &[event], ResponseStreamMode::EventStream)
+                    .await;
+
+            assert_eq!(outcome, Outcome::ClientDisconnected);
+            assert!(protocol.first_token_at_ns.is_some());
+            assert_eq!(protocol.model.effective.as_deref(), Some(model));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_sse_data_still_publishes_first_token_and_diagnostics() {
+        let (_, protocol) = run_client_close_after_response(
+            "https://example.com/v1/messages",
+            &[b"data: {malformed json\n\n"],
+            ResponseStreamMode::EventStream,
+        )
+        .await;
+
+        assert!(protocol.first_token_at_ns.is_some());
+        assert_eq!(protocol.warnings[0].kind, "sse_event_invalid");
+    }
+
+    #[tokio::test]
     async fn client_close_before_sse_terminal_event_is_disconnected() {
         let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/messages",
@@ -1967,6 +2045,7 @@ mod tests {
         .await;
         assert_eq!(outcome, Outcome::ClientDisconnected);
         assert!(!protocol.response_terminal);
+        assert!(protocol.first_token_at_ns.is_some());
         assert!(protocol.token_usage.is_none());
     }
 
@@ -2115,6 +2194,92 @@ mod tests {
             json.observe(br#"{"object":"response"}"#),
             PrefixSniff::Normal
         );
+    }
+
+    #[test]
+    fn first_token_data_matches_relay_line_filtering() {
+        assert!(!is_first_token_data(b""));
+        assert!(!is_first_token_data(b" \t\r\n"));
+        assert!(!is_first_token_data("\u{00a0}".as_bytes()));
+        assert!(!is_first_token_data(b" [DONE]"));
+        assert!(!is_first_token_data(b"[DONE] trailing relay text"));
+        assert!(is_first_token_data(b"ping"));
+        assert!(is_first_token_data(b"{"));
+        assert!(is_first_token_data(b"\xff"));
+    }
+
+    #[test]
+    fn sse_first_token_counts_any_eligible_data_line_and_never_overwrites_it() {
+        let ignored = b"\xef\xbb\xbf: comment\nevent: response.created\r\ndata:\rdata: \t \ndata: [DONE] trailing\r\n";
+        let mut indexer = SseIndexer::new(None, "record-1".to_string());
+        indexer.feed(ignored, 0, "1".to_string()).unwrap();
+        assert!(indexer.take_first_token_at_ns().is_none());
+
+        let message_start = b"data:\ndata: {\"type\":\"message_start\"}\n\n";
+        indexer
+            .feed(message_start, ignored.len() as u64, "2".to_string())
+            .unwrap();
+        assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("2"));
+
+        indexer
+            .feed(
+                b"data: ping\n\n",
+                (ignored.len() + message_start.len()) as u64,
+                "3".to_string(),
+            )
+            .unwrap();
+        assert!(indexer.take_first_token_at_ns().is_none());
+    }
+
+    #[test]
+    fn sse_first_token_accepts_relay_compatible_non_output_data() {
+        for line in [
+            b"data: ping\n".as_slice(),
+            b"data: {\"type\":\"error\",\"error\":{}}\n".as_slice(),
+            b"data: {malformed json\n".as_slice(),
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n".as_slice(),
+            b"data: {\"type\":\"response.created\"}\n".as_slice(),
+        ] {
+            let mut indexer = SseIndexer::new(None, "record-1".to_string());
+            indexer.feed(line, 0, "7".to_string()).unwrap();
+            assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("7"));
+        }
+    }
+
+    #[test]
+    fn sse_first_token_supports_lf_cr_and_crlf_lines() {
+        for body in [
+            b"data: ping\ndata: later\n".as_slice(),
+            b"data: ping\rdata: later\r".as_slice(),
+            b"data: ping\r\ndata: later\r\n".as_slice(),
+        ] {
+            let mut indexer = SseIndexer::new(None, "record-1".to_string());
+            indexer.feed(body, 0, "11".to_string()).unwrap();
+            indexer.finish().unwrap();
+            assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("11"));
+        }
+    }
+
+    #[test]
+    fn sse_first_token_uses_line_completion_and_eof_arrival_times() {
+        let mut indexer = SseIndexer::new(None, "record-1".to_string());
+        let first = b"\xef\xbb\xbfdata: {\"type\":\"response.created\"}";
+        indexer.feed(first, 0, "1".to_string()).unwrap();
+        assert!(indexer.take_first_token_at_ns().is_none());
+        indexer
+            .feed(b"\r", first.len() as u64, "2".to_string())
+            .unwrap();
+        assert!(indexer.take_first_token_at_ns().is_none());
+        indexer
+            .feed(b"\n", (first.len() + 1) as u64, "3".to_string())
+            .unwrap();
+        assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("3"));
+
+        let mut eof = SseIndexer::new(None, "record-2".to_string());
+        eof.feed(b"data: ping", 0, "8".to_string()).unwrap();
+        assert!(eof.take_first_token_at_ns().is_none());
+        assert!(eof.finish().unwrap());
+        assert_eq!(eof.take_first_token_at_ns().as_deref(), Some("8"));
     }
 
     #[test]

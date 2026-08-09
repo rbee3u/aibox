@@ -211,9 +211,15 @@ The Traffic Proxy best-effort materializes the protocol overview for OpenAI
 Responses and Claude Messages as stable facts become available. Partial Token
 Usage stays in memory until the model protocol reports a terminal response.
 Protocol parsing failures add warnings without changing forwarding or the
-Traffic Outcome. First Token requires a complete output-bearing SSE event with
-valid event timing and is never inferred from response headers or the first
-response body byte.
+Traffic Outcome. For recognized streaming responses, First Token is recorded
+when the first trim-nonempty SSE `data:` line not beginning with `[DONE]` is
+completely received. The line need not form valid JSON or contain output, so
+ping, error, empty-delta, `message_start`, and `response.created` data qualify.
+Comments, other SSE fields, blank data, and `[DONE]` prefixes do not. Split
+lines use their terminator's arrival time, while an unterminated EOF line uses
+the final body arrival time. First Token is never inferred from response
+headers or the first response body byte, and remains absent for unknown
+protocols and non-streaming responses.
 
 The raw request, response, and SSE index remain the diagnostic evidence. List
 and detail APIs read the persisted protocol overview without opening model

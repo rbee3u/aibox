@@ -337,6 +337,16 @@ impl ProtocolObserver {
         )
     }
 
+    pub(super) fn observe_first_token(&mut self, at_ns: String) -> bool {
+        if self.summary.family == ProtocolFamily::Unknown
+            || self.summary.first_token_at_ns.is_some()
+        {
+            return false;
+        }
+        self.summary.first_token_at_ns = Some(at_ns);
+        true
+    }
+
     pub(super) fn observe_sse_data(&mut self, data: &[u8], at_ns: String) -> bool {
         if data.is_empty() || data == b"[DONE]" {
             return false;
@@ -438,7 +448,6 @@ impl ProtocolObserver {
 
     fn apply_event(&mut self, event: StreamEvent, at_ns: String) -> bool {
         let kind = event.kind.as_deref().unwrap_or_default();
-        let is_output_bearing = output_bearing(&event);
         let family = if kind.starts_with("response.") {
             ProtocolFamily::OpenaiResponses
         } else if matches!(
@@ -506,11 +515,6 @@ impl ProtocolObserver {
         }
         if let Some(usage) = event.usage {
             changed |= self.apply_usage(usage, Some(at_ns.clone()));
-        }
-
-        if self.summary.first_token_at_ns.is_none() && is_output_bearing {
-            self.summary.first_token_at_ns = Some(at_ns.clone());
-            changed = true;
         }
 
         if kind == "error" {
@@ -914,7 +918,6 @@ struct StreamEvent {
     response: Option<ResponseEnvelope>,
     message: Option<Value>,
     usage: Option<UsageEnvelope>,
-    delta: Option<Value>,
     error: Option<Value>,
     code: Option<String>,
 }
@@ -929,45 +932,6 @@ struct JsonResponseEnvelope {
     usage: Option<UsageEnvelope>,
     error: Option<Value>,
     incomplete_details: Option<IncompleteDetails>,
-}
-
-fn output_bearing(event: &StreamEvent) -> bool {
-    let kind = event.kind.as_deref().unwrap_or_default();
-    if kind == "content_block_delta" {
-        let Some(delta) = event.delta.as_ref() else {
-            return false;
-        };
-        let delta_kind = delta.get("type").and_then(Value::as_str);
-        return match delta_kind {
-            Some("text_delta") => nonempty_value(delta.get("text")),
-            Some("thinking_delta") => nonempty_value(delta.get("thinking")),
-            Some("input_json_delta") => nonempty_value(delta.get("partial_json")),
-            _ => false,
-        };
-    }
-    matches!(
-        kind,
-        "response.output_text.delta"
-            | "response.refusal.delta"
-            | "response.reasoning_summary_text.delta"
-            | "response.reasoning_text.delta"
-            | "response.function_call_arguments.delta"
-            | "response.custom_tool_call_input.delta"
-            | "response.mcp_call_arguments.delta"
-            | "response.code_interpreter_call_code.delta"
-            | "response.audio.delta"
-            | "response.audio.transcript.delta"
-    ) && nonempty_value(event.delta.as_ref())
-}
-
-fn nonempty_value(value: Option<&Value>) -> bool {
-    match value {
-        Some(Value::String(value)) => !value.is_empty(),
-        Some(Value::Array(value)) => !value.is_empty(),
-        Some(Value::Object(value)) => !value.is_empty(),
-        Some(Value::Null) | None => false,
-        Some(_) => true,
-    }
 }
 
 fn error_parts(error: &Value, fallback_kind: &str, fallback_message: &str) -> (String, String) {
@@ -1334,44 +1298,20 @@ mod tests {
     }
 
     #[test]
-    fn only_nonempty_model_deltas_are_output_bearing() {
-        for (json, expected) in [
-            (
-                r#"{"type":"response.output_text.delta","delta":"hi"}"#,
-                true,
-            ),
-            (r#"{"type":"response.output_text.delta","delta":""}"#, false),
-            (
-                r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"work"}}"#,
-                true,
-            ),
-            (
-                r#"{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"sig"}}"#,
-                false,
-            ),
-            (
-                r#"{"type":"response.audio.transcript.delta","delta":"hello"}"#,
-                true,
-            ),
+    fn first_token_is_recorded_once_only_for_recognized_protocols() {
+        for url in [
+            "https://example.test/v1/responses",
+            "https://example.test/v1/messages",
         ] {
-            let event: StreamEvent = serde_json::from_str(json).unwrap();
-            assert_eq!(output_bearing(&event), expected, "{json}");
+            let mut observer = ProtocolObserver::new(Some(url));
+            assert!(observer.observe_first_token("10".to_string()));
+            assert!(!observer.observe_first_token("20".to_string()));
+            assert_eq!(observer.snapshot().first_token_at_ns.as_deref(), Some("10"));
         }
 
-        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
-        observer.observe_sse_data(
-            br#"{"type":"response.output_text.delta","delta":""}"#,
-            "10".to_string(),
-        );
-        observer.observe_sse_data(
-            br#"{"type":"response.output_text.delta","delta":"hello"}"#,
-            "20".to_string(),
-        );
-        observer.observe_sse_data(
-            br#"{"type":"response.output_text.delta","delta":"again"}"#,
-            "30".to_string(),
-        );
-        assert_eq!(observer.snapshot().first_token_at_ns.as_deref(), Some("20"));
+        let mut unknown = ProtocolObserver::new(Some("https://example.test/health"));
+        assert!(!unknown.observe_first_token("10".to_string()));
+        assert!(unknown.snapshot().first_token_at_ns.is_none());
     }
 
     #[test]

@@ -21,12 +21,12 @@ describe("Summary presentation helpers", () => {
       expect.objectContaining({ label: "Request upload", durationMs: 100, status: "complete" }),
       expect.objectContaining({ label: "Response wait", durationMs: 300, status: "complete" }),
       expect.objectContaining({ label: "First-token wait", durationMs: 400, status: "complete" }),
-      expect.objectContaining({ label: "Model output", durationMs: 330, status: "complete" }),
+      expect.objectContaining({ label: "Response stream", durationMs: 330, status: "complete" }),
       expect.objectContaining({ label: "Finalization", durationMs: 20, status: "complete" }),
     ]);
   });
 
-  it("keeps First-token wait live until an output-bearing event arrives", () => {
+  it("keeps First-token wait live until an eligible SSE data line arrives", () => {
     const detail = {
       ...completedDetail,
       state: "active" as const,
@@ -55,7 +55,27 @@ describe("Summary presentation helpers", () => {
     );
   });
 
-  it("uses a single Response body stage when First Token is not observable", () => {
+  it("uses a Response body stage for a terminal stream without First Token", () => {
+    const detail = {
+      ...completedDetail,
+      summary: {
+        ...completedDetail.summary,
+        protocol: {
+          ...completedDetail.summary.protocol!,
+          first_token_at_ns: null,
+        },
+      },
+    };
+    expect(timingStages(detail).map((stage) => stage.label)).toEqual([
+      "Proxy setup",
+      "Request upload",
+      "Response wait",
+      "Response body",
+      "Finalization",
+    ]);
+  });
+
+  it("uses a single Response body stage for a non-streaming response", () => {
     const detail = {
       ...completedDetail,
       summary: {
