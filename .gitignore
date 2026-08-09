@@ -3,3 +3,6 @@
 /.idea/
 /target/
 /web/traffic/node_modules/
+/web/traffic/e2e/__screenshots__/
+/web/traffic/test-results/
+/web/traffic/playwright-report/

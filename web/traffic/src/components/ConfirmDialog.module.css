@@ -1,57 +1,81 @@
-.backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 10;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: #1c233066;
-}
 .dialog {
-  width: min(420px, 100%);
-  padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 18px 50px #1d243026;
+  width: min(430px, calc(100vw - 40px));
+  max-width: none;
+  margin: auto;
+  overflow: visible;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  animation: dialogIn var(--transition-base);
 }
+
+.dialog::backdrop {
+  background: rgb(7 11 18 / 0.58);
+  backdrop-filter: blur(2px);
+}
+
+.content {
+  padding: 22px;
+}
+
 .icon {
   display: grid;
+  width: 38px;
+  height: 38px;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  color: var(--danger);
+  border: 1px solid var(--danger-line);
   border-radius: 50%;
+  color: var(--danger);
   background: var(--danger-soft);
 }
-.dialog h2 {
+
+.content h2 {
   margin: 14px 0 7px;
-  font-size: 18px;
+  color: var(--ink);
+  font-size: 17px;
+  letter-spacing: -0.015em;
 }
-.dialog p {
+
+.content p {
   margin: 0;
   color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
+
 .actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 7px;
   margin-top: 22px;
 }
+
 .actions button {
-  min-width: 88px;
+  min-width: 90px;
 }
+
 .danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: #fff;
   border-color: var(--danger);
+  color: white;
   background: var(--danger);
 }
+
 .danger:hover:not(:disabled) {
-  color: #fff;
-  border-color: #a62424;
-  background: #a62424;
+  border-color: var(--danger-strong);
+  color: white;
+  background: var(--danger-strong);
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
 }

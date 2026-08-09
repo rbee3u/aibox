@@ -1,5 +1,6 @@
-import { BookOpen, Box, GitFork, LoaderCircle, Radio } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BookOpen, Box, GitFork, LoaderCircle, Radio, SunMoon } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { createTrafficApi } from "./api";
 import { bodyComplete, contentCoding, isSseResponse } from "./bodyPresentation";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -30,9 +31,28 @@ type AppError = { source: ErrorSource; message: string };
 const LIST_POLL_INTERVAL_MS = 5000;
 const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
 const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, status: "idle", message: null };
+const THEME_STORAGE_KEY = "aibox-traffic-theme";
+const LIST_WIDTH_STORAGE_KEY = "aibox-traffic-list-width";
+const DEFAULT_LIST_WIDTH = 480;
+const MIN_LIST_WIDTH = 360;
+const MAX_LIST_WIDTH = 640;
+const LIST_WIDTH_STEP = 16;
+
+export type ThemePreference = "system" | "light" | "dark";
+
+interface SplitDrag {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+  currentWidth: number;
+}
 
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
+  const [listWidth, setListWidth] = useState(readListWidth);
+  const [resizing, setResizing] = useState(false);
+  const splitDrag = useRef<SplitDrag | null>(null);
   const [list, setList] = useState<RecordListData>({
     records: [],
     total: 0,
@@ -81,6 +101,67 @@ export function App({ api: providedApi }: AppProps) {
   const activeId = detail?.state === "active" ? detail.request.id : null;
   const detailState = detail?.state ?? null;
   const responseAvailable = detail?.response !== null && detail?.response !== undefined;
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (theme === "system") root.removeAttribute("data-theme");
+    else root.dataset.theme = theme;
+    storePreference(THEME_STORAGE_KEY, theme);
+    return () => root.removeAttribute("data-theme");
+  }, [theme]);
+
+  const updateListWidth = useCallback((value: number, persist = false) => {
+    const next = clampListWidth(value);
+    setListWidth(next);
+    if (persist) storePreference(LIST_WIDTH_STORAGE_KEY, String(next));
+  }, []);
+
+  function startResize(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    splitDrag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: listWidth,
+      currentWidth: listWidth,
+    };
+    setResizing(true);
+    if (typeof event.currentTarget.setPointerCapture === "function") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+  }
+
+  function resize(event: PointerEvent<HTMLDivElement>) {
+    const drag = splitDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.currentWidth = clampListWidth(drag.startWidth + event.clientX - drag.startX);
+    updateListWidth(drag.currentWidth);
+  }
+
+  function finishResize(event: PointerEvent<HTMLDivElement>) {
+    const drag = splitDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    updateListWidth(drag.currentWidth, true);
+    splitDrag.current = null;
+    setResizing(false);
+    if (
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = listWidth - LIST_WIDTH_STEP;
+    if (event.key === "ArrowRight") next = listWidth + LIST_WIDTH_STEP;
+    if (event.key === "Home") next = MIN_LIST_WIDTH;
+    if (event.key === "End") next = MAX_LIST_WIDTH;
+    if (next === null) return;
+    event.preventDefault();
+    updateListWidth(next, true);
+  }
   const reportError = useCallback((source: ErrorSource, cause: unknown) => {
     setError({
       source,
@@ -490,6 +571,7 @@ export function App({ api: providedApi }: AppProps) {
       setDialog(null);
       clearError("action");
       await refreshAfterDelete();
+      setFocusAfterDelete(null);
     } catch (cause) {
       reportError("action", cause);
     } finally {
@@ -581,90 +663,146 @@ export function App({ api: providedApi }: AppProps) {
           <a href="https://github.com/rbee3u/aibox" target="_blank" rel="noopener noreferrer">
             <GitFork size={14} aria-hidden="true" /> GitHub
           </a>
+          <label className={styles.themeControl}>
+            <SunMoon size={14} aria-hidden="true" />
+            <span className="srOnly">Color theme</span>
+            <select
+              aria-label="Color theme"
+              value={theme}
+              onChange={(event) => setTheme(event.target.value as ThemePreference)}
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
         </nav>
       </header>
-      {error && (
-        <div className={styles.bannerWrap}>
+      <main
+        className={`${styles.main} ${resizing ? styles.resizing : ""}`}
+        style={{ "--list-width": `${listWidth}px` } as CSSProperties}
+      >
+        <div className={styles.listColumn}>
+          {error?.source === "list" && (
+            <div className={styles.scopedBanner}>
+              <StatusBanner
+                kind="error"
+                message={error.message}
+                action={
+                  selectionMode ? undefined : { label: "Retry", onClick: () => void refreshPage() }
+                }
+                onDismiss={() => clearError("list")}
+              />
+            </div>
+          )}
+          <RecordList
+            records={list.records}
+            total={list.total}
+            page={page}
+            hasPrevious={page > 0}
+            hasNext={Boolean(list.next_cursor)}
+            selectionMode={selectionMode}
+            selected={selected}
+            currentId={currentId}
+            onEnterSelection={() => setSelectionMode(true)}
+            onExitSelection={exitSelectionMode}
+            onTogglePage={togglePageSelection}
+            onToggle={(id) =>
+              setSelected((current) => {
+                const next = new Set(current);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            onSelect={(id) => void selectRecord(id)}
+            onPrevious={() => {
+              cursors.current[page] = cursors.current[page] ?? null;
+              void loadPage(page - 1);
+            }}
+            onNext={() => void loadPage(page + 1)}
+            loading={loadingList}
+            refreshing={refreshing}
+            deletableCount={list.deletable_count}
+            onRefresh={() => void refreshPage()}
+            onDeleteSelected={() => setDialog({ kind: "selected", ids: selectedIds })}
+            onDeleteAll={() => setDialog({ kind: "all", count: list.deletable_count })}
+            onDeleteRecord={(id) => void deleteRecord(id)}
+            deletingRecordId={deletingRecordId}
+            deletionBusy={deleting || deletingRecordId !== null}
+            focusAfterDelete={focusAfterDelete}
+            onFocusAfterDelete={() => setFocusAfterDelete(undefined)}
+          />
+        </div>
+        <div
+          className={styles.splitter}
+          role="separator"
+          aria-label="Resize Traffic records panel"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_LIST_WIDTH}
+          aria-valuemax={MAX_LIST_WIDTH}
+          aria-valuenow={listWidth}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onPointerMove={resize}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onDoubleClick={() => updateListWidth(DEFAULT_LIST_WIDTH, true)}
+          onKeyDown={resizeWithKeyboard}
+        >
+          <span aria-hidden="true" />
+        </div>
+        <div className={styles.detailColumn}>
+          {error?.source === "detail" && (
+            <div className={styles.scopedBanner}>
+              <StatusBanner
+                kind="error"
+                message={error.message}
+                action={
+                  currentId
+                    ? { label: "Retry", onClick: () => void selectRecord(currentId) }
+                    : undefined
+                }
+                onDismiss={() => clearError("detail")}
+              />
+            </div>
+          )}
+          {loadingDetail ? (
+            <section className={styles.emptyDetail}>
+              <LoaderIcon />
+              <p>Loading record…</p>
+            </section>
+          ) : detail ? (
+            <RecordDetail
+              key={detail.request.id}
+              detail={detail}
+              bodies={bodies}
+              bodyStatus={bodyStatus}
+              decodedBodies={decodedBodies}
+              eventTimings={eventTimings}
+              tab={tab}
+              onTabChange={setTab}
+              onDownload={(kind) => void download(kind)}
+              loadingBody={loadingBody}
+            />
+          ) : (
+            <section className={styles.emptyDetail}>
+              <Radio size={26} aria-hidden="true" />
+              <h1>Select a request</h1>
+              <p>Choose a Traffic Record to inspect its summary and raw data.</p>
+            </section>
+          )}
+        </div>
+      </main>
+      {error?.source === "action" && (
+        <div className={styles.actionNotice}>
           <StatusBanner
             kind="error"
             message={error.message}
-            action={
-              error.source === "list"
-                ? selectionMode
-                  ? undefined
-                  : { label: "Retry", onClick: () => void refreshPage() }
-                : error.source === "detail" && currentId
-                  ? { label: "Retry", onClick: () => void selectRecord(currentId) }
-                  : undefined
-            }
-            onDismiss={() => clearError()}
+            onDismiss={() => clearError("action")}
           />
         </div>
       )}
-      <main className={styles.main}>
-        <RecordList
-          records={list.records}
-          total={list.total}
-          page={page}
-          hasPrevious={page > 0}
-          hasNext={Boolean(list.next_cursor)}
-          selectionMode={selectionMode}
-          selected={selected}
-          currentId={currentId}
-          onEnterSelection={() => setSelectionMode(true)}
-          onExitSelection={exitSelectionMode}
-          onTogglePage={togglePageSelection}
-          onToggle={(id) =>
-            setSelected((current) => {
-              const next = new Set(current);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            })
-          }
-          onSelect={(id) => void selectRecord(id)}
-          onPrevious={() => {
-            cursors.current[page] = cursors.current[page] ?? null;
-            void loadPage(page - 1);
-          }}
-          onNext={() => void loadPage(page + 1)}
-          loading={loadingList}
-          refreshing={refreshing}
-          deletableCount={list.deletable_count}
-          onRefresh={() => void refreshPage()}
-          onDeleteSelected={() => setDialog({ kind: "selected", ids: selectedIds })}
-          onDeleteAll={() => setDialog({ kind: "all", count: list.deletable_count })}
-          onDeleteRecord={(id) => void deleteRecord(id)}
-          deletingRecordId={deletingRecordId}
-          deletionBusy={deleting || deletingRecordId !== null}
-          focusAfterDelete={focusAfterDelete}
-          onFocusAfterDelete={() => setFocusAfterDelete(undefined)}
-        />
-        {loadingDetail ? (
-          <section className={styles.emptyDetail}>
-            <LoaderIcon />
-            <p>Loading record…</p>
-          </section>
-        ) : detail ? (
-          <RecordDetail
-            key={detail.request.id}
-            detail={detail}
-            bodies={bodies}
-            bodyStatus={bodyStatus}
-            decodedBodies={decodedBodies}
-            eventTimings={eventTimings}
-            tab={tab}
-            onTabChange={setTab}
-            onDownload={(kind) => void download(kind)}
-            loadingBody={loadingBody}
-          />
-        ) : (
-          <section className={styles.emptyDetail}>
-            <Radio size={26} aria-hidden="true" />
-            <h1>Select a request</h1>
-          </section>
-        )}
-      </main>
       {dialog && (
         <ConfirmDialog
           title={
@@ -689,6 +827,38 @@ export function App({ api: providedApi }: AppProps) {
 
 function LoaderIcon() {
   return <LoaderCircle className={styles.loader} size={28} aria-label="Loading" />;
+}
+
+function readThemePreference(): ThemePreference {
+  const value = readPreference(THEME_STORAGE_KEY);
+  return value === "light" || value === "dark" || value === "system" ? value : "system";
+}
+
+function readListWidth(): number {
+  const stored = readPreference(LIST_WIDTH_STORAGE_KEY);
+  if (stored === null) return DEFAULT_LIST_WIDTH;
+  const value = Number(stored);
+  return Number.isFinite(value) ? clampListWidth(value) : DEFAULT_LIST_WIDTH;
+}
+
+function clampListWidth(value: number): number {
+  return Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(value)));
+}
+
+function readPreference(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storePreference(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Appearance preferences are optional; the viewer remains fully usable without storage.
+  }
 }
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Traffic management request failed";

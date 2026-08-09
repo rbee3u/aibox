@@ -102,7 +102,10 @@ export function RecordList({
             {pageSelected ? "Clear page" : "Select page"}
           </button>
         ) : (
-          <h2 className={styles.title}>Traffic records</h2>
+          <div className={styles.titleGroup}>
+            <h2 className={styles.title}>Traffic records</h2>
+            <span className={styles.totalCount}>{total}</span>
+          </div>
         )}
         <div className={selectionMode ? styles.selectionActions : styles.headerActions}>
           {selectionMode ? (
@@ -110,6 +113,7 @@ export function RecordList({
           ) : (
             <button
               ref={refreshButton}
+              data-dialog-focus-fallback="true"
               type="button"
               className={styles.refreshButton}
               onClick={onRefresh}
@@ -127,9 +131,13 @@ export function RecordList({
           )}
           {selectionMode ? (
             <button
+              key="delete-selected"
               type="button"
               className={styles.deleteSelected}
-              onClick={onDeleteSelected}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                onDeleteSelected();
+              }}
               disabled={selected.size === 0 || deletionBusy}
               aria-label="Delete selected"
               title="Delete selected"
@@ -139,9 +147,13 @@ export function RecordList({
             </button>
           ) : (
             <button
+              key="delete-all"
               type="button"
               className={styles.deleteAll}
-              onClick={onDeleteAll}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                onDeleteAll();
+              }}
               disabled={deletableCount === 0 || deletionBusy}
             >
               <Trash2 size={14} aria-hidden="true" /> Delete all
@@ -163,7 +175,7 @@ export function RecordList({
           </button>
         </div>
       </div>
-      <div className={styles.records} aria-live="polite">
+      <div className={styles.records} aria-busy={loading}>
         {records.length === 0 ? (
           <div className={styles.empty}>
             <Clock3 size={22} aria-hidden="true" />

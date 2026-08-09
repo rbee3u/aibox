@@ -1,4 +1,7 @@
 node_modules/
+e2e/__screenshots__/
+test-results/
+playwright-report/
 ../../assets/traffic.html
 ../../assets/traffic.css
 ../../assets/traffic.js

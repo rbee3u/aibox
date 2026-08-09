@@ -25,6 +25,21 @@ make traffic-lint       # ESLint frontend source files
 make traffic-check      # Format check, typecheck, build, node check, test, lint
 ```
 
+Optional desktop browser smoke tests use a loopback-only Vite development
+listener. They deliberately avoid committed screenshot baselines and remain
+separate from the routine socket-free checks:
+
+```sh
+npm --prefix web/traffic run test:chrome        # Installed stable Chrome
+npm --prefix web/traffic run test:browsers      # Firefox and WebKit behavior smoke
+```
+
+The browser smoke projects require the matching optional Playwright browsers:
+
+```sh
+npm --prefix web/traffic exec playwright install firefox webkit
+```
+
 There is intentionally no required Vite development server. Run `make
 traffic-build`, then start `aibox traffic` and open the embedded viewer to
 check the complete page and real Traffic API.

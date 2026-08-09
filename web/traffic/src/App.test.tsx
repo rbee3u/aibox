@@ -16,6 +16,8 @@ import type { TrafficApi } from "./types";
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  window.localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
 });
 
 describe("Traffic App", () => {
@@ -49,6 +51,7 @@ describe("Traffic App", () => {
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     }
     expect(within(banner).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(banner).getByRole("combobox", { name: "Color theme" })).toHaveValue("system");
 
     const recordListPanel = screen.getByRole("complementary", { name: "Traffic records" });
     expect(
@@ -98,6 +101,67 @@ describe("Traffic App", () => {
     expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
       "— / 500ms",
     );
+  });
+
+  it("applies, persists, and safely resets the color theme", async () => {
+    window.localStorage.setItem("aibox-traffic-theme", "dark");
+    const user = userEvent.setup();
+    render(<App api={fakeApi()} />);
+
+    const theme = screen.getByRole("combobox", { name: "Color theme" });
+    expect(theme).toHaveValue("dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    await user.selectOptions(theme, "light");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(window.localStorage.getItem("aibox-traffic-theme")).toBe("light");
+
+    await user.selectOptions(theme, "system");
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(window.localStorage.getItem("aibox-traffic-theme")).toBe("system");
+  });
+
+  it("falls back to system appearance and the default split when storage is unavailable", () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("storage unavailable", "SecurityError");
+    });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("storage unavailable", "SecurityError");
+    });
+
+    render(<App api={fakeApi()} />);
+
+    expect(screen.getByRole("combobox", { name: "Color theme" })).toHaveValue("system");
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(screen.getByRole("separator", { name: "Resize Traffic records panel" })).toHaveAttribute(
+      "aria-valuenow",
+      "480",
+    );
+    getItem.mockRestore();
+    setItem.mockRestore();
+  });
+
+  it("resizes the record panel with pointer and keyboard controls", () => {
+    window.localStorage.setItem("aibox-traffic-list-width", "not-a-width");
+    render(<App api={fakeApi()} />);
+
+    const splitter = screen.getByRole("separator", { name: "Resize Traffic records panel" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "480");
+
+    fireEvent.keyDown(splitter, { key: "ArrowRight" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "496");
+    expect(window.localStorage.getItem("aibox-traffic-list-width")).toBe("496");
+
+    fireEvent.pointerDown(splitter, { button: 0, pointerId: 1, clientX: 100 });
+    fireEvent.pointerMove(splitter, { pointerId: 1, clientX: 200 });
+    fireEvent.pointerUp(splitter, { pointerId: 1, clientX: 200 });
+    expect(splitter).toHaveAttribute("aria-valuenow", "596");
+    expect(window.localStorage.getItem("aibox-traffic-list-width")).toBe("596");
+
+    fireEvent.keyDown(splitter, { key: "End" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "640");
+    fireEvent.doubleClick(splitter);
+    expect(splitter).toHaveAttribute("aria-valuenow", "480");
   });
 
   it("prefers effective list metadata and preserves placeholders", async () => {
@@ -359,7 +423,9 @@ describe("Traffic App", () => {
     await waitFor(() =>
       expect(deleteRecordsMock.mock.calls).toContainEqual([[completedSummary.id]]),
     );
-    expect(screen.getByRole("button", { name: "Refresh traffic records" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh traffic records" })).toHaveFocus(),
+    );
     expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
   });
 
@@ -505,7 +571,9 @@ describe("Traffic App", () => {
       await screen.findByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot delete record");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("cannot delete record");
+    expect(screen.getByRole("main")).not.toContainElement(alert);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "POST api.example.test/v1/responses" }),
@@ -513,6 +581,8 @@ describe("Traffic App", () => {
     expect(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).toBeEnabled();
+    await user.click(within(alert).getByRole("button", { name: "Dismiss message" }));
+    expect(alert).not.toBeInTheDocument();
   });
 
   it("returns to the previous page when immediate deletion empties the current page", async () => {
@@ -637,7 +707,7 @@ describe("Traffic App", () => {
     expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
-  it("ignores Escape in confirmation dialogs and selection mode", async () => {
+  it("traps confirmation focus, closes on Escape, and preserves selection", async () => {
     const user = userEvent.setup();
     render(<App api={fakeApi()} />);
 
@@ -647,16 +717,21 @@ describe("Traffic App", () => {
     );
     await user.click(screen.getByRole("button", { name: "Delete selected" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
+    const cancelDialog = within(dialog).getByRole("button", { name: "Cancel" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete permanently" });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(confirm, { key: "Tab" });
+    expect(cancelDialog).toHaveFocus();
+    fireEvent.keyDown(cancelDialog, { key: "Tab", shiftKey: true });
+    expect(confirm).toHaveFocus();
     fireEvent.keyDown(dialog, { key: "Escape" });
 
-    expect(dialog).toBeInTheDocument();
+    expect(dialog).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete selected" })).toHaveFocus(),
+    );
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(dialog).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
@@ -827,7 +902,10 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     render(<App api={api} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot scan Traffic Records");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("cannot scan Traffic Records");
+    const listPanel = screen.getByRole("complementary", { name: "Traffic records" });
+    expect(listPanel.parentElement).toContainElement(alert);
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(
       await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),

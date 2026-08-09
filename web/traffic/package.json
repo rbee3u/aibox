@@ -10,17 +10,20 @@
     "format": "prettier --write .",
     "build": "vite build && node scripts/publish-assets.mjs",
     "test": "vitest run",
+    "test:chrome": "playwright test --project=desktop-chrome",
+    "test:browsers": "playwright test --project=desktop-firefox --project=desktop-webkit",
     "lint": "eslint src vite.config.ts",
     "check": "prettier --check . && tsc --noEmit && npm run build && node --check ../../assets/traffic.js && npm run test && npm run lint"
   },
   "dependencies": {
-    "lucide-react": "^1.28.0",
     "lossless-json": "^4.3.0",
+    "lucide-react": "^1.28.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",

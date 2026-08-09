@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { completedDetail } from "../test/fixtures";
@@ -533,6 +533,41 @@ describe("Traffic Record Summary", () => {
     await user.click(screen.getByRole("button", { name: "Source" }));
     expect(screen.getByText(source)).toBeInTheDocument();
     expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
+  });
+
+  it("navigates visible JSON nodes with the ARIA tree keyboard model", () => {
+    const source = '{"nested":{"answer":42},"tail":true}';
+    render(
+      <RecordDetail
+        detail={{ ...completedDetail, request_body_bytes: source.length }}
+        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
+        bodyStatus={{ request: "loaded", response: "idle" }}
+        tab="request"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    const initialItems = screen.getAllByRole("treeitem");
+    const root = initialItems[0];
+    const nested = initialItems[1];
+    expect(root).toHaveAttribute("tabindex", "0");
+    expect(nested).toHaveAttribute("aria-expanded", "false");
+
+    root.focus();
+    fireEvent.keyDown(root, { key: "ArrowDown" });
+    expect(nested).toHaveFocus();
+    fireEvent.keyDown(nested, { key: "ArrowRight" });
+    expect(nested).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.keyDown(nested, { key: "ArrowRight" });
+    const expandedItems = screen.getAllByRole("treeitem");
+    expect(expandedItems[2]).toHaveFocus();
+    fireEvent.keyDown(expandedItems[2], { key: "ArrowLeft" });
+    expect(nested).toHaveFocus();
+    fireEvent.keyDown(nested, { key: "End" });
+    expect(screen.getAllByRole("treeitem").at(-1)).toHaveFocus();
   });
 
   it("keeps the real fallback reason when declared JSON cannot be rendered", () => {
