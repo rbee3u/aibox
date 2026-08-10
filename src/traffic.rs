@@ -58,6 +58,9 @@ pub(crate) fn dispatch(args: &TrafficArgs) -> Result<i32> {
 }
 
 fn validate_listener_scope(args: &TrafficArgs) -> Result<()> {
+    if args.listen.port() == 0 {
+        bail!("Traffic listener port must not be 0");
+    }
     if !args.listen.ip().is_loopback() && !args.allow_remote {
         bail!(
             "non-loopback Traffic listener {} requires --allow-remote",
@@ -283,6 +286,18 @@ mod tests {
             ..denied
         };
         validate_listener_scope(&allowed).unwrap();
+    }
+
+    #[test]
+    fn listener_rejects_an_ephemeral_port_the_viewer_cannot_advertise() {
+        let args = TrafficArgs {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            allow_remote: false,
+        };
+        assert_eq!(
+            validate_listener_scope(&args).unwrap_err().to_string(),
+            "Traffic listener port must not be 0"
+        );
     }
 
     #[test]

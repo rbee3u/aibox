@@ -54,16 +54,45 @@ existing management routes.
 
 `src/api.ts` is the only browser-facing Traffic API client. Its TypeScript
 interfaces mirror the Rust JSON responses, including raw Summary timing,
-record-outcome fields, the top-level Coding Agent Session ID, and the persisted
-Model Protocol Summary; the Rust routes, CSRF rules, CSP, and loopback checks
-remain unchanged. Components receive an API interface so tests can use
-deterministic fakes without sockets.
+Traffic Outcome, the top-level Coding Agent Session ID, the persisted Model
+Protocol Summary and Record Assessment, and normalized Diagnostics groups; the
+Rust routes, CSRF rules, CSP, and loopback checks remain unchanged. Components
+receive an API interface so tests can use deterministic fakes without sockets.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-record polling. The Summary is
 the default detail tab, and request/response bodies load only for the visible
 body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
+
+## Record Assessment and Diagnostics
+
+Traffic Outcome, HTTP response status, Provider Error, and diagnostic warnings
+remain independent evidence. The backend derives one Record Assessment for
+consistent display; the browser never reclassifies a Record from `outcome`,
+status, or Body content.
+
+| Evidence | Assessment | Examples |
+| --- | --- | --- |
+| The Record is still active | Active | Waiting for response metadata; streaming a response |
+| Terminal with no findings | OK | HTTP 2xx/3xx and a complete recognized model response |
+| Explicit failure evidence | Error | proxy rejection or transport failure, recording failure, HTTP 4xx/5xx, Provider Error, `response.failed`, `response.incomplete` |
+| Incomplete or degraded evidence | Warning | client disconnect or request upload abort, process interruption, missing model terminal event, diagnostics degradation, unaccompanied `response.cancelled` |
+
+Active takes visual precedence until the Traffic Record terminates. Every
+terminal warning elevates OK to Warning. Duplicate findings with the same
+source, kind, and message collapse to their earliest observed time. The compact
+primary cause uses this precedence: recording integrity, Provider Error,
+proxy/transport, HTTP, then warnings. All findings remain visible regardless of
+which one is primary.
+
+The Record list leaves OK quiet and adds only one accessible Warning or Error
+icon beside the independent HTTP status. The detail header keeps `HTTP 200`
+green even when a red Provider Error tag is present; the tag names the primary
+cause, exposes its message as a tooltip, and adds `+N` for further findings.
+Missing response metadata is neutral rather than an error by itself.
+Diagnostics renders the normalized `Proxy / transport`, `HTTP response`,
+`Model API`, and `Warnings` groups supplied by Rust.
 
 ## Body Views
 
@@ -111,6 +140,11 @@ shows `Time unavailable` plus one warning and never suppresses Event data.
 Active views request later sequences during their normal poll. Event time is
 shown relative to Record start at millisecond precision, with the absolute
 timestamp in a tooltip using the viewer's existing timezone convention.
+Content-encoded event streams retain their exact encoded bytes but do not get
+an event index, because decoded Event boundaries cannot be mapped to exact raw
+byte offsets; the decoded Pretty view remains available after a supported zstd
+Body is complete. A zstd event stream is interpreted only after complete EOF
+and does not synthesize First Token or per-Event timing.
 
 ## Protocol Summary
 
@@ -119,16 +153,16 @@ top-level `summary.coding_agent_session_id`. OpenAI Responses prefers the first
 nonempty UTF-8 `session-id` request-header value and falls back to
 `x-claude-code-session-id`; Claude Messages uses the reverse precedence.
 Header names are matched exactly and case-insensitively. Unknown protocols do
-not derive this value, bodies are never searched for it, and older Records are
+not derive this value, bodies are never searched for it, and missing values are
 not backfilled.
 
 The Traffic Proxy derives model, reasoning effort, response mode, First Token,
 final Token Usage, and Provider Errors from native OpenAI Responses or Claude
 Messages data while it records the exchange. Stable facts are atomically
 checkpointed in the optional `summary.protocol` object. List and detail APIs
-return that same object without opening or parsing request/response bodies.
-Older version-1 Records without the object remain readable and are never lazily
-backfilled. Raw bodies and the best-effort SSE index remain available for
+return that same object without parsing request/response bodies. Traffic Record
+format v2 has no v1 compatibility reader, migration, lazy backfill, or
+read-time repair. Raw bodies and the best-effort SSE index remain available for
 diagnosis.
 
 For a recognized streaming response, First Token is the offset at which the
@@ -169,5 +203,21 @@ explicit zero remains visible; a completely empty report retains its state
 message. Metric labels and values sit together as centered inline pairs,
 including Output and the lower-right Reasoning inset. Timing keeps its stage
 timeline and metric order while using the same centered inline treatment for
-First token, Duration, and Started. Diagnostics, the Record list, and the other
-detail tabs do not use this presentation.
+First token, Duration, and Ended. The list and Timing summary display Traffic
+End Time for terminal Records and `—` for active or interrupted Records; list
+ordering follows descending canonical directory basename order. Active and
+interrupted Records therefore appear first by start time, followed by terminal
+Records by End Time; host and UUID break same-millisecond ties. Diagnostics and
+the other detail tabs do not use this presentation.
+
+The Record list uses one-based pages of 50 from the current complete ordering.
+Each poll opens only each Record's `summary.json`, which contains the complete
+list projection and persisted Assessment. Detail reads remain strict over raw
+request/response metadata, Body entries, and relevant ancestors, so an unsafe
+or malformed raw entry can fail detail without hiding a valid list row.
+Polling refreshes the page the viewer is already on, even when terminalization
+moves Records between pages. An empty page falls back through earlier pages to
+the closest non-empty page or page 1. Multi-page selection pauses polling;
+after deletion the viewer returns to the lowest page containing a selected
+Record and applies the same empty-page fallback. Single-record and delete-all
+operations return to their originating page.

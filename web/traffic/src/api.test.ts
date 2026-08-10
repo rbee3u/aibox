@@ -6,6 +6,25 @@ describe("Traffic API client", () => {
     document.head.innerHTML = '<meta name="aibox-csrf" content="test-token">';
   });
 
+  it("uses one-based page queries", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ records: [], total: 0, deletable_count: 0, has_next: false }),
+          ),
+        ),
+      );
+    const api = createTrafficApi(fetchMock);
+
+    await api.listRecords(1);
+    await api.listRecords(3);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/_aibox/traffic/api/records");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/_aibox/traffic/api/records?page=3");
+  });
+
   it("adds CSRF and JSON headers to mutating requests", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ deleted: 2 }), {
@@ -52,6 +71,20 @@ describe("Traffic API client", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/_aibox/traffic/api/records/record%2Fid/response-body?offset=7",
     );
+  });
+
+  it("falls back to the received byte boundary when the offset header is invalid", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(new Uint8Array([3, 4]), {
+        headers: { "X-Aibox-Traffic-Next-Offset": "not-a-number" },
+      }),
+    );
+    const api = createTrafficApi(fetchMock);
+
+    await expect(api.loadBody("record", "response", 7)).resolves.toEqual({
+      bytes: new Uint8Array([3, 4]),
+      nextOffset: 9,
+    });
   });
 
   it("loads decoded Body bytes without a raw offset", async () => {

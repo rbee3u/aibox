@@ -4,6 +4,8 @@ export type BodyLoadStatus = "idle" | "loading" | "loaded" | "error";
 export type DecodedBodyStatus = "idle" | "waiting" | "loading" | "loaded" | "unsupported" | "error";
 export type DetailTab = "summary" | BodyKind;
 export type EventTimingState = "available" | "unavailable" | "partial";
+export type AssessmentLevel = "active" | "ok" | "warning" | "error";
+export type AssessmentSource = "traffic" | "http" | "provider" | "diagnostic";
 
 export interface EventTimingEntry {
   sequence: number;
@@ -69,11 +71,50 @@ export interface SummaryDiagnostic {
   at_ns: string;
 }
 
+export interface SummaryRequestMetadata {
+  method: string;
+  incoming_uri: string;
+  upstream_url: string | null;
+  http_version: string;
+}
+
+export interface SummaryResponseMetadata {
+  status: number;
+  http_version: string;
+}
+
+export interface AssessmentPrimary {
+  source: AssessmentSource;
+  kind: string;
+  message: string;
+}
+
+export interface RecordAssessment {
+  level: AssessmentLevel;
+  primary: AssessmentPrimary | null;
+  issue_count: number;
+}
+
+export interface AssessmentFinding extends AssessmentPrimary {
+  level: AssessmentLevel;
+  phase: string | null;
+  at_ns: string | null;
+}
+
+export interface DiagnosticGroups {
+  traffic: AssessmentFinding[];
+  http: AssessmentFinding[];
+  provider: AssessmentFinding[];
+  warnings: AssessmentFinding[];
+}
+
 export interface SummaryMetadata {
   schema_version: number;
   record_id: string;
   kind: string;
   observed_at: string;
+  request: SummaryRequestMetadata;
+  response: SummaryResponseMetadata | null;
   terminal: boolean;
   timing: SummaryTiming;
   coding_agent_session_id: string | null;
@@ -81,6 +122,7 @@ export interface SummaryMetadata {
   outcome: string | null;
   errors: SummaryDiagnostic[];
   warnings: SummaryDiagnostic[];
+  assessment: RecordAssessment;
 }
 
 export type ProtocolFamily = "openai_responses" | "claude_messages" | "unknown";
@@ -136,6 +178,7 @@ export interface ResultMetadata {
 export interface RecordSummary {
   id: string;
   started_at: string;
+  ended_at: string | null;
   method: string;
   incoming_uri: string;
   upstream_url: string | null;
@@ -145,13 +188,14 @@ export interface RecordSummary {
   state: RecordState;
   total_ms: number | null;
   protocol: ProtocolSummary | null;
+  assessment: RecordAssessment;
 }
 
 export interface RecordList {
   records: RecordSummary[];
   total: number;
   deletable_count: number;
-  next_cursor: string | null;
+  has_next: boolean;
 }
 
 export interface RecordDetail {
@@ -159,6 +203,8 @@ export interface RecordDetail {
   response: ResponseMetadata | null;
   result: ResultMetadata | null;
   summary: SummaryMetadata;
+  assessment: RecordAssessment;
+  diagnostics: DiagnosticGroups;
   state: RecordState;
   request_body_bytes: number;
   response_body_bytes: number;
@@ -167,7 +213,7 @@ export interface RecordDetail {
 }
 
 export interface TrafficApi {
-  listRecords(cursor?: string, signal?: AbortSignal): Promise<RecordList>;
+  listRecords(page?: number, signal?: AbortSignal): Promise<RecordList>;
   getRecord(id: string, signal?: AbortSignal): Promise<RecordDetail>;
   loadBody(
     id: string,

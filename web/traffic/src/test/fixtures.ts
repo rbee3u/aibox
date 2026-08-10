@@ -1,11 +1,24 @@
 import { vi } from "vitest";
 import type {
+  RecordAssessment,
   ProtocolSummary,
   RecordDetail,
   RecordList,
   RecordSummary,
   TrafficApi,
 } from "../types";
+
+export const okAssessment: RecordAssessment = {
+  level: "ok",
+  primary: null,
+  issue_count: 0,
+};
+
+export const activeAssessment: RecordAssessment = {
+  level: "active",
+  primary: null,
+  issue_count: 0,
+};
 
 export const completedProtocol: ProtocolSummary = {
   family: "openai_responses",
@@ -40,6 +53,7 @@ export const activeProtocol: ProtocolSummary = {
 export const completedSummary: RecordSummary = {
   id: "0198-demo-completed",
   started_at: "2026-08-06T04:00:00Z",
+  ended_at: "2026-08-06T04:00:01.250Z",
   method: "POST",
   incoming_uri: "/https://api.example.test/v1/responses?stream=true",
   upstream_url: "https://api.example.test/v1/responses?stream=true",
@@ -49,11 +63,13 @@ export const completedSummary: RecordSummary = {
   state: "completed",
   total_ms: 1250,
   protocol: completedProtocol,
+  assessment: okAssessment,
 };
 
 export const activeSummary: RecordSummary = {
   id: "0198-demo-active",
   started_at: "2026-08-06T04:01:00Z",
+  ended_at: null,
   method: "GET",
   incoming_uri: "/https://stream.example.test/events",
   upstream_url: "https://stream.example.test/events",
@@ -63,13 +79,14 @@ export const activeSummary: RecordSummary = {
   state: "active",
   total_ms: 500,
   protocol: activeProtocol,
+  assessment: activeAssessment,
 };
 
 export const recordList: RecordList = {
   records: [activeSummary, completedSummary],
   total: 2,
   deletable_count: 1,
-  next_cursor: null,
+  has_next: false,
 };
 
 export const completedDetail: RecordDetail = {
@@ -91,16 +108,26 @@ export const completedDetail: RecordDetail = {
     headers: [{ name: "content-type", value_base64: btoa("text/event-stream") }],
   },
   result: {
-    ended_at: "2026-08-06T04:00:01.250Z",
+    ended_at: completedSummary.ended_at!,
     outcome: "completed",
     total_ms: 1250,
     error: null,
   },
   summary: {
-    schema_version: 1,
+    schema_version: 2,
     record_id: completedSummary.id,
     kind: "summary",
     observed_at: completedSummary.started_at,
+    request: {
+      method: completedSummary.method,
+      incoming_uri: completedSummary.incoming_uri,
+      upstream_url: completedSummary.upstream_url,
+      http_version: "HTTP/2.0",
+    },
+    response: {
+      status: 200,
+      http_version: "HTTP/2",
+    },
     terminal: true,
     timing: {
       upstream_request_started_at_ns: "100000000",
@@ -115,6 +142,14 @@ export const completedDetail: RecordDetail = {
     protocol: completedProtocol,
     outcome: "completed",
     errors: [],
+    warnings: [],
+    assessment: okAssessment,
+  },
+  assessment: okAssessment,
+  diagnostics: {
+    traffic: [],
+    http: [],
+    provider: [],
     warnings: [],
   },
   state: "completed",
@@ -138,6 +173,13 @@ export const activeDetail: RecordDetail = {
   summary: {
     ...completedDetail.summary,
     record_id: activeSummary.id,
+    request: {
+      ...completedDetail.summary.request,
+      method: activeSummary.method,
+      incoming_uri: activeSummary.incoming_uri,
+      upstream_url: activeSummary.upstream_url,
+    },
+    response: null,
     terminal: false,
     timing: {
       ...completedDetail.summary.timing,
@@ -148,7 +190,9 @@ export const activeDetail: RecordDetail = {
     },
     protocol: activeProtocol,
     outcome: null,
+    assessment: activeAssessment,
   },
+  assessment: activeAssessment,
   state: "active",
   request_body_bytes: 0,
   response_body_bytes: 0,

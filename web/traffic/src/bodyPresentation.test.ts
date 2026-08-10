@@ -102,5 +102,8 @@ describe("Body presentation", () => {
       "2026-08-06 12:00:01.251",
     );
     expect(eventRelativeTime("invalid")).toBe("Time unavailable");
+    expect(
+      eventAbsoluteTime(completedDetail.request.started_at, "1000000000000000000000000000000"),
+    ).toBe("—");
   });
 });

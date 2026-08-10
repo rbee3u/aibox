@@ -19,13 +19,6 @@
   background: var(--bg-shell);
 }
 
-.titleGroup {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-}
-
 .title {
   margin: 0;
   color: var(--ink);
@@ -34,24 +27,6 @@
   letter-spacing: 0.01em;
   line-height: 1.25;
   white-space: nowrap;
-}
-
-.totalCount {
-  display: inline-grid;
-  min-width: 22px;
-  height: 20px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0 6px;
-  color: var(--muted);
-  background: var(--surface-inset);
-  font:
-    650 10px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  font-variant-numeric: tabular-nums;
 }
 
 .headerActions,
@@ -459,7 +434,7 @@
     row-gap: 3px;
   }
 
-  .titleGroup,
+  .title,
   .pageSelection {
     flex: 1 0 100%;
   }

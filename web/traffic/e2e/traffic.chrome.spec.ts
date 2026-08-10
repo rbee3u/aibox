@@ -38,9 +38,19 @@ const protocol = {
   warnings: [],
 };
 
+const okAssessment = { level: "ok", primary: null, issue_count: 0 };
+const activeAssessment = { level: "active", primary: null, issue_count: 0 };
+const providerError = {
+  source: "provider",
+  kind: "server_error",
+  message: "Our servers are currently overloaded. Please try again later.",
+};
+const providerErrorAssessment = { level: "error", primary: providerError, issue_count: 1 };
+
 const primaryRecord = {
   id: "019fe51f-82b7-7701-bfb0-231441977e27",
   started_at: "2026-08-09T06:04:45Z",
+  ended_at: "2026-08-09T06:05:12.830Z",
   method: "POST",
   incoming_uri: "/https://relay.example.test/v1/responses",
   upstream_url: "https://relay.example.test/v1/responses",
@@ -50,6 +60,7 @@ const primaryRecord = {
   state: "completed",
   total_ms: 27830,
   protocol,
+  assessment: providerErrorAssessment,
 };
 
 const records = [
@@ -135,7 +146,7 @@ const detail = {
     headers: [header("content-type", "text/event-stream")],
   },
   result: {
-    ended_at: "2026-08-09T06:05:12.830Z",
+    ended_at: primaryRecord.ended_at,
     outcome: "completed",
     total_ms: 27830,
     error: null,
@@ -145,6 +156,13 @@ const detail = {
     record_id: primaryRecord.id,
     kind: "summary",
     observed_at: primaryRecord.started_at,
+    request: {
+      method: primaryRecord.method,
+      incoming_uri: primaryRecord.incoming_uri,
+      upstream_url: primaryRecord.upstream_url,
+      http_version: "HTTP/2.0",
+    },
+    response: { status: 200, http_version: "HTTP/2" },
     terminal: true,
     timing: {
       upstream_request_started_at_ns: "119000000",
@@ -159,6 +177,21 @@ const detail = {
     protocol,
     outcome: "completed",
     errors: [],
+    warnings: [],
+    assessment: providerErrorAssessment,
+  },
+  assessment: providerErrorAssessment,
+  diagnostics: {
+    traffic: [],
+    http: [],
+    provider: [
+      {
+        ...providerError,
+        level: "error",
+        phase: "response",
+        at_ns: "27813000000",
+      },
+    ],
     warnings: [],
   },
   state: "completed",
@@ -181,6 +214,40 @@ test("light desktop inspector", async ({ page }) => {
   await expect(
     page.getByRole("separator", { name: "Resize Traffic records panel" }),
   ).toHaveAttribute("aria-valuenow", "480");
+  await expectPaginationAtPanelBottom(page);
+
+  const issueMarker = page.getByRole("img", { name: /Record error: Server error/ });
+  const markerBox = await issueMarker.boundingBox();
+  expect(markerBox).not.toBeNull();
+  expect(markerBox!.width).toBeGreaterThanOrEqual(24);
+  expect(markerBox!.height).toBeGreaterThanOrEqual(24);
+  await issueMarker.hover();
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("Error · Server error");
+  await expect(tooltip).toContainText(providerError.message);
+  const tooltipBox = await tooltip.boundingBox();
+  expect(tooltipBox).not.toBeNull();
+  expect(tooltipBox!.x).toBeGreaterThanOrEqual(8);
+  expect(tooltipBox!.y).toBeGreaterThanOrEqual(8);
+  expect(tooltipBox!.x + tooltipBox!.width).toBeLessThanOrEqual(1432);
+  expect(tooltipBox!.y + tooltipBox!.height).toBeLessThanOrEqual(892);
+  expect(tooltipBox!.x + tooltipBox!.width).toBeLessThan(markerBox!.x);
+  await page.mouse.move(900, 40);
+  await expect(tooltip).toBeHidden();
+
+  await issueMarker.hover();
+  await expect(tooltip).toBeVisible();
+  await page
+    .getByRole("complementary", { name: "Traffic records" })
+    .locator("[aria-busy]")
+    .dispatchEvent("scroll");
+  await expect(tooltip).toBeHidden();
+
+  await page.getByText("Server error", { exact: true }).hover();
+  await expect(tooltip).toContainText("Error · Server error");
+  await expect(tooltip).toContainText(providerError.message);
+  await page.mouse.move(900, 40);
+  await expect(tooltip).toBeHidden();
 
   await page.getByRole("tab", { name: "Request" }).click();
   await expect(page.getByText("Bearer test-token-not-a-secret")).toBeVisible();
@@ -212,11 +279,14 @@ test("empty and error states remain scoped", async ({ page }) => {
   await mockEmpty(page);
   await page.goto("./");
   await expect(page.getByText("No traffic recorded yet.")).toBeVisible();
+  await expectPaginationAtPanelBottom(page);
+  await expectEmptyStateCentered(page);
 
   await page.unrouteAll({ behavior: "wait" });
   await mockListError(page);
   await page.reload();
   await expect(page.getByRole("alert")).toContainText("cannot scan Traffic Records");
+  await expectPaginationAtPanelBottom(page);
   await expect(page.getByRole("heading", { name: "Select a request" })).toBeVisible();
 });
 
@@ -225,7 +295,7 @@ async function mockTraffic(page: Page, detailDelay = 0) {
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (path === "/_aibox/traffic/api/records") {
-      return json(route, { records, total: records.length, deletable_count: 6, next_cursor: null });
+      return json(route, { records, total: records.length, deletable_count: 6, has_next: false });
     }
     if (path === `/_aibox/traffic/api/records/${primaryRecord.id}`) {
       if (detailDelay) await new Promise((resolve) => setTimeout(resolve, detailDelay));
@@ -255,7 +325,7 @@ async function mockTraffic(page: Page, detailDelay = 0) {
 
 async function mockEmpty(page: Page) {
   await page.route("**/_aibox/traffic/api/records", (route) =>
-    json(route, { records: [], total: 0, deletable_count: 0, next_cursor: null }),
+    json(route, { records: [], total: 0, deletable_count: 0, has_next: false }),
   );
 }
 
@@ -286,6 +356,7 @@ function record(
   return {
     id,
     started_at: "2026-08-09T06:01:26Z",
+    ended_at: active ? null : "2026-08-09T06:02:26Z",
     method,
     incoming_uri: `/https://${host}${path}`,
     upstream_url: `https://${host}${path}`,
@@ -303,7 +374,36 @@ function record(
           token_usage: active ? null : protocol.token_usage,
         }
       : null,
+    assessment: active ? activeAssessment : okAssessment,
   };
+}
+
+async function expectPaginationAtPanelBottom(page: Page) {
+  const panel = page.getByRole("complementary", { name: "Traffic records" });
+  const pagination = page.getByRole("navigation", { name: "Record pages" });
+  await expect
+    .poll(async () => {
+      const [columnBox, paginationBox] = await Promise.all([
+        panel.locator("..").boundingBox(),
+        pagination.boundingBox(),
+      ]);
+      if (!columnBox || !paginationBox) return Number.POSITIVE_INFINITY;
+      return Math.abs(columnBox.y + columnBox.height - (paginationBox.y + paginationBox.height));
+    })
+    .toBeLessThanOrEqual(1);
+}
+
+async function expectEmptyStateCentered(page: Page) {
+  const empty = page.getByText("No traffic recorded yet.").locator("..");
+  const records = page
+    .getByRole("complementary", { name: "Traffic records" })
+    .locator("[aria-busy]");
+  const [emptyBox, recordsBox] = await Promise.all([empty.boundingBox(), records.boundingBox()]);
+  expect(emptyBox).not.toBeNull();
+  expect(recordsBox).not.toBeNull();
+  expect(
+    Math.abs(emptyBox!.y + emptyBox!.height / 2 - (recordsBox!.y + recordsBox!.height / 2)),
+  ).toBeLessThanOrEqual(1);
 }
 
 function header(name: string, value: string) {

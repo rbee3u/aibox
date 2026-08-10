@@ -24,7 +24,7 @@ import type {
   EventTimingIndex,
   RecordDetail,
 } from "../types";
-import { bytes, concatChunks } from "../utils";
+import { bytes, concatChunks, hex } from "../utils";
 import { JsonTree } from "./JsonTree";
 import styles from "./RecordDetail.module.css";
 
@@ -57,15 +57,18 @@ export function BodyViewer({
   const copiedTimer = useRef<number | undefined>(undefined);
   const headers = kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
   const coding = contentCoding(headers);
-  const original = concatChunks(bodyChunks);
+  const original = useMemo(() => concatChunks(bodyChunks), [bodyChunks]);
   const complete = bodyComplete(detail, kind);
-  const sourceBytes =
-    coding.kind === "identity"
-      ? original
-      : coding.kind === "zstd" && decoded.status === "loaded"
-        ? decoded.bytes
-        : null;
-  const decodedText = sourceBytes ? decodeUtf8(sourceBytes) : null;
+  const sourceBytes = useMemo(
+    () =>
+      coding.kind === "identity"
+        ? original
+        : coding.kind === "zstd" && decoded.status === "loaded"
+          ? decoded.bytes
+          : null,
+    [coding.kind, decoded.bytes, decoded.status, original],
+  );
+  const decodedText = useMemo(() => (sourceBytes ? decodeUtf8(sourceBytes) : null), [sourceBytes]);
   const mediaType = bodyMediaType(headers);
   const declaredJson = isJsonMediaType(mediaType);
   const sse = kind === "response" && isSseResponse(detail);
@@ -236,10 +239,11 @@ function SourceView({
   message: string | null;
   onRenderLarge?: () => void;
 }) {
+  const hexSource = decodedText?.ok === false ? decodedText.hex : hex(original);
   const source =
     decodedText?.ok === true
       ? decodedText.text || "(empty body)"
-      : `hex: ${toHex(original) || "(empty body)"}`;
+      : `hex: ${hexSource || "(empty body)"}`;
   return (
     <div className={styles.sourceWrap}>
       {(message || onRenderLarge) && (
@@ -461,7 +465,7 @@ function sourceMessage({
   if (coding === "unsupported" || decoded.status === "unsupported") return decoded.message;
   if (decoded.status === "error") return decoded.message;
   if (coding === "zstd" && decoded.status !== "loaded") return decoded.message;
-  if (invalidUtf8) return "Decoded Body is not valid UTF-8; showing original hex.";
+  if (invalidUtf8) return "Decoded Body is not valid UTF-8; showing decoded bytes as hex.";
   if (large)
     return "Decoded Body is larger than 5 MiB; Source is shown to avoid expensive rendering.";
   if (declaredJson && !complete) return "Pretty will be available when the JSON Body is complete.";
@@ -476,8 +480,4 @@ function toggleSet<T>(values: Set<T>, value: T): Set<T> {
   if (next.has(value)) next.delete(value);
   else next.add(value);
   return next;
-}
-
-function toHex(value: Uint8Array): string {
-  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
 }

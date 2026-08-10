@@ -39,8 +39,8 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
   }
 
   return {
-    async listRecords(cursor, signal) {
-      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    async listRecords(page = 1, signal) {
+      const query = page === 1 ? "" : `?page=${page}`;
       const response = await request(`/_aibox/traffic/api/records${query}`, { signal });
       return (await response.json()) as RecordList;
     },
@@ -59,7 +59,15 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
       );
       const bytes = new Uint8Array(await response.arrayBuffer());
       const header = response.headers.get("X-Aibox-Traffic-Next-Offset");
-      return { bytes, nextOffset: Number(header ?? offset + bytes.length) };
+      const fallbackOffset = offset + bytes.length;
+      const advertisedOffset = header === null ? null : Number(header);
+      const nextOffset =
+        advertisedOffset !== null &&
+        Number.isSafeInteger(advertisedOffset) &&
+        advertisedOffset === fallbackOffset
+          ? advertisedOffset
+          : fallbackOffset;
+      return { bytes, nextOffset };
     },
 
     async loadDecodedBody(id, kind, signal) {

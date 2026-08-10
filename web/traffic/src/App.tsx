@@ -25,11 +25,12 @@ interface AppProps {
   api?: TrafficApi;
 }
 type Dialog = { kind: "selected"; ids: string[] } | { kind: "all"; count: number } | null;
-type ErrorSource = "list" | "detail" | "action";
-type AppError = { source: ErrorSource; message: string };
+type ErrorSource = "list" | "detail" | "body" | "action";
+type AppErrors = Record<ErrorSource, string | null>;
 
 const LIST_POLL_INTERVAL_MS = 5000;
 const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
+const RECORDS_PER_PAGE = 50;
 const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, status: "idle", message: null };
 const THEME_STORAGE_KEY = "aibox-traffic-theme";
 const LIST_WIDTH_STORAGE_KEY = "aibox-traffic-list-width";
@@ -37,6 +38,7 @@ const DEFAULT_LIST_WIDTH = 480;
 const MIN_LIST_WIDTH = 360;
 const MAX_LIST_WIDTH = 640;
 const LIST_WIDTH_STEP = 16;
+const EMPTY_ERRORS: AppErrors = { list: null, detail: null, body: null, action: null };
 
 export type ThemePreference = "system" | "light" | "dark";
 
@@ -57,13 +59,13 @@ export function App({ api: providedApi }: AppProps) {
     records: [],
     total: 0,
     deletable_count: 0,
-    next_cursor: null,
+    has_next: false,
   });
-  const [page, setPage] = useState(0);
-  const pageRef = useRef(0);
-  const cursors = useRef<Array<string | null>>([null]);
+  const [page, setPage] = useState(1);
+  const pageRef = useRef(1);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectionPages = useRef<Map<string, number>>(new Map());
   const [currentId, setCurrentId] = useState<string | null>(null);
   const currentIdRef = useRef<string | null>(null);
   const [currentState, setCurrentState] = useState<RecordState | null>(null);
@@ -89,7 +91,7 @@ export function App({ api: providedApi }: AppProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingBody, setLoadingBody] = useState(false);
-  const [error, setError] = useState<AppError | null>(null);
+  const [errors, setErrors] = useState<AppErrors>(EMPTY_ERRORS);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [deleting, setDeleting] = useState(false);
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
@@ -101,6 +103,23 @@ export function App({ api: providedApi }: AppProps) {
   const activeId = detail?.state === "active" ? detail.request.id : null;
   const detailState = detail?.state ?? null;
   const responseAvailable = detail?.response !== null && detail?.response !== undefined;
+  const visibleBodyKind = tab === "summary" ? null : tab;
+  const visibleBodyHeaders =
+    visibleBodyKind === "request"
+      ? detail?.request.headers
+      : visibleBodyKind === "response"
+        ? detail?.response?.headers
+        : undefined;
+  const visibleBodyCoding = contentCoding(visibleBodyHeaders ?? []);
+  const visibleBodyCodingKind = visibleBodyCoding.kind;
+  const visibleBodyCodingMessage =
+    visibleBodyCoding.kind === "unsupported" ? visibleBodyCoding.message : null;
+  const visibleBodyComplete =
+    detail !== null && visibleBodyKind !== null ? bodyComplete(detail, visibleBodyKind) : false;
+  const shouldLoadVisibleTimings =
+    visibleBodyKind === "response" && detail !== null && isSseResponse(detail);
+  const visibleDetailError = errors.detail ?? errors.body;
+  const visibleDetailErrorSource: ErrorSource = errors.detail ? "detail" : "body";
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -163,35 +182,44 @@ export function App({ api: providedApi }: AppProps) {
     updateListWidth(next, true);
   }
   const reportError = useCallback((source: ErrorSource, cause: unknown) => {
-    setError({
-      source,
-      message: typeof cause === "string" ? cause : errorMessage(cause),
-    });
+    const message = typeof cause === "string" ? cause : errorMessage(cause);
+    setErrors((current) => ({ ...current, [source]: message }));
   }, []);
-  const clearError = useCallback((source?: ErrorSource) => {
-    setError((current) => (source === undefined || current?.source === source ? null : current));
+  const clearError = useCallback((source: ErrorSource) => {
+    setErrors((current) => (current[source] === null ? current : { ...current, [source]: null }));
   }, []);
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
     setSelected(new Set());
+    selectionPages.current.clear();
   }, []);
   const clearCurrentRecord = useCallback(() => {
     detailController.current?.abort();
     bodyController.current?.abort();
+    detailController.current = null;
+    bodyController.current = null;
     currentIdRef.current = null;
     setCurrentId(null);
     setCurrentState(null);
     setDetail(null);
+    setBodies({ request: [], response: [] });
+    setBodyStatus({ request: "idle", response: "idle" });
     setDecodedBodies({ request: EMPTY_DECODED_BODY, response: EMPTY_DECODED_BODY });
     setEventTimings(null);
     timingNextSequence.current = 0;
     decodedLoaded.current = { request: false, response: false };
+    offsets.current = { request: 0, response: 0 };
+    setTab("summary");
+    setLoadingDetail(false);
     setLoadingBody(false);
-  }, []);
+    clearError("detail");
+    clearError("body");
+  }, [clearError]);
 
   const loadPage = useCallback(
     async (pageToLoad: number, background = false): Promise<RecordListData | null> => {
       if (background && pageNavigation.current) return null;
+      const targetPage = Math.max(1, pageToLoad);
       listController.current?.abort();
       const controller = new AbortController();
       listController.current = controller;
@@ -200,14 +228,11 @@ export function App({ api: providedApi }: AppProps) {
         setLoadingList(true);
       }
       try {
-        const payload = await api.listRecords(
-          cursors.current[pageToLoad] ?? undefined,
-          controller.signal,
-        );
+        const payload = await api.listRecords(targetPage, controller.signal);
         if (listController.current !== controller || controller.signal.aborted) return null;
         setList(payload);
-        setPage(pageToLoad);
-        pageRef.current = pageToLoad;
+        setPage(targetPage);
+        pageRef.current = targetPage;
         const currentSummary = currentIdRef.current
           ? payload.records.find((record) => record.id === currentIdRef.current)
           : undefined;
@@ -216,7 +241,6 @@ export function App({ api: providedApi }: AppProps) {
             current && current !== "active" ? current : currentSummary.state,
           );
         }
-        if (payload.next_cursor) cursors.current[pageToLoad + 1] = payload.next_cursor;
         clearError("list");
         return payload;
       } catch (cause) {
@@ -239,26 +263,27 @@ export function App({ api: providedApi }: AppProps) {
     [api, clearError, reportError],
   );
 
+  const refreshWithFallback = useCallback(
+    async (targetPage = pageRef.current, background = false) => {
+      let candidate = Math.max(1, targetPage);
+      while (true) {
+        const payload = await loadPage(candidate, background);
+        if (!payload) return null;
+        if (payload.records.length > 0 || candidate === 1) return { page: candidate, payload };
+        candidate -= 1;
+      }
+    },
+    [loadPage],
+  );
+
   const refreshPage = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadPage(page);
+      await refreshWithFallback(page);
     } finally {
       setRefreshing(false);
     }
-  }, [loadPage, page]);
-
-  const refreshAfterDelete = useCallback(async () => {
-    const pageToRefresh = pageRef.current;
-    let payload = await loadPage(pageToRefresh);
-    if (!payload) return null;
-    if (pageToRefresh > 0 && payload.records.length === 0 && pageRef.current === pageToRefresh) {
-      payload = await loadPage(pageToRefresh - 1);
-      if (!payload) return null;
-      return { page: pageToRefresh - 1, payload };
-    }
-    return { page: pageToRefresh, payload };
-  }, [loadPage]);
+  }, [page, refreshWithFallback]);
 
   const loadBody = useCallback(
     async (id: string, kind: BodyKind, offset: number, controller: AbortController) => {
@@ -296,7 +321,8 @@ export function App({ api: providedApi }: AppProps) {
       setTab("summary");
       setLoadingBody(false);
       setLoadingDetail(true);
-      clearError();
+      clearError("detail");
+      clearError("body");
       try {
         const record = await api.getRecord(id, controller.signal);
         if (detailController.current !== controller || controller.signal.aborted) return;
@@ -325,7 +351,7 @@ export function App({ api: providedApi }: AppProps) {
     let disposed = false;
     let timer: number | undefined;
     const poll = async () => {
-      await loadPage(pageRef.current, true);
+      await refreshWithFallback(pageRef.current, true);
       if (!disposed) timer = window.setTimeout(() => void poll(), LIST_POLL_INTERVAL_MS);
     };
     void poll();
@@ -334,7 +360,7 @@ export function App({ api: providedApi }: AppProps) {
       listController.current?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loadPage, selectionMode]);
+  }, [refreshWithFallback, selectionMode]);
 
   useEffect(
     () => () => {
@@ -396,11 +422,6 @@ export function App({ api: providedApi }: AppProps) {
     const id = currentId;
     const kind = tab;
     const active = detailState === "active";
-    const headers =
-      kind === "request" ? detail?.request.headers : (detail?.response?.headers ?? []);
-    const coding = contentCoding(headers ?? []);
-    const complete = detail ? bodyComplete(detail, kind) : false;
-    const shouldLoadTimings = kind === "response" && detail !== null && isSseResponse(detail);
     const controller = new AbortController();
     bodyController.current = controller;
     let disposed = false;
@@ -417,12 +438,16 @@ export function App({ api: providedApi }: AppProps) {
         await loadBody(id, kind, offsets.current[kind], controller);
         if (disposed || bodyController.current !== controller || controller.signal.aborted) return;
         setBodyStatus((current) => ({ ...current, [kind]: "loaded" }));
-        if (coding.kind === "unsupported") {
+        if (visibleBodyCodingKind === "unsupported") {
           setDecodedBodies((current) => ({
             ...current,
-            [kind]: { bytes: null, status: "unsupported", message: coding.message },
+            [kind]: {
+              bytes: null,
+              status: "unsupported",
+              message: visibleBodyCodingMessage,
+            },
           }));
-        } else if (coding.kind === "zstd" && !complete) {
+        } else if (visibleBodyCodingKind === "zstd" && !visibleBodyComplete) {
           setDecodedBodies((current) => ({
             ...current,
             [kind]: {
@@ -431,8 +456,7 @@ export function App({ api: providedApi }: AppProps) {
               message: "Waiting for the complete zstd body before decoding.",
             },
           }));
-        } else if (coding.kind === "zstd" && !decodedLoaded.current[kind]) {
-          decodedLoaded.current[kind] = true;
+        } else if (visibleBodyCodingKind === "zstd" && !decodedLoaded.current[kind]) {
           setDecodedBodies((current) => ({
             ...current,
             [kind]: { bytes: null, status: "loading", message: null },
@@ -446,12 +470,14 @@ export function App({ api: providedApi }: AppProps) {
               currentIdRef.current !== id
             )
               return;
+            decodedLoaded.current[kind] = true;
             setDecodedBodies((current) => ({
               ...current,
               [kind]: { bytes: decoded, status: "loaded", message: null },
             }));
           } catch (cause) {
             if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+              decodedLoaded.current[kind] = false;
               setDecodedBodies((current) => ({
                 ...current,
                 [kind]: {
@@ -462,14 +488,14 @@ export function App({ api: providedApi }: AppProps) {
               }));
             }
           }
-        } else if (coding.kind === "identity") {
+        } else if (visibleBodyCodingKind === "identity") {
           setDecodedBodies((current) => ({
             ...current,
             [kind]: { bytes: null, status: "loaded", message: null },
           }));
         }
 
-        if (shouldLoadTimings) {
+        if (shouldLoadVisibleTimings) {
           try {
             const timing = await api.loadEventTimings(
               id,
@@ -491,7 +517,7 @@ export function App({ api: providedApi }: AppProps) {
             }
           }
         }
-        clearError("detail");
+        clearError("body");
       } catch (cause) {
         if (
           bodyController.current === controller &&
@@ -501,13 +527,14 @@ export function App({ api: providedApi }: AppProps) {
             ...current,
             [kind]: current[kind] === "loaded" ? "loaded" : "error",
           }));
-          reportError("detail", cause);
+          reportError("body", cause);
         }
       } finally {
         if (bodyController.current === controller) setLoadingBody(false);
         if (
           !disposed &&
           active &&
+          !visibleBodyComplete &&
           bodyController.current === controller &&
           !controller.signal.aborted
         ) {
@@ -529,14 +556,17 @@ export function App({ api: providedApi }: AppProps) {
   }, [
     clearError,
     currentId,
-    detail,
     detailState,
     api,
     loadBody,
     loadingDetail,
     reportError,
     responseAvailable,
+    shouldLoadVisibleTimings,
     tab,
+    visibleBodyCodingKind,
+    visibleBodyCodingMessage,
+    visibleBodyComplete,
   ]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
@@ -547,19 +577,49 @@ export function App({ api: providedApi }: AppProps) {
         .filter((record) => record.state !== "active")
         .map((record) => record.id);
       const pageSelected = deletableIds.length > 0 && deletableIds.every((id) => current.has(id));
-      deletableIds.forEach((id) => (pageSelected ? next.delete(id) : next.add(id)));
+      deletableIds.forEach((id) => {
+        if (pageSelected) {
+          next.delete(id);
+          selectionPages.current.delete(id);
+        } else {
+          if (!next.has(id)) {
+            next.add(id);
+            selectionPages.current.set(id, pageRef.current);
+          }
+        }
+      });
       return next;
     });
   };
 
   async function confirmDelete() {
     if (!dialog) return;
+    const targetPage =
+      dialog.kind === "selected"
+        ? dialog.ids.reduce(
+            (minimum, id) => Math.min(minimum, selectionPages.current.get(id) ?? pageRef.current),
+            Number.MAX_SAFE_INTEGER,
+          )
+        : pageRef.current;
     setDeleting(true);
     try {
       if (dialog.kind === "selected") await api.deleteRecords(dialog.ids);
       else await api.deleteAll(dialog.count);
       const deletedIds = dialog.kind === "selected" ? dialog.ids : [];
+      setList((current) =>
+        removeDeletedFromList(
+          current,
+          dialog.kind === "all"
+            ? current.records
+                .filter((record) => record.state !== "active")
+                .map((record) => record.id)
+            : deletedIds,
+          dialog.kind === "all" ? dialog.count : deletedIds.length,
+          pageRef.current,
+        ),
+      );
       setSelected(new Set());
+      selectionPages.current.clear();
       if (dialog.kind === "selected") setSelectionMode(false);
       if (
         currentId &&
@@ -570,7 +630,7 @@ export function App({ api: providedApi }: AppProps) {
       }
       setDialog(null);
       clearError("action");
-      await refreshAfterDelete();
+      await refreshWithFallback(targetPage);
       setFocusAfterDelete(null);
     } catch (cause) {
       reportError("action", cause);
@@ -587,8 +647,9 @@ export function App({ api: providedApi }: AppProps) {
     try {
       await api.deleteRecords([id]);
       if (currentIdRef.current === id) clearCurrentRecord();
+      setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
       const stayedOnOriginPage = pageRef.current === originPage;
-      const refreshed = await refreshAfterDelete();
+      const refreshed = await refreshWithFallback(originPage);
       if (stayedOnOriginPage && refreshed) {
         setFocusAfterDelete(
           focusTargetAfterDelete(
@@ -628,7 +689,7 @@ export function App({ api: providedApi }: AppProps) {
         detailController.current === controller &&
         !(cause instanceof DOMException && cause.name === "AbortError")
       )
-        reportError("detail", cause);
+        reportError("body", cause);
     }
   }
 
@@ -683,11 +744,11 @@ export function App({ api: providedApi }: AppProps) {
         style={{ "--list-width": `${listWidth}px` } as CSSProperties}
       >
         <div className={styles.listColumn}>
-          {error?.source === "list" && (
+          {errors.list && (
             <div className={styles.scopedBanner}>
               <StatusBanner
                 kind="error"
-                message={error.message}
+                message={errors.list}
                 action={
                   selectionMode ? undefined : { label: "Retry", onClick: () => void refreshPage() }
                 }
@@ -699,8 +760,8 @@ export function App({ api: providedApi }: AppProps) {
             records={list.records}
             total={list.total}
             page={page}
-            hasPrevious={page > 0}
-            hasNext={Boolean(list.next_cursor)}
+            hasPrevious={page > 1}
+            hasNext={list.has_next}
             selectionMode={selectionMode}
             selected={selected}
             currentId={currentId}
@@ -710,16 +771,18 @@ export function App({ api: providedApi }: AppProps) {
             onToggle={(id) =>
               setSelected((current) => {
                 const next = new Set(current);
-                if (next.has(id)) next.delete(id);
-                else next.add(id);
+                if (next.has(id)) {
+                  next.delete(id);
+                  selectionPages.current.delete(id);
+                } else {
+                  next.add(id);
+                  selectionPages.current.set(id, pageRef.current);
+                }
                 return next;
               })
             }
             onSelect={(id) => void selectRecord(id)}
-            onPrevious={() => {
-              cursors.current[page] = cursors.current[page] ?? null;
-              void loadPage(page - 1);
-            }}
+            onPrevious={() => void loadPage(page - 1)}
             onNext={() => void loadPage(page + 1)}
             loading={loadingList}
             refreshing={refreshing}
@@ -753,17 +816,17 @@ export function App({ api: providedApi }: AppProps) {
           <span aria-hidden="true" />
         </div>
         <div className={styles.detailColumn}>
-          {error?.source === "detail" && (
+          {visibleDetailError && (
             <div className={styles.scopedBanner}>
               <StatusBanner
                 kind="error"
-                message={error.message}
+                message={visibleDetailError}
                 action={
                   currentId
                     ? { label: "Retry", onClick: () => void selectRecord(currentId) }
                     : undefined
                 }
-                onDismiss={() => clearError("detail")}
+                onDismiss={() => clearError(visibleDetailErrorSource)}
               />
             </div>
           )}
@@ -794,11 +857,11 @@ export function App({ api: providedApi }: AppProps) {
           )}
         </div>
       </main>
-      {error?.source === "action" && (
+      {errors.action && (
         <div className={styles.actionNotice}>
           <StatusBanner
             kind="error"
-            message={error.message}
+            message={errors.action}
             onDismiss={() => clearError("action")}
           />
         </div>
@@ -913,6 +976,23 @@ function focusTargetAfterDelete(
       .find((record) => record.state !== "active")?.id ??
     null
   );
+}
+
+function removeDeletedFromList(
+  current: RecordListData,
+  ids: readonly string[],
+  deletedCount: number,
+  currentPage: number,
+): RecordListData {
+  const deleted = new Set(ids);
+  const total = Math.max(0, current.total - deletedCount);
+  return {
+    ...current,
+    records: current.records.filter((record) => !deleted.has(record.id)),
+    total,
+    deletable_count: Math.max(0, current.deletable_count - deletedCount),
+    has_next: currentPage * RECORDS_PER_PAGE < total,
+  };
 }
 
 export default App;

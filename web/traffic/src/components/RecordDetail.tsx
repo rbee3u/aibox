@@ -2,14 +2,13 @@ import { Check, Clipboard, FileText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type {
+  AssessmentFinding,
   BodyKind,
   BodyLoadStatus,
   DecodedBodyState,
   DetailTab,
   EventTimingIndex,
-  ProtocolDiagnostic,
   RecordDetail as RecordDetailData,
-  SummaryDiagnostic,
   TokenUsage,
   UsageState,
 } from "../types";
@@ -19,7 +18,7 @@ import { decodeHeader, duration, formatTimestamp, recordDetailUrl } from "../uti
 import { BodyViewer } from "./BodyViewer";
 import styles from "./RecordDetail.module.css";
 import { RecordHeadlineStatus } from "./RecordStatus";
-import { errorKindLabel } from "./statusPresentation";
+import { assessmentPrimaryLabel } from "./statusPresentation";
 
 const TABS: Array<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
@@ -60,7 +59,6 @@ export function RecordDetail({
   const tabRefs = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({});
   const request = detail.request;
   const response = detail.response;
-  const result = detail.result;
   const [origin, path] = recordDetailUrl(request);
   const panelId = `record-panel-${request.id}`;
 
@@ -87,7 +85,11 @@ export function RecordDetail({
             <span>{path}</span>
           </span>
         </div>
-        <RecordHeadlineStatus response={response} result={result} state={detail.state} />
+        <RecordHeadlineStatus
+          response={response}
+          state={detail.state}
+          assessment={detail.assessment}
+        />
       </div>
       <div className={styles.tabs} role="tablist" aria-label="Record data">
         {TABS.map(({ value, label }, index) => (
@@ -157,16 +159,12 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
   const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
   const responseMode = mode === "stream" ? "Streaming" : mode === "normal" ? "Non-streaming" : null;
-  const trafficErrors = detail.summary.errors;
-  const trafficWarnings = detail.summary.warnings;
-  const protocolErrors = protocol?.errors ?? [];
-  const protocolWarnings = protocol?.warnings ?? [];
+  const diagnostics = detail.diagnostics;
   const hasDiagnostics =
-    protocolErrors.length > 0 ||
-    trafficErrors.length > 0 ||
-    trafficWarnings.length > 0 ||
-    protocolWarnings.length > 0 ||
-    detail.state === "interrupted";
+    diagnostics.traffic.length > 0 ||
+    diagnostics.http.length > 0 ||
+    diagnostics.provider.length > 0 ||
+    diagnostics.warnings.length > 0;
 
   useEffect(
     () => () => {
@@ -239,7 +237,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
         <dl className={`${styles.metricGrid} ${styles.timingMetrics}`}>
           <Metric label="First token" value={duration(firstToken)} />
           <Metric label="Duration" value={duration(total)} />
-          <Metric label="Started" value={formatTimestamp(detail.request.started_at)} />
+          <Metric label="Ended" value={formatTimestamp(detail.result?.ended_at ?? "")} />
         </dl>
         {stages.length > 0 ? (
           <div className={styles.timeline} role="list" aria-label="Timing stages">
@@ -279,17 +277,10 @@ function Summary({ detail }: { detail: RecordDetailData }) {
         <h2 id="record-diagnostics-title">Diagnostics</h2>
         {hasDiagnostics ? (
           <div className={styles.diagnosticGroups}>
-            <DiagnosticGroup title="API / Provider errors" entries={protocolErrors} />
-            <DiagnosticGroup
-              title="Traffic errors"
-              entries={trafficErrors}
-              fallback={
-                detail.state === "interrupted" && trafficErrors.length === 0
-                  ? "The Traffic Record ended without a terminal diagnostic."
-                  : undefined
-              }
-            />
-            <DiagnosticGroup title="Warnings" entries={[...trafficWarnings, ...protocolWarnings]} />
+            <DiagnosticGroup title="Proxy / transport" entries={diagnostics.traffic} tone="error" />
+            <DiagnosticGroup title="HTTP response" entries={diagnostics.http} tone="error" />
+            <DiagnosticGroup title="Model API" entries={diagnostics.provider} tone="error" />
+            <DiagnosticGroup title="Warnings" entries={diagnostics.warnings} tone="warning" />
           </div>
         ) : (
           <p className={styles.sectionState}>No diagnostics.</p>
@@ -422,44 +413,40 @@ function TokenUsageGroup({
   );
 }
 
-type DiagnosticEntry = SummaryDiagnostic | ProtocolDiagnostic;
-
 function DiagnosticGroup({
   title,
   entries,
-  fallback,
+  tone,
 }: {
   title: string;
-  entries: DiagnosticEntry[];
-  fallback?: string;
+  entries: AssessmentFinding[];
+  tone: "error" | "warning";
 }) {
-  if (entries.length === 0 && !fallback) return null;
+  if (entries.length === 0) return null;
   return (
-    <section className={styles.diagnosticGroup} aria-label={title}>
+    <section
+      className={`${styles.diagnosticGroup} ${
+        tone === "error" ? styles.errorDiagnostics : styles.warningDiagnostics
+      }`}
+      aria-label={title}
+    >
       <h3>
         {title} <span>{entries.length || 1}</span>
       </h3>
       <div className={styles.diagnosticList}>
-        {fallback && entries.length === 0 ? (
-          <article className={styles.diagnosticItem}>
-            <strong>Interrupted</strong>
-            <p>{fallback}</p>
+        {entries.map((entry, index) => (
+          <article
+            className={styles.diagnosticItem}
+            key={`${entry.source}-${entry.kind}-${entry.at_ns}-${index}`}
+          >
+            <div className={styles.diagnosticMeta}>
+              <strong>{assessmentPrimaryLabel(entry)}</strong>
+              {entry.phase && <span>{entry.phase}</span>}
+              {entry.at_ns && <span>{duration(elapsedNsMs(entry.at_ns))}</span>}
+            </div>
+            <p>{entry.message}</p>
           </article>
-        ) : (
-          entries.map((entry, index) => (
-            <article
-              className={styles.diagnosticItem}
-              key={`${entry.kind}-${entry.at_ns}-${index}`}
-            >
-              <div className={styles.diagnosticMeta}>
-                <strong>{errorKindLabel(entry.kind)}</strong>
-                {"phase" in entry && <span>{entry.phase}</span>}
-                {entry.at_ns && <span>{duration(elapsedNsMs(entry.at_ns))}</span>}
-              </div>
-              <p>{entry.message}</p>
-            </article>
-          ))
-        )}
+        ))}
       </div>
     </section>
   );

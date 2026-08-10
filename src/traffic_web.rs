@@ -4,14 +4,16 @@ use crate::traffic_interpretation::{
 };
 use crate::traffic_proxy;
 use crate::traffic_store::{
-    RecordedHeader, ResponseMetadata, ResponseSource, StoredRecord, SummaryMetadata, TrafficStore,
+    AssessmentFinding, AssessmentLevel, AssessmentSource, RecordAssessment, RecordDetailReadError,
+    RecordedHeader, ResponseMetadata, ResponseSource, StoredRecordSummary, SummaryMetadata,
+    TrafficStore, anchored_at, diagnostic_findings, effective_assessment,
 };
+use anyhow::Context as _;
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::Next;
-use base64::Engine as _;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -46,16 +48,11 @@ fn validate_management_request(
     if !peer.ip().is_loopback() {
         return Err("the Traffic management interface is loopback-only".to_string());
     }
-    let expected = format!("127.0.0.1:{}", state.port);
     let allowed_host = request
         .headers()
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|host| {
-            host.eq_ignore_ascii_case(&expected)
-                || host.eq_ignore_ascii_case(&format!("localhost:{}", state.port))
-                || host.eq_ignore_ascii_case(&format!("[::1]:{}", state.port))
-        });
+        .is_some_and(|host| allowed_loopback_host(host, state.port));
     if !allowed_host {
         return Err("invalid Host for the Traffic management interface".to_string());
     }
@@ -91,13 +88,39 @@ fn validate_management_request(
 }
 
 fn allowed_loopback_origin(origin: &str, port: u16) -> bool {
-    [
+    let mut allowed = vec![
         format!("http://127.0.0.1:{port}"),
         format!("http://localhost:{port}"),
         format!("http://[::1]:{port}"),
-    ]
-    .iter()
-    .any(|allowed| origin.eq_ignore_ascii_case(allowed))
+    ];
+    if port == 80 {
+        allowed.extend([
+            "http://127.0.0.1".to_string(),
+            "http://localhost".to_string(),
+            "http://[::1]".to_string(),
+        ]);
+    }
+    allowed
+        .iter()
+        .any(|allowed| origin.eq_ignore_ascii_case(allowed))
+}
+
+fn allowed_loopback_host(host: &str, port: u16) -> bool {
+    let mut allowed = vec![
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+    ];
+    if port == 80 {
+        allowed.extend([
+            "127.0.0.1".to_string(),
+            "localhost".to_string(),
+            "[::1]".to_string(),
+        ]);
+    }
+    allowed
+        .iter()
+        .any(|allowed| host.eq_ignore_ascii_case(allowed))
 }
 
 fn secure_response(mut response: Response<Body>) -> Response<Body> {
@@ -149,13 +172,14 @@ fn content(
 
 #[derive(Deserialize)]
 pub(super) struct ListQuery {
-    cursor: Option<String>,
+    page: Option<u64>,
 }
 
 #[derive(Serialize)]
 struct RecordSummary {
     id: String,
     started_at: String,
+    ended_at: Option<String>,
     method: String,
     incoming_uri: String,
     upstream_url: Option<String>,
@@ -165,6 +189,7 @@ struct RecordSummary {
     state: String,
     total_ms: Option<u64>,
     protocol: Option<ProtocolSummary>,
+    assessment: RecordAssessment,
 }
 
 #[derive(Serialize)]
@@ -172,77 +197,98 @@ struct RecordList {
     records: Vec<RecordSummary>,
     total: usize,
     deletable_count: usize,
-    next_cursor: Option<String>,
+    has_next: bool,
 }
 
 pub(super) async fn list_records(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Response<Body> {
-    match list_records_inner(&state.store, query.cursor.as_deref()) {
-        Ok(value) => json_response(StatusCode::OK, &value),
-        Err(error) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || list_records_inner(&store, query.page)).await {
+        Ok(Ok(value)) => json_response(StatusCode::OK, &value),
+        Ok(Err(error)) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("scan Traffic Records: {error}"),
+        ),
     }
 }
 
-fn list_records_inner(store: &TrafficStore, cursor: Option<&str>) -> anyhow::Result<RecordList> {
-    let records = store.scan()?;
+fn list_records_inner(store: &TrafficStore, page: Option<u64>) -> anyhow::Result<RecordList> {
+    let page = page.unwrap_or(1);
+    if page == 0 {
+        anyhow::bail!("Traffic Record page must be a positive integer");
+    }
+    let start = usize::try_from(page - 1)
+        .ok()
+        .and_then(|page| page.checked_mul(PAGE_SIZE))
+        .context("Traffic Record page is too large")?;
+    let records = store.scan_summaries()?;
     let total = records.len();
     let deletable_count = records.iter().filter(|record| !record.active).count();
-    let cursor = cursor.map(decode_cursor).transpose()?;
-    let mut eligible: Vec<_> = records
+    let has_next = start
+        .checked_add(PAGE_SIZE)
+        .is_some_and(|next| next < total);
+    let records = records
         .iter()
-        .filter(|record| {
-            cursor.as_ref().is_none_or(|(started, id)| {
-                (&record.request.started_at, &record.request.id) < (started, id)
-            })
-        })
+        .skip(start)
+        .take(PAGE_SIZE)
+        .map(summary)
         .collect();
-    let has_more = eligible.len() > PAGE_SIZE;
-    eligible.truncate(PAGE_SIZE);
-    let next_cursor = if has_more {
-        eligible
-            .last()
-            .map(|record| encode_cursor(&record.request.started_at, &record.request.id))
-    } else {
-        None
-    };
-    let records = eligible.into_iter().map(summary).collect();
     Ok(RecordList {
         records,
         total,
         deletable_count,
-        next_cursor,
+        has_next,
     })
 }
 
-fn summary(record: &StoredRecord) -> RecordSummary {
+fn summary(record: &StoredRecordSummary) -> RecordSummary {
+    let value = &record.summary;
     let (state, outcome) = if record.active {
         ("active", "active")
-    } else if let Some(result) = &record.result {
-        ("completed", result.outcome.as_str())
+    } else if let Some(outcome) = value.outcome {
+        ("completed", outcome.as_str())
     } else {
         ("interrupted", "interrupted")
     };
+    let ended_at = value
+        .terminal
+        .then(|| {
+            value
+                .timing
+                .finished_at_ns
+                .as_deref()
+                .and_then(|offset| anchored_at(&value.observed_at, offset))
+        })
+        .flatten();
     RecordSummary {
-        id: record.request.id.clone(),
-        started_at: record.request.started_at.clone(),
-        method: record.request.method.clone(),
-        incoming_uri: record.request.incoming_uri.clone(),
-        upstream_url: record.request.upstream_url.clone(),
-        status: record.response.as_ref().map(|response| response.status),
-        http_version: record
+        id: value.record_id.clone(),
+        started_at: value.observed_at.clone(),
+        ended_at,
+        method: value.request.method.clone(),
+        incoming_uri: value.request.incoming_uri.clone(),
+        upstream_url: value.request.upstream_url.clone(),
+        status: value.response.as_ref().map(|response| response.status),
+        http_version: value
             .response
             .as_ref()
             .map(|response| response.http_version.clone()),
         outcome: outcome.to_string(),
         state: state.to_string(),
         total_ms: if record.active {
-            elapsed_wall_ms(&record.request.started_at, None)
+            elapsed_wall_ms(&value.observed_at, None)
         } else {
-            record.result.as_ref().map(|result| result.total_ms)
+            value
+                .timing
+                .finished_at_ns
+                .as_deref()
+                .and_then(|value| value.parse::<u128>().ok())
+                .and_then(|value| u64::try_from(value / 1_000_000).ok())
         },
-        protocol: record.summary.protocol.clone(),
+        protocol: value.protocol.clone(),
+        assessment: effective_assessment(value, record.active),
     }
 }
 
@@ -264,9 +310,7 @@ impl From<ResponseMetadata> for ResponseDetail {
             .and_then(|status| status.canonical_reason())
             .map(str::to_string);
         Self {
-            // Keep the management response compatible with the existing
-            // viewer API; persisted files use Summary schema version 1.
-            format_version: 2,
+            format_version: crate::traffic_store::FORMAT_VERSION,
             source: metadata.source,
             headers_at: metadata.headers_at,
             status: metadata.status,
@@ -283,6 +327,8 @@ struct RecordDetail {
     response: Option<ResponseDetail>,
     result: Option<crate::traffic_store::ResultMetadata>,
     summary: SummaryMetadata,
+    assessment: RecordAssessment,
+    diagnostics: DiagnosticGroups,
     state: String,
     request_body_bytes: u64,
     response_body_bytes: u64,
@@ -290,12 +336,46 @@ struct RecordDetail {
     timeline_end_at_ns: Option<String>,
 }
 
+#[derive(Serialize)]
+struct DiagnosticGroups {
+    traffic: Vec<AssessmentFinding>,
+    http: Vec<AssessmentFinding>,
+    provider: Vec<AssessmentFinding>,
+    warnings: Vec<AssessmentFinding>,
+}
+
+fn diagnostic_groups(summary: &SummaryMetadata, interrupted: bool) -> DiagnosticGroups {
+    let mut groups = DiagnosticGroups {
+        traffic: Vec::new(),
+        http: Vec::new(),
+        provider: Vec::new(),
+        warnings: Vec::new(),
+    };
+    for finding in diagnostic_findings(summary, interrupted) {
+        if finding.level == AssessmentLevel::Warning {
+            groups.warnings.push(finding);
+        } else {
+            match finding.source {
+                AssessmentSource::Traffic => groups.traffic.push(finding),
+                AssessmentSource::Http => groups.http.push(finding),
+                AssessmentSource::Provider => groups.provider.push(finding),
+                AssessmentSource::Diagnostic => groups.warnings.push(finding),
+            }
+        }
+    }
+    groups
+}
+
 pub(super) async fn record_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
-    match state.store.find(&id) {
-        Ok(record) => {
+    let store = state.store.clone();
+    let lookup_id = id.clone();
+    let lookup =
+        tokio::task::spawn_blocking(move || store.find_with_event_index_warnings(&lookup_id)).await;
+    match lookup {
+        Ok(Ok(record)) => {
             let state_name = if record.active {
                 "active"
             } else if record.result.is_none() {
@@ -307,6 +387,9 @@ pub(super) async fn record_detail(
                 .active
                 .then(|| elapsed_wall_ms(&record.request.started_at, None))
                 .flatten();
+            let interrupted = !record.active && record.result.is_none();
+            let assessment = effective_assessment(&record.summary, record.active);
+            let diagnostics = diagnostic_groups(&record.summary, interrupted);
             let live_elapsed_ns = state.store.live_elapsed_ns(&id);
             let timeline_end_at_ns = timeline_end_at_ns(&record, live_elapsed_ns);
             let response_headers_at = record
@@ -329,6 +412,8 @@ pub(super) async fn record_detail(
                     response,
                     result: record.result,
                     summary: record.summary,
+                    assessment,
+                    diagnostics,
                     state: state_name.to_string(),
                     request_body_bytes: record.request_body_bytes,
                     response_body_bytes: record.response_body_bytes,
@@ -337,7 +422,16 @@ pub(super) async fn record_detail(
                 },
             )
         }
-        Err(error) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Ok(Err(RecordDetailReadError::Lookup(error))) => {
+            json_error(StatusCode::NOT_FOUND, &error.to_string())
+        }
+        Ok(Err(RecordDetailReadError::EventIndex(error))) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
+        }
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("read Traffic Record detail: {error}"),
+        ),
     }
 }
 
@@ -348,15 +442,6 @@ fn elapsed_wall_ms(started: &str, ended: Option<&str>) -> Option<u64> {
         .and_then(|value| time::OffsetDateTime::parse(value, &Rfc3339).ok())
         .unwrap_or_else(time::OffsetDateTime::now_utc);
     u64::try_from((ended - started).whole_milliseconds()).ok()
-}
-
-fn anchored_at(observed_at: &str, offset_ns: &str) -> Option<String> {
-    use time::format_description::well_known::Rfc3339;
-    let observed = time::OffsetDateTime::parse(observed_at, &Rfc3339).ok()?;
-    let offset = offset_ns.parse::<i64>().ok()?;
-    (observed + time::Duration::nanoseconds(offset))
-        .format(&Rfc3339)
-        .ok()
 }
 
 #[derive(Deserialize)]
@@ -401,12 +486,21 @@ async fn body_response(
     response: bool,
     offset: u64,
 ) -> Response<Body> {
-    let (file, length) = match store.open_body(id, response, offset) {
-        Ok(value) => value,
-        Err(error) if error.to_string().contains("exceeds current length") => {
+    let store = store.clone();
+    let id = id.to_string();
+    let opened = tokio::task::spawn_blocking(move || store.open_body(&id, response, offset)).await;
+    let (file, length) = match opened {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) if error.to_string().contains("exceeds current length") => {
             return json_error(StatusCode::RANGE_NOT_SATISFIABLE, &error.to_string());
         }
-        Err(error) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Ok(Err(error)) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("open Traffic body: {error}"),
+            );
+        }
     };
     let remaining = length - offset;
     let file = tokio::fs::File::from_std(file).take(remaining);
@@ -428,9 +522,17 @@ async fn body_response(
 }
 
 async fn decoded_body_response(store: &TrafficStore, id: &str, response: bool) -> Response<Body> {
-    let record = match store.find(id) {
-        Ok(record) => record,
-        Err(error) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+    let lookup_store = store.clone();
+    let lookup_id = id.to_string();
+    let record = match tokio::task::spawn_blocking(move || lookup_store.find(&lookup_id)).await {
+        Ok(Ok(record)) => record,
+        Ok(Err(error)) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("read Traffic Record for body decoding: {error}"),
+            );
+        }
     };
     let completed = if response {
         record
@@ -468,9 +570,19 @@ async fn decoded_body_response(store: &TrafficStore, id: &str, response: bool) -
         Ok(coding) => coding,
         Err(error) => return json_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, &error.to_string()),
     };
-    let (file, length) = match store.open_record_body(&record, response, 0) {
-        Ok(value) => value,
-        Err(error) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+    let body_store = store.clone();
+    let opened =
+        tokio::task::spawn_blocking(move || body_store.open_record_body(&record, response, 0))
+            .await;
+    let (file, length) = match opened {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("open Traffic body for decoding: {error}"),
+            );
+        }
     };
     let (body, length) = match coding {
         BodyContentCoding::Identity => {
@@ -552,8 +664,12 @@ pub(super) async fn response_event_timings(
     Path(id): Path<String>,
     Query(query): Query<EventTimingQuery>,
 ) -> Response<Body> {
-    match state.store.read_event_timings(&id, query.after_sequence) {
-        Ok(timings) => json_response(
+    let store = state.store.clone();
+    let timings =
+        tokio::task::spawn_blocking(move || store.read_event_timings(&id, query.after_sequence))
+            .await;
+    match timings {
+        Ok(Ok(timings)) => json_response(
             StatusCode::OK,
             &EventTimingResponse {
                 state: if !timings.available {
@@ -575,7 +691,11 @@ pub(super) async fn response_event_timings(
                 warning: timings.warning,
             },
         ),
-        Err(error) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Ok(Err(error)) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("read Traffic SSE Event timings: {error}"),
+        ),
     }
 }
 
@@ -588,9 +708,11 @@ pub(super) async fn delete_records(
     State(state): State<AppState>,
     Json(request): Json<DeleteRequest>,
 ) -> Response<Body> {
-    match state.store.delete_ids(&request.ids) {
-        Ok(deleted) => json_response(StatusCode::OK, &json!({"deleted": deleted})),
-        Err(error) => {
+    let store = state.store.clone();
+    let deleted = tokio::task::spawn_blocking(move || store.delete_ids(&request.ids)).await;
+    match deleted {
+        Ok(Ok(deleted)) => json_response(StatusCode::OK, &json!({"deleted": deleted})),
+        Ok(Err(error)) => {
             let status = if error.to_string().contains("active Traffic") {
                 StatusCode::CONFLICT
             } else {
@@ -598,6 +720,10 @@ pub(super) async fn delete_records(
             };
             json_error(status, &error.to_string())
         }
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("delete Traffic Records: {error}"),
+        ),
     }
 }
 
@@ -610,12 +736,20 @@ pub(super) async fn delete_all(
     State(state): State<AppState>,
     Json(request): Json<DeleteAllRequest>,
 ) -> Response<Body> {
-    match state.store.delete_all(request.expected_deletable_count) {
-        Ok(deleted) => json_response(StatusCode::OK, &json!({"deleted": deleted})),
-        Err(error) if error.to_string().contains("count changed") => {
+    let store = state.store.clone();
+    let deleted =
+        tokio::task::spawn_blocking(move || store.delete_all(request.expected_deletable_count))
+            .await;
+    match deleted {
+        Ok(Ok(deleted)) => json_response(StatusCode::OK, &json!({"deleted": deleted})),
+        Ok(Err(error)) if error.to_string().contains("count changed") => {
             json_error(StatusCode::CONFLICT, &error.to_string())
         }
-        Err(error) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+        Ok(Err(error)) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("delete all Traffic Records: {error}"),
+        ),
     }
 }
 
@@ -635,22 +769,11 @@ fn json_error(status: StatusCode, message: &str) -> Response<Body> {
     content(status, "application/json; charset=utf-8", body)
 }
 
-fn encode_cursor(started: &str, id: &str) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(serde_json::to_vec(&(started, id)).expect("cursor strings serialize"))
-}
-
-fn decode_cursor(cursor: &str) -> anyhow::Result<(String, String)> {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(cursor)
-        .map_err(|_| anyhow::anyhow!("invalid Traffic Record cursor"))?;
-    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid Traffic Record cursor"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::Request;
+    use base64::Engine as _;
     use http_body_util::BodyExt as _;
     use std::io::Write as _;
     use uuid::Uuid;
@@ -714,17 +837,6 @@ mod tests {
     async fn response_json(response: Response<Body>) -> serde_json::Value {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
-    }
-
-    #[test]
-    fn cursors_are_opaque_and_round_trip() {
-        let cursor = encode_cursor("2026-08-05T12:00:00Z", "id");
-        assert!(!cursor.contains("2026"));
-        assert_eq!(
-            decode_cursor(&cursor).unwrap(),
-            ("2026-08-05T12:00:00Z".to_string(), "id".to_string())
-        );
-        assert!(decode_cursor("not-a-cursor").is_err());
     }
 
     #[test]
@@ -867,6 +979,27 @@ mod tests {
     }
 
     #[test]
+    fn management_security_accepts_the_omitted_default_http_port_only_for_port_80() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 80).unwrap();
+        let request = management_request(
+            Method::POST,
+            Some("localhost"),
+            Some("http://localhost"),
+            Some("same-origin"),
+            Some(&state.csrf),
+        );
+        validate_management_request(&state, "127.0.0.1:40000".parse().unwrap(), &request).unwrap();
+
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let request = management_request(Method::GET, Some("localhost"), None, None, None);
+        assert!(
+            validate_management_request(&state, "127.0.0.1:40000".parse().unwrap(), &request)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn record_summaries_distinguish_active_interrupted_and_completed_state() {
         let temp = tempfile::tempdir().unwrap();
         let first_process = TrafficStore::open(temp.path()).unwrap();
@@ -897,10 +1030,16 @@ mod tests {
 
         assert_eq!(list.total, 3);
         assert_eq!(list.deletable_count, 2);
-        for (id, state, outcome, has_duration) in [
-            (active.id.as_str(), "active", "active", true),
-            (completed_id.as_str(), "completed", "rejected", true),
-            (interrupted_id.as_str(), "interrupted", "interrupted", false),
+        for (id, state, outcome, has_duration, has_end_time) in [
+            (active.id.as_str(), "active", "active", true, false),
+            (completed_id.as_str(), "completed", "rejected", true, true),
+            (
+                interrupted_id.as_str(),
+                "interrupted",
+                "interrupted",
+                false,
+                false,
+            ),
         ] {
             let record = list.records.iter().find(|record| record.id == id).unwrap();
             assert_eq!(
@@ -908,16 +1047,41 @@ mod tests {
                 (state, outcome)
             );
             assert_eq!(record.total_ms.is_some(), has_duration);
+            assert_eq!(record.ended_at.is_some(), has_end_time);
             assert!(record.http_version.is_none());
             assert!(record.protocol.is_some());
+            let expected_assessment = match state {
+                "active" => "active",
+                "interrupted" => "warning",
+                _ => "error",
+            };
+            assert_eq!(
+                serde_json::to_value(&record.assessment).unwrap()["level"],
+                expected_assessment
+            );
         }
+
+        let completed_summary = list
+            .records
+            .iter()
+            .find(|record| record.id == completed_id)
+            .unwrap();
+        let completed_detail = store.find(&completed_id).unwrap();
+        assert_eq!(
+            completed_summary.ended_at.as_ref(),
+            completed_detail
+                .result
+                .as_ref()
+                .map(|result| &result.ended_at)
+        );
 
         let (responded, _) = store
             .begin("GET", "/responded", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();
         store
             .write_response(
-                &responded.directory,
+                &responded.locator,
+                &responded.summary,
                 &ResponseMetadata {
                     format_version: crate::traffic_store::FORMAT_VERSION,
                     source: ResponseSource::Upstream,
@@ -945,6 +1109,106 @@ mod tests {
             .unwrap();
         assert_eq!(responded_summary.status, Some(204));
         assert_eq!(responded_summary.http_version.as_deref(), Some("HTTP/2"));
+        assert_eq!(responded_summary.assessment.level, AssessmentLevel::Ok);
+    }
+
+    #[tokio::test]
+    async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let mut ids = Vec::new();
+        for (status, provider_error) in [(401, false), (200, true)] {
+            let (record, _) = state
+                .store
+                .begin(
+                    "POST",
+                    "/https://api.example.test/v1/responses",
+                    Some("https://api.example.test/v1/responses"),
+                    "HTTP/1.1",
+                    Vec::new(),
+                    Some("api.example.test"),
+                )
+                .unwrap();
+            state
+                .store
+                .write_response(
+                    &record.locator,
+                    &record.summary,
+                    &ResponseMetadata {
+                        format_version: crate::traffic_store::FORMAT_VERSION,
+                        source: ResponseSource::Upstream,
+                        headers_at: "2026-08-06T04:00:00Z".to_string(),
+                        status,
+                        http_version: "HTTP/2".to_string(),
+                        headers: Vec::new(),
+                    },
+                )
+                .unwrap();
+            if provider_error {
+                state
+                    .store
+                    .update_summary(&record.locator, &record.summary, |summary| {
+                        summary.protocol.as_mut().unwrap().errors.push(
+                            crate::traffic_interpretation::ProtocolDiagnostic {
+                                kind: "service_unavailable_error".to_string(),
+                                message:
+                                    "Our servers are currently overloaded. Please try again later."
+                                        .to_string(),
+                                at_ns: Some("20".to_string()),
+                            },
+                        );
+                        true
+                    })
+                    .unwrap();
+            }
+            state
+                .store
+                .finish(
+                    &record,
+                    std::time::Instant::now(),
+                    &crate::traffic_store::RuntimeMeasurements::default(),
+                    crate::traffic_store::Outcome::Completed,
+                    None,
+                )
+                .unwrap();
+            ids.push((record.id, status, provider_error));
+        }
+
+        let list = list_records_inner(&state.store, None).unwrap();
+        for (id, status, provider_error) in ids {
+            let row = list.records.iter().find(|record| record.id == id).unwrap();
+            assert_eq!(row.status, Some(status));
+            assert_eq!(row.assessment.level, AssessmentLevel::Error);
+            assert_eq!(
+                row.assessment.primary.as_ref().unwrap().source,
+                if provider_error {
+                    AssessmentSource::Provider
+                } else {
+                    AssessmentSource::Http
+                }
+            );
+
+            let response = record_detail(State(state.clone()), Path(id)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let detail = response_json(response).await;
+            assert_eq!(detail["response"]["status"], status);
+            assert_eq!(detail["assessment"]["level"], "error");
+            if provider_error {
+                assert_eq!(
+                    detail["diagnostics"]["provider"].as_array().unwrap().len(),
+                    1
+                );
+                assert!(detail["diagnostics"]["http"].as_array().unwrap().is_empty());
+            } else {
+                assert_eq!(detail["diagnostics"]["http"].as_array().unwrap().len(), 1);
+                assert!(
+                    detail["diagnostics"]["provider"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
     }
 
     #[test]
@@ -967,7 +1231,7 @@ mod tests {
             .write_all(b"not response json")
             .unwrap();
         store
-            .update_summary(&record.directory, &record.summary, |summary| {
+            .update_summary(&record.locator, &record.summary, |summary| {
                 summary.protocol.as_mut().unwrap().model.requested =
                     Some("persisted-list-model".to_string());
                 true
@@ -981,6 +1245,69 @@ mod tests {
             Some("persisted-list-model")
         );
         assert!(protocol.warnings.is_empty());
+    }
+
+    #[test]
+    fn record_list_does_not_parse_the_optional_event_timing_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let mut index = store.create_event_index(&record).unwrap();
+        writeln!(index, "not json").unwrap();
+        index.flush().unwrap();
+
+        let list = list_records_inner(&store, None).unwrap();
+        assert_eq!(list.records.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn record_detail_adds_event_timing_index_diagnostics_on_demand() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (record, _) = state
+            .store
+            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let mut index = state.store.create_event_index(&record).unwrap();
+        writeln!(index, "not json").unwrap();
+        index.flush().unwrap();
+
+        let response = record_detail(State(state), Path(record.id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let warnings = json["summary"]["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["kind"], "event_index_failed");
+        assert!(warnings[0]["message"].as_str().unwrap().contains("line 1"));
+        assert_eq!(json["assessment"]["level"], "active");
+        assert_eq!(json["assessment"]["issue_count"], 1);
+        assert_eq!(json["diagnostics"]["warnings"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn record_detail_ignores_only_an_active_unterminated_event_index_tail() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (record, _) = state
+            .store
+            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let mut index = state.store.create_event_index(&record).unwrap();
+        write!(index, "{{\"schema_version\":").unwrap();
+        index.flush().unwrap();
+
+        let response = record_detail(State(state.clone()), Path(record.id.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert!(json["summary"]["warnings"].as_array().unwrap().is_empty());
+
+        state.store.abandon_active(&record.id);
+        let response = record_detail(State(state), Path(record.id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["summary"]["warnings"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -1021,7 +1348,7 @@ mod tests {
             .unwrap();
         state
             .store
-            .update_summary(&record.directory, &record.summary, |summary| {
+            .update_summary(&record.locator, &record.summary, |summary| {
                 let protocol = summary.protocol.as_mut().unwrap();
                 protocol.model.requested = Some("persisted-model".to_string());
                 protocol.response_terminal = true;
@@ -1044,6 +1371,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert_eq!(json["state"], "completed");
+        assert_eq!(json["request"]["method"], "POST");
+        assert_eq!(
+            json["request"]["incoming_uri"],
+            "/https://example.test/v1/responses"
+        );
+        assert_eq!(json["request"]["http_version"], "HTTP/1.1");
         assert!(json["timeline_end_at_ns"].as_str().is_some());
         assert!(json.get("interpretation").is_none());
         assert_eq!(json["summary"]["protocol"]["family"], "openai_responses");
@@ -1120,7 +1453,8 @@ mod tests {
             .unwrap();
         store
             .write_response(
-                &record.directory,
+                &record.locator,
+                &record.summary,
                 &ResponseMetadata {
                     format_version: crate::traffic_store::FORMAT_VERSION,
                     source: ResponseSource::Upstream,
@@ -1385,7 +1719,7 @@ mod tests {
     }
 
     #[test]
-    fn pagination_is_fixed_at_fifty_and_cursor_is_stable_when_new_records_arrive() {
+    fn pagination_is_fixed_at_fifty_and_recomputes_each_page_from_current_order() {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         for _ in 0..51 {
@@ -1394,15 +1728,66 @@ mod tests {
         let first = list_records_inner(&store, None).unwrap();
         assert_eq!(first.total, 51);
         assert_eq!(first.records.len(), 50);
-        let cursor = first.next_cursor.unwrap();
-        let second = list_records_inner(&store, Some(&cursor)).unwrap();
+        assert!(first.has_next);
+        let second = list_records_inner(&store, Some(2)).unwrap();
         assert_eq!(second.records.len(), 1);
-        assert!(second.next_cursor.is_none());
+        assert!(!second.has_next);
 
         finished_record(&store, "/new", b"", b"");
-        let stable_second = list_records_inner(&store, Some(&cursor)).unwrap();
-        assert_eq!(stable_second.total, 52);
-        assert_eq!(stable_second.records.len(), 1);
-        assert_eq!(stable_second.records[0].id, second.records[0].id);
+        let recomputed_second = list_records_inner(&store, Some(2)).unwrap();
+        assert_eq!(recomputed_second.total, 52);
+        assert_eq!(recomputed_second.records.len(), 2);
+        assert_eq!(recomputed_second.records[1].id, second.records[0].id);
+        assert!(list_records_inner(&store, Some(0)).is_err());
+        assert!(list_records_inner(&store, Some(u64::MAX)).is_err());
+        assert!(
+            list_records_inner(&store, Some(3))
+                .unwrap()
+                .records
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn invalid_page_is_rejected_before_the_store_is_scanned() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        std::fs::remove_dir(store.root()).unwrap();
+        std::fs::write(store.root(), b"not a directory").unwrap();
+
+        let error = list_records_inner(&store, Some(0)).err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Traffic Record page must be a positive integer"
+        );
+    }
+
+    #[test]
+    fn record_list_uses_terminal_end_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (first, _) = store
+            .begin("GET", "/first", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let (second, _) = store
+            .begin("GET", "/second", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+
+        for record in [&second, &first] {
+            store
+                .finish(
+                    record,
+                    std::time::Instant::now(),
+                    &crate::traffic_store::RuntimeMeasurements::default(),
+                    crate::traffic_store::Outcome::Completed,
+                    None,
+                )
+                .unwrap();
+        }
+
+        let records = list_records_inner(&store, None).unwrap().records;
+        assert_eq!(records[0].id, first.id);
+        assert_eq!(records[1].id, second.id);
+        assert!(records.iter().all(|record| record.ended_at.is_some()));
     }
 }

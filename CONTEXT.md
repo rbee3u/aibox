@@ -45,6 +45,18 @@ Summary. It can exist without an upstream response and may be incomplete after
 cancellation, recording failure, or process interruption.
 _Avoid_: Session, Transcript, Run History
 
+**Traffic Record Summary**:
+The checkpointed overview of one Traffic Record's request, response, lifecycle,
+model protocol, and Record Assessment. It is a projection of the raw diagnostic
+evidence rather than a replacement for that evidence.
+_Avoid_: Parsed body, interpretation cache, Traffic Record
+
+**Record Assessment**:
+The current Active, OK, Warning, or Error classification of one Traffic Record,
+derived from its independent lifecycle, HTTP, Provider Error, and diagnostic
+evidence.
+_Avoid_: Traffic Outcome, HTTP status, Provider Error
+
 **SSE Event**:
 A dispatchable event in an event-stream response: a blank-line-terminated
 block containing at least one `data` field. Its bytes remain part of the raw
@@ -67,6 +79,12 @@ The elapsed time from the start of a Traffic Record until its terminal outcome.
 For an active record it is the current elapsed time; an interrupted record has
 no known terminal duration.
 _Avoid_: TTFB, response-header time
+
+**Traffic End Time**:
+The wall-clock time when a Traffic Record reaches its terminal Traffic Outcome.
+Every normal or abnormal terminal outcome has one; an active or interrupted
+Traffic Record has none.
+_Avoid_: Completion Time, response completion time
 
 **First Token**:
 The elapsed time from Traffic Record start until a recognized streaming model

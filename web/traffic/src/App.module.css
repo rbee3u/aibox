@@ -143,6 +143,10 @@
   background: var(--surface);
 }
 
+.listColumn > aside {
+  grid-row: 2;
+}
+
 .splitter {
   position: relative;
   z-index: 4;

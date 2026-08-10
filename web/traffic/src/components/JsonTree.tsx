@@ -261,10 +261,19 @@ function collectVisibleNodes(
 function JsonScalar({ value, truncated }: { value: JsonValue; truncated: boolean }) {
   let rendered = stringifyJson(value);
   if (truncated && typeof value === "string") {
-    rendered = `${JSON.stringify([...value].slice(0, LONG_STRING_CHARACTERS).join(""))}…`;
+    rendered = `${JSON.stringify(stringPrefix(value, LONG_STRING_CHARACTERS))}…`;
   }
   const type = isLosslessNumber(value) ? "number" : value === null ? "null" : typeof value;
   return <span className={styles[`json${capitalize(type)}`]}>{rendered}</span>;
+}
+
+function stringPrefix(value: string, characters: number): string {
+  let offset = 0;
+  for (let count = 0; count < characters && offset < value.length; count += 1) {
+    const codePoint = value.codePointAt(offset);
+    offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+  }
+  return value.slice(0, offset);
 }
 
 function escapePath(value: string): string {

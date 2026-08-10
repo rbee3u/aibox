@@ -14,6 +14,7 @@ import type { RecordSummary } from "../types";
 import { compactDuration, formatTimestamp, recordUrl } from "../utils";
 import styles from "./RecordList.module.css";
 import { RecordStatus } from "./RecordStatus";
+import { assessmentIssueText, assessmentPresentation } from "./statusPresentation";
 
 interface RecordListProps {
   records: RecordSummary[];
@@ -102,10 +103,7 @@ export function RecordList({
             {pageSelected ? "Clear page" : "Select page"}
           </button>
         ) : (
-          <div className={styles.titleGroup}>
-            <h2 className={styles.title}>Traffic records</h2>
-            <span className={styles.totalCount}>{total}</span>
-          </div>
+          <h2 className={styles.title}>Traffic records</h2>
         )}
         <div className={selectionMode ? styles.selectionActions : styles.headerActions}>
           {selectionMode ? (
@@ -191,10 +189,18 @@ export function RecordList({
               resolveRequestedEffective(record.protocol?.reasoning_effort).value ?? "—";
             const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
-            const started = formatTimestamp(record.started_at);
+            const ended = formatTimestamp(record.ended_at ?? "");
+            const issue = assessmentPresentation(record.assessment);
             const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
-            const metadataDescription = `${modelDescription}; ${timingDescription}; Started ${started}`;
+            const metadataDescription = [
+              modelDescription,
+              timingDescription,
+              `Ended ${ended}`,
+              issue ? assessmentIssueText(issue) : null,
+            ]
+              .filter((value): value is string => value !== null)
+              .join("; ");
             const metadataDescriptionId = `record-metadata-${record.id}`;
             return (
               <div
@@ -230,8 +236,8 @@ export function RecordList({
                   <span className={styles.status}>
                     <RecordStatus
                       status={record.status}
-                      outcome={record.outcome}
                       state={record.state}
+                      assessment={record.assessment}
                       compact
                     />
                   </span>
@@ -242,8 +248,8 @@ export function RecordList({
                     <span className={styles.timing} title={timingDescription}>
                       {firstToken} / {totalDuration}
                     </span>
-                    <span className={styles.timestamp} title={`Started ${started}`}>
-                      {started}
+                    <span className={styles.timestamp} title={`Ended ${ended}`}>
+                      {ended}
                     </span>
                     <span id={metadataDescriptionId} className={styles.visuallyHidden}>
                       {metadataDescription}
@@ -297,7 +303,7 @@ export function RecordList({
           <ChevronLeft size={15} aria-hidden="true" /> Previous
         </button>
         <span>
-          Page {page + 1} · {records.length} shown · {total} total
+          Page {page} · {records.length} shown · {total} total
         </span>
         <button type="button" onClick={onNext} disabled={!hasNext || loading}>
           Next <ChevronRight size={15} aria-hidden="true" />

@@ -181,7 +181,9 @@ Outcome even when the client closes immediately after consuming that event.
 Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 
 ```text
-<UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
+active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
+  # renamed after terminal Summary commit to:
+<end-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
   request.json
   request.body
   response.json          # present only after upstream response headers arrive
@@ -190,14 +192,26 @@ Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
   summary.json
 ```
 
+The UUID is the Record identity. The directory name is a materialized ordering
+hint: `active-` means only that a terminal name has not been successfully
+materialized, not that the Record is necessarily active. `summary.json` is the
+lifecycle authority. A process interruption can leave a non-terminal Summary,
+and a rename or directory-sync failure can leave a terminal Summary under an
+`active-` name; the latter is warned without changing its Outcome or End Time.
+Safe older unprefixed names remain readable without migration. New names use
+UTC-basic millisecond timestamps derived from the Summary's canonical start or
+end time.
+
 The collection and Record directories are mode `0700`; files are `0600`.
 Metadata stores the upstream URL, base64 lossless header values, upstream
 status and HTTP version, nanosecond timing checkpoints, outcome, and
-diagnostics. `summary.json` also contains the optional top-level Coding Agent
-Session ID reported by a recognized model request and the optional Model
-Protocol Summary: protocol family, response terminality, requested/effective
-model and reasoning effort, requested/observed response mode, First Token,
-final Token Usage, and provider diagnostics. Body files contain the exact
+diagnostics. Traffic Record format v2 makes `summary.json` the complete Traffic
+Record Summary used by list reads: request and response list fields, lifecycle,
+Record Assessment, the optional Coding Agent Session ID reported by a
+recognized model request, and the optional Model Protocol Summary. The latter
+contains protocol family, response terminality, requested/effective model and
+reasoning effort, requested/observed response mode, First Token, final Token
+Usage, and provider diagnostics. Body files contain the exact
 application-visible bytes;
 their current lengths are derived rather than persisted. `summary.json` exists
 from Record creation and remains non-terminal if the process is interrupted. A
@@ -206,6 +220,22 @@ ranges point back into `response.body`; indexing never changes forwarding or
 the Traffic Outcome. Unknown, incompatible, or structurally incomplete
 collection entries are ignored with warnings; selected reads and deletion
 revalidate real paths and reject symlinks or unexpected types.
+
+List scanning opens only each real `summary.json`; it does not inspect raw
+request/response metadata, Bodies, or the SSE index. A valid Summary therefore
+keeps its list row visible when separate raw evidence is malformed or unsafe.
+Detail reads remain strict over that evidence and fail rather than following or
+repairing it. Version-1 Traffic Records are unsupported; there is no migration,
+backfill, or read-time reconstruction of a v2 Summary.
+
+Every terminal Traffic Outcome, including rejection, upstream failure, client
+disconnect, recording failure, and server shutdown, has a Traffic End Time
+derived from the Summary start anchor and terminal monotonic offset. Active and
+interrupted Records do not. The viewer orders canonical directory basenames by
+descending ASCII order: active and interrupted Records first by start time,
+then terminal Records by End Time, with host and UUID breaking millisecond
+ties. A terminal Summary stranded under an `active-` name is ordered by the
+terminal name it should have received.
 
 The Traffic Proxy best-effort materializes the protocol overview for OpenAI
 Responses and Claude Messages as stable facts become available. Partial Token
@@ -221,10 +251,24 @@ the final body arrival time. First Token is never inferred from response
 headers or the first response body byte, and remains absent for unknown
 protocols and non-streaming responses.
 
-The raw request, response, and SSE index remain the diagnostic evidence. List
-and detail APIs read the persisted protocol overview without opening model
-bodies. Unknown HTTP remains readable, and older version-1 Records without the
-optional protocol object are not reparsed, backfilled, or rewritten.
+Record Assessment classifies active Records as Active and clean terminal
+Records as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,
+`response.failed`, and `response.incomplete` evidence is Error. Client
+disconnect or request upload abort, process interruption, a missing recognized
+model terminal event, diagnostic degradation, and an unaccompanied
+`response.cancelled` are Warning. Traffic Outcome, HTTP status, and Provider
+Error remain separately recorded; for example HTTP 200 can have a Provider
+Error or an upstream stream failure, while HTTP 401 can coexist with structured
+Provider Error details.
+
+Content-encoded SSE remains raw and unindexed. A supported zstd stream is
+semantically interpreted only after complete EOF, without synthesizing First
+Token or Event timings from decoded offsets.
+
+The raw request, response, and SSE index remain the diagnostic evidence. The
+list API reads the persisted Summary only; the detail API opens raw metadata
+and Body entries strictly. Unknown HTTP remains readable without being treated
+as a model API response.
 
 Traffic records HTTP semantics rather than transport frames. Downstream and
 upstream protocol negotiation are independent. Header values and repeated

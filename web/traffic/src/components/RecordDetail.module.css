@@ -556,10 +556,13 @@
   border-left: 3px solid var(--line);
   background: var(--surface-inset);
 }
-.diagnosticGroup:first-child .diagnosticItem,
-.diagnosticGroup:nth-child(2) .diagnosticItem {
+.errorDiagnostics .diagnosticItem {
   border-left-color: var(--danger);
   background: var(--danger-soft);
+}
+.warningDiagnostics .diagnosticItem {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
 }
 .diagnosticMeta {
   display: flex;

@@ -1,10 +1,12 @@
 use crate::traffic::AppState;
 use crate::traffic_interpretation::{
-    ProtocolFamily, ProtocolObserver, ProtocolSummary, ResponseModeValue,
+    BodyContentCoding, ProtocolFamily, ProtocolObserver, ProtocolSummary, ResponseModeValue,
+    body_content_coding,
 };
 use crate::traffic_store::{
-    ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRecord, Outcome, RecordedHeader, ResponseMetadata,
-    ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore, offset_ns, utc_now,
+    ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRecord, Outcome, RecordLocator, RecordedHeader,
+    ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore, offset_ns,
+    utc_now,
 };
 use anyhow::Context as _;
 use axum::body::Body;
@@ -13,7 +15,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
 use serde::Serialize;
 use std::collections::HashSet;
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -153,7 +155,7 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             return recording_failure(&mut guard, format!("clone request body file: {error}"));
         }
     };
-    let request_error = Arc::new(Mutex::new(None::<String>));
+    let request_error = Arc::new(Mutex::new(None::<RequestStreamFailure>));
     let request_stream = recorded_request_stream_with_summary(
         body,
         request_file,
@@ -164,7 +166,8 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             protocol,
             request_headers: request_metadata.headers,
             store: Some(guard.store.clone()),
-            directory: guard.record.directory.clone(),
+            locator: Some(guard.record.locator.clone()),
+            directory: std::path::PathBuf::new(),
             origin: guard.record.origin,
             shutdown: state.shutdown.clone(),
         },
@@ -199,13 +202,22 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            if let Some(message) = recording {
+            if let Some(failure) = recording {
+                let (status, outcome) = match failure.kind {
+                    ErrorKind::ClientDisconnected | ErrorKind::RequestBodyFailed => {
+                        (StatusCode::BAD_REQUEST, Outcome::ClientDisconnected)
+                    }
+                    ErrorKind::ServerShutdown => {
+                        (StatusCode::SERVICE_UNAVAILABLE, Outcome::ServerShutdown)
+                    }
+                    _ => (StatusCode::INSUFFICIENT_STORAGE, Outcome::RecordingFailed),
+                };
                 return finish_proxy_response(
                     &mut guard,
-                    StatusCode::INSUFFICIENT_STORAGE,
-                    &message,
-                    Outcome::RecordingFailed,
-                    ErrorKind::RequestRecordingFailed,
+                    status,
+                    &failure.message,
+                    outcome,
+                    failure.kind,
                 );
             }
             let status = if error.is_timeout() {
@@ -250,9 +262,10 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             format!("checkpoint response metadata: {error:#}"),
         );
     }
-    if let Err(error) = state
-        .store
-        .write_response(&guard.record.directory, &metadata)
+    if let Err(error) =
+        state
+            .store
+            .write_response(&guard.record.locator, &guard.record.summary, &metadata)
     {
         return recording_failure(&mut guard, format!("record response metadata: {error:#}"));
     }
@@ -274,6 +287,7 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
             ResponseStreamConfig {
                 mode: response_stream_mode,
                 status: status.as_u16(),
+                headers: metadata.headers.clone(),
             },
             &mut guard,
         )
@@ -293,6 +307,7 @@ struct RecordGuard {
     record: NewRecord,
     measurements: Arc<Mutex<RuntimeMeasurements>>,
     protocol: Arc<Mutex<ProtocolObserver>>,
+    pending_terminal: Option<(Outcome, Option<ErrorMetadata>)>,
     finished: bool,
 }
 
@@ -309,6 +324,7 @@ impl RecordGuard {
             record,
             measurements,
             protocol,
+            pending_terminal: None,
             finished: false,
         }
     }
@@ -318,7 +334,7 @@ impl RecordGuard {
         update: impl FnOnce(&mut crate::traffic_store::TimingMetadata),
     ) -> anyhow::Result<()> {
         self.store
-            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+            .update_summary(&self.record.locator, &self.record.summary, |summary| {
                 update(&mut summary.timing);
                 true
             })?;
@@ -338,7 +354,7 @@ impl RecordGuard {
         observer.observe_response_headers(headers, event_stream, at_ns.clone());
         let protocol = observer.snapshot();
         self.store
-            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+            .update_summary(&self.record.locator, &self.record.summary, |summary| {
                 summary.timing.upstream_response_headers_at_ns = Some(at_ns);
                 summary.protocol = Some(protocol);
                 true
@@ -364,7 +380,7 @@ impl RecordGuard {
             .snapshot()
     }
 
-    fn observe_sse_events(&self, events: &[(Vec<u8>, String)]) -> anyhow::Result<()> {
+    fn observe_sse_events(&self, events: &[ObservedSseEvent]) -> anyhow::Result<()> {
         if events.is_empty() {
             return Ok(());
         }
@@ -372,9 +388,11 @@ impl RecordGuard {
             .protocol
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = events.iter().fold(false, |changed, (data, at_ns)| {
-            observer.observe_sse_data(data, at_ns.clone()) | changed
-        });
+        let changed = events
+            .iter()
+            .fold(false, |changed, (event_name, data, at_ns)| {
+                observer.observe_sse_event(event_name.as_deref(), data, at_ns.clone()) | changed
+            });
         if changed {
             self.publish_protocol(observer.snapshot())?;
         }
@@ -392,30 +410,61 @@ impl RecordGuard {
         Ok(())
     }
 
-    fn observe_json_response(&self, status: u16) -> anyhow::Result<()> {
+    fn observe_json_response(&self, status: u16, headers: &[RecordedHeader]) -> anyhow::Result<()> {
         let at_ns = offset_ns(self.record.origin);
         let mut observer = self
             .protocol
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        observer.observe_json_response(&self.record.directory.join("response.body"), status, at_ns);
+        self.store
+            .with_record_path(&self.record.locator, |directory| {
+                observer.observe_json_response(
+                    &directory.join("response.body"),
+                    status,
+                    headers,
+                    at_ns,
+                )
+            })?;
         self.publish_protocol(observer.snapshot())
     }
 
-    fn observe_http_status(&self, status: u16) -> anyhow::Result<()> {
-        let mut observer = self
-            .protocol
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if observer.observe_http_status(status, offset_ns(self.record.origin)) {
-            self.publish_protocol(observer.snapshot())?;
+    fn observe_encoded_sse_response(&self) -> anyhow::Result<()> {
+        let at_ns = offset_ns(self.record.origin);
+        let decoded = self
+            .store
+            .with_record_path(&self.record.locator, |directory| {
+                let file = crate::tenant::open_real_file(
+                    &directory.join("response.body"),
+                    "Traffic response body",
+                )?;
+                let mut decoder = zstd::stream::read::Decoder::new(file)
+                    .context("create zstd response decoder")?;
+                let mut bytes = Vec::new();
+                decoder
+                    .read_to_end(&mut bytes)
+                    .context("decode zstd response body")?;
+                Ok::<_, anyhow::Error>(bytes)
+            })?;
+        let decoded = match decoded {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.add_warning("response_interpretation_failed", error.to_string());
+                return Ok(());
+            }
+        };
+        let mut indexer = SseIndexer::new(None, self.record.id.clone());
+        if let Err(error) = indexer.feed(&decoded, 0, at_ns.clone()) {
+            self.add_warning("response_interpretation_failed", error.to_string());
         }
-        Ok(())
+        if let Err(error) = indexer.finish() {
+            self.add_warning("response_interpretation_failed", error.to_string());
+        }
+        self.observe_sse_events(&indexer.take_protocol_events())
     }
 
     fn publish_protocol(&self, protocol: ProtocolSummary) -> anyhow::Result<()> {
         self.store
-            .update_summary(&self.record.directory, &self.record.summary, |summary| {
+            .update_summary(&self.record.locator, &self.record.summary, |summary| {
                 if summary.protocol.as_ref() == Some(&protocol) {
                     return false;
                 }
@@ -428,7 +477,7 @@ impl RecordGuard {
     fn add_warning(&self, kind: &str, message: String) {
         let result =
             self.store
-                .update_summary(&self.record.directory, &self.record.summary, |summary| {
+                .update_summary(&self.record.locator, &self.record.summary, |summary| {
                     summary
                         .warnings
                         .push(crate::traffic_store::DiagnosticMetadata {
@@ -445,6 +494,7 @@ impl RecordGuard {
     }
 
     fn finish(&mut self, outcome: Outcome, error: Option<ErrorMetadata>) -> anyhow::Result<()> {
+        self.pending_terminal = Some((outcome, error.clone()));
         let values = self
             .measurements
             .lock()
@@ -457,6 +507,7 @@ impl RecordGuard {
             .finish(&self.record, self.record.origin, &values, outcome, error);
         if result.is_ok() {
             self.finished = true;
+            self.pending_terminal = None;
         }
         result.map(|_| ())
     }
@@ -467,27 +518,50 @@ impl Drop for RecordGuard {
         if self.finished {
             return;
         }
-        let _ = self.finish(
-            Outcome::ClientDisconnected,
-            Some(ErrorMetadata {
-                kind: ErrorKind::ClientDisconnected,
-                message: "client disconnected before the proxy attempt completed".to_string(),
-            }),
-        );
+        let (outcome, error) = self.pending_terminal.clone().unwrap_or_else(|| {
+            (
+                Outcome::ClientDisconnected,
+                Some(ErrorMetadata {
+                    kind: ErrorKind::ClientDisconnected,
+                    message: "client disconnected before the proxy attempt completed".to_string(),
+                }),
+            )
+        });
+        let _ = self.finish(outcome, error);
         self.store.abandon_active(&self.record.id);
     }
 }
 
 struct RequestStreamContext {
     measurements: Arc<Mutex<RuntimeMeasurements>>,
-    error_slot: Arc<Mutex<Option<String>>>,
+    error_slot: Arc<Mutex<Option<RequestStreamFailure>>>,
     summary: SummaryHandle,
     protocol: Arc<Mutex<ProtocolObserver>>,
     request_headers: Vec<RecordedHeader>,
     store: Option<TrafficStore>,
+    locator: Option<RecordLocator>,
     directory: std::path::PathBuf,
     origin: Instant,
     shutdown: tokio_util::sync::CancellationToken,
+}
+
+#[derive(Clone, Debug)]
+struct RequestStreamFailure {
+    kind: ErrorKind,
+    message: String,
+}
+
+fn request_failure(
+    slot: &Mutex<Option<RequestStreamFailure>>,
+    kind: ErrorKind,
+    error: impl ToString,
+) {
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(RequestStreamFailure {
+        kind,
+        message: error.to_string(),
+    });
 }
 
 fn recorded_request_stream_with_summary(
@@ -502,6 +576,7 @@ fn recorded_request_stream_with_summary(
         protocol,
         request_headers,
         store,
+        locator,
         directory,
         origin,
         shutdown,
@@ -513,7 +588,7 @@ fn recorded_request_stream_with_summary(
             let next = tokio::select! {
                 _ = shutdown.cancelled() => {
                     let error = io::Error::new(io::ErrorKind::Interrupted, "Traffic Proxy is shutting down");
-                    *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                    request_failure(&error_slot, ErrorKind::ServerShutdown, &error);
                     yield Err(error);
                     break;
                 }
@@ -527,18 +602,18 @@ fn recorded_request_stream_with_summary(
                 Ok(chunk) => chunk,
                 Err(error) => {
                     let error = io::Error::new(io::ErrorKind::UnexpectedEof, error.to_string());
-                    *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                    request_failure(&error_slot, ErrorKind::RequestBodyFailed, &error);
                     yield Err(error);
                     break;
                 }
             };
             if let Err(error) = file.write_all(&chunk).await {
-                *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(error);
                 break;
             }
             if let Err(error) = file.flush().await {
-                *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(error);
                 break;
             }
@@ -549,7 +624,7 @@ fn recorded_request_stream_with_summary(
             let at_ns = offset_ns(origin);
             let first_request_byte = checkpoint_summary_update(
                 store.as_ref(),
-                &directory,
+                locator.as_ref(),
                 &summary,
                 |value| {
                     if value.timing.upstream_request_body_first_byte_at_ns.is_some() {
@@ -560,7 +635,7 @@ fn recorded_request_stream_with_summary(
                 },
             );
             if let Err(error) = first_request_byte {
-                *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(io::Error::other(error.to_string()));
                 break;
             }
@@ -572,6 +647,7 @@ fn recorded_request_stream_with_summary(
                 let at_ns = offset_ns(origin);
                 let checkpoint = checkpoint_request_complete(
                     store.as_ref(),
+                    locator.as_ref(),
                     &directory,
                     &summary,
                     &protocol,
@@ -579,13 +655,13 @@ fn recorded_request_stream_with_summary(
                     at_ns,
                 );
                 if let Err(error) = checkpoint {
-                    *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                    request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
                     yield Err(io::Error::other(error.to_string()));
                 }
             }
             Ok(()) => {}
             Err(error) => {
-                *error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
                 if body_complete {
                     yield Err(error);
                 }
@@ -596,22 +672,35 @@ fn recorded_request_stream_with_summary(
 
 fn checkpoint_request_complete(
     store: Option<&TrafficStore>,
+    locator: Option<&RecordLocator>,
     directory: &std::path::Path,
     summary: &SummaryHandle,
     protocol: &Mutex<ProtocolObserver>,
     request_headers: &[RecordedHeader],
     at_ns: String,
 ) -> anyhow::Result<bool> {
+    if summary.read(|summary| summary.terminal) {
+        return Ok(false);
+    }
     let mut observer = protocol
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    observer.observe_request(
-        &directory.join("request.body"),
-        request_headers,
-        at_ns.clone(),
-    );
+    let _ = match (store, locator) {
+        (Some(store), Some(locator)) => store.with_record_path(locator, |directory| {
+            observer.observe_request(
+                &directory.join("request.body"),
+                request_headers,
+                at_ns.clone(),
+            )
+        })?,
+        _ => observer.observe_request(
+            &directory.join("request.body"),
+            request_headers,
+            at_ns.clone(),
+        ),
+    };
     let protocol_snapshot = observer.snapshot();
-    checkpoint_summary_update(store, directory, summary, |value| {
+    checkpoint_summary_update(store, locator, summary, |value| {
         value.timing.upstream_request_body_completed_at_ns = Some(at_ns);
         value.protocol = Some(protocol_snapshot);
         true
@@ -625,23 +714,14 @@ fn recorded_request_stream(
     body: Body,
     file: tokio::fs::File,
     measurements: Arc<Mutex<RuntimeMeasurements>>,
-    error_slot: Arc<Mutex<Option<String>>>,
+    error_slot: Arc<Mutex<Option<RequestStreamFailure>>>,
     started: Instant,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
-    let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata {
-        schema_version: FORMAT_VERSION,
-        record_id: String::new(),
-        kind: "summary".to_string(),
-        observed_at: utc_now(),
-        terminal: false,
-        timing: crate::traffic_store::TimingMetadata::default(),
-        coding_agent_session_id: None,
-        protocol: Some(ProtocolSummary::default()),
-        outcome: None,
-        errors: Vec::new(),
-        warnings: Vec::new(),
-    });
+    let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata::test(
+        String::new(),
+        Some(ProtocolSummary::default()),
+    ));
     recorded_request_stream_with_summary(
         body,
         file,
@@ -652,6 +732,7 @@ fn recorded_request_stream(
             protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
             request_headers: Vec::new(),
             store: None,
+            locator: None,
             directory: std::path::PathBuf::new(),
             origin: started,
             shutdown,
@@ -661,12 +742,16 @@ fn recorded_request_stream(
 
 fn checkpoint_summary_update(
     store: Option<&TrafficStore>,
-    directory: &std::path::Path,
+    locator: Option<&RecordLocator>,
     summary: &SummaryHandle,
     update: impl FnOnce(&mut crate::traffic_store::SummaryMetadata) -> bool,
 ) -> anyhow::Result<bool> {
     match store {
-        Some(store) => store.update_summary(directory, summary, update),
+        Some(store) => store.update_summary(
+            locator.context("Traffic Record locator is unavailable")?,
+            summary,
+            update,
+        ),
         None => Ok(summary.update(update)),
     }
 }
@@ -687,6 +772,7 @@ fn record_response_stream(
         ResponseStreamConfig {
             mode: ResponseStreamMode::Normal,
             status: 200,
+            headers: Vec::new(),
         },
         guard,
     )
@@ -696,6 +782,7 @@ fn record_response_stream(
 enum ResponseStreamMode {
     Normal,
     EventStream,
+    OpaqueEventStream,
     Detect,
 }
 
@@ -703,7 +790,7 @@ impl ResponseStreamMode {
     fn observed_event_stream(self) -> Option<bool> {
         match self {
             Self::Normal => Some(false),
-            Self::EventStream => Some(true),
+            Self::EventStream | Self::OpaqueEventStream => Some(true),
             Self::Detect => None,
         }
     }
@@ -712,10 +799,12 @@ impl ResponseStreamMode {
 struct ResponseStreamConfig {
     mode: ResponseStreamMode,
     status: u16,
+    headers: Vec<RecordedHeader>,
 }
 
 enum ResponseBodyTracker {
     Normal,
+    OpaqueEventStream,
     EventStream(SseIndexer),
     Detect {
         sniffer: SsePrefixSniffer,
@@ -728,6 +817,7 @@ impl ResponseBodyTracker {
         match mode {
             ResponseStreamMode::Normal => Self::Normal,
             ResponseStreamMode::EventStream => Self::EventStream(new_sse_indexer(guard)),
+            ResponseStreamMode::OpaqueEventStream => Self::OpaqueEventStream,
             ResponseStreamMode::Detect => Self::Detect {
                 sniffer: SsePrefixSniffer::default(),
                 pending: Vec::new(),
@@ -743,6 +833,7 @@ impl ResponseBodyTracker {
     ) -> anyhow::Result<()> {
         match self {
             Self::Normal => Ok(()),
+            Self::OpaqueEventStream => Ok(()),
             Self::EventStream(indexer) => feed_sse_chunk(indexer, chunk, at_ns, guard),
             Self::Detect { sniffer, pending } => {
                 pending.push((chunk.clone(), at_ns));
@@ -771,6 +862,7 @@ impl ResponseBodyTracker {
     fn finish(&mut self, guard: &RecordGuard) -> anyhow::Result<()> {
         match self {
             Self::Normal => Ok(()),
+            Self::OpaqueEventStream => guard.observe_encoded_sse_response(),
             Self::Detect { .. } => {
                 guard.observe_response_mode(false)?;
                 *self = Self::Normal;
@@ -795,7 +887,7 @@ impl ResponseBodyTracker {
     }
 
     fn is_event_stream(&self) -> bool {
-        matches!(self, Self::EventStream(_))
+        matches!(self, Self::EventStream(_) | Self::OpaqueEventStream)
     }
 
     fn terminal_seen(&self) -> bool {
@@ -842,6 +934,7 @@ async fn record_response_stream_with_index(
     let ResponseStreamConfig {
         mode,
         status: response_status,
+        headers: response_headers,
     } = config;
     let mut stream = Box::pin(stream);
     let mut tracker = ResponseBodyTracker::new(mode, guard);
@@ -980,9 +1073,9 @@ async fn record_response_stream_with_index(
         }
     } else {
         let semantic_result = if response_completed && !tracker.is_event_stream() {
-            guard.observe_json_response(response_status)
+            guard.observe_json_response(response_status, &response_headers)
         } else {
-            guard.observe_http_status(response_status)
+            Ok(())
         };
         if let Err(error) = semantic_result {
             terminal = (
@@ -1157,7 +1250,15 @@ fn response_stream_mode(
     protocol: &ProtocolSummary,
 ) -> ResponseStreamMode {
     if is_event_stream(headers) {
-        return ResponseStreamMode::EventStream;
+        let recorded = RecordedHeader::from_headers(headers);
+        return if matches!(
+            body_content_coding(&recorded),
+            Ok(BodyContentCoding::Identity)
+        ) {
+            ResponseStreamMode::EventStream
+        } else {
+            ResponseStreamMode::OpaqueEventStream
+        };
     }
     if !headers.contains_key(header::CONTENT_TYPE)
         && status.is_success()
@@ -1223,6 +1324,8 @@ struct SseEventIndexEntry {
     completed_at_ns: String,
 }
 
+type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
+
 struct SseIndexer {
     file: Option<std::fs::File>,
     record_id: String,
@@ -1234,7 +1337,7 @@ struct SseIndexer {
     data_seen: bool,
     event_name: Option<Vec<u8>>,
     data: Vec<u8>,
-    protocol_events: Vec<(Vec<u8>, String)>,
+    protocol_events: Vec<ObservedSseEvent>,
     first_token_seen: bool,
     first_token_at_ns: Option<String>,
     terminal_seen: bool,
@@ -1274,7 +1377,7 @@ impl SseIndexer {
         self.terminal_seen
     }
 
-    fn take_protocol_events(&mut self) -> Vec<(Vec<u8>, String)> {
+    fn take_protocol_events(&mut self) -> Vec<ObservedSseEvent> {
         std::mem::take(&mut self.protocol_events)
     }
 
@@ -1329,8 +1432,11 @@ impl SseIndexer {
                     self.terminal_seen = true;
                 }
                 if self.data_seen {
-                    self.protocol_events
-                        .push((self.data.clone(), at_ns.clone()));
+                    self.protocol_events.push((
+                        self.event_name.clone(),
+                        self.data.clone(),
+                        at_ns.clone(),
+                    ));
                 }
                 if self.data_seen
                     && !self.indexing_disabled
@@ -1668,6 +1774,7 @@ fn version_name(version: Version) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use std::convert::Infallible;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_util::sync::CancellationToken;
@@ -1707,6 +1814,50 @@ mod tests {
             b"request\0\xffbody"
         );
         assert_eq!(record.result.unwrap().outcome, Outcome::Rejected);
+    }
+
+    #[test]
+    fn terminal_retry_preserves_the_original_outcome() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin("GET", "/failed", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let id = record.id.clone();
+        let summary_path = record.directory.join("summary.json");
+        let saved_summary_path = record.directory.join("summary.saved");
+        let mut guard = RecordGuard::new(
+            store.clone(),
+            record,
+            Arc::new(Mutex::new(RuntimeMeasurements::default())),
+            Arc::new(Mutex::new(ProtocolObserver::new(None))),
+            Instant::now(),
+        );
+
+        std::fs::rename(&summary_path, &saved_summary_path).unwrap();
+        std::fs::create_dir(&summary_path).unwrap();
+        assert!(
+            guard
+                .finish(
+                    Outcome::RecordingFailed,
+                    Some(ErrorMetadata {
+                        kind: ErrorKind::ResponseRecordingFailed,
+                        message: "response recording failed".to_string(),
+                    }),
+                )
+                .is_err()
+        );
+        std::fs::remove_dir(&summary_path).unwrap();
+        std::fs::rename(&saved_summary_path, &summary_path).unwrap();
+
+        drop(guard);
+
+        let result = store.find(&id).unwrap().result.unwrap();
+        assert_eq!(result.outcome, Outcome::RecordingFailed);
+        assert!(matches!(
+            result.error.unwrap().kind,
+            ErrorKind::ResponseRecordingFailed
+        ));
     }
 
     #[tokio::test]
@@ -1777,21 +1928,12 @@ mod tests {
                 "client body failed",
             )),
         ]));
-        let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata {
-            schema_version: FORMAT_VERSION,
-            record_id: String::new(),
-            kind: "summary".to_string(),
-            observed_at: utc_now(),
-            terminal: false,
-            timing: crate::traffic_store::TimingMetadata::default(),
-            coding_agent_session_id: None,
-            protocol: Some(ProtocolSummary::for_url(Some(
+        let summary = SummaryHandle::new(crate::traffic_store::SummaryMetadata::test(
+            String::new(),
+            Some(ProtocolSummary::for_url(Some(
                 "https://example.test/v1/responses",
             ))),
-            outcome: None,
-            errors: Vec::new(),
-            warnings: Vec::new(),
-        });
+        ));
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let error = Arc::new(Mutex::new(None));
         let stream = recorded_request_stream_with_summary(
@@ -1806,6 +1948,7 @@ mod tests {
                 )))),
                 request_headers: Vec::new(),
                 store: None,
+                locator: None,
                 directory: temp.path().to_path_buf(),
                 origin: Instant::now(),
                 shutdown: CancellationToken::new(),
@@ -1828,13 +1971,13 @@ mod tests {
                 .request_body_duration
                 .is_none()
         );
-        assert_eq!(
-            error
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_deref(),
-            Some("client body failed")
-        );
+        let failure = error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap();
+        assert_eq!(failure.kind, ErrorKind::RequestBodyFailed);
+        assert_eq!(failure.message, "client body failed");
     }
 
     #[tokio::test]
@@ -1895,7 +2038,7 @@ mod tests {
 
         let record = store.find(&id).unwrap();
         assert_eq!(
-            std::fs::read(&response_path).unwrap(),
+            std::fs::read(record.directory.join("response.body")).unwrap(),
             b"data: first\n\ndata: second\n\n"
         );
         let result = record.result.unwrap();
@@ -1941,7 +2084,11 @@ mod tests {
                 ReceiverStream::new(upstream_receiver),
                 response_file,
                 client_sender,
-                ResponseStreamConfig { mode, status: 200 },
+                ResponseStreamConfig {
+                    mode,
+                    status: 200,
+                    headers: Vec::new(),
+                },
                 &mut guard,
             )
             .await;
@@ -2038,6 +2185,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zstd_sse_is_interpreted_only_after_eof_without_event_timing() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let upstream_url = "https://example.com/v1/responses";
+        let (record, _) = store
+            .begin(
+                "POST",
+                upstream_url,
+                Some(upstream_url),
+                "HTTP/1.1",
+                Vec::new(),
+                Some("example.com"),
+            )
+            .unwrap();
+        let id = record.id.clone();
+        let headers = vec![
+            RecordedHeader {
+                name: "content-type".to_string(),
+                value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
+            },
+            RecordedHeader {
+                name: "content-encoding".to_string(),
+                value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
+            },
+        ];
+        let guard = RecordGuard::new(
+            store.clone(),
+            record,
+            Arc::new(Mutex::new(RuntimeMeasurements::default())),
+            Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
+            Instant::now(),
+        );
+        guard
+            .observe_response_headers(&headers, Some(true))
+            .unwrap();
+        let body = zstd::stream::encode_all(
+            br#"event: response.failed
+data: {"type":"error","error":{"type":"service_unavailable_error","message":"overloaded"}}
+
+"#
+            .as_slice(),
+            0,
+        )
+        .unwrap();
+        let response_file =
+            tokio::fs::File::from_std(guard.record.response_body.try_clone().unwrap());
+        let (sender, mut receiver) = mpsc::channel(2);
+        let task = tokio::spawn(async move {
+            let mut guard = guard;
+            record_response_stream_with_index(
+                CancellationToken::new(),
+                futures_util::stream::iter([Ok(Bytes::from(body))]),
+                response_file,
+                sender,
+                ResponseStreamConfig {
+                    mode: ResponseStreamMode::OpaqueEventStream,
+                    status: 200,
+                    headers,
+                },
+                &mut guard,
+            )
+            .await;
+        });
+        while receiver.recv().await.is_some() {}
+        task.await.unwrap();
+
+        let record = store.find(&id).unwrap();
+        let protocol = record.summary.protocol.unwrap();
+        assert!(protocol.response_terminal);
+        assert_eq!(protocol.errors[0].kind, "service_unavailable_error");
+        assert!(protocol.first_token_at_ns.is_none());
+        assert!(!record.directory.join("response.events.jsonl").exists());
+    }
+
+    #[tokio::test]
     async fn client_close_before_sse_terminal_event_is_disconnected() {
         let (outcome, protocol) = run_client_close_after_response(
             "https://example.com/v1/messages",
@@ -2112,6 +2334,7 @@ mod tests {
                 ResponseStreamConfig {
                     mode: ResponseStreamMode::Detect,
                     status: 200,
+                    headers: Vec::new(),
                 },
                 &mut guard,
             )
@@ -2178,6 +2401,11 @@ mod tests {
         assert_eq!(
             response_stream_mode(&headers, StatusCode::OK, &protocol),
             ResponseStreamMode::EventStream
+        );
+        headers.insert(header::CONTENT_ENCODING, "zstd".parse().unwrap());
+        assert_eq!(
+            response_stream_mode(&headers, StatusCode::OK, &protocol),
+            ResponseStreamMode::OpaqueEventStream
         );
     }
 

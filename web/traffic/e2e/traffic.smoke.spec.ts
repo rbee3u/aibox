@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 const id = "019fe51f-82b7-7701-bfb0-231441977e27";
+const okAssessment = { level: "ok", primary: null, issue_count: 0 };
 const record = {
   id,
   started_at: "2026-08-09T06:04:45Z",
+  ended_at: "2026-08-09T06:04:45.420Z",
   method: "GET",
   incoming_uri: "/https://example.test/api/hello",
   upstream_url: "https://example.test/api/hello",
@@ -13,6 +15,7 @@ const record = {
   state: "completed",
   total_ms: 420,
   protocol: null,
+  assessment: okAssessment,
 };
 const detail = {
   request: {
@@ -33,7 +36,7 @@ const detail = {
     headers: [],
   },
   result: {
-    ended_at: "2026-08-09T06:04:45.420Z",
+    ended_at: record.ended_at,
     outcome: "completed",
     total_ms: 420,
     error: null,
@@ -43,6 +46,13 @@ const detail = {
     record_id: id,
     kind: "summary",
     observed_at: record.started_at,
+    request: {
+      method: record.method,
+      incoming_uri: record.incoming_uri,
+      upstream_url: record.upstream_url,
+      http_version: "HTTP/2.0",
+    },
+    response: { status: 200, http_version: "HTTP/2" },
     terminal: true,
     timing: {
       upstream_request_started_at_ns: "20000000",
@@ -58,7 +68,10 @@ const detail = {
     outcome: "completed",
     errors: [],
     warnings: [],
+    assessment: okAssessment,
   },
+  assessment: okAssessment,
+  diagnostics: { traffic: [], http: [], provider: [], warnings: [] },
   state: "completed",
   request_body_bytes: 0,
   response_body_bytes: 0,
@@ -78,7 +91,7 @@ test("desktop layout and keyboard interactions", async ({ page }) => {
           records: [record],
           total: 1,
           deletable_count: 1,
-          next_cursor: null,
+          has_next: false,
         }),
       });
     }

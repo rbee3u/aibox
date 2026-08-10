@@ -5,7 +5,7 @@ import {
   type LosslessNumber,
 } from "lossless-json";
 import type { BodyKind, HeaderValue, RecordDetail } from "./types";
-import { formatTimestampWithMilliseconds, tryDecodeHeader } from "./utils";
+import { formatTimestampWithMilliseconds, hex, tryDecodeHeader } from "./utils";
 
 export const LARGE_PRETTY_BYTES = 5 * 1024 * 1024;
 export const LONG_STRING_CHARACTERS = 200;
@@ -15,7 +15,15 @@ export function shouldDeferPretty(decodedBytes: number): boolean {
 }
 
 export function shouldTruncateJsonString(value: string): boolean {
-  return [...value].length > LONG_STRING_CHARACTERS;
+  let characters = 0;
+  let offset = 0;
+  while (offset < value.length) {
+    const codePoint = value.codePointAt(offset);
+    offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+    characters += 1;
+    if (characters > LONG_STRING_CHARACTERS) return true;
+  }
+  return false;
 }
 
 export type JsonValue =
@@ -46,7 +54,7 @@ export function decodeUtf8(bytes: Uint8Array): Utf8Result {
   } catch {
     return {
       ok: false,
-      hex: [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(" "),
+      hex: hex(bytes),
     };
   }
 }
@@ -229,8 +237,11 @@ export function eventAbsoluteTime(observedAt: string, offsetNs: string): string 
   } catch {
     return "—";
   }
-  if (!Number.isFinite(milliseconds)) return "—";
-  return formatTimestampWithMilliseconds(new Date(observed + milliseconds).toISOString());
+  const timestamp = observed + milliseconds;
+  if (!Number.isFinite(milliseconds) || !Number.isFinite(timestamp)) return "—";
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "—";
+  return formatTimestampWithMilliseconds(date.toISOString());
 }
 
 function trimZeros(value: string): string {

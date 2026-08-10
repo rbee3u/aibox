@@ -75,6 +75,41 @@ describe("Summary presentation helpers", () => {
     ]);
   });
 
+  it("moves to active finalization when a stream completes without a First Token", () => {
+    const detail = {
+      ...completedDetail,
+      state: "active" as const,
+      result: null,
+      timeline_end_at_ns: "1240000000",
+      summary: {
+        ...completedDetail.summary,
+        terminal: false,
+        outcome: null,
+        timing: {
+          ...completedDetail.summary.timing,
+          finished_at_ns: null,
+        },
+        protocol: {
+          ...completedDetail.summary.protocol!,
+          first_token_at_ns: null,
+          token_usage: null,
+        },
+      },
+    };
+
+    const stages = timingStages(detail);
+    expect(stages.map((stage) => stage.label)).toEqual([
+      "Proxy setup",
+      "Request upload",
+      "Response wait",
+      "Response body",
+      "Finalization",
+    ]);
+    expect(stages.at(-1)).toEqual(
+      expect.objectContaining({ label: "Finalization", status: "ongoing", durationMs: 10 }),
+    );
+  });
+
   it("uses a single Response body stage for a non-streaming response", () => {
     const detail = {
       ...completedDetail,

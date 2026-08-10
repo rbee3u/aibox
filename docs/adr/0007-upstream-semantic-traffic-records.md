@@ -1,6 +1,6 @@
 # Record upstream HTTP semantics with raw evidence and a protocol summary
 
-Status: accepted
+Status: accepted; version-1 compatibility superseded by ADR-0011
 
 A Traffic Record represents one upstream request attempt at the HTTP semantic
 layer. It stores filtered application headers, raw body bytes, monotonic timing
@@ -43,9 +43,8 @@ casing and cross-name order may be normalized by the HTTP library.
 ## Consequences
 
 Traffic Records remain temporary diagnostics without a migration mechanism.
-Incompatible schema versions are ignored as unsupported. The optional protocol
-object is an additive version-1 field: older version-1 Records remain readable
-with no protocol overview and are neither parsed nor rewritten to backfill it.
-Later presentation layers can derive durations, body sizes, status lines, and
-SSE views without changing the raw record layout or reopening bodies for the
-protocol overview.
+Incompatible schema versions are ignored as unsupported. ADR-0011 supersedes
+the former additive version-1 compatibility decision with a complete version-2
+Summary projection. Later presentation layers can derive durations, body sizes,
+status lines, and SSE views without changing raw evidence or reopening bodies
+for the protocol overview.

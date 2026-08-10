@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { completedDetail } from "../test/fixtures";
+import { activeDetail, completedDetail } from "../test/fixtures";
 import { RecordDetail } from "./RecordDetail";
 
 function definitionValue(scope: HTMLElement, label: string): HTMLElement {
@@ -13,8 +13,17 @@ describe("Traffic Record Summary", () => {
   it("renders Claude cache fallback and all diagnostic groups", () => {
     const detail = {
       ...completedDetail,
+      response: {
+        ...completedDetail.response!,
+        status: 503,
+        reason_phrase: "Service Unavailable",
+      },
       summary: {
         ...completedDetail.summary,
+        response: {
+          ...completedDetail.summary.response!,
+          status: 503,
+        },
         protocol: {
           family: "claude_messages" as const,
           response_terminal: true,
@@ -55,6 +64,65 @@ describe("Traffic Record Summary", () => {
             kind: "event_index_failed",
             message: "Index warning.",
             at_ns: "1000000000",
+          },
+        ],
+      },
+      assessment: {
+        level: "error" as const,
+        primary: {
+          source: "provider" as const,
+          kind: "overloaded_error",
+          message: "Overloaded",
+        },
+        issue_count: 5,
+      },
+      diagnostics: {
+        provider: [
+          {
+            level: "error" as const,
+            source: "provider" as const,
+            kind: "overloaded_error",
+            message: "Overloaded",
+            phase: "model_api",
+            at_ns: "800000000",
+          },
+        ],
+        traffic: [
+          {
+            level: "error" as const,
+            source: "traffic" as const,
+            kind: "client_disconnected",
+            message: "Client disconnected.",
+            phase: "response",
+            at_ns: "900000000",
+          },
+        ],
+        http: [
+          {
+            level: "error" as const,
+            source: "http" as const,
+            kind: "http_503",
+            message: "Upstream returned HTTP 503",
+            phase: "response",
+            at_ns: "500000000",
+          },
+        ],
+        warnings: [
+          {
+            level: "warning" as const,
+            source: "diagnostic" as const,
+            kind: "event_index_failed",
+            message: "Index warning.",
+            phase: "recording",
+            at_ns: "1000000000",
+          },
+          {
+            level: "warning" as const,
+            source: "diagnostic" as const,
+            kind: "cache_write_breakdown_inconsistent",
+            message: "Cache write TTL details do not match the total.",
+            phase: "model_api",
+            at_ns: null,
           },
         ],
       },
@@ -101,11 +169,14 @@ describe("Traffic Record Summary", () => {
     expect(within(tokenUsage).getByRole("group", { name: "Output tokens" })).toBeInTheDocument();
     expect(within(summary).queryByText("Final")).not.toBeInTheDocument();
     expect(within(summary).queryByText(/Requested model/)).not.toBeInTheDocument();
-    expect(
-      within(summary).getByRole("region", { name: "API / Provider errors" }),
-    ).toHaveTextContent("Overloaded");
-    expect(within(summary).getByRole("region", { name: "Traffic errors" })).toHaveTextContent(
+    expect(within(summary).getByRole("region", { name: "Model API" })).toHaveTextContent(
+      "Overloaded",
+    );
+    expect(within(summary).getByRole("region", { name: "Proxy / transport" })).toHaveTextContent(
       "Client disconnected",
+    );
+    expect(within(summary).getByRole("region", { name: "HTTP response" })).toHaveTextContent(
+      "Upstream returned HTTP 503",
     );
     const warnings = within(summary).getByRole("region", { name: "Warnings" });
     expect(warnings).toHaveTextContent("Index warning");
@@ -230,11 +301,29 @@ describe("Traffic Record Summary", () => {
     expect(Array.from(timingSection.querySelectorAll("dt"), (term) => term.textContent)).toEqual([
       "First token",
       "Duration",
-      "Started",
+      "Ended",
     ]);
+    expect(definitionValue(timingSection, "Ended")).toHaveTextContent("2026-08-06 12:00:01");
     expect(within(timingSection).getByRole("list", { name: "Timing stages" })).toHaveTextContent(
       "Response body",
     );
+  });
+
+  it("shows no End Time while a Record is active", () => {
+    render(
+      <RecordDetail
+        detail={activeDetail}
+        bodies={{ request: [], response: [] }}
+        bodyStatus={{ request: "idle", response: "idle" }}
+        tab="summary"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    const timingSection = screen.getByRole("heading", { name: "Timing" }).parentElement!;
+    expect(definitionValue(timingSection, "Ended")).toHaveTextContent("—");
   });
 
   it("shows explicit Model states when protocol values are missing", () => {
@@ -586,6 +675,40 @@ describe("Traffic Record Summary", () => {
 
     expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("status")).toHaveTextContent("Pretty unavailable:");
+  });
+
+  it("shows decoded zstd bytes as hex when the decoded Source is not UTF-8", () => {
+    const encoded = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
+    const decoded = new Uint8Array([0xff, 0x00]);
+    render(
+      <RecordDetail
+        detail={{
+          ...completedDetail,
+          request: {
+            ...completedDetail.request,
+            headers: [
+              ...completedDetail.request.headers,
+              { name: "content-encoding", value_base64: btoa("zstd") },
+            ],
+          },
+          request_body_bytes: encoded.length,
+        }}
+        bodies={{ request: [encoded], response: [] }}
+        bodyStatus={{ request: "loaded", response: "idle" }}
+        decodedBodies={{
+          request: { bytes: decoded, status: "loaded", message: null },
+          response: { bytes: null, status: "idle", message: null },
+        }}
+        tab="request"
+        onTabChange={vi.fn()}
+        onDownload={vi.fn()}
+        loadingBody={false}
+      />,
+    );
+
+    expect(screen.getByText("hex: ff 00")).toBeInTheDocument();
+    expect(screen.queryByText(/28 b5 2f fd/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("showing decoded bytes as hex");
   });
 
   it("shows SSE Event type, completion time, partial timing warning, and Event data copy", async () => {

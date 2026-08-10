@@ -1,7 +1,7 @@
 .root,
 .value,
 .phase,
-.warning {
+.issue {
   display: inline-flex;
   align-items: center;
 }
@@ -27,9 +27,11 @@
   color: var(--muted);
 }
 .error,
-.warning,
 .anomaly {
   color: var(--danger);
+}
+.warningTone {
+  color: var(--warning);
 }
 .active,
 .phase {
@@ -43,8 +45,21 @@
 .phase {
   gap: 4px;
 }
-.warning {
+.issue {
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+.issue.error:hover {
+  background: var(--danger-soft);
+}
+.issue.warningTone:hover {
+  background: var(--warning-soft);
 }
 .dot {
   display: inline-block;
@@ -89,6 +104,7 @@
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
+  max-width: 100%;
 }
 .activeTag {
   color: var(--warning);
@@ -97,4 +113,49 @@
 .errorTag {
   color: var(--danger);
   background: var(--danger-soft);
+}
+.warningTag {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.issueCount {
+  flex: 0 0 auto;
+  padding-left: 5px;
+  border-left: 1px solid currentColor;
+  font-variant-numeric: tabular-nums;
+}
+.tagLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tooltip {
+  position: fixed;
+  z-index: 80;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.tooltipVisible {
+  visibility: visible;
+  opacity: 1;
+}
+.tooltipTitle {
+  color: var(--ink);
+  font-weight: 750;
+}
+.tooltipMessage {
+  margin-top: 3px;
 }

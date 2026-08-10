@@ -347,27 +347,16 @@ impl ProtocolObserver {
         true
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn observe_sse_data(&mut self, data: &[u8], at_ns: String) -> bool {
-        if data.is_empty() || data == b"[DONE]" {
-            return false;
-        }
-        let event: StreamEvent = match serde_json::from_slice(data).context("parse SSE data JSON") {
-            Ok(event) => event,
-            Err(error) => {
-                return self.summary.add_warning(
-                    "sse_event_invalid",
-                    format!("Cannot interpret SSE event: {error:#}"),
-                    Some(at_ns),
-                );
-            }
-        };
-        self.apply_event(event, at_ns)
+        self.observe_sse_event(None, data, at_ns)
     }
 
     pub(super) fn observe_json_response(
         &mut self,
         path: &Path,
-        status: u16,
+        _status: u16,
+        headers: &[RecordedHeader],
         at_ns: String,
     ) -> bool {
         let file = match crate::tenant::open_real_file(path, "Traffic response body")
@@ -382,8 +371,19 @@ impl ProtocolObserver {
                 );
             }
         };
-        let parsed =
-            serde_json::from_reader::<_, JsonResponseEnvelope>(file).context("parse response JSON");
+        let parsed = match body_content_coding(headers) {
+            Ok(BodyContentCoding::Identity) => {
+                serde_json::from_reader::<_, JsonResponseEnvelope>(file)
+                    .context("parse response JSON")
+            }
+            Ok(BodyContentCoding::Zstd) => zstd::stream::read::Decoder::new(file)
+                .context("create zstd response decoder")
+                .and_then(|decoder| {
+                    serde_json::from_reader::<_, JsonResponseEnvelope>(decoder)
+                        .context("parse response JSON")
+                }),
+            Err(error) => Err(error).context("read response Content-Encoding"),
+        };
         let mut changed = false;
         match parsed {
             Ok(envelope) => {
@@ -404,16 +404,20 @@ impl ProtocolObserver {
                 if let Some(usage) = envelope.usage {
                     changed |= self.apply_usage(usage, Some(at_ns.clone()));
                 }
-                if let Some(error) = envelope.error {
-                    let (kind, message) = error_parts(&error, "api_error", "Upstream API error");
-                    changed |= self.summary.add_error(kind, message, Some(at_ns.clone()));
-                }
-                if let Some(reason) = envelope.incomplete_details.and_then(|value| value.reason) {
-                    changed |= self.summary.add_error(
-                        "response_incomplete",
-                        format!("OpenAI response was incomplete: {reason}"),
-                        Some(at_ns.clone()),
-                    );
+                if self.summary.family != ProtocolFamily::Unknown {
+                    if let Some(error) = envelope.error {
+                        let (kind, message) =
+                            error_parts(&error, "api_error", "Upstream API error");
+                        changed |= self.summary.add_error(kind, message, Some(at_ns.clone()));
+                    }
+                    if let Some(reason) = envelope.incomplete_details.and_then(|value| value.reason)
+                    {
+                        changed |= self.summary.add_error(
+                            "response_incomplete",
+                            format!("OpenAI response was incomplete: {reason}"),
+                            Some(at_ns.clone()),
+                        );
+                    }
                 }
             }
             Err(error) if self.summary.family != ProtocolFamily::Unknown => {
@@ -429,26 +433,42 @@ impl ProtocolObserver {
             self.summary.response_terminal = true;
             changed = true;
         }
-        changed |= self.commit_final_usage();
-        changed | self.observe_http_status(status, at_ns)
+        changed | self.commit_final_usage()
     }
 
-    pub(super) fn observe_http_status(&mut self, status: u16, at_ns: String) -> bool {
-        if status < 400 || !self.summary.errors.is_empty() {
+    pub(super) fn observe_sse_event(
+        &mut self,
+        event_name: Option<&[u8]>,
+        data: &[u8],
+        at_ns: String,
+    ) -> bool {
+        if data.is_empty() || data == b"[DONE]" {
             return false;
         }
-        self.summary.add_error(
-            format!("http_{status}"),
-            format!(
-                "Upstream returned HTTP {status}; the response body was not recognized as an OpenAI Responses or Claude Messages error. See the Response tab for the raw body."
-            ),
-            Some(at_ns),
-        )
+        let event: StreamEvent = match serde_json::from_slice(data).context("parse SSE data JSON") {
+            Ok(event) => event,
+            Err(error) => {
+                return self.summary.add_warning(
+                    "sse_event_invalid",
+                    format!("Cannot interpret SSE event: {error:#}"),
+                    Some(at_ns),
+                );
+            }
+        };
+        self.apply_event(event_name, event, at_ns)
     }
 
-    fn apply_event(&mut self, event: StreamEvent, at_ns: String) -> bool {
+    fn apply_event(
+        &mut self,
+        event_name: Option<&[u8]>,
+        event: StreamEvent,
+        at_ns: String,
+    ) -> bool {
         let kind = event.kind.as_deref().unwrap_or_default();
-        let family = if kind.starts_with("response.") {
+        let event_name = event_name.and_then(|value| std::str::from_utf8(value).ok());
+        let family = if kind.starts_with("response.")
+            || event_name.is_some_and(|value| value.starts_with("response."))
+        {
             ProtocolFamily::OpenaiResponses
         } else if matches!(
             kind,
@@ -458,6 +478,16 @@ impl ProtocolObserver {
                 | "content_block_start"
                 | "content_block_delta"
                 | "content_block_stop"
+        ) || matches!(
+            event_name,
+            Some(
+                "message_start"
+                    | "message_delta"
+                    | "message_stop"
+                    | "content_block_start"
+                    | "content_block_delta"
+                    | "content_block_stop"
+            )
         ) {
             ProtocolFamily::ClaudeMessages
         } else {
@@ -465,7 +495,9 @@ impl ProtocolObserver {
         };
         let mut changed = self.summary.set_family(family, Some(at_ns.clone()));
 
-        if let Some(response) = event.response {
+        if self.summary.family != ProtocolFamily::Unknown
+            && let Some(response) = event.response
+        {
             changed |= self
                 .summary
                 .set_effective_model(nonempty(response.model), Some(at_ns.clone()));
@@ -491,7 +523,9 @@ impl ProtocolObserver {
             }
         }
 
-        if let Some(message) = event.message.as_ref().and_then(Value::as_object) {
+        if self.summary.family != ProtocolFamily::Unknown
+            && let Some(message) = event.message.as_ref().and_then(Value::as_object)
+        {
             changed |= self.summary.set_effective_model(
                 message
                     .get("model")
@@ -513,11 +547,13 @@ impl ProtocolObserver {
                 }
             }
         }
-        if let Some(usage) = event.usage {
+        if self.summary.family != ProtocolFamily::Unknown
+            && let Some(usage) = event.usage
+        {
             changed |= self.apply_usage(usage, Some(at_ns.clone()));
         }
 
-        if kind == "error" {
+        if kind == "error" && self.summary.family != ProtocolFamily::Unknown {
             if let Some(error) = event.error.as_ref() {
                 let (error_kind, message) = error_parts(error, "api_error", "Upstream API error");
                 changed |= self
@@ -532,14 +568,11 @@ impl ProtocolObserver {
             }
         }
 
-        let terminal = matches!(
-            kind,
-            "response.completed"
-                | "response.failed"
-                | "response.incomplete"
-                | "response.cancelled"
-                | "message_stop"
-        );
+        let terminal_kind = event_name
+            .filter(|value| is_terminal_event_kind(value))
+            .unwrap_or(kind);
+        let terminal = is_terminal_event_kind(terminal_kind)
+            || (terminal_kind == "error" && self.summary.family != ProtocolFamily::Unknown);
         if terminal && !self.summary.response_terminal {
             self.summary.response_terminal = true;
             changed = true;
@@ -547,16 +580,27 @@ impl ProtocolObserver {
         if terminal {
             changed |= self.commit_final_usage();
         }
-        if matches!(kind, "response.failed" | "response.cancelled")
-            && !self
-                .summary
-                .errors
-                .iter()
-                .any(|error| error.at_ns.as_deref() == Some(at_ns.as_str()))
-        {
+        let has_error_at = self
+            .summary
+            .errors
+            .iter()
+            .any(|error| error.at_ns.as_deref() == Some(at_ns.as_str()));
+        if terminal_kind == "response.failed" && !has_error_at {
             changed |= self.summary.add_error(
-                kind.trim_start_matches("response."),
-                format!("OpenAI stream ended with {kind}"),
+                "failed",
+                "OpenAI stream ended with response.failed",
+                Some(at_ns),
+            );
+        } else if terminal_kind == "response.incomplete" && !has_error_at {
+            changed |= self.summary.add_error(
+                "response_incomplete",
+                "OpenAI stream ended with response.incomplete",
+                Some(at_ns),
+            );
+        } else if terminal_kind == "response.cancelled" && !has_error_at {
+            changed |= self.summary.add_warning(
+                "cancelled",
+                "OpenAI stream ended with response.cancelled",
                 Some(at_ns),
             );
         }
@@ -695,21 +739,18 @@ impl ProtocolObserver {
                 })
             }
             ProtocolFamily::ClaudeMessages => {
-                let writes = self.usage.cache_creation_tokens.or_else(|| {
-                    self.usage
-                        .cache_write_5m_tokens
-                        .unwrap_or(0)
-                        .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0))
-                });
-                let split_sum = self
-                    .usage
-                    .cache_write_5m_tokens
-                    .unwrap_or(0)
-                    .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0));
-                let split_valid = (self.usage.cache_write_5m_tokens.is_some()
-                    || self.usage.cache_write_1h_tokens.is_some())
-                    && writes.is_some()
-                    && split_sum == writes;
+                let split_reported = self.usage.cache_write_5m_tokens.is_some()
+                    || self.usage.cache_write_1h_tokens.is_some();
+                let split_sum = split_reported
+                    .then(|| {
+                        self.usage
+                            .cache_write_5m_tokens
+                            .unwrap_or(0)
+                            .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0))
+                    })
+                    .flatten();
+                let writes = self.usage.cache_creation_tokens.or(split_sum);
+                let split_valid = split_reported && writes.is_some() && split_sum == writes;
                 let total = self.usage.input_tokens.and_then(|base| {
                     base.checked_add(self.usage.cache_read_tokens.unwrap_or(0))?
                         .checked_add(writes.unwrap_or(0))
@@ -732,6 +773,17 @@ impl ProtocolObserver {
             ProtocolFamily::Unknown => None,
         }
     }
+}
+
+fn is_terminal_event_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "response.completed"
+            | "response.failed"
+            | "response.incomplete"
+            | "response.cancelled"
+            | "message_stop"
+    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1159,7 +1211,7 @@ mod tests {
         }];
         let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
         assert!(observer.observe_response_headers(&headers, Some(false), "10".to_string()));
-        assert!(observer.observe_json_response(&response_path, 200, "20".to_string()));
+        assert!(observer.observe_json_response(&response_path, 200, &[], "20".to_string()));
         let summary = observer.snapshot();
         assert_eq!(summary.model.effective.as_deref(), Some("header-model"));
         assert_eq!(
@@ -1178,25 +1230,47 @@ mod tests {
     }
 
     #[test]
-    fn malformed_protocol_data_warns_without_hiding_http_error() {
+    fn malformed_protocol_data_warns_without_synthesizing_provider_errors() {
         let temp = tempfile::tempdir().unwrap();
         let response_path = temp.path().join("response.json");
         fs::write(&response_path, b"not json").unwrap();
         let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
         assert!(observer.observe_sse_data(b"not json", "10".to_string()));
-        assert!(observer.observe_json_response(&response_path, 503, "20".to_string()));
+        assert!(observer.observe_json_response(&response_path, 503, &[], "20".to_string()));
         let summary = observer.snapshot();
         assert!(summary.response_terminal);
         assert_eq!(summary.warnings.len(), 2);
-        assert_eq!(summary.errors.len(), 1);
-        assert_eq!(summary.errors[0].kind, "http_503");
+        assert!(summary.errors.is_empty());
 
-        let mut unknown = ProtocolObserver::new(Some("https://example.test/health"));
-        assert!(unknown.observe_http_status(502, "30".to_string()));
+        let unknown = ProtocolObserver::new(Some("https://example.test/health"));
         let summary = unknown.snapshot();
         assert_eq!(summary.family, ProtocolFamily::Unknown);
         assert!(!summary.response_terminal);
-        assert_eq!(summary.errors[0].kind, "http_502");
+        assert!(summary.errors.is_empty());
+    }
+
+    #[test]
+    fn zstd_response_metadata_is_interpreted_after_the_recorded_body_is_complete() {
+        let temp = tempfile::tempdir().unwrap();
+        let response_path = temp.path().join("response.zstd");
+        let compressed = zstd::stream::encode_all(
+            br#"{"object":"response","model":"gpt-compressed","usage":{"input_tokens":12,"output_tokens":4}}"#
+                .as_slice(),
+            0,
+        )
+        .unwrap();
+        fs::write(&response_path, compressed).unwrap();
+        let headers = [RecordedHeader {
+            name: "content-encoding".to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
+        }];
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
+
+        assert!(observer.observe_json_response(&response_path, 200, &headers, "20".to_string()));
+        let summary = observer.snapshot();
+        assert_eq!(summary.model.effective.as_deref(), Some("gpt-compressed"));
+        assert_eq!(summary.token_usage.unwrap().output_tokens, Some(4));
+        assert!(summary.response_terminal);
     }
 
     #[test]
@@ -1233,6 +1307,23 @@ mod tests {
         let usage = observer.snapshot().token_usage.unwrap();
         assert_eq!(usage.total_input_tokens, Some(415));
         assert_eq!(usage.output_tokens, Some(13));
+    }
+
+    #[test]
+    fn claude_missing_cache_counters_stay_unreported() {
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/messages"));
+        observer.observe_sse_data(
+            br#"{"type":"message_start","message":{"usage":{"input_tokens":37}}}"#,
+            "10".to_string(),
+        );
+        observer.observe_sse_data(br#"{"type":"message_stop"}"#, "20".to_string());
+
+        let usage = observer.snapshot().token_usage.unwrap();
+        assert_eq!(usage.total_input_tokens, Some(37));
+        assert_eq!(usage.cached_input_tokens, None);
+        assert_eq!(usage.cache_write_tokens, None);
+        assert_eq!(usage.cache_write_5m_tokens, None);
+        assert_eq!(usage.cache_write_1h_tokens, None);
     }
 
     #[test]
@@ -1276,6 +1367,22 @@ mod tests {
     }
 
     #[test]
+    fn response_failed_event_with_top_level_error_is_a_provider_error() {
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
+        observer.observe_sse_event(
+            Some(b"response.failed"),
+            br#"{"type":"error","error":{"type":"service_unavailable_error","code":"server_error","message":"Our servers are currently overloaded. Please try again later.","param":null},"sequence_number":2}"#,
+            "20".to_string(),
+        );
+        let summary = observer.snapshot();
+        assert_eq!(summary.family, ProtocolFamily::OpenaiResponses);
+        assert!(summary.response_terminal);
+        assert_eq!(summary.errors.len(), 1);
+        assert_eq!(summary.errors[0].kind, "service_unavailable_error");
+        assert!(summary.errors[0].message.contains("overloaded"));
+    }
+
+    #[test]
     fn incomplete_and_cancelled_openai_events_are_terminal_with_final_usage() {
         for (event, expected_error) in [
             (
@@ -1292,7 +1399,12 @@ mod tests {
             let summary = observer.snapshot();
             assert!(summary.response_terminal);
             assert!(summary.token_usage.is_some());
-            assert_eq!(summary.errors[0].kind, expected_error);
+            if expected_error == "cancelled" {
+                assert!(summary.errors.is_empty());
+                assert_eq!(summary.warnings[0].kind, expected_error);
+            } else {
+                assert_eq!(summary.errors[0].kind, expected_error);
+            }
         }
     }
 
@@ -1327,8 +1439,11 @@ mod tests {
             message: "Observed after the first token".to_string(),
             at_ns: Some("20".to_string()),
         });
+        let mut summary = SummaryMetadata::test(String::new(), Some(protocol));
+        summary.timing = timing;
         let record = StoredRecord {
             directory: PathBuf::new(),
+            sort_key: String::new(),
             request: RequestMetadata {
                 format_version: 1,
                 id: uuid::Uuid::now_v7().to_string(),
@@ -1340,19 +1455,7 @@ mod tests {
                 headers: Vec::new(),
             },
             response: None,
-            summary: SummaryMetadata {
-                schema_version: 1,
-                record_id: String::new(),
-                kind: "summary".to_string(),
-                observed_at: String::new(),
-                terminal: false,
-                timing,
-                coding_agent_session_id: None,
-                protocol: Some(protocol),
-                outcome: None,
-                errors: Vec::new(),
-                warnings: Vec::new(),
-            },
+            summary,
             result: None,
             request_body_bytes: 0,
             response_body_bytes: 0,
