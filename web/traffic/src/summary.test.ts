@@ -1,18 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { completedDetail } from "./test/fixtures";
 import { elapsedNsMs, resolveRequestedEffective, timingStages, tokenCount } from "./summary";
+import type { ProtocolSummary } from "./types";
 
 describe("Summary presentation helpers", () => {
-  it("prefers effective values and reports requested fallbacks", () => {
-    expect(resolveRequestedEffective({ requested: "low", effective: "high" })).toEqual({
-      value: "high",
-      source: "effective",
-    });
-    expect(resolveRequestedEffective({ requested: "medium", effective: null })).toEqual({
-      value: "medium",
-      source: "requested",
-    });
-    expect(resolveRequestedEffective(undefined)).toEqual({ value: null, source: null });
+  it("prefers effective values and falls back to requested values", () => {
+    expect(resolveRequestedEffective({ requested: "low", effective: "high" })).toBe("high");
+    expect(resolveRequestedEffective({ requested: "medium", effective: null })).toBe("medium");
+    expect(resolveRequestedEffective(undefined)).toBeNull();
   });
 
   it("builds the six streaming Timing Stages on one axis", () => {
@@ -55,25 +50,42 @@ describe("Summary presentation helpers", () => {
     );
   });
 
-  it("uses a Response body stage for a terminal stream without First Token", () => {
-    const detail = {
-      ...completedDetail,
-      summary: {
-        ...completedDetail.summary,
-        protocol: {
-          ...completedDetail.summary.protocol!,
-          first_token_at_ns: null,
-        },
+  it.each([
+    {
+      mode: "a terminal stream without First Token",
+      protocol: { first_token_at_ns: null },
+    },
+    {
+      mode: "a non-streaming response",
+      protocol: {
+        response_mode: { requested: "normal", observed: "normal" },
+        first_token_at_ns: null,
       },
-    };
-    expect(timingStages(detail).map((stage) => stage.label)).toEqual([
-      "Proxy setup",
-      "Request upload",
-      "Response wait",
-      "Response body",
-      "Finalization",
-    ]);
-  });
+    },
+  ] satisfies Array<{ mode: string; protocol: Partial<ProtocolSummary> }>)(
+    "uses a single Response body stage for $mode",
+    ({ protocol }) => {
+      const detail = {
+        ...completedDetail,
+        summary: {
+          ...completedDetail.summary,
+          protocol: {
+            ...completedDetail.summary.protocol!,
+            ...protocol,
+          },
+        },
+      };
+      const stages = timingStages(detail);
+      expect(stages.map((stage) => stage.label)).toEqual([
+        "Proxy setup",
+        "Request upload",
+        "Response wait",
+        "Response body",
+        "Finalization",
+      ]);
+      expect(stages[3].durationMs).toBe(730);
+    },
+  );
 
   it("moves to active finalization when a stream completes without a First Token", () => {
     const detail = {
@@ -108,29 +120,6 @@ describe("Summary presentation helpers", () => {
     expect(stages.at(-1)).toEqual(
       expect.objectContaining({ label: "Finalization", status: "ongoing", durationMs: 10 }),
     );
-  });
-
-  it("uses a single Response body stage for a non-streaming response", () => {
-    const detail = {
-      ...completedDetail,
-      summary: {
-        ...completedDetail.summary,
-        protocol: {
-          ...completedDetail.summary.protocol!,
-          response_mode: { requested: "normal" as const, observed: "normal" as const },
-          first_token_at_ns: null,
-        },
-      },
-    };
-    const stages = timingStages(detail);
-    expect(stages.map((stage) => stage.label)).toEqual([
-      "Proxy setup",
-      "Request upload",
-      "Response wait",
-      "Response body",
-      "Finalization",
-    ]);
-    expect(stages[3].durationMs).toBe(730);
   });
 
   it("formats nanosecond offsets and token counters without losing zero", () => {

@@ -48,9 +48,12 @@ export interface ParsedSseStream {
 
 export type Utf8Result = { ok: true; text: string } | { ok: false; hex: string };
 
-export function decodeUtf8(bytes: Uint8Array): Utf8Result {
+export function decodeUtf8(bytes: Uint8Array, complete = true): Utf8Result {
   try {
-    return { ok: true, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+    return {
+      ok: true,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: !complete }),
+    };
   } catch {
     return {
       ok: false,
@@ -195,11 +198,13 @@ export function parseSse(text: string): ParsedSseStream {
   return { events, hasPartialTail: blockTouched };
 }
 
-export function sseEventTypes(event: ParsedSseEvent): {
+export function sseEventTypes(
+  event: ParsedSseEvent,
+  parsed = parseJson(event.data),
+): {
   primary: string;
   secondary: string | null;
 } {
-  const parsed = parseJson(event.data);
   const payloadType =
     parsed.ok && isJsonContainer(parsed.value) && !Array.isArray(parsed.value)
       ? parsed.value.type

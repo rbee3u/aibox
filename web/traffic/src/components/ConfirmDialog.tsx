@@ -23,19 +23,28 @@ export function ConfirmDialog({
   const confirmButton = useRef<HTMLButtonElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const focusCaptured = useRef(false);
 
   useEffect(() => {
     const element = dialog.current;
-    restoreFocus.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!focusCaptured.current) {
+      restoreFocus.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      focusCaptured.current = true;
+    }
     if (element) {
       if (typeof element.showModal === "function") element.showModal();
       else element.setAttribute("open", "");
     }
     confirmButton.current?.focus();
     return () => {
+      if (element?.open) {
+        if (typeof element.close === "function") element.close();
+        else element.removeAttribute("open");
+      }
       const target = restoreFocus.current;
       window.setTimeout(() => {
+        if (element?.open) return;
         if (target?.isConnected) target.focus();
         else document.querySelector<HTMLElement>('[data-dialog-focus-fallback="true"]')?.focus();
       });

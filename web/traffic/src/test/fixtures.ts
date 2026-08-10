@@ -82,12 +82,32 @@ export const activeSummary: RecordSummary = {
   assessment: activeAssessment,
 };
 
-export const recordList: RecordList = {
-  records: [activeSummary, completedSummary],
-  total: 2,
-  deletable_count: 1,
-  has_next: false,
-};
+export function completedSummaryFor(id: string, host: string): RecordSummary {
+  const upstreamUrl = `https://${host}/v1/responses`;
+  return {
+    ...completedSummary,
+    id,
+    incoming_uri: `/${upstreamUrl}`,
+    upstream_url: upstreamUrl,
+  };
+}
+
+export function recordListFor(
+  records: RecordSummary[],
+  overrides: Partial<Omit<RecordList, "records">> = {},
+): RecordList {
+  return {
+    records,
+    total: records.length,
+    deletable_count: records.filter((record) => record.state !== "active").length,
+    has_next: false,
+    ...overrides,
+  };
+}
+
+export const recordList = recordListFor([activeSummary, completedSummary]);
+
+export const activeRecordList = recordListFor([activeSummary]);
 
 export const completedDetail: RecordDetail = {
   request: {
@@ -199,6 +219,32 @@ export const activeDetail: RecordDetail = {
   live_total_ms: 500,
   timeline_end_at_ns: "500000000",
 };
+
+export function withRequestEncoding(detail: RecordDetail, encoding: string): RecordDetail {
+  return {
+    ...detail,
+    request: {
+      ...detail.request,
+      headers: [
+        ...detail.request.headers,
+        { name: "content-encoding", value_base64: btoa(encoding) },
+      ],
+    },
+  };
+}
+
+export function withIncompleteRequestBody(detail: RecordDetail): RecordDetail {
+  return {
+    ...detail,
+    summary: {
+      ...detail.summary,
+      timing: {
+        ...detail.summary.timing,
+        upstream_request_body_completed_at_ns: null,
+      },
+    },
+  };
+}
 
 export function fakeApi(overrides: Partial<TrafficApi> = {}): TrafficApi {
   return {

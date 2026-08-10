@@ -7,6 +7,7 @@ import {
   decodeHeader,
   duration,
   formatTimestamp,
+  mergeEventTimings,
   recordDetailUrl,
   recordUrl,
 } from "./utils";
@@ -80,5 +81,39 @@ describe("traffic display utilities", () => {
       "invalid target",
       "/raw",
     ]);
+  });
+
+  it("merges SSE timing snapshots by sequence while adopting the latest state", () => {
+    expect(
+      mergeEventTimings(
+        {
+          state: "partial",
+          events: [
+            { sequence: 3, completed_at_ns: "300" },
+            { sequence: 1, completed_at_ns: "old" },
+          ],
+          next_sequence: 4,
+          warning: "incomplete tail",
+        },
+        {
+          state: "available",
+          events: [
+            { sequence: 2, completed_at_ns: "200" },
+            { sequence: 1, completed_at_ns: "100" },
+          ],
+          next_sequence: 3,
+          warning: null,
+        },
+      ),
+    ).toEqual({
+      state: "available",
+      events: [
+        { sequence: 1, completed_at_ns: "100" },
+        { sequence: 2, completed_at_ns: "200" },
+        { sequence: 3, completed_at_ns: "300" },
+      ],
+      next_sequence: 4,
+      warning: null,
+    });
   });
 });

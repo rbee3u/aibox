@@ -12,19 +12,10 @@ export interface TimingStage {
   durationMs: number;
 }
 
-export type RequestedEffectiveSource = "effective" | "requested";
-
-export interface ResolvedRequestedEffective {
-  value: string | null;
-  source: RequestedEffectiveSource | null;
-}
-
 export function resolveRequestedEffective(
   field: RequestedEffective<string> | null | undefined,
-): ResolvedRequestedEffective {
-  if (field?.effective != null) return { value: field.effective, source: "effective" };
-  if (field?.requested != null) return { value: field.requested, source: "requested" };
-  return { value: null, source: null };
+): string | null {
+  return field?.effective ?? field?.requested ?? null;
 }
 
 function parseNs(value: string | null | undefined): bigint | null {

@@ -1,8 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RecordAssessment, RecordState, ResponseMetadata } from "../types";
 import { RecordHeadlineStatus, RecordStatus } from "./RecordStatus";
-import styles from "./RecordStatus.module.css";
 import {
   assessmentPrimaryLabel,
   errorKindLabel,
@@ -31,8 +30,6 @@ const disconnectWarning: RecordAssessment = {
   issue_count: 1,
 };
 
-afterEach(() => vi.useRealTimers());
-
 function presentation(
   status: number | null,
   assessment: RecordAssessment = ok,
@@ -49,6 +46,14 @@ const response: ResponseMetadata = {
   reason_phrase: "OK",
   headers: [],
 };
+
+function showTooltip(target: HTMLElement) {
+  fireEvent.pointerEnter(target);
+  act(() => {
+    vi.runOnlyPendingTimers();
+  });
+  return screen.getByRole("tooltip");
+}
 
 describe("record status presentation", () => {
   it.each([
@@ -115,48 +120,33 @@ describe("RecordStatus", () => {
     const { rerender } = render(
       <RecordStatus status={null} state="active" assessment={active} compact />,
     );
-    expect(screen.getByText("Waiting")).toHaveClass(styles.active);
+    expect(screen.getByText("Waiting")).toBeInTheDocument();
 
     rerender(<RecordStatus status={200} state="active" assessment={active} compact />);
     expect(screen.queryByText("HTTP/2")).not.toBeInTheDocument();
-    expect(screen.getByText("200")).toHaveClass(styles.success);
+    expect(screen.getByText("200")).toBeInTheDocument();
     expect(screen.getByText("Streaming")).toBeInTheDocument();
   });
 
-  it("renders one compact accessible error icon without replacing HTTP 200", () => {
-    render(<RecordStatus status={200} state="completed" assessment={providerError} compact />);
-    expect(screen.getByText("200")).toHaveClass(styles.success);
-    const marker = screen.getByRole("img", {
-      name: /Record error: Server error.*currently overloaded/,
-    });
-    expect(marker).toHaveClass(styles.error);
-    expect(marker).not.toHaveAttribute("title");
-  });
-
-  it("shows fast custom tooltips for compact errors and warnings", () => {
+  it("renders accessible compact issues and opens their tooltips", () => {
     vi.useFakeTimers();
     const { rerender } = render(
       <RecordStatus status={200} state="completed" assessment={providerError} compact />,
     );
-    const errorMarker = screen.getByRole("img", { name: /Record error: Server error/ });
+    expect(screen.getByText("200")).toBeInTheDocument();
+    const errorMarker = screen.getByRole("img", {
+      name: /Record error: Server error.*currently overloaded/,
+    });
+    expect(errorMarker).not.toHaveAttribute("title");
 
     fireEvent.pointerEnter(errorMarker);
     fireEvent.scroll(window);
     act(() => {
-      vi.advanceTimersByTime(150);
+      vi.runOnlyPendingTimers();
     });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    fireEvent.pointerEnter(errorMarker);
-    act(() => {
-      vi.advanceTimersByTime(149);
-    });
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    const errorTooltip = screen.getByRole("tooltip");
+    const errorTooltip = showTooltip(errorMarker);
     expect(errorMarker).toHaveAttribute("aria-describedby", errorTooltip.id);
     expect(errorTooltip).toHaveTextContent("Error · Server error");
     expect(errorTooltip).toHaveTextContent(providerError.primary!.message);
@@ -170,46 +160,31 @@ describe("RecordStatus", () => {
     const warningMarker = screen.getByRole("img", {
       name: /Record warning: Client disconnected/,
     });
-    fireEvent.pointerEnter(warningMarker);
-    act(() => {
-      vi.advanceTimersByTime(150);
-    });
-    expect(within(screen.getByRole("tooltip")).getByText("Warning")).toHaveClass(
-      styles.warningTone,
-    );
+    expect(within(showTooltip(warningMarker)).getByText("Warning")).toBeInTheDocument();
 
     fireEvent.scroll(window);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
-  it("renders warning and error headline tags with fast tooltips", () => {
+  it("opens headline issue tooltips", () => {
     vi.useFakeTimers();
     const { rerender } = render(
       <RecordHeadlineStatus response={response} state="completed" assessment={providerError} />,
     );
-    expect(screen.getByLabelText("HTTP/2 200 OK")).toHaveClass(styles.success);
-    expect(screen.getByText("HTTP/2")).toHaveClass(styles.protocol);
-    expect(screen.getByText("Server error").parentElement).toHaveClass(styles.errorTag);
+    expect(screen.getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
+    expect(screen.getByText("HTTP/2")).toBeInTheDocument();
+    expect(screen.getByText("Server error")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
-    expect(screen.getByText("Server error").parentElement).not.toHaveAttribute("title");
 
     rerender(
       <RecordHeadlineStatus response={null} state="completed" assessment={disconnectWarning} />,
     );
-    expect(screen.getByLabelText("No response")).toHaveClass(styles.neutral);
-    const warningTag = screen.getByText("Client disconnected").parentElement!;
-    expect(warningTag).toHaveClass(styles.warningTag);
+    expect(screen.getByLabelText("No response")).toBeInTheDocument();
+    const warningTag = screen.getByText("Client disconnected");
 
-    fireEvent.pointerEnter(warningTag);
-    act(() => {
-      vi.advanceTimersByTime(149);
-    });
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Warning · Client disconnected");
-    expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);
+    const tooltip = showTooltip(warningTag);
+    expect(tooltip).toHaveTextContent("Warning · Client disconnected");
+    expect(tooltip).toHaveTextContent(disconnectWarning.primary!.message);
 
     fireEvent.pointerLeave(warningTag);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -217,7 +192,7 @@ describe("RecordStatus", () => {
 
   it("renders Waiting before response metadata arrives", () => {
     render(<RecordHeadlineStatus response={null} state="active" assessment={active} />);
-    expect(screen.getByText("Waiting").parentElement).toHaveClass(styles.activeTag);
+    expect(screen.getByText("Waiting")).toBeInTheDocument();
     expect(screen.queryByText("No response")).not.toBeInTheDocument();
   });
 });

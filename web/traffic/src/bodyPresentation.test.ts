@@ -62,6 +62,12 @@ describe("Body presentation", () => {
     });
   });
 
+  it("keeps an incomplete UTF-8 tail readable while an active body is still streaming", () => {
+    expect(decodeUtf8(new Uint8Array([0xe4, 0xbd]), false)).toEqual({ ok: true, text: "" });
+    expect(decodeUtf8(new Uint8Array([0xe4, 0xbd]), true)).toMatchObject({ ok: false });
+    expect(decodeUtf8(new Uint8Array([0xff, 0xe4]), false)).toMatchObject({ ok: false });
+  });
+
   it("applies the Pretty and string guards only above their exact boundaries", () => {
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES)).toBe(false);
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES + 1)).toBe(true);

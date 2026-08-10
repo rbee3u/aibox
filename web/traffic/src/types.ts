@@ -1,7 +1,6 @@
 export type RecordState = "active" | "completed" | "interrupted";
 export type BodyKind = "request" | "response";
-export type BodyLoadStatus = "idle" | "loading" | "loaded" | "error";
-export type DecodedBodyStatus = "idle" | "waiting" | "loading" | "loaded" | "unsupported" | "error";
+export type BodyLoadStatus = "idle" | "loaded" | "error";
 export type DetailTab = "summary" | BodyKind;
 export type EventTimingState = "available" | "unavailable" | "partial";
 export type AssessmentLevel = "active" | "ok" | "warning" | "error";
@@ -21,8 +20,7 @@ export interface EventTimingIndex {
 
 export interface DecodedBodyState {
   bytes: Uint8Array | null;
-  status: DecodedBodyStatus;
-  message: string | null;
+  error: string | null;
 }
 
 export interface HeaderValue {

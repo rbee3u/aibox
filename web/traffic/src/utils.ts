@@ -1,4 +1,4 @@
-import type { HeaderValue, RecordSummary } from "./types";
+import type { EventTimingIndex, HeaderValue, RecordSummary } from "./types";
 
 const UTC_PLUS_EIGHT_MS = 8 * 60 * 60 * 1000;
 const EXPLICIT_TIME_ZONE = /(?:z|[+-]\d{2}:\d{2})$/i;
@@ -150,4 +150,20 @@ export function concatChunks(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.length;
   }
   return output;
+}
+
+export function mergeEventTimings(
+  current: EventTimingIndex | null,
+  incoming: EventTimingIndex,
+): EventTimingIndex {
+  const bySequence = new Map(
+    (current?.events ?? []).map((event) => [event.sequence, event] as const),
+  );
+  for (const event of incoming.events) bySequence.set(event.sequence, event);
+  return {
+    state: incoming.state,
+    events: [...bySequence.values()].sort((left, right) => left.sequence - right.sequence),
+    next_sequence: Math.max(current?.next_sequence ?? 0, incoming.next_sequence),
+    warning: incoming.warning,
+  };
 }

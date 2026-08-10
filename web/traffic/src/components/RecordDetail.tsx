@@ -43,8 +43,8 @@ export function RecordDetail({
   bodies,
   bodyStatus,
   decodedBodies = {
-    request: { bytes: null, status: "loaded", message: null },
-    response: { bytes: null, status: "loaded", message: null },
+    request: { bytes: null, error: null },
+    response: { bytes: null, error: null },
   },
   eventTimings = null,
   tab,
@@ -149,10 +149,10 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   const sessionCopiedTimer = useRef<number | undefined>(undefined);
   const total = detail.result?.total_ms ?? detail.live_total_ms;
   const protocol = detail.summary.protocol;
-  const resolvedModel = resolveRequestedEffective(protocol?.model);
-  const resolvedReasoningEffort = resolveRequestedEffective(protocol?.reasoning_effort);
-  const model = resolvedModel.value ?? (detail.state === "active" ? "Detecting…" : "Not reported");
-  const reasoningEffort = resolvedReasoningEffort.value;
+  const model =
+    resolveRequestedEffective(protocol?.model) ??
+    (detail.state === "active" ? "Detecting…" : "Not reported");
+  const reasoningEffort = resolveRequestedEffective(protocol?.reasoning_effort);
   const sessionId = detail.summary.coding_agent_session_id;
   const sessionCopied = sessionId !== null && copiedSessionId === sessionId;
   const stages = timingStages(detail);

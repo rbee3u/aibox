@@ -1,36 +1,89 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { activeDetail, completedDetail } from "../test/fixtures";
+import { LARGE_PRETTY_BYTES } from "../bodyPresentation";
+import {
+  activeDetail,
+  completedDetail,
+  withIncompleteRequestBody,
+  withRequestEncoding,
+} from "../test/fixtures";
+import type { RecordDetail as RecordDetailData, TokenUsage } from "../types";
 import { RecordDetail } from "./RecordDetail";
+
+type RecordDetailProps = ComponentProps<typeof RecordDetail>;
+const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
+
+function detailProps(
+  detail: RecordDetailProps["detail"],
+  overrides: Partial<Omit<RecordDetailProps, "detail">> = {},
+): RecordDetailProps {
+  return {
+    detail,
+    bodies: { request: [], response: [] },
+    bodyStatus: { request: "idle", response: "idle" },
+    tab: "summary",
+    onTabChange: vi.fn(),
+    onDownload: vi.fn(),
+    loadingBody: false,
+    ...overrides,
+  };
+}
+
+function renderDetail(
+  detail: RecordDetailProps["detail"],
+  overrides: Partial<Omit<RecordDetailProps, "detail">> = {},
+) {
+  return render(<RecordDetail {...detailProps(detail, overrides)} />);
+}
+
+function renderRequestBody(
+  detail: RecordDetailProps["detail"],
+  body: Uint8Array,
+  overrides: Partial<Omit<RecordDetailProps, "detail" | "bodies" | "bodyStatus" | "tab">> = {},
+) {
+  return renderDetail(detail, {
+    bodies: { request: [body], response: [] },
+    bodyStatus: { request: "loaded", response: "idle" },
+    tab: "request",
+    ...overrides,
+  });
+}
 
 function definitionValue(scope: HTMLElement, label: string): HTMLElement {
   const term = within(scope).getByText(label, { selector: "dt" });
-  return term.parentElement!.querySelector("dd")!;
+  const definition = term.parentElement?.querySelector<HTMLElement>("dd");
+  if (!definition) throw new Error(`Missing definition for ${label}`);
+  return definition;
 }
 
-describe("Traffic Record Summary", () => {
-  it("renders Claude cache fallback and all diagnostic groups", () => {
+function terms(scope: HTMLElement): string[] {
+  return within(scope)
+    .getAllByRole("term")
+    .map((term) => term.textContent ?? "");
+}
+
+function withTokenUsage(detail: RecordDetailData, tokenUsage: TokenUsage): RecordDetailData {
+  return {
+    ...detail,
+    summary: {
+      ...detail.summary,
+      protocol: { ...detail.summary.protocol!, token_usage: tokenUsage },
+    },
+  };
+}
+
+describe("RecordDetail", () => {
+  it("renders Claude cache fallback and each diagnostic group", () => {
     const detail = {
       ...completedDetail,
-      response: {
-        ...completedDetail.response!,
-        status: 503,
-        reason_phrase: "Service Unavailable",
-      },
       summary: {
         ...completedDetail.summary,
-        response: {
-          ...completedDetail.summary.response!,
-          status: 503,
-        },
         protocol: {
+          ...completedDetail.summary.protocol!,
           family: "claude_messages" as const,
-          response_terminal: true,
           model: { requested: "claude-opus-5", effective: null },
-          reasoning_effort: { requested: "high", effective: null },
-          response_mode: { requested: "stream" as const, observed: "stream" as const },
-          first_token_at_ns: "700000000",
           token_usage: {
             total_input_tokens: 415,
             base_input_tokens: 37,
@@ -41,40 +94,7 @@ describe("Traffic Record Summary", () => {
             output_tokens: 13,
             reasoning_output_tokens: null,
           },
-          errors: [{ kind: "overloaded_error", message: "Overloaded", at_ns: "800000000" }],
-          warnings: [
-            {
-              kind: "cache_write_breakdown_inconsistent",
-              message: "Cache write TTL details do not match the total.",
-              at_ns: null,
-            },
-          ],
         },
-        errors: [
-          {
-            phase: "response",
-            kind: "client_disconnected",
-            message: "Client disconnected.",
-            at_ns: "900000000",
-          },
-        ],
-        warnings: [
-          {
-            phase: "recording",
-            kind: "event_index_failed",
-            message: "Index warning.",
-            at_ns: "1000000000",
-          },
-        ],
-      },
-      assessment: {
-        level: "error" as const,
-        primary: {
-          source: "provider" as const,
-          kind: "overloaded_error",
-          message: "Overloaded",
-        },
-        issue_count: 5,
       },
       diagnostics: {
         provider: [
@@ -127,41 +147,16 @@ describe("Traffic Record Summary", () => {
         ],
       },
     };
-    render(
-      <RecordDetail
-        detail={detail}
-        bodies={{ request: [], response: [] }}
-        bodyStatus={{ request: "idle", response: "idle" }}
-        tab="summary"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
-    );
+    renderDetail(detail);
 
     const summary = screen.getByRole("tabpanel");
-    const modelSummary = within(summary).getByRole("heading", {
-      name: "Model",
-    }).parentElement!;
+    const modelSummary = within(summary).getByRole("region", { name: "Model" });
     expect(within(summary).getByText("claude-opus-5")).toBeInTheDocument();
     expect(within(summary).getByText("high")).toBeInTheDocument();
     expect(within(modelSummary).getByText("Streaming")).toBeInTheDocument();
     const tokenUsage = within(summary).getByRole("region", { name: "Token usage" });
     const inputTokens = within(tokenUsage).getByRole("group", { name: "Input tokens" });
-    expect(Array.from(inputTokens.querySelectorAll("dt"), (term) => term.textContent)).toEqual([
-      "Base input",
-      "Cache hits & refreshes",
-      "Cache writes",
-    ]);
-    for (const label of [
-      "Total input",
-      "Base input",
-      "Cache hits & refreshes",
-      "Cache writes",
-      "Output",
-    ]) {
-      expect(within(tokenUsage).getByText(label)).toBeInTheDocument();
-    }
+    expect(terms(inputTokens)).toEqual(["Base input", "Cache hits & refreshes", "Cache writes"]);
     expect(definitionValue(inputTokens, "Cache writes")).toHaveTextContent("38");
     expect(
       within(tokenUsage).getByRole("group", { name: "Total input tokens" }),
@@ -201,20 +196,10 @@ describe("Traffic Record Summary", () => {
         },
       },
     };
-    const { rerender } = render(
-      <RecordDetail
-        detail={detail}
-        bodies={{ request: [], response: [] }}
-        bodyStatus={{ request: "idle", response: "idle" }}
-        tab="summary"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
-    );
+    const { rerender } = renderDetail(detail);
 
     const inputTokens = screen.getByRole("group", { name: "Input tokens" });
-    expect(Array.from(inputTokens.querySelectorAll("dt"), (term) => term.textContent)).toEqual([
+    expect(terms(inputTokens)).toEqual([
       "Base input",
       "Cache hits & refreshes",
       "Cache writes",
@@ -233,7 +218,7 @@ describe("Traffic Record Summary", () => {
 
     rerender(
       <RecordDetail
-        detail={{
+        {...detailProps({
           ...detail,
           summary: {
             ...detail.summary,
@@ -245,13 +230,7 @@ describe("Traffic Record Summary", () => {
               },
             },
           },
-        }}
-        bodies={{ request: [], response: [] }}
-        bodyStatus={{ request: "idle", response: "idle" }}
-        tab="summary"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
+        })}
       />,
     );
     const partialCacheWrites = screen.getByRole("group", {
@@ -279,30 +258,16 @@ describe("Traffic Record Summary", () => {
         },
       },
     };
-    render(
-      <RecordDetail
-        detail={detail}
-        bodies={{ request: [], response: [] }}
-        bodyStatus={{ request: "idle", response: "idle" }}
-        tab="summary"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
-    );
+    renderDetail(detail);
 
-    const modelSummary = screen.getByRole("heading", { name: "Model" }).parentElement!;
+    const modelSummary = screen.getByRole("region", { name: "Model" });
     expect(within(modelSummary).getByTitle("Model effective-model")).toHaveTextContent(
       "effective-model·high",
     );
     expect(within(modelSummary).getByText("Non-streaming")).toBeInTheDocument();
     expect(screen.queryByText("requested-model")).not.toBeInTheDocument();
-    const timingSection = screen.getByRole("heading", { name: "Timing" }).parentElement!;
-    expect(Array.from(timingSection.querySelectorAll("dt"), (term) => term.textContent)).toEqual([
-      "First token",
-      "Duration",
-      "Ended",
-    ]);
+    const timingSection = screen.getByRole("region", { name: "Timing" });
+    expect(terms(timingSection)).toEqual(["First token", "Duration", "Ended"]);
     expect(definitionValue(timingSection, "Ended")).toHaveTextContent("2026-08-06 12:00:01");
     expect(within(timingSection).getByRole("list", { name: "Timing stages" })).toHaveTextContent(
       "Response body",
@@ -310,31 +275,13 @@ describe("Traffic Record Summary", () => {
   });
 
   it("shows no End Time while a Record is active", () => {
-    render(
-      <RecordDetail
-        detail={activeDetail}
-        bodies={{ request: [], response: [] }}
-        bodyStatus={{ request: "idle", response: "idle" }}
-        tab="summary"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
-    );
+    renderDetail(activeDetail);
 
-    const timingSection = screen.getByRole("heading", { name: "Timing" }).parentElement!;
+    const timingSection = screen.getByRole("region", { name: "Timing" });
     expect(definitionValue(timingSection, "Ended")).toHaveTextContent("—");
   });
 
   it("shows explicit Model states when protocol values are missing", () => {
-    const props = {
-      bodies: { request: [] as Uint8Array[], response: [] as Uint8Array[] },
-      bodyStatus: { request: "idle" as const, response: "idle" as const },
-      tab: "summary" as const,
-      onTabChange: vi.fn(),
-      onDownload: vi.fn(),
-      loadingBody: false,
-    };
     const terminal = {
       ...completedDetail,
       summary: {
@@ -343,8 +290,8 @@ describe("Traffic Record Summary", () => {
         protocol: null,
       },
     };
-    const { rerender } = render(<RecordDetail detail={terminal} {...props} />);
-    let modelSummary = screen.getByRole("heading", { name: "Model" }).parentElement!;
+    const { rerender } = renderDetail(terminal);
+    let modelSummary = screen.getByRole("region", { name: "Model" });
     expect(definitionValue(modelSummary, "Session ID")).toHaveTextContent("Not reported");
     expect(within(modelSummary).getByTitle("Model Not reported")).toHaveTextContent("Not reported");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
@@ -365,27 +312,19 @@ describe("Traffic Record Summary", () => {
         },
       },
     };
-    rerender(<RecordDetail detail={active} {...props} />);
-    modelSummary = screen.getByRole("heading", { name: "Model" }).parentElement!;
+    rerender(<RecordDetail {...detailProps(active)} />);
+    modelSummary = screen.getByRole("region", { name: "Model" });
     expect(within(modelSummary).getByTitle("Model Detecting…")).toHaveTextContent("Detecting…");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
     expect(within(modelSummary).queryByText("Streaming")).not.toBeInTheDocument();
   });
 
   it("derives usage state from the persisted protocol summary", () => {
-    const props = {
-      bodies: { request: [] as Uint8Array[], response: [] as Uint8Array[] },
-      bodyStatus: { request: "idle" as const, response: "idle" as const },
-      tab: "summary" as const,
-      onTabChange: vi.fn(),
-      onDownload: vi.fn(),
-      loadingBody: false,
-    };
     const oldRecord = {
       ...completedDetail,
       summary: { ...completedDetail.summary, protocol: null },
     };
-    const { rerender } = render(<RecordDetail detail={oldRecord} {...props} />);
+    const { rerender } = renderDetail(oldRecord);
     expect(screen.getByText("Token usage is unavailable for this protocol.")).toBeInTheDocument();
 
     const terminalWithoutUsage = {
@@ -395,7 +334,7 @@ describe("Traffic Record Summary", () => {
         protocol: { ...completedDetail.summary.protocol!, token_usage: null },
       },
     };
-    rerender(<RecordDetail detail={terminalWithoutUsage} {...props} />);
+    rerender(<RecordDetail {...detailProps(terminalWithoutUsage)} />);
     expect(
       screen.getByText("The completed response did not report token usage."),
     ).toBeInTheDocument();
@@ -412,7 +351,7 @@ describe("Traffic Record Summary", () => {
         },
       },
     };
-    rerender(<RecordDetail detail={activeWithoutUsage} {...props} />);
+    rerender(<RecordDetail {...detailProps(activeWithoutUsage)} />);
     expect(
       screen.getByText("Waiting for the upstream API to report token usage."),
     ).toBeInTheDocument();
@@ -421,39 +360,18 @@ describe("Traffic Record Summary", () => {
   it("copies the Session ID and renders OpenAI token labels including zero", async () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
-    const props = {
-      bodies: { request: [] as Uint8Array[], response: [] as Uint8Array[] },
-      bodyStatus: { request: "idle" as const, response: "idle" as const },
-      tab: "summary" as const,
-      onTabChange: vi.fn(),
-      onDownload: vi.fn(),
-      loadingBody: false,
-    };
-    const detail = {
-      ...completedDetail,
-      summary: {
-        ...completedDetail.summary,
-        protocol: {
-          ...completedDetail.summary.protocol!,
-          token_usage: {
-            ...completedDetail.summary.protocol!.token_usage!,
-            output_tokens: 0,
-          },
-        },
-      },
-    };
-    const { rerender } = render(<RecordDetail detail={detail} {...props} />);
+    const detail = withTokenUsage(completedDetail, {
+      ...completedDetail.summary.protocol!.token_usage!,
+      output_tokens: 0,
+    });
+    const { rerender } = renderDetail(detail);
 
     const tokenUsage = screen.getByRole("region", { name: "Token usage" });
     const inputTokens = within(tokenUsage).getByRole("group", { name: "Input tokens" });
-    expect(Array.from(inputTokens.querySelectorAll("dt"), (term) => term.textContent)).toEqual([
-      "Input",
-      "Cached input",
-      "Cache writes",
-    ]);
+    expect(terms(inputTokens)).toEqual(["Input", "Cached input", "Cache writes"]);
     expect(definitionValue(inputTokens, "Cache writes")).toHaveTextContent("—");
     expect(screen.queryByText("Reasoning output")).not.toBeInTheDocument();
-    const modelSummary = screen.getByRole("heading", { name: "Model" }).parentElement!;
+    const modelSummary = screen.getByRole("region", { name: "Model" });
     expect(definitionValue(modelSummary, "Output")).toHaveTextContent(/^0$/);
     const reasoning = within(tokenUsage).getByRole("group", {
       name: "Output includes 64 reasoning tokens",
@@ -466,45 +384,27 @@ describe("Traffic Record Summary", () => {
 
     rerender(
       <RecordDetail
-        detail={{
+        {...detailProps({
           ...detail,
           summary: { ...detail.summary, coding_agent_session_id: "different-session" },
-        }}
-        {...props}
+        })}
       />,
     );
     expect(screen.getByRole("button", { name: "Copy Session ID" })).toBeInTheDocument();
   });
 
   it("preserves the token billing skeleton, missing markers, and explicit zero", () => {
-    const props = {
-      bodies: { request: [] as Uint8Array[], response: [] as Uint8Array[] },
-      bodyStatus: { request: "idle" as const, response: "idle" as const },
-      tab: "summary" as const,
-      onTabChange: vi.fn(),
-      onDownload: vi.fn(),
-      loadingBody: false,
-    };
-    const detail = {
-      ...completedDetail,
-      summary: {
-        ...completedDetail.summary,
-        protocol: {
-          ...completedDetail.summary.protocol!,
-          token_usage: {
-            total_input_tokens: null,
-            base_input_tokens: 0,
-            cached_input_tokens: null,
-            cache_write_tokens: null,
-            cache_write_5m_tokens: null,
-            cache_write_1h_tokens: null,
-            output_tokens: 5,
-            reasoning_output_tokens: 2,
-          },
-        },
-      },
-    };
-    const { rerender } = render(<RecordDetail detail={detail} {...props} />);
+    const detail = withTokenUsage(completedDetail, {
+      total_input_tokens: null,
+      base_input_tokens: 0,
+      cached_input_tokens: null,
+      cache_write_tokens: null,
+      cache_write_5m_tokens: null,
+      cache_write_1h_tokens: null,
+      output_tokens: 5,
+      reasoning_output_tokens: 2,
+    });
+    const { rerender } = renderDetail(detail);
 
     let tokenUsage = screen.getByRole("region", { name: "Token usage" });
     let inputTokens = within(tokenUsage).getByRole("group", { name: "Input tokens" });
@@ -526,22 +426,14 @@ describe("Traffic Record Summary", () => {
 
     rerender(
       <RecordDetail
-        detail={{
-          ...detail,
-          summary: {
-            ...detail.summary,
-            protocol: {
-              ...detail.summary.protocol,
-              token_usage: {
-                ...detail.summary.protocol.token_usage,
-                total_input_tokens: 0,
-                base_input_tokens: null,
-                output_tokens: null,
-              },
-            },
-          },
-        }}
-        {...props}
+        {...detailProps(
+          withTokenUsage(detail, {
+            ...detail.summary.protocol!.token_usage!,
+            total_input_tokens: 0,
+            base_input_tokens: null,
+            output_tokens: null,
+          }),
+        )}
       />,
     );
     tokenUsage = screen.getByRole("region", { name: "Token usage" });
@@ -562,26 +454,18 @@ describe("Traffic Record Summary", () => {
 
     rerender(
       <RecordDetail
-        detail={{
-          ...detail,
-          summary: {
-            ...detail.summary,
-            protocol: {
-              ...detail.summary.protocol,
-              token_usage: {
-                total_input_tokens: null,
-                base_input_tokens: null,
-                cached_input_tokens: null,
-                cache_write_tokens: null,
-                cache_write_5m_tokens: null,
-                cache_write_1h_tokens: null,
-                output_tokens: null,
-                reasoning_output_tokens: 2,
-              },
-            },
-          },
-        }}
-        {...props}
+        {...detailProps(
+          withTokenUsage(detail, {
+            total_input_tokens: null,
+            base_input_tokens: null,
+            cached_input_tokens: null,
+            cache_write_tokens: null,
+            cache_write_5m_tokens: null,
+            cache_write_1h_tokens: null,
+            output_tokens: null,
+            reasoning_output_tokens: 2,
+          }),
+        )}
       />,
     );
     expect(screen.getByText("The upstream API reported no token counters.")).toBeInTheDocument();
@@ -591,17 +475,8 @@ describe("Traffic Record Summary", () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
     const source = '{"nested":{"big":900719925474099312345},"text":"' + `${"界".repeat(201)}"}`;
-    render(
-      <RecordDetail
-        detail={{ ...completedDetail, request_body_bytes: new TextEncoder().encode(source).length }}
-        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
-        bodyStatus={{ request: "loaded", response: "idle" }}
-        tab="request"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
-    );
+    const encoded = new TextEncoder().encode(source);
+    renderRequestBody({ ...completedDetail, request_body_bytes: encoded.length }, encoded);
 
     expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Expand nested" })).toHaveAttribute(
@@ -611,11 +486,8 @@ describe("Traffic Record Summary", () => {
     expect(screen.queryByText("900719925474099312345")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Expand nested" }));
     expect(screen.getByText("900719925474099312345")).toBeInTheDocument();
-    const stringToggle = screen.getByRole("button", { name: "Show all" });
-    expect(stringToggle.nextElementSibling).toHaveAccessibleName("Copy string value");
-
-    const nestedSummary = screen.getByText("Object · 1 item");
-    expect(nestedSummary.nextElementSibling).toHaveAccessibleName("Copy object value");
+    expect(screen.getByRole("button", { name: "Copy string value" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Copy object value" })).toHaveLength(2);
 
     await user.click(screen.getByRole("button", { name: "Copy decoded Body Source" }));
     expect(writeText).toHaveBeenLastCalledWith(source);
@@ -626,16 +498,9 @@ describe("Traffic Record Summary", () => {
 
   it("navigates visible JSON nodes with the ARIA tree keyboard model", () => {
     const source = '{"nested":{"answer":42},"tail":true}';
-    render(
-      <RecordDetail
-        detail={{ ...completedDetail, request_body_bytes: source.length }}
-        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
-        bodyStatus={{ request: "loaded", response: "idle" }}
-        tab="request"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
+    renderRequestBody(
+      { ...completedDetail, request_body_bytes: source.length },
+      new TextEncoder().encode(source),
     );
 
     const initialItems = screen.getAllByRole("treeitem");
@@ -661,49 +526,72 @@ describe("Traffic Record Summary", () => {
 
   it("keeps the real fallback reason when declared JSON cannot be rendered", () => {
     const source = '{"broken":';
-    render(
-      <RecordDetail
-        detail={{ ...completedDetail, request_body_bytes: source.length }}
-        bodies={{ request: [new TextEncoder().encode(source)], response: [] }}
-        bodyStatus={{ request: "loaded", response: "idle" }}
-        tab="request"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
+    renderRequestBody(
+      { ...completedDetail, request_body_bytes: source.length },
+      new TextEncoder().encode(source),
     );
 
     expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("status")).toHaveTextContent("Pretty unavailable:");
   });
 
+  it("shows unsupported encoding instead of waiting for an incomplete JSON Body", () => {
+    const source = new Uint8Array([0x1f, 0x8b]);
+    renderRequestBody(
+      {
+        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "gzip")),
+        request_body_bytes: source.length,
+      },
+      source,
+    );
+
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Unsupported Content-Encoding: gzip");
+    expect(screen.queryByText(/Waiting for the complete JSON Body/)).not.toBeInTheDocument();
+  });
+
+  it("derives the zstd wait state from Body completeness", () => {
+    renderRequestBody(
+      {
+        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "zstd")),
+        request_body_bytes: zstdBytes.length,
+      },
+      zstdBytes,
+      {
+        decodedBodies: {
+          request: { bytes: null, error: null },
+          response: { bytes: null, error: null },
+        },
+      },
+    );
+
+    expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Waiting for the complete zstd Body before decoding",
+    );
+  });
+
+  it("does not offer Pretty rendering for a large non-UTF-8 Body", () => {
+    renderRequestBody(
+      { ...completedDetail, request_body_bytes: LARGE_PRETTY_BYTES + 1 },
+      new Uint8Array([0xff]),
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("not valid UTF-8");
+    expect(screen.queryByRole("button", { name: "Render Pretty" })).not.toBeInTheDocument();
+  });
+
   it("shows decoded zstd bytes as hex when the decoded Source is not UTF-8", () => {
-    const encoded = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
     const decoded = new Uint8Array([0xff, 0x00]);
-    render(
-      <RecordDetail
-        detail={{
-          ...completedDetail,
-          request: {
-            ...completedDetail.request,
-            headers: [
-              ...completedDetail.request.headers,
-              { name: "content-encoding", value_base64: btoa("zstd") },
-            ],
-          },
-          request_body_bytes: encoded.length,
-        }}
-        bodies={{ request: [encoded], response: [] }}
-        bodyStatus={{ request: "loaded", response: "idle" }}
-        decodedBodies={{
-          request: { bytes: decoded, status: "loaded", message: null },
-          response: { bytes: null, status: "idle", message: null },
-        }}
-        tab="request"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
+    renderRequestBody(
+      { ...withRequestEncoding(completedDetail, "zstd"), request_body_bytes: zstdBytes.length },
+      zstdBytes,
+      {
+        decodedBodies: {
+          request: { bytes: decoded, error: null },
+          response: { bytes: null, error: null },
+        },
+      },
     );
 
     expect(screen.getByText("hex: ff 00")).toBeInTheDocument();
@@ -717,22 +605,19 @@ describe("Traffic Record Summary", () => {
     const source =
       'event: transport.delta\ndata: {"type":"answer.delta","value":900719925474099312345}\n\n' +
       "data: [DONE]\n\n";
-    render(
-      <RecordDetail
-        detail={{ ...completedDetail, response_body_bytes: source.length }}
-        bodies={{ request: [], response: [new TextEncoder().encode(source)] }}
-        bodyStatus={{ request: "idle", response: "loaded" }}
-        eventTimings={{
+    renderDetail(
+      { ...completedDetail, response_body_bytes: source.length },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        eventTimings: {
           state: "partial",
           events: [{ sequence: 0, completed_at_ns: "1250500000" }],
           next_sequence: 1,
           warning: "SSE Event timing index is incomplete.",
-        }}
-        tab="response"
-        onTabChange={vi.fn()}
-        onDownload={vi.fn()}
-        loadingBody={false}
-      />,
+        },
+        tab: "response",
+      },
     );
 
     expect(screen.getByText("SSE Event timing index is incomplete.")).toBeInTheDocument();

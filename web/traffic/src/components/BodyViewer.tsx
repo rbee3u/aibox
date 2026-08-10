@@ -14,6 +14,7 @@ import {
   sseEventTypes,
   shouldDeferPretty,
   stringifyJson,
+  type ContentCoding,
   type ParsedSseEvent,
 } from "../bodyPresentation";
 import type { BodyViewMemory } from "../bodyViewMemory";
@@ -60,15 +61,13 @@ export function BodyViewer({
   const original = useMemo(() => concatChunks(bodyChunks), [bodyChunks]);
   const complete = bodyComplete(detail, kind);
   const sourceBytes = useMemo(
-    () =>
-      coding.kind === "identity"
-        ? original
-        : coding.kind === "zstd" && decoded.status === "loaded"
-          ? decoded.bytes
-          : null,
-    [coding.kind, decoded.bytes, decoded.status, original],
+    () => (coding.kind === "identity" ? original : coding.kind === "zstd" ? decoded.bytes : null),
+    [coding.kind, decoded.bytes, original],
   );
-  const decodedText = useMemo(() => (sourceBytes ? decodeUtf8(sourceBytes) : null), [sourceBytes]);
+  const decodedText = useMemo(
+    () => (sourceBytes ? decodeUtf8(sourceBytes, complete) : null),
+    [complete, sourceBytes],
+  );
   const mediaType = bodyMediaType(headers);
   const declaredJson = isJsonMediaType(mediaType);
   const sse = kind === "response" && isSseResponse(detail);
@@ -83,12 +82,13 @@ export function BodyViewer({
     [canParse, decodedText, sse],
   );
   const jsonPretty = parsedJson?.ok === true;
+  const pendingDecode = coding.kind === "zstd" && decoded.bytes === null && decoded.error === null;
   const pendingPretty =
-    (declaredJson && !complete) ||
-    (coding.kind === "zstd" && (decoded.status === "waiting" || decoded.status === "loading"));
+    coding.kind !== "unsupported" && ((declaredJson && !complete) || pendingDecode);
   const prettyAvailable = sse ? parsedEvents !== null : jsonPretty;
   const resolvedMode =
     memory.mode === "pretty" && (prettyAvailable || pendingPretty) ? "pretty" : "source";
+  const canRenderLarge = large && !memory.renderLarge && decodedText?.ok === true;
   const originalSize = kind === "request" ? detail.request_body_bytes : detail.response_body_bytes;
   const decodedSize = coding.kind === "zstd" ? sourceBytes?.length : undefined;
 
@@ -173,12 +173,14 @@ export function BodyViewer({
       </div>
       {bodyStatus === "error" ? (
         <BodyState>Original Body unavailable.</BodyState>
-      ) : bodyStatus === "idle" || (bodyStatus === "loading" && original.length === 0) ? (
+      ) : bodyStatus === "idle" ? (
         <BodyState loading>Loading Body…</BodyState>
       ) : resolvedMode === "pretty" && pendingPretty ? (
         <BodyState loading>
           {coding.kind === "zstd"
-            ? "Waiting for the complete zstd Body before decoding…"
+            ? complete
+              ? "Decoding zstd Body…"
+              : "Waiting for the complete zstd Body before decoding…"
             : "Waiting for the complete JSON Body…"}
         </BodyState>
       ) : resolvedMode === "pretty" && parsedEvents ? (
@@ -205,7 +207,7 @@ export function BodyViewer({
           decodedText={decodedText}
           coding={coding.kind}
           message={sourceMessage({
-            coding: coding.kind,
+            coding,
             decoded,
             invalidUtf8: decodedText?.ok === false,
             declaredJson,
@@ -216,7 +218,7 @@ export function BodyViewer({
             prettyAvailable,
           })}
           onRenderLarge={
-            large && !memory.renderLarge
+            canRenderLarge
               ? () => onMemoryChange({ ...memory, renderLarge: true, mode: "pretty" })
               : undefined
           }
@@ -289,6 +291,14 @@ function SseEventList({
     () => new Map((timings?.events ?? []).map((timing) => [timing.sequence, timing])),
     [timings],
   );
+  const presentedEvents = useMemo(
+    () =>
+      events.map((event) => {
+        const parsed = parseJson(event.data);
+        return { event, parsed, types: sseEventTypes(event, parsed) };
+      }),
+    [events],
+  );
 
   useEffect(
     () => () => {
@@ -301,8 +311,7 @@ function SseEventList({
     if (list && followBottom.current) list.scrollTop = list.scrollHeight;
   }, [events.length]);
 
-  async function copyEvent(event: ParsedSseEvent) {
-    const parsed = parseJson(event.data);
+  async function copyEvent(event: ParsedSseEvent, parsed: ReturnType<typeof parseJson>) {
     const content = parsed.ok ? stringifyJson(parsed.value, true) : event.data;
     try {
       await navigator.clipboard.writeText(content);
@@ -331,11 +340,9 @@ function SseEventList({
             element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
         }}
       >
-        {events.map((event) => {
+        {presentedEvents.map(({ event, parsed, types }) => {
           const open = memory.expandedEvents.has(event.sequence);
-          const types = sseEventTypes(event);
           const timing = timingBySequence.get(event.sequence);
-          const parsed = parseJson(event.data);
           return (
             <article className={styles.eventCard} key={event.sequence}>
               <div className={styles.eventHeader}>
@@ -370,7 +377,7 @@ function SseEventList({
                 <button
                   type="button"
                   className={styles.eventCopy}
-                  onClick={() => void copyEvent(event)}
+                  onClick={() => void copyEvent(event, parsed)}
                   aria-label={
                     copiedEvent === event.sequence ? "SSE Event data copied" : "Copy SSE Event data"
                   }
@@ -451,7 +458,7 @@ function sourceMessage({
   mediaType,
   prettyAvailable,
 }: {
-  coding: "identity" | "zstd" | "unsupported";
+  coding: ContentCoding;
   decoded: DecodedBodyState;
   invalidUtf8: boolean;
   declaredJson: boolean;
@@ -462,9 +469,11 @@ function sourceMessage({
   prettyAvailable: boolean;
 }): string | null {
   if (prettyAvailable) return null;
-  if (coding === "unsupported" || decoded.status === "unsupported") return decoded.message;
-  if (decoded.status === "error") return decoded.message;
-  if (coding === "zstd" && decoded.status !== "loaded") return decoded.message;
+  if (coding.kind === "unsupported") return coding.message;
+  if (decoded.error) return decoded.error;
+  if (coding.kind === "zstd" && decoded.bytes === null) {
+    return complete ? "Decoding zstd Body." : "Waiting for the complete zstd Body before decoding.";
+  }
   if (invalidUtf8) return "Decoded Body is not valid UTF-8; showing decoded bytes as hex.";
   if (large)
     return "Decoded Body is larger than 5 MiB; Source is shown to avoid expensive rendering.";

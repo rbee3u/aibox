@@ -81,10 +81,11 @@ export function RecordList({
 
   useEffect(() => {
     if (focusAfterDelete === undefined) return;
-    const target =
+    const preferred =
       focusAfterDelete === null
         ? refreshButton.current
         : deleteButtons.current.get(focusAfterDelete);
+    const target = preferred && !preferred.disabled ? preferred : refreshButton.current;
     if (!target || target.disabled) return;
     target.focus();
     onFocusAfterDelete();
@@ -115,7 +116,7 @@ export function RecordList({
               type="button"
               className={styles.refreshButton}
               onClick={onRefresh}
-              disabled={refreshing}
+              disabled={refreshing || deletionBusy}
               aria-label={refreshing ? "Refreshing traffic records" : "Refresh traffic records"}
               aria-busy={refreshing}
             >
@@ -184,9 +185,9 @@ export function RecordList({
             const target = recordUrl(record);
             const active = record.state === "active";
             const checked = selected.has(record.id);
-            const model = resolveRequestedEffective(record.protocol?.model).value ?? "—";
+            const model = resolveRequestedEffective(record.protocol?.model) ?? "—";
             const reasoningEffort =
-              resolveRequestedEffective(record.protocol?.reasoning_effort).value ?? "—";
+              resolveRequestedEffective(record.protocol?.reasoning_effort) ?? "—";
             const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
             const ended = formatTimestamp(record.ended_at ?? "");
@@ -299,13 +300,17 @@ export function RecordList({
         )}
       </div>
       <nav className={styles.pagination} aria-label="Record pages">
-        <button type="button" onClick={onPrevious} disabled={!hasPrevious || loading}>
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={!hasPrevious || loading || deletionBusy}
+        >
           <ChevronLeft size={15} aria-hidden="true" /> Previous
         </button>
         <span>
           Page {page} · {records.length} shown · {total} total
         </span>
-        <button type="button" onClick={onNext} disabled={!hasNext || loading}>
+        <button type="button" onClick={onNext} disabled={!hasNext || loading || deletionBusy}>
           Next <ChevronRight size={15} aria-hidden="true" />
         </button>
       </nav>
