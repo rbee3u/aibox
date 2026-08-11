@@ -61,8 +61,20 @@ fn claude_token_is_a_string_field_in_settings() {
     .to_string();
     assert!(wrong_type.contains("must be a string"), "{wrong_type}");
 
-    assert!(NamedConfigDefinition::parse(AgentKind::Claude, "", None).is_err());
-    assert!(NamedConfigDefinition::parse(AgentKind::Claude, "{}", Some("{}")).is_err());
+    let empty_main = NamedConfigDefinition::parse(AgentKind::Claude, "", None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        empty_main.contains("parse Named Config main configuration"),
+        "{empty_main}"
+    );
+    let unexpected_auth = NamedConfigDefinition::parse(AgentKind::Claude, "{}", Some("{}"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        unexpected_auth,
+        "Claude Named Config does not use auth.json"
+    );
 }
 
 #[test]
@@ -123,9 +135,20 @@ fn codex_application_preserves_comments_and_replaces_whole_auth() {
         .unwrap();
     let main = result.main.unwrap();
     assert!(main.contains("# keep comment"), "{main}");
-    assert!(main.contains("model = \"new\""), "{main}");
-    assert!(!main.contains("sandbox_mode"), "{main}");
-    assert!(main.contains("status_line"), "{main}");
+    let document = main.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["model"].as_str(), Some("new"));
+    assert!(document.get("sandbox_mode").is_none());
+    assert_eq!(
+        document["model_providers"]["custom"]["name"].as_str(),
+        Some("custom")
+    );
+    assert_eq!(
+        document["tui"]["status_line"]
+            .as_array()
+            .and_then(|values| values.get(0))
+            .and_then(toml_edit::Value::as_str),
+        Some("model")
+    );
     let auth: Value = serde_json::from_str(result.auth.as_deref().unwrap()).unwrap();
     assert_eq!(auth, serde_json::json!({"OPENAI_API_KEY": "new"}));
 }
@@ -146,19 +169,19 @@ fn codex_openai_base_url_sets_replaces_and_removes() {
         .unwrap();
     let main = result.main.unwrap();
     assert!(main.contains("# endpoint"), "{main}");
-    assert!(
-        main.contains(
-            "openai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\""
-        ),
-        "{main}"
+    let document = main.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(
+        document["openai_base_url"].as_str(),
+        Some("http://host.docker.internal:9923/https://api.openai.com/v1")
     );
-    assert!(main.contains("keep = true"), "{main}");
+    assert_eq!(document["keep"].as_bool(), Some(true));
 
     let omitted = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
     let result = omitted.apply(Some(&main), None).unwrap();
     let main = result.main.unwrap();
-    assert!(!main.contains("openai_base_url"), "{main}");
-    assert!(main.contains("keep = true"), "{main}");
+    let document = main.parse::<toml_edit::DocumentMut>().unwrap();
+    assert!(document.get("openai_base_url").is_none());
+    assert_eq!(document["keep"].as_bool(), Some(true));
 }
 
 #[test]
@@ -184,10 +207,18 @@ fn semantically_empty_missing_files_remain_absent() {
 #[test]
 fn existing_blank_json_configuration_is_invalid() {
     let claude = NamedConfigDefinition::parse(AgentKind::Claude, "{}", None).unwrap();
-    assert!(claude.apply(Some(""), None).is_err());
+    let claude_error = claude.apply(Some(""), None).unwrap_err().to_string();
+    assert!(
+        claude_error.contains("parse Current Config settings.json"),
+        "{claude_error}"
+    );
 
     let codex = NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).unwrap();
-    assert!(codex.apply(None, Some("")).is_err());
+    let codex_error = codex.apply(None, Some("")).unwrap_err().to_string();
+    assert!(
+        codex_error.contains("parse Current Config auth.json"),
+        "{codex_error}"
+    );
 }
 
 #[test]
@@ -215,6 +246,11 @@ fn missing_fields_remove_conflicting_parent_structures() {
         )
         .unwrap();
     let main = result.main.unwrap();
-    assert!(!main.contains("custom"), "{main}");
-    assert!(main.contains("other = true"), "{main}");
+    let document = main.parse::<toml_edit::DocumentMut>().unwrap();
+    let providers = document["model_providers"].as_table_like().unwrap();
+    assert!(providers.get("custom").is_none());
+    assert_eq!(
+        providers.get("other").and_then(toml_edit::Item::as_bool),
+        Some(true)
+    );
 }

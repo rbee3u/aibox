@@ -786,6 +786,27 @@ fn stable_tempdir() -> tempfile::TempDir {
 }
 
 #[cfg(unix)]
+#[track_caller]
+fn wait_for_child_exit(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    failure: &str,
+) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{failure}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
 const SIGNAL_HELPER_DIR: &str = "AIBOX_TEST_SIGNAL_HELPER_DIR";
 #[cfg(unix)]
 const IGNORED_HUP_HELPER_DIR: &str = "AIBOX_TEST_IGNORED_HUP_HELPER_DIR";
@@ -826,7 +847,6 @@ fn ignored_hup_helper_process() {
     unsafe {
         libc::raise(signal_hook::consts::SIGHUP);
     }
-    std::thread::sleep(Duration::from_millis(200));
     std::fs::write(dir.join("survived"), "survived\n").unwrap();
 }
 
@@ -913,7 +933,11 @@ fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) 
     };
     rustix::process::kill_process(pid, rsig).unwrap();
 
-    let status = child.wait().unwrap();
+    let status = wait_for_child_exit(
+        &mut child,
+        Duration::from_secs(10),
+        "signal helper did not exit after receiving the signal",
+    );
     (scratch, status)
 }
 
@@ -1165,18 +1189,11 @@ fn signal_child_forwards_each_supported_signal_to_the_registered_process() {
 
         signal_child(signal);
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("signal {signal} did not terminate the registered child");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let status = wait_for_child_exit(
+            &mut child,
+            Duration::from_secs(2),
+            &format!("signal {signal} did not terminate the registered child"),
+        );
         assert_eq!(
             status.signal(),
             Some(signal),

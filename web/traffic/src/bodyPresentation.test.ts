@@ -67,8 +67,13 @@ describe("Body presentation", () => {
       kind: "identity",
     });
     expect(contentCoding([header("CONTENT-ENCODING", " ZsTd ")])).toEqual({ kind: "zstd" });
-    expect(contentCoding([header("content-encoding", "gzip, zstd")])).toMatchObject({
+    expect(contentCoding([header("content-encoding", "gzip, zstd")])).toEqual({
       kind: "unsupported",
+      message: "Unsupported Content-Encoding: gzip, zstd",
+    });
+    expect(contentCoding([{ name: "content-encoding", value_base64: btoa("\xff") }])).toEqual({
+      kind: "unsupported",
+      message: "Content-Encoding header is not valid UTF-8",
     });
     expect(bodyMediaType([header("Content-Type", "Application/Problem+JSON; charset=utf-8")])).toBe(
       "application/problem+json",

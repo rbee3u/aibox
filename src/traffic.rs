@@ -276,11 +276,21 @@ mod tests {
 
     #[test]
     fn non_loopback_listener_requires_explicit_remote_permission() {
+        for listen in ["127.0.0.1:9923", "[::1]:9923"] {
+            validate_listener_scope(&TrafficArgs {
+                listen: listen.parse().unwrap(),
+                allow_remote: false,
+            })
+            .unwrap();
+        }
         let denied = TrafficArgs {
             listen: "0.0.0.0:9923".parse().unwrap(),
             allow_remote: false,
         };
-        assert!(validate_listener_scope(&denied).is_err());
+        assert_eq!(
+            validate_listener_scope(&denied).unwrap_err().to_string(),
+            "non-loopback Traffic listener 0.0.0.0:9923 requires --allow-remote"
+        );
         let allowed = TrafficArgs {
             allow_remote: true,
             ..denied
@@ -301,47 +311,42 @@ mod tests {
     }
 
     #[test]
-    fn startup_summary_uses_loopback_viewer_and_home_relative_records() {
-        assert_eq!(
-            startup_summary(
+    fn startup_summary_formats_the_viewer_and_records_location() {
+        for (port, records, home, expected_records) in [
+            (
                 9923,
-                Path::new("/Users/example/.aibox/traffic"),
-                Some(Path::new("/Users/example")),
+                "/Users/example/.aibox/traffic",
+                Some("/Users/example"),
+                "~/.aibox/traffic",
             ),
-            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records ~/.aibox/traffic"
-        );
-    }
-
-    #[test]
-    fn startup_summary_changes_only_the_viewer_port() {
-        assert_eq!(
-            startup_summary(
+            (
                 8080,
-                Path::new("/Users/example/.aibox/traffic"),
-                Some(Path::new("/Users/example")),
+                "/Users/example/.aibox/traffic",
+                Some("/Users/example"),
+                "~/.aibox/traffic",
             ),
-            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:8080/\n   Raw records ~/.aibox/traffic"
-        );
-    }
-
-    #[test]
-    fn startup_summary_keeps_records_outside_home_absolute() {
-        assert_eq!(
-            startup_summary(
+            (
                 9923,
-                Path::new("/var/lib/aibox/traffic"),
-                Some(Path::new("/Users/example")),
+                "/var/lib/aibox/traffic",
+                Some("/Users/example"),
+                "/var/lib/aibox/traffic",
             ),
-            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records /var/lib/aibox/traffic"
-        );
-    }
-
-    #[test]
-    fn startup_summary_uses_absolute_records_path_without_home() {
-        assert_eq!(
-            startup_summary(9923, Path::new("/var/lib/aibox/traffic"), None),
-            ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:9923/\n   Raw records /var/lib/aibox/traffic"
-        );
+            (
+                9923,
+                "/var/lib/aibox/traffic",
+                None,
+                "/var/lib/aibox/traffic",
+            ),
+        ] {
+            let home = home.map(Path::new);
+            assert_eq!(
+                startup_summary(port, Path::new(records), home),
+                format!(
+                    ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:{port}/\n   Raw records {expected_records}"
+                ),
+                "port={port}, records={records}, home={home:?}"
+            );
+        }
     }
 
     #[tokio::test]

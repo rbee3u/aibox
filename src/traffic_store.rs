@@ -1,6 +1,7 @@
-use crate::traffic_interpretation::{
-    ProtocolFamily, ProtocolSummary, ResponseModeValue, coding_agent_session_id,
-};
+#[cfg(test)]
+use crate::traffic_assessment::diagnostic_findings;
+use crate::traffic_assessment::{calculate_assessment, refresh_assessment};
+use crate::traffic_interpretation::{ProtocolSummary, coding_agent_session_id};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -381,6 +382,7 @@ pub(super) struct StoredRecord {
     pub request_body_bytes: u64,
     pub response_body_bytes: u64,
     pub active: bool,
+    pub live_elapsed_ns: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -388,10 +390,11 @@ pub(super) struct StoredRecordSummary {
     pub sort_key: String,
     pub summary: SummaryMetadata,
     pub active: bool,
+    pub live_elapsed_ns: Option<String>,
 }
 
 impl RecordAssessment {
-    fn active(issue_count: usize) -> Self {
+    pub(super) fn active(issue_count: usize) -> Self {
         Self {
             level: AssessmentLevel::Active,
             primary: None,
@@ -399,256 +402,12 @@ impl RecordAssessment {
         }
     }
 
-    fn ok() -> Self {
+    pub(super) fn ok() -> Self {
         Self {
             level: AssessmentLevel::Ok,
             primary: None,
             issue_count: 0,
         }
-    }
-}
-
-pub(super) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RecordAssessment {
-    calculate_assessment(summary, active, !summary.terminal && !active)
-}
-
-pub(super) fn diagnostic_findings(
-    summary: &SummaryMetadata,
-    interrupted: bool,
-) -> Vec<AssessmentFinding> {
-    let mut findings = Vec::new();
-
-    for error in &summary.errors {
-        let level = if matches!(
-            error.kind.as_str(),
-            "client_disconnected" | "request_body_failed" | "event_index_failed"
-        ) {
-            AssessmentLevel::Warning
-        } else {
-            AssessmentLevel::Error
-        };
-        push_finding(
-            &mut findings,
-            AssessmentFinding {
-                level,
-                source: AssessmentSource::Traffic,
-                kind: error.kind.clone(),
-                message: error.message.clone(),
-                phase: Some(error.phase.clone()),
-                at_ns: Some(error.at_ns.clone()),
-            },
-        );
-    }
-
-    if summary.errors.is_empty()
-        && let Some(outcome) = summary.outcome
-        && outcome != Outcome::Completed
-    {
-        let level = if outcome == Outcome::ClientDisconnected {
-            AssessmentLevel::Warning
-        } else {
-            AssessmentLevel::Error
-        };
-        push_finding(
-            &mut findings,
-            AssessmentFinding {
-                level,
-                source: AssessmentSource::Traffic,
-                kind: outcome.as_str().to_string(),
-                message: outcome_fallback_message(outcome).to_string(),
-                phase: None,
-                at_ns: summary.timing.finished_at_ns.clone(),
-            },
-        );
-    }
-
-    if let Some(response) = &summary.response
-        && response.status >= 400
-    {
-        push_finding(
-            &mut findings,
-            AssessmentFinding {
-                level: AssessmentLevel::Error,
-                source: AssessmentSource::Http,
-                kind: format!("http_{}", response.status),
-                message: format!("Upstream returned HTTP {}", response.status),
-                phase: Some("response".to_string()),
-                at_ns: summary.timing.upstream_response_headers_at_ns.clone(),
-            },
-        );
-    }
-
-    if let Some(protocol) = &summary.protocol {
-        for error in &protocol.errors {
-            push_finding(
-                &mut findings,
-                AssessmentFinding {
-                    level: AssessmentLevel::Error,
-                    source: AssessmentSource::Provider,
-                    kind: error.kind.clone(),
-                    message: error.message.clone(),
-                    phase: Some("model_api".to_string()),
-                    at_ns: error.at_ns.clone(),
-                },
-            );
-        }
-        for warning in &protocol.warnings {
-            push_finding(
-                &mut findings,
-                AssessmentFinding {
-                    level: AssessmentLevel::Warning,
-                    source: if warning.kind == "cancelled" {
-                        AssessmentSource::Provider
-                    } else {
-                        AssessmentSource::Diagnostic
-                    },
-                    kind: warning.kind.clone(),
-                    message: warning.message.clone(),
-                    phase: Some("model_api".to_string()),
-                    at_ns: warning.at_ns.clone(),
-                },
-            );
-        }
-        let streaming = protocol.response_mode.observed == Some(ResponseModeValue::Stream)
-            || (protocol.response_mode.observed.is_none()
-                && protocol.response_mode.requested == Some(ResponseModeValue::Stream));
-        if summary.terminal
-            && summary.outcome == Some(Outcome::Completed)
-            && protocol.family != ProtocolFamily::Unknown
-            && streaming
-            && !protocol.response_terminal
-        {
-            push_finding(
-                &mut findings,
-                AssessmentFinding {
-                    level: AssessmentLevel::Warning,
-                    source: AssessmentSource::Diagnostic,
-                    kind: "model_response_terminal_not_observed".to_string(),
-                    message: "The recognized model stream ended without a terminal protocol event"
-                        .to_string(),
-                    phase: Some("model_api".to_string()),
-                    at_ns: summary
-                        .timing
-                        .upstream_response_body_completed_at_ns
-                        .clone(),
-                },
-            );
-        }
-    }
-
-    for warning in &summary.warnings {
-        push_finding(
-            &mut findings,
-            AssessmentFinding {
-                level: AssessmentLevel::Warning,
-                source: AssessmentSource::Diagnostic,
-                kind: warning.kind.clone(),
-                message: warning.message.clone(),
-                phase: Some(warning.phase.clone()),
-                at_ns: Some(warning.at_ns.clone()),
-            },
-        );
-    }
-
-    if interrupted {
-        push_finding(
-            &mut findings,
-            AssessmentFinding {
-                level: AssessmentLevel::Warning,
-                source: AssessmentSource::Traffic,
-                kind: "interrupted".to_string(),
-                message: "Traffic Proxy stopped before the Traffic Record was finalized"
-                    .to_string(),
-                phase: None,
-                at_ns: None,
-            },
-        );
-    }
-
-    findings
-}
-
-fn calculate_assessment(
-    summary: &SummaryMetadata,
-    active: bool,
-    interrupted: bool,
-) -> RecordAssessment {
-    let findings = diagnostic_findings(summary, interrupted);
-    if active {
-        return RecordAssessment::active(findings.len());
-    }
-    let Some(primary) = findings
-        .iter()
-        .min_by_key(|finding| finding_sort_key(finding))
-    else {
-        return RecordAssessment::ok();
-    };
-    RecordAssessment {
-        level: primary.level,
-        primary: Some(AssessmentPrimary {
-            source: primary.source,
-            kind: primary.kind.clone(),
-            message: primary.message.clone(),
-        }),
-        issue_count: findings.len(),
-    }
-}
-
-fn refresh_assessment(summary: &mut SummaryMetadata) {
-    summary.assessment = calculate_assessment(summary, !summary.terminal, false);
-}
-
-fn push_finding(findings: &mut Vec<AssessmentFinding>, finding: AssessmentFinding) {
-    if let Some(existing) = findings.iter_mut().find(|existing| {
-        existing.source == finding.source
-            && existing.kind == finding.kind
-            && existing.message == finding.message
-    }) {
-        if offset_key(finding.at_ns.as_deref()) < offset_key(existing.at_ns.as_deref()) {
-            *existing = finding;
-        }
-        return;
-    }
-    findings.push(finding);
-}
-
-fn finding_sort_key(finding: &AssessmentFinding) -> (u8, u8, u128) {
-    let severity = match finding.level {
-        AssessmentLevel::Error => 0,
-        AssessmentLevel::Warning => 1,
-        AssessmentLevel::Active | AssessmentLevel::Ok => 2,
-    };
-    let source = if finding.source == AssessmentSource::Traffic
-        && matches!(
-            finding.kind.as_str(),
-            "recording_failed" | "request_recording_failed" | "response_recording_failed"
-        ) {
-        0
-    } else {
-        match finding.source {
-            AssessmentSource::Provider => 1,
-            AssessmentSource::Traffic => 2,
-            AssessmentSource::Http => 3,
-            AssessmentSource::Diagnostic => 4,
-        }
-    };
-    (severity, source, offset_key(finding.at_ns.as_deref()))
-}
-
-fn offset_key(value: Option<&str>) -> u128 {
-    value
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(u128::MAX)
-}
-
-fn outcome_fallback_message(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::Completed => "The proxy attempt completed",
-        Outcome::Rejected => "The proxy rejected the upstream request",
-        Outcome::UpstreamError => "The upstream request or response failed",
-        Outcome::ClientDisconnected => "The client disconnected before the proxy attempt completed",
-        Outcome::RecordingFailed => "The Traffic Record could not be recorded completely",
-        Outcome::ServerShutdown => "Traffic Proxy stopped before the attempt completed",
     }
 }
 
@@ -832,7 +591,7 @@ impl TrafficStore {
     ) -> Result<()> {
         let _namespace = self
             .namespace
-            .read()
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let directory = locator.path();
         validate_record_ancestor(&self.root, &directory)?;
@@ -1209,15 +968,6 @@ impl TrafficStore {
         self.find_unlocked(id)
     }
 
-    pub fn live_elapsed_ns(&self, id: &str) -> Option<String> {
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(id)
-            .copied()
-            .map(offset_ns)
-    }
-
     pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
         let _namespace = self
             .namespace
@@ -1456,11 +1206,12 @@ fn read_record_summary(
     validate_id(&summary.record_id)?;
     let directory = parse_record_directory_name(path, &summary.record_id)?;
     validate_summary(&summary)?;
-    let active_record = !summary.terminal && active.contains_key(&summary.record_id);
+    let live_elapsed_ns = active_elapsed_ns(summary.terminal, active, &summary.record_id);
     Ok(StoredRecordSummary {
         sort_key: canonical_sort_key(&summary, &directory.host, &summary.record_id)?,
         summary,
-        active: active_record,
+        active: live_elapsed_ns.is_some(),
+        live_elapsed_ns,
     })
 }
 
@@ -1530,7 +1281,7 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
         http_version: metadata.http_version,
         headers: metadata.headers,
     });
-    let active_record = !summary.terminal && active.contains_key(&request.id);
+    let live_elapsed_ns = active_elapsed_ns(summary.terminal, active, &request.id);
     let result = summary.terminal.then(|| {
         let mut result = summary_to_result(&summary);
         result.request_bytes = request_body_bytes;
@@ -1546,8 +1297,21 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
         result,
         request_body_bytes,
         response_body_bytes,
-        active: active_record,
+        active: live_elapsed_ns.is_some(),
+        live_elapsed_ns,
     })
+}
+
+fn active_elapsed_ns(
+    terminal: bool,
+    active: &HashMap<String, Instant>,
+    record_id: &str,
+) -> Option<String> {
+    if terminal {
+        None
+    } else {
+        active.get(record_id).copied().map(offset_ns)
+    }
 }
 
 fn validate_schema(version: u32, kind: &str, expected: &str) -> Result<()> {
@@ -2217,6 +1981,57 @@ mod tests {
     }
 
     #[test]
+    fn response_metadata_publication_excludes_detail_readers() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin("GET", "/response", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        let reader = store
+            .namespace
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(0);
+        let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(0);
+        let writer_store = store.clone();
+        let locator = record.locator.clone();
+        let summary = record.summary.clone();
+        let writer = std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
+            let result = writer_store.write_response(
+                &locator,
+                &summary,
+                &ResponseMetadata {
+                    format_version: FORMAT_VERSION,
+                    source: ResponseSource::Upstream,
+                    headers_at: utc_now(),
+                    status: 200,
+                    http_version: "HTTP/1.1".to_string(),
+                    headers: Vec::new(),
+                },
+            );
+            finished_sender.send(result).unwrap();
+        });
+
+        started_receiver.recv().unwrap();
+        assert!(matches!(
+            finished_receiver.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(reader);
+        finished_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+
+        assert_eq!(
+            store.find(&record.id).unwrap().response.unwrap().status,
+            200
+        );
+    }
+
+    #[test]
     fn safe_unprefixed_nonterminal_directory_remains_readable_without_migration() {
         let temp = tempfile::tempdir().unwrap();
         let first = TrafficStore::open(temp.path()).unwrap();
@@ -2332,7 +2147,11 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].request.id, record.id);
         assert!(!listed[0].active);
-        assert!(store.find(&record.id).is_err());
+        let error = format!("{:#}", store.find(&record.id).unwrap_err());
+        assert!(
+            error.contains("Traffic request metadata does not exist"),
+            "the preserved collision directory must remain visibly invalid: {error}"
+        );
     }
 
     #[test]
@@ -2540,7 +2359,7 @@ mod tests {
         let store = TrafficStore::open(temp.path()).unwrap();
         let outside = temp.path().join("outside");
         fs::write(&outside, b"outside").unwrap();
-        let mut ids = Vec::new();
+        let mut corrupted_records = Vec::new();
         for corruption in ["request_metadata", "response_metadata", "request_body"] {
             let (mut record, _) = store
                 .begin("GET", "/corrupt", None, "HTTP/1.1", Vec::new(), None)
@@ -2585,12 +2404,25 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            ids.push(record.id);
+            corrupted_records.push((corruption, record.id));
         }
 
-        assert_eq!(store.scan_summaries().unwrap().len(), ids.len());
-        for id in ids {
-            assert!(store.find(&id).is_err());
+        assert_eq!(
+            store.scan_summaries().unwrap().len(),
+            corrupted_records.len()
+        );
+        for (corruption, id) in corrupted_records {
+            let error = format!("{:#}", store.find(&id).unwrap_err());
+            let expected = match corruption {
+                "request_metadata" => "parse Traffic request metadata",
+                "response_metadata" => "Traffic response metadata is not a regular file",
+                "request_body" => "Traffic request body is not a regular file",
+                _ => unreachable!(),
+            };
+            assert!(
+                error.contains(expected),
+                "{corruption} should fail detail reads for its own reason: {error}"
+            );
         }
     }
 
@@ -2826,9 +2658,17 @@ mod tests {
         let renamed = store.root().join(format!("wrong-name-{id}"));
         fs::rename(&record.directory, &renamed).unwrap();
         assert!(store.scan().unwrap().is_empty());
-        assert!(store.find(&id).is_err());
+        let find_error = format!("{:#}", store.find(&id).unwrap_err());
+        assert!(
+            find_error.contains("Traffic Record directory name is not structurally valid"),
+            "{find_error}"
+        );
         store.abandon_active(&id);
-        assert!(store.delete_ids(&[id]).is_err());
+        let delete_error = format!("{:#}", store.delete_ids(&[id]).unwrap_err());
+        assert!(
+            delete_error.contains("Traffic Record directory name is not structurally valid"),
+            "{delete_error}"
+        );
         assert!(renamed.exists());
     }
 
@@ -2920,7 +2760,11 @@ mod tests {
             .unwrap();
         let terminal_directory = record.locator.path();
         symlink(&target, terminal_directory.join("unsafe-link")).unwrap();
-        assert!(store.delete_ids(std::slice::from_ref(&record.id)).is_err());
+        let error = store
+            .delete_ids(std::slice::from_ref(&record.id))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsafe entry"), "{error}");
         assert_eq!(fs::read(target).unwrap(), b"keep");
         assert!(terminal_directory.exists());
     }
@@ -2946,7 +2790,11 @@ mod tests {
         let (active, _) = store
             .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
             .unwrap();
-        assert!(store.delete_all(1).is_err());
+        let error = store.delete_all(1).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "deletable Traffic Record count changed (expected 1, now 2)"
+        );
         assert_eq!(store.scan().unwrap().len(), 3);
         assert_eq!(store.delete_all(2).unwrap(), 2);
         let remaining = store.scan().unwrap();

@@ -982,11 +982,15 @@ mod tests {
         for args in [
             &["aibox", "traffic", "--listen", "127.0.0.1:0"][..],
             &["aibox", "traffic", "--listen", "localhost:9923"][..],
+        ] {
+            assert_parse_error(args, ErrorKind::ValueValidation);
+        }
+        for args in [
             &["aibox", "traffic", "--agent", "codex"][..],
             &["aibox", "traffic", "--tenant", "work"][..],
             &["aibox", "traffic", "--host"][..],
         ] {
-            assert!(Cli::try_parse_from(args).is_err(), "accepted {args:?}");
+            assert_parse_error(args, ErrorKind::UnknownArgument);
         }
     }
 }

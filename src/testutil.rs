@@ -18,17 +18,6 @@ pub(crate) fn write_stub_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// True if `args` contains `a` immediately followed by `b` — the shape every
-/// Docker/agent flag-with-value takes in an assembled argv.
-pub(crate) fn contains_pair(args: &[String], a: &str, b: &str) -> bool {
-    pair_pos(args, a, b).is_some()
-}
-
-/// The index of the `a` in an `a b` pair, for asserting relative order.
-pub(crate) fn pair_pos(args: &[String], a: &str, b: &str) -> Option<usize> {
-    args.windows(2).position(|w| w[0] == a && w[1] == b)
-}
-
 /// Return the only item in a slice, with a useful failure when a scenario
 /// unexpectedly produces zero or multiple results.
 #[track_caller]

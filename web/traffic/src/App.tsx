@@ -1,25 +1,15 @@
 import { BookOpen, Box, GitFork, LoaderCircle, Radio, SunMoon } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
-import { ApiError, createTrafficApi } from "./api";
-import { bodyComplete, bodyHeaders, contentCoding, isSseResponse } from "./bodyPresentation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { createTrafficApi } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
 import { StatusBanner } from "./components/StatusBanner";
-import type {
-  BodyKind,
-  BodyLoadStatus,
-  DecodedBodyState,
-  DetailTab,
-  EventTimingIndex,
-  RecordDetail as RecordDetailData,
-  RecordList as RecordListData,
-  RecordSummary,
-  RecordState,
-  TrafficApi,
-} from "./types";
-import { mergeEventTimings } from "./utils";
+import { useRecordInspection } from "./useRecordInspection";
+import { MAX_LIST_WIDTH, MIN_LIST_WIDTH, useResizableListWidth } from "./useResizableListWidth";
+import { usePersistentTheme, type ThemePreference } from "./usePersistentTheme";
+import type { RecordList as RecordListData, RecordSummary, TrafficApi } from "./types";
 import styles from "./App.module.css";
 
 interface AppProps {
@@ -27,45 +17,25 @@ interface AppProps {
 }
 type Dialog = { kind: "selected"; ids: string[] } | { kind: "all"; count: number } | null;
 type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
-type ErrorSource = "list" | "detail" | "body" | "action";
+type ErrorSource = "list" | "action";
 type AppErrors = Record<ErrorSource, string | null>;
 
 const LIST_POLL_INTERVAL_MS = 5000;
-const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
 const RECORDS_PER_PAGE = 50;
-const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, error: null };
-const THEME_STORAGE_KEY = "aibox-traffic-theme";
-const LIST_WIDTH_STORAGE_KEY = "aibox-traffic-list-width";
-const DEFAULT_LIST_WIDTH = 480;
-const MIN_LIST_WIDTH = 360;
-const MAX_LIST_WIDTH = 640;
-const LIST_WIDTH_STEP = 16;
-const EMPTY_ERRORS: AppErrors = { list: null, detail: null, body: null, action: null };
-const EMPTY_BODIES: Record<BodyKind, Uint8Array[]> = { request: [], response: [] };
-const EMPTY_BODY_STATUS: Record<BodyKind, BodyLoadStatus> = {
-  request: "idle",
-  response: "idle",
-};
-const EMPTY_DECODED_BODIES: Record<BodyKind, DecodedBodyState> = {
-  request: EMPTY_DECODED_BODY,
-  response: EMPTY_DECODED_BODY,
-};
-
-type ThemePreference = "system" | "light" | "dark";
-
-interface SplitDrag {
-  pointerId: number;
-  startX: number;
-  startWidth: number;
-  currentWidth: number;
-}
+const EMPTY_ERRORS: AppErrors = { list: null, action: null };
 
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
-  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
-  const [listWidth, setListWidth] = useState(readListWidth);
-  const [resizing, setResizing] = useState(false);
-  const splitDrag = useRef<SplitDrag | null>(null);
+  const [theme, setTheme] = usePersistentTheme();
+  const {
+    listWidth,
+    resizing,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onKeyDown,
+    reset: resetListWidth,
+  } = useResizableListWidth();
   const [list, setList] = useState<RecordListData>({
     records: [],
     total: 0,
@@ -77,22 +47,8 @@ export function App({ api: providedApi }: AppProps) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const selectionPages = useRef<Map<string, number>>(new Map());
-  const [currentId, setCurrentId] = useState<string | null>(null);
-  const currentIdRef = useRef<string | null>(null);
-  const [currentState, setCurrentState] = useState<RecordState | null>(null);
-  const [detail, setDetail] = useState<RecordDetailData | null>(null);
-  const [bodies, setBodies] = useState(EMPTY_BODIES);
-  const [bodyStatus, setBodyStatus] = useState(EMPTY_BODY_STATUS);
-  const [decodedBodies, setDecodedBodies] = useState(EMPTY_DECODED_BODIES);
-  const [eventTimings, setEventTimings] = useState<EventTimingIndex | null>(null);
-  const timingNextSequence = useRef(0);
-  const offsets = useRef({ request: 0, response: 0 });
-  const decodedLoaded = useRef({ request: false, response: false });
-  const [tab, setTab] = useState<DetailTab>("summary");
   const [loadingList, setLoadingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [loadingBody, setLoadingBody] = useState(false);
   const [errors, setErrors] = useState<AppErrors>(EMPTY_ERRORS);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [deletion, setDeletion] = useState<Deletion>(null);
@@ -100,86 +56,10 @@ export function App({ api: providedApi }: AppProps) {
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
-  const detailController = useRef<AbortController | null>(null);
-  const bodyController = useRef<AbortController | null>(null);
   const deleting = deletion?.kind === "batch";
   const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
   const deletionBusy = deletion !== null;
-  const activeId = detail?.state === "active" ? detail.request.id : null;
-  const detailState = detail?.state ?? null;
-  const responseAvailable = Boolean(detail?.response);
-  const visibleBodyKind = tab === "summary" ? null : tab;
-  const visibleBodyCodingKind =
-    detail && visibleBodyKind
-      ? contentCoding(bodyHeaders(detail, visibleBodyKind)).kind
-      : "identity";
-  const visibleBodyComplete =
-    detail !== null && visibleBodyKind !== null ? bodyComplete(detail, visibleBodyKind) : false;
-  const shouldLoadVisibleTimings =
-    visibleBodyKind === "response" && detail !== null && isSseResponse(detail);
-  const visibleDetailError = errors.detail ?? errors.body;
-  const visibleDetailErrorSource = errors.detail ? "detail" : "body";
 
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    if (theme === "system") root.removeAttribute("data-theme");
-    else root.dataset.theme = theme;
-    storePreference(THEME_STORAGE_KEY, theme);
-    return () => root.removeAttribute("data-theme");
-  }, [theme]);
-
-  const updateListWidth = useCallback((value: number, persist = false) => {
-    const next = clampListWidth(value);
-    setListWidth(next);
-    if (persist) storePreference(LIST_WIDTH_STORAGE_KEY, String(next));
-  }, []);
-
-  function startResize(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
-    splitDrag.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startWidth: listWidth,
-      currentWidth: listWidth,
-    };
-    setResizing(true);
-    if (typeof event.currentTarget.setPointerCapture === "function") {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-    event.preventDefault();
-  }
-
-  function resize(event: PointerEvent<HTMLDivElement>) {
-    const drag = splitDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    drag.currentWidth = clampListWidth(drag.startWidth + event.clientX - drag.startX);
-    updateListWidth(drag.currentWidth);
-  }
-
-  function finishResize(event: PointerEvent<HTMLDivElement>) {
-    const drag = splitDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    updateListWidth(drag.currentWidth, true);
-    splitDrag.current = null;
-    setResizing(false);
-    if (
-      typeof event.currentTarget.hasPointerCapture === "function" &&
-      event.currentTarget.hasPointerCapture(event.pointerId)
-    ) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
-
-  function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
-    let next: number | null = null;
-    if (event.key === "ArrowLeft") next = listWidth - LIST_WIDTH_STEP;
-    if (event.key === "ArrowRight") next = listWidth + LIST_WIDTH_STEP;
-    if (event.key === "Home") next = MIN_LIST_WIDTH;
-    if (event.key === "End") next = MAX_LIST_WIDTH;
-    if (next === null) return;
-    event.preventDefault();
-    updateListWidth(next, true);
-  }
   const reportError = useCallback((source: ErrorSource, cause: unknown) => {
     const message = typeof cause === "string" ? cause : errorMessage(cause);
     setErrors((current) => ({ ...current, [source]: message }));
@@ -187,40 +67,32 @@ export function App({ api: providedApi }: AppProps) {
   const clearError = useCallback((source: ErrorSource) => {
     setErrors((current) => (current[source] === null ? current : { ...current, [source]: null }));
   }, []);
+  const inspection = useRecordInspection({ api, records: list.records });
+  const {
+    bodies,
+    bodyStatus,
+    clearCurrentRecord,
+    clearVisibleError,
+    clearRecordIfCurrent,
+    currentId,
+    currentState,
+    decodedBodies,
+    detail,
+    download,
+    eventTimings,
+    error: inspectionError,
+    loadingBody,
+    loadingDetail,
+    selectRecord,
+    setTab,
+    syncCurrentState,
+    tab,
+  } = inspection;
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
     setSelected(new Set());
     selectionPages.current.clear();
   }, []);
-  const resetRecordData = useCallback(() => {
-    setDetail(null);
-    setBodies(EMPTY_BODIES);
-    setBodyStatus(EMPTY_BODY_STATUS);
-    setDecodedBodies(EMPTY_DECODED_BODIES);
-    setEventTimings(null);
-    timingNextSequence.current = 0;
-    decodedLoaded.current = { request: false, response: false };
-    offsets.current = { request: 0, response: 0 };
-    setTab("summary");
-    setLoadingBody(false);
-    setErrors((current) =>
-      current.detail === null && current.body === null
-        ? current
-        : { ...current, detail: null, body: null },
-    );
-  }, []);
-  const clearCurrentRecord = useCallback(() => {
-    detailController.current?.abort();
-    bodyController.current?.abort();
-    detailController.current = null;
-    bodyController.current = null;
-    currentIdRef.current = null;
-    setCurrentId(null);
-    setCurrentState(null);
-    setLoadingDetail(false);
-    resetRecordData();
-  }, [resetRecordData]);
-
   function beginDeletion(next: Exclude<Deletion, null>): boolean {
     if (deletionInProgress.current) return false;
     deletionInProgress.current = true;
@@ -251,15 +123,7 @@ export function App({ api: providedApi }: AppProps) {
         setList(payload);
         setPage(targetPage);
         pageRef.current = targetPage;
-        const selectedId = currentIdRef.current;
-        const currentSummary = selectedId
-          ? payload.records.find((record) => record.id === selectedId)
-          : undefined;
-        if (currentSummary) {
-          setCurrentState((current) =>
-            current && current !== "active" ? current : currentSummary.state,
-          );
-        }
+        syncCurrentState(payload.records);
         clearError("list");
         return payload;
       } catch (cause) {
@@ -276,7 +140,7 @@ export function App({ api: providedApi }: AppProps) {
         }
       }
     },
-    [api, clearError, reportError],
+    [api, clearError, reportError, syncCurrentState],
   );
 
   const refreshWithFallback = useCallback(
@@ -301,39 +165,6 @@ export function App({ api: providedApi }: AppProps) {
     }
   }, [page, refreshWithFallback]);
 
-  const selectRecord = useCallback(
-    async (id: string) => {
-      detailController.current?.abort();
-      bodyController.current?.abort();
-      const controller = new AbortController();
-      detailController.current = controller;
-      currentIdRef.current = id;
-      setCurrentId(id);
-      setCurrentState(list.records.find((record) => record.id === id)?.state ?? null);
-      resetRecordData();
-      setLoadingDetail(true);
-      try {
-        const record = await api.getRecord(id, controller.signal);
-        if (detailController.current !== controller || controller.signal.aborted) return;
-        setDetail(record);
-        setCurrentState(record.state);
-      } catch (cause) {
-        if (
-          detailController.current === controller &&
-          !requestWasCancelled(cause, controller.signal)
-        ) {
-          if (isNotFound(cause)) clearCurrentRecord();
-          reportError("detail", cause);
-        }
-      } finally {
-        if (detailController.current === controller) {
-          setLoadingDetail(false);
-        }
-      }
-    },
-    [api, clearCurrentRecord, list.records, reportError, resetRecordData],
-  );
-
   useEffect(() => {
     if (selectionMode) {
       listController.current?.abort();
@@ -352,183 +183,6 @@ export function App({ api: providedApi }: AppProps) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [refreshWithFallback, selectionMode]);
-
-  useEffect(
-    () => () => {
-      listController.current?.abort();
-      detailController.current?.abort();
-      bodyController.current?.abort();
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (loadingDetail || !activeId) return;
-    const id = activeId;
-    const controller = detailController.current;
-    if (!controller) return;
-    let disposed = false;
-    let timer: number | undefined;
-    let shouldContinue = true;
-    const ownsRequest = () =>
-      !disposed &&
-      detailController.current === controller &&
-      currentIdRef.current === id &&
-      !controller.signal.aborted;
-    const poll = async () => {
-      if (!ownsRequest()) return;
-      try {
-        const fresh = await api.getRecord(id, controller.signal);
-        if (!ownsRequest()) return;
-        setDetail(fresh);
-        setCurrentState(fresh.state);
-        clearError("detail");
-        shouldContinue = fresh.state === "active";
-      } catch (cause) {
-        if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
-          if (isNotFound(cause)) {
-            shouldContinue = false;
-            clearCurrentRecord();
-          }
-          reportError("detail", cause);
-        }
-      } finally {
-        if (shouldContinue && ownsRequest()) {
-          timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
-        }
-      }
-    };
-    timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [activeId, api, clearCurrentRecord, clearError, loadingDetail, reportError]);
-
-  useEffect(() => {
-    bodyController.current?.abort();
-    if (loadingDetail || detailState === null || !currentId || tab === "summary") return;
-    if (tab === "response" && !responseAvailable) {
-      return;
-    }
-
-    const id = currentId;
-    const kind = tab;
-    const active = detailState === "active";
-    const controller = new AbortController();
-    bodyController.current = controller;
-    let disposed = false;
-    let timer: number | undefined;
-    let shouldContinue = active && !visibleBodyComplete;
-    const ownsRequest = () =>
-      !disposed &&
-      bodyController.current === controller &&
-      currentIdRef.current === id &&
-      !controller.signal.aborted;
-
-    const poll = async () => {
-      if (!ownsRequest()) return;
-      setLoadingBody(true);
-      try {
-        const chunk = await api.loadBody(id, kind, offsets.current[kind], controller.signal);
-        if (!ownsRequest()) return;
-        if (chunk.bytes.length > 0) {
-          setBodies((current) => ({ ...current, [kind]: [...current[kind], chunk.bytes] }));
-        }
-        offsets.current[kind] = chunk.nextOffset;
-        setBodyStatus((current) => ({ ...current, [kind]: "loaded" }));
-        if (
-          visibleBodyCodingKind === "zstd" &&
-          visibleBodyComplete &&
-          !decodedLoaded.current[kind]
-        ) {
-          setDecodedBodies((current) =>
-            current[kind].error === null ? current : { ...current, [kind]: EMPTY_DECODED_BODY },
-          );
-          try {
-            const decoded = await api.loadDecodedBody(id, kind, controller.signal);
-            if (!ownsRequest()) return;
-            decodedLoaded.current[kind] = true;
-            setDecodedBodies((current) => ({
-              ...current,
-              [kind]: { bytes: decoded, error: null },
-            }));
-          } catch (cause) {
-            if (!ownsRequest() || requestWasCancelled(cause, controller.signal)) return;
-            if (isNotFound(cause)) shouldContinue = false;
-            decodedLoaded.current[kind] = false;
-            setDecodedBodies((current) => ({
-              ...current,
-              [kind]: {
-                bytes: null,
-                error: `Decoded Source unavailable: ${errorMessage(cause)}`,
-              },
-            }));
-          }
-        }
-
-        if (shouldLoadVisibleTimings) {
-          try {
-            const timing = await api.loadEventTimings(
-              id,
-              timingNextSequence.current,
-              controller.signal,
-            );
-            if (!ownsRequest()) return;
-            timingNextSequence.current = Math.max(timingNextSequence.current, timing.next_sequence);
-            setEventTimings((current) => mergeEventTimings(current, timing));
-          } catch (cause) {
-            if (!ownsRequest() || requestWasCancelled(cause, controller.signal)) return;
-            if (isNotFound(cause)) shouldContinue = false;
-            setEventTimings((current) => ({
-              state: "unavailable",
-              events: current?.events ?? [],
-              next_sequence: timingNextSequence.current,
-              warning: `SSE Event timing unavailable: ${errorMessage(cause)}`,
-            }));
-          }
-        }
-        clearError("body");
-      } catch (cause) {
-        if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
-          if (isNotFound(cause)) shouldContinue = false;
-          setBodyStatus((current) => ({
-            ...current,
-            [kind]: current[kind] === "loaded" ? "loaded" : "error",
-          }));
-          reportError("body", cause);
-        }
-      } finally {
-        if (bodyController.current === controller) setLoadingBody(false);
-        if (shouldContinue && ownsRequest()) {
-          timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-      controller.abort();
-      if (bodyController.current === controller) {
-        bodyController.current = null;
-        setLoadingBody(false);
-      }
-    };
-  }, [
-    clearError,
-    currentId,
-    detailState,
-    api,
-    loadingDetail,
-    reportError,
-    responseAvailable,
-    shouldLoadVisibleTimings,
-    tab,
-    visibleBodyCodingKind,
-    visibleBodyComplete,
-  ]);
 
   const selectedIds = [...selected];
 
@@ -620,7 +274,7 @@ export function App({ api: providedApi }: AppProps) {
     clearError("action");
     try {
       await api.deleteRecords([id]);
-      if (currentIdRef.current === id) clearCurrentRecord();
+      clearRecordIfCurrent(id);
       setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
       setFocusAfterDelete(
         focusTargetAfterDelete(
@@ -645,29 +299,6 @@ export function App({ api: providedApi }: AppProps) {
       reportError("action", cause);
     } finally {
       finishDeletion();
-    }
-  }
-
-  async function download(kind: BodyKind) {
-    const id = currentId;
-    const controller = detailController.current;
-    if (!id || !controller) return;
-    try {
-      const { bytes: data } = await api.loadBody(id, kind, 0, controller.signal);
-      if (controller.signal.aborted || detailController.current !== controller) return;
-      const bodyBuffer = data.buffer.slice(
-        data.byteOffset,
-        data.byteOffset + data.byteLength,
-      ) as ArrayBuffer;
-      const url = URL.createObjectURL(new Blob([bodyBuffer]));
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${id}.${kind}.body`;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (cause) {
-      if (detailController.current === controller && !requestWasCancelled(cause, controller.signal))
-        reportError("body", cause);
     }
   }
 
@@ -771,26 +402,26 @@ export function App({ api: providedApi }: AppProps) {
           aria-valuemax={MAX_LIST_WIDTH}
           aria-valuenow={listWidth}
           tabIndex={0}
-          onPointerDown={startResize}
-          onPointerMove={resize}
-          onPointerUp={finishResize}
-          onPointerCancel={finishResize}
-          onDoubleClick={() => updateListWidth(DEFAULT_LIST_WIDTH, true)}
-          onKeyDown={resizeWithKeyboard}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onDoubleClick={resetListWidth}
+          onKeyDown={onKeyDown}
         >
           <span aria-hidden="true" />
         </div>
         <div className={styles.detailColumn}>
-          {visibleDetailError && (
+          {inspectionError && (
             <div className={styles.scopedBanner}>
               <StatusBanner
-                message={visibleDetailError}
+                message={inspectionError}
                 action={
                   currentId
                     ? { label: "Retry", onClick: () => void selectRecord(currentId) }
                     : undefined
                 }
-                onDismiss={() => clearError(visibleDetailErrorSource)}
+                onDismiss={clearVisibleError}
               />
             </div>
           )}
@@ -848,38 +479,6 @@ export function App({ api: providedApi }: AppProps) {
   );
 }
 
-function readThemePreference(): ThemePreference {
-  const value = readPreference(THEME_STORAGE_KEY);
-  return value === "light" || value === "dark" || value === "system" ? value : "system";
-}
-
-function readListWidth(): number {
-  const stored = readPreference(LIST_WIDTH_STORAGE_KEY);
-  if (stored === null) return DEFAULT_LIST_WIDTH;
-  const value = Number(stored);
-  return Number.isFinite(value) ? clampListWidth(value) : DEFAULT_LIST_WIDTH;
-}
-
-function clampListWidth(value: number): number {
-  return Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(value)));
-}
-
-function readPreference(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function storePreference(key: string, value: string) {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Appearance preferences are optional; the viewer remains fully usable without storage.
-  }
-}
-
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Traffic management request failed";
 }
@@ -889,10 +488,6 @@ function requestWasCancelled(cause: unknown, signal: AbortSignal): boolean {
     signal.aborted ||
     (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "AbortError")
   );
-}
-
-function isNotFound(cause: unknown): cause is ApiError {
-  return cause instanceof ApiError && cause.status === 404;
 }
 
 function focusTargetAfterDelete(

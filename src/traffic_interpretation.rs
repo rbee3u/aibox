@@ -402,7 +402,7 @@ impl ProtocolObserver {
                     .summary
                     .set_effective_effort(nonempty(envelope.reasoning_effort), Some(at_ns.clone()));
                 if let Some(usage) = envelope.usage {
-                    changed |= self.apply_usage(usage, Some(at_ns.clone()));
+                    changed |= self.apply_usage(&usage, Some(at_ns.clone()));
                 }
                 if self.summary.family != ProtocolFamily::Unknown {
                     if let Some(error) = envelope.error {
@@ -464,115 +464,134 @@ impl ProtocolObserver {
         event: StreamEvent,
         at_ns: String,
     ) -> bool {
-        let kind = event.kind.as_deref().unwrap_or_default();
-        let event_name = event_name.and_then(|value| std::str::from_utf8(value).ok());
-        let family = if kind.starts_with("response.")
-            || event_name.is_some_and(|value| value.starts_with("response."))
-        {
-            ProtocolFamily::OpenaiResponses
-        } else if matches!(
+        let StreamEvent {
             kind,
-            "message_start"
-                | "message_delta"
-                | "message_stop"
-                | "content_block_start"
-                | "content_block_delta"
-                | "content_block_stop"
-        ) || matches!(
-            event_name,
-            Some(
-                "message_start"
-                    | "message_delta"
-                    | "message_stop"
-                    | "content_block_start"
-                    | "content_block_delta"
-                    | "content_block_stop"
-            )
-        ) {
-            ProtocolFamily::ClaudeMessages
-        } else {
-            ProtocolFamily::Unknown
-        };
+            response,
+            message,
+            usage,
+            error,
+            code,
+        } = event;
+        let kind = kind.as_deref().unwrap_or_default();
+        let event_name = event_name.and_then(|value| std::str::from_utf8(value).ok());
+        let family = event_family(kind, event_name);
         let mut changed = self.summary.set_family(family, Some(at_ns.clone()));
 
         if self.summary.family != ProtocolFamily::Unknown
-            && let Some(response) = event.response
+            && let Some(response) = response
         {
-            changed |= self
-                .summary
-                .set_effective_model(nonempty(response.model), Some(at_ns.clone()));
-            changed |= self
-                .summary
-                .set_effective_effort(nonempty(response.reasoning_effort), Some(at_ns.clone()));
-            if let Some(usage) = response.usage {
-                changed |= self.apply_usage(usage, Some(at_ns.clone()));
-            }
-            if let Some(error) = response.error {
-                let (error_kind, message) =
-                    error_parts(&error, "api_error", "OpenAI response error");
-                changed |= self
-                    .summary
-                    .add_error(error_kind, message, Some(at_ns.clone()));
-            }
-            if let Some(reason) = response.incomplete_details.and_then(|value| value.reason) {
-                changed |= self.summary.add_error(
-                    "response_incomplete",
-                    format!("OpenAI response was incomplete: {reason}"),
-                    Some(at_ns.clone()),
-                );
-            }
+            changed |= self.apply_response_event(response, &at_ns);
         }
 
         if self.summary.family != ProtocolFamily::Unknown
-            && let Some(message) = event.message.as_ref().and_then(Value::as_object)
+            && let Some(message) = message.as_ref()
         {
-            changed |= self.summary.set_effective_model(
-                message
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .and_then(|value| nonempty(Some(value))),
-                Some(at_ns.clone()),
-            );
-            if let Some(usage) = message.get("usage") {
-                match serde_json::from_value::<UsageEnvelope>(usage.clone()) {
-                    Ok(usage) => changed |= self.apply_usage(usage, Some(at_ns.clone())),
-                    Err(error) => {
-                        changed |= self.summary.add_warning(
-                            "token_usage_invalid",
-                            format!("Cannot parse message_start usage: {error}"),
-                            Some(at_ns.clone()),
-                        );
-                    }
-                }
-            }
+            changed |= self.apply_message_event(message, &at_ns);
         }
         if self.summary.family != ProtocolFamily::Unknown
-            && let Some(usage) = event.usage
+            && let Some(usage) = usage
         {
-            changed |= self.apply_usage(usage, Some(at_ns.clone()));
+            changed |= self.apply_usage(&usage, Some(at_ns.clone()));
         }
 
-        if kind == "error" && self.summary.family != ProtocolFamily::Unknown {
-            if let Some(error) = event.error.as_ref() {
-                let (error_kind, message) = error_parts(error, "api_error", "Upstream API error");
-                changed |= self
-                    .summary
-                    .add_error(error_kind, message, Some(at_ns.clone()));
-            } else if let Some(message) = event.message.as_ref().and_then(Value::as_str) {
-                changed |= self.summary.add_error(
-                    event.code.as_deref().unwrap_or("api_error"),
-                    message,
-                    Some(at_ns.clone()),
-                );
-            }
-        }
+        changed |= self.apply_error_event(
+            kind,
+            error.as_ref(),
+            message.as_ref(),
+            code.as_deref(),
+            &at_ns,
+        );
 
         let terminal_kind = event_name
             .filter(|value| is_terminal_event_kind(value))
             .unwrap_or(kind);
+        changed |= self.apply_terminal_event(terminal_kind, at_ns);
+        changed
+    }
+
+    fn apply_response_event(&mut self, response: ResponseEnvelope, at_ns: &str) -> bool {
+        let mut changed = self
+            .summary
+            .set_effective_model(nonempty(response.model), Some(at_ns.to_string()));
+        changed |= self
+            .summary
+            .set_effective_effort(nonempty(response.reasoning_effort), Some(at_ns.to_string()));
+        if let Some(usage) = response.usage {
+            changed |= self.apply_usage(&usage, Some(at_ns.to_string()));
+        }
+        if let Some(error) = response.error {
+            let (error_kind, message) = error_parts(&error, "api_error", "OpenAI response error");
+            changed |= self
+                .summary
+                .add_error(error_kind, message, Some(at_ns.to_string()));
+        }
+        if let Some(reason) = response.incomplete_details.and_then(|value| value.reason) {
+            changed |= self.summary.add_error(
+                "response_incomplete",
+                format!("OpenAI response was incomplete: {reason}"),
+                Some(at_ns.to_string()),
+            );
+        }
+        changed
+    }
+
+    fn apply_message_event(&mut self, message: &Value, at_ns: &str) -> bool {
+        let Some(message) = message.as_object() else {
+            return false;
+        };
+        let mut changed = self.summary.set_effective_model(
+            message
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .and_then(|value| nonempty(Some(value))),
+            Some(at_ns.to_string()),
+        );
+        if let Some(usage) = message.get("usage") {
+            match serde_json::from_value::<UsageEnvelope>(usage.clone()) {
+                Ok(usage) => changed |= self.apply_usage(&usage, Some(at_ns.to_string())),
+                Err(error) => {
+                    changed |= self.summary.add_warning(
+                        "token_usage_invalid",
+                        format!("Cannot parse message_start usage: {error}"),
+                        Some(at_ns.to_string()),
+                    );
+                }
+            }
+        }
+        changed
+    }
+
+    fn apply_error_event(
+        &mut self,
+        kind: &str,
+        error: Option<&Value>,
+        message: Option<&Value>,
+        code: Option<&str>,
+        at_ns: &str,
+    ) -> bool {
+        if kind != "error" || self.summary.family == ProtocolFamily::Unknown {
+            return false;
+        }
+        if let Some(error) = error {
+            let (error_kind, message) = error_parts(error, "api_error", "Upstream API error");
+            self.summary
+                .add_error(error_kind, message, Some(at_ns.to_string()))
+        } else if let Some(message) = message.and_then(Value::as_str) {
+            self.summary.add_error(
+                code.unwrap_or("api_error"),
+                message,
+                Some(at_ns.to_string()),
+            )
+        } else {
+            false
+        }
+    }
+
+    fn apply_terminal_event(&mut self, terminal_kind: &str, at_ns: String) -> bool {
         let terminal = is_terminal_event_kind(terminal_kind)
             || (terminal_kind == "error" && self.summary.family != ProtocolFamily::Unknown);
+        let mut changed = false;
         if terminal && !self.summary.response_terminal {
             self.summary.response_terminal = true;
             changed = true;
@@ -607,7 +626,7 @@ impl ProtocolObserver {
         changed
     }
 
-    fn apply_usage(&mut self, usage: UsageEnvelope, at_ns: Option<String>) -> bool {
+    fn apply_usage(&mut self, usage: &UsageEnvelope, at_ns: Option<String>) -> bool {
         merge_option(&mut self.usage.input_tokens, usage.input_tokens);
         merge_option(
             &mut self.usage.cached_tokens,
@@ -639,21 +658,18 @@ impl ProtocolObserver {
             &mut self.usage.cache_creation_tokens,
             usage.cache_creation_input_tokens,
         );
-        let nested_5m = usage
-            .cache_creation
-            .as_ref()
-            .and_then(|value| value.ephemeral_5m_input_tokens);
-        let nested_1h = usage
-            .cache_creation
-            .as_ref()
-            .and_then(|value| value.ephemeral_1h_input_tokens);
+        let cache_creation = usage.cache_creation.as_ref();
+        let five_minute_cache_writes =
+            cache_creation.and_then(|value| value.ephemeral_5m_input_tokens);
+        let one_hour_cache_writes =
+            cache_creation.and_then(|value| value.ephemeral_1h_input_tokens);
         merge_option(
             &mut self.usage.cache_write_5m_tokens,
-            nested_5m.or(usage.cache_creation_5m_input_tokens),
+            five_minute_cache_writes.or(usage.cache_creation_5m_input_tokens),
         );
         merge_option(
             &mut self.usage.cache_write_1h_tokens,
-            nested_1h.or(usage.cache_creation_1h_input_tokens),
+            one_hour_cache_writes.or(usage.cache_creation_1h_input_tokens),
         );
         self.has_usage = true;
         self.validate_usage(at_ns)
@@ -773,6 +789,30 @@ impl ProtocolObserver {
             ProtocolFamily::Unknown => None,
         }
     }
+}
+
+fn event_family(kind: &str, event_name: Option<&str>) -> ProtocolFamily {
+    if kind.starts_with("response.")
+        || event_name.is_some_and(|value| value.starts_with("response."))
+    {
+        ProtocolFamily::OpenaiResponses
+    } else if is_claude_event_kind(kind) || event_name.is_some_and(is_claude_event_kind) {
+        ProtocolFamily::ClaudeMessages
+    } else {
+        ProtocolFamily::Unknown
+    }
+}
+
+fn is_claude_event_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "message_start"
+            | "message_delta"
+            | "message_stop"
+            | "content_block_start"
+            | "content_block_delta"
+            | "content_block_stop"
+    )
 }
 
 fn is_terminal_event_kind(value: &str) -> bool {
@@ -1088,8 +1128,26 @@ mod tests {
             body_content_coding(&[header("CONTENT-ENCODING", b" ZsTd ")]).unwrap(),
             BodyContentCoding::Zstd
         );
-        assert!(body_content_coding(&[header("content-encoding", b"identity, zstd")]).is_err());
-        assert!(body_content_coding(&[header("content-encoding", b"gzip")]).is_err());
+        for (value, expected) in [
+            (
+                b"identity, zstd".as_slice(),
+                "unsupported Content-Encoding \"identity, zstd\"",
+            ),
+            (b"gzip".as_slice(), "unsupported Content-Encoding \"gzip\""),
+        ] {
+            let error = body_content_coding(&[header("content-encoding", value)])
+                .unwrap_err()
+                .to_string();
+            assert_eq!(error, expected, "{value:?}");
+        }
+
+        let invalid_utf8 = header("content-encoding", &[0xff]);
+        assert_eq!(
+            body_content_coding(&[invalid_utf8])
+                .unwrap_err()
+                .to_string(),
+            "Content-Encoding header is not UTF-8"
+        );
     }
 
     #[test]
@@ -1460,6 +1518,7 @@ mod tests {
             request_body_bytes: 0,
             response_body_bytes: 0,
             active: false,
+            live_elapsed_ns: None,
         };
         assert_eq!(timeline_end_at_ns(&record, None).as_deref(), Some("20"));
     }

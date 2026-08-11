@@ -1,4 +1,5 @@
 use crate::traffic::AppState;
+use crate::traffic_assessment::{diagnostic_findings, effective_assessment};
 use crate::traffic_interpretation::{
     BodyContentCoding, ProtocolSummary, body_content_coding, timeline_end_at_ns,
 };
@@ -6,7 +7,7 @@ use crate::traffic_proxy;
 use crate::traffic_store::{
     AssessmentFinding, AssessmentLevel, AssessmentSource, RecordAssessment, RecordDetailReadError,
     RecordedHeader, ResponseMetadata, ResponseSource, StoredRecordSummary, SummaryMetadata,
-    TrafficStore, anchored_at, diagnostic_findings, effective_assessment,
+    TrafficStore, anchored_at,
 };
 use anyhow::Context as _;
 use axum::Json;
@@ -278,7 +279,7 @@ fn summary(record: &StoredRecordSummary) -> RecordSummary {
         outcome: outcome.to_string(),
         state: state.to_string(),
         total_ms: if record.active {
-            elapsed_wall_ms(&value.observed_at, None)
+            record.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms)
         } else {
             value
                 .timing
@@ -383,15 +384,11 @@ pub(super) async fn record_detail(
             } else {
                 "completed"
             };
-            let live_total_ms = record
-                .active
-                .then(|| elapsed_wall_ms(&record.request.started_at, None))
-                .flatten();
+            let live_total_ms = record.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
             let interrupted = !record.active && record.result.is_none();
             let assessment = effective_assessment(&record.summary, record.active);
             let diagnostics = diagnostic_groups(&record.summary, interrupted);
-            let live_elapsed_ns = state.store.live_elapsed_ns(&id);
-            let timeline_end_at_ns = timeline_end_at_ns(&record, live_elapsed_ns);
+            let timeline_end_at_ns = timeline_end_at_ns(&record, record.live_elapsed_ns.clone());
             let response_headers_at = record
                 .summary
                 .timing
@@ -435,13 +432,11 @@ pub(super) async fn record_detail(
     }
 }
 
-fn elapsed_wall_ms(started: &str, ended: Option<&str>) -> Option<u64> {
-    use time::format_description::well_known::Rfc3339;
-    let started = time::OffsetDateTime::parse(started, &Rfc3339).ok()?;
-    let ended = ended
-        .and_then(|value| time::OffsetDateTime::parse(value, &Rfc3339).ok())
-        .unwrap_or_else(time::OffsetDateTime::now_utc);
-    u64::try_from((ended - started).whole_milliseconds()).ok()
+fn elapsed_ns_ms(elapsed_ns: &str) -> Option<u64> {
+    elapsed_ns
+        .parse::<u128>()
+        .ok()
+        .and_then(|value| u64::try_from(value / 1_000_000).ok())
 }
 
 #[derive(Deserialize)]
@@ -1263,6 +1258,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_durations_do_not_depend_on_the_wall_clock_anchor() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let (record, _) = state
+            .store
+            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .unwrap();
+        state
+            .store
+            .update_summary(&record.locator, &record.summary, |summary| {
+                summary.observed_at = "9999-01-01T00:00:00Z".to_string();
+                true
+            })
+            .unwrap();
+
+        let list = list_records_inner(&state.store, None).unwrap();
+        let list_total_ms = list.records[0].total_ms.unwrap();
+
+        let response = record_detail(State(state), Path(record.id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let detail_total_ms = json["live_total_ms"].as_u64().unwrap();
+        let timeline_end_ns = json["timeline_end_at_ns"]
+            .as_str()
+            .unwrap()
+            .parse::<u128>()
+            .unwrap();
+        assert!(detail_total_ms >= list_total_ms);
+        assert_eq!(u128::from(detail_total_ms), timeline_end_ns / 1_000_000);
+    }
+
+    #[tokio::test]
     async fn record_detail_adds_event_timing_index_diagnostics_on_demand() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path(), 9923).unwrap();
@@ -1738,8 +1765,6 @@ mod tests {
         assert_eq!(recomputed_second.total, 52);
         assert_eq!(recomputed_second.records.len(), 2);
         assert_eq!(recomputed_second.records[1].id, second.records[0].id);
-        assert!(list_records_inner(&store, Some(0)).is_err());
-        assert!(list_records_inner(&store, Some(u64::MAX)).is_err());
         assert!(
             list_records_inner(&store, Some(3))
                 .unwrap()
@@ -1755,11 +1780,15 @@ mod tests {
         std::fs::remove_dir(store.root()).unwrap();
         std::fs::write(store.root(), b"not a directory").unwrap();
 
-        let error = list_records_inner(&store, Some(0)).err().unwrap();
-        assert_eq!(
-            error.to_string(),
-            "Traffic Record page must be a positive integer"
-        );
+        for (page, expected) in [
+            (0, "Traffic Record page must be a positive integer"),
+            (u64::MAX, "Traffic Record page is too large"),
+        ] {
+            let error = list_records_inner(&store, Some(page))
+                .err()
+                .expect("invalid page must be rejected before scanning");
+            assert_eq!(error.to_string(), expected, "page={page}");
+        }
     }
 
     #[test]

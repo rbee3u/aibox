@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_filtering_is_sorted_unique_and_never_completes_mount_targets() {
+    fn candidate_filtering_is_sorted_unique_and_excludes_selected_values() {
         let excluded = BTreeSet::from(["alpha".to_string()]);
         let values = filter_candidates(
             ["alpine", "alpha", "alpine", "beta"].map(str::to_string),
@@ -919,7 +919,10 @@ mod tests {
             &excluded,
         );
         assert_eq!(candidate_values(&values), ["alpine"]);
+    }
 
+    #[test]
+    fn mount_completion_stops_at_container_targets_and_filters_colons() {
         assert!(complete_mount(OsStr::new("src:/container"), None).is_empty());
         let values = without_colon(vec![
             CompletionCandidate::new("safe-path"),
@@ -984,12 +987,18 @@ mod tests {
     }
 
     #[test]
-    fn tenant_discovery_is_read_only() {
+    fn tenant_discovery_modes_are_read_only_and_do_not_invent_delete_targets() {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("missing");
         assert_eq!(
             tenant_values_at(&root, TenantCandidates::Select).unwrap(),
             ["default"]
+        );
+        assert!(
+            tenant_values_at(&root, TenantCandidates::Existing)
+                .unwrap()
+                .is_empty(),
+            "destructive completion must suggest only real Managed Tenants"
         );
         assert!(!root.exists());
     }

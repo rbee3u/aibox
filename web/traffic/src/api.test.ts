@@ -26,17 +26,49 @@ describe("Traffic API client", () => {
     ]);
   });
 
-  it("keeps read requests cache-free and forwards their abort signal", async () => {
+  it("encodes record ids and keeps read requests cache-free", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({}));
-    const signal = new AbortController().signal;
     const api = createTrafficApi(fetchMock);
 
-    await api.getRecord("record/id", signal);
+    await api.getRecord("record/id");
 
     const [path, init] = fetchMock.mock.calls[0];
     expect(path).toBe("/_aibox/traffic/api/records/record%2Fid");
-    expect(init).toMatchObject({ cache: "no-store", signal });
+    expect(init).toMatchObject({ cache: "no-store" });
     expect(new Headers(init?.headers).has("X-Aibox-Traffic-CSRF")).toBe(false);
+  });
+
+  it("forwards cancellation to every API operation", async () => {
+    const responses = [
+      Response.json({ records: [], total: 0, deletable_count: 0 }),
+      Response.json({}),
+      new Response(new Uint8Array()),
+      new Response(new Uint8Array()),
+      Response.json({ state: "unavailable", events: [], next_sequence: 0 }),
+      Response.json({ deleted: 0 }),
+      Response.json({ deleted: 0 }),
+    ];
+    let responseIndex = 0;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(responses[responseIndex++]));
+    const signal = new AbortController().signal;
+    const api = createTrafficApi(fetchMock);
+
+    await Promise.all([
+      api.listRecords(2, signal),
+      api.getRecord("record", signal),
+      api.loadBody("record", "request", 0, signal),
+      api.loadDecodedBody("record", "response", signal),
+      api.loadEventTimings("record", 0, signal),
+      api.deleteRecords([], signal),
+      api.deleteAll(0, signal),
+    ]);
+
+    expect(fetchMock.mock.calls).toHaveLength(7);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.signal).toBe(signal);
+    }
   });
 
   const mutations = [
@@ -79,18 +111,20 @@ describe("Traffic API client", () => {
           statusText: "Conflict",
         },
       ),
-      new ApiError("active Traffic Records cannot be deleted", 409),
+      { message: "active Traffic Records cannot be deleted", status: 409 },
     ],
     [
       "HTTP status when the body is not JSON",
       new Response("Bad Gateway", { status: 502, statusText: "Bad Gateway" }),
-      new ApiError("502 Bad Gateway", 502),
+      { message: "502 Bad Gateway", status: 502 },
     ],
   ])("surfaces the server's %s", async (_case, response, expectedError) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response);
     const api = createTrafficApi(fetchMock);
 
-    await expect(api.deleteRecords(["active"])).rejects.toEqual(expectedError);
+    const request = api.deleteRecords(["active"]);
+    await expect(request).rejects.toBeInstanceOf(ApiError);
+    await expect(request).rejects.toMatchObject({ name: "ApiError", ...expectedError });
   });
 
   it.each([

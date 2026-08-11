@@ -62,28 +62,12 @@ fn transcript_line_reader_rejects_oversized_lines_without_reading_the_whole_file
 }
 
 #[test]
-fn transcript_line_limit_accepts_an_exact_size_final_line() {
+fn transcript_line_limit_accepts_exact_size_records_with_jsonl_delimiters() {
     let home = tempfile::tempdir().unwrap();
     let path = write_session(home.path(), "exact");
-    let line = br#"{"typed":"ok"}"#;
-    std::fs::write(&path, line).unwrap();
-    let mut visits = 0;
-
-    for_each_json_line_with_limit(home.path(), &path, line.len() as u64, |_| {
-        visits += 1;
-    })
-    .unwrap();
-
-    assert_eq!(visits, 1);
-}
-
-#[test]
-fn transcript_line_limit_excludes_jsonl_delimiters() {
-    let home = tempfile::tempdir().unwrap();
-    let path = write_session(home.path(), "exact-with-newline");
     let record = r#"{"typed":"ok"}"#;
 
-    for delimiter in ["\n", "\r\n"] {
+    for delimiter in ["", "\n", "\r\n"] {
         std::fs::write(&path, format!("{record}{delimiter}")).unwrap();
         let mut visits = 0;
 
@@ -95,46 +79,64 @@ fn transcript_line_limit_excludes_jsonl_delimiters() {
 }
 
 #[test]
-fn malformed_and_unsupported_records_keep_rows_and_prompts_but_return_nonzero() {
-    let home = tempfile::tempdir().unwrap();
-    let path = write_session(home.path(), "diagnostic");
-    std::fs::write(
-            &path,
-            "not-json\n{\"unsupported\":true}\n{\"typed\":\"visible\",\"ts\":\"2026-01-01T00:00:00Z\"}\n",
-        )
+fn diagnostic_records_keep_readable_output_and_report_their_exact_kind() {
+    for (case, body, expected_diagnostics) in [
+        (
+            "malformed JSON",
+            "not-json\n{\"typed\":\"visible\",\"ts\":\"2026-01-01T00:00:00Z\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
+            TranscriptDiagnostics {
+                malformed_lines: 1,
+                unsupported_user_records: 0,
+            },
+        ),
+        (
+            "unsupported user record",
+            "{\"unsupported\":true}\n{\"typed\":\"visible\",\"ts\":\"2026-01-01T00:00:00Z\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
+            TranscriptDiagnostics {
+                malformed_lines: 0,
+                unsupported_user_records: 1,
+            },
+        ),
+        (
+            "partially supported prompt",
+            "{\"typed\":\"visible\",\"partial\":true,\"ts\":\"2026-01-01T00:00:00Z\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
+            TranscriptDiagnostics {
+                malformed_lines: 0,
+                unsupported_user_records: 1,
+            },
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let path = write_session(home.path(), "diagnostic");
+        std::fs::write(&path, body).unwrap();
+
+        let summary = TestBackend.summarize(&path).unwrap();
+        assert_eq!(summary.diagnostics, expected_diagnostics, "{case}");
+
+        let mut rows = Vec::new();
+        let list_code = list_with_printer(&TestBackend, home.path(), |line| {
+            rows.push(line.to_string());
+            Ok(true)
+        })
         .unwrap();
+        assert_eq!(list_code, 1, "{case}");
+        assert_eq!(rows, ["diagnostic    2026-01-01 00:00  visible"], "{case}");
 
-    let mut rows = Vec::new();
-    let list_code = list_with_printer(&TestBackend, home.path(), |line| {
-        rows.push(line.to_string());
-        Ok(true)
-    })
-    .unwrap();
-    assert_eq!(list_code, 1);
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].contains("visible"), "{:?}", rows);
-
-    let mut prompts = Vec::new();
-    let get_code = get_with_printer(&TestBackend, home.path(), "diagnostic", |line| {
-        prompts.push(line.to_string());
-        Ok(true)
-    })
-    .unwrap();
-    assert_eq!(get_code, 1);
-    assert!(prompts.iter().any(|line| line.contains("visible")));
-
-    let mut input = Cursor::new(Vec::<u8>::new());
-    let targets = delete_targets(&TestBackend, home.path(), &[], true).unwrap();
-    delete_targets_with_input(&TestBackend, home.path(), targets, true, &mut input).unwrap();
-    assert!(!path.exists());
+        let mut prompts = Vec::new();
+        let get_code = get_with_printer(&TestBackend, home.path(), "diagnostic", |line| {
+            prompts.push(line.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(get_code, 1, "{case}");
+        assert_eq!(prompts, ["\n[1] 2026-01-01 00:00\nvisible"], "{case}");
+    }
 }
 
 #[test]
-fn partially_supported_prompts_stay_visible_but_return_nonzero() {
+fn recognized_non_prompt_records_are_a_clean_empty_prompt_view() {
     let home = tempfile::tempdir().unwrap();
-    let path = write_session(home.path(), "partial");
-    std::fs::write(&path, "{\"typed\":\"visible\",\"partial\":true}\n").unwrap();
-
+    write_session(home.path(), "empty");
     let mut rows = Vec::new();
     assert_eq!(
         list_with_printer(&TestBackend, home.path(), |line| {
@@ -142,30 +144,10 @@ fn partially_supported_prompts_stay_visible_but_return_nonzero() {
             Ok(true)
         })
         .unwrap(),
-        1
-    );
-    assert!(rows[0].contains("visible"), "{rows:?}");
-
-    let mut prompts = Vec::new();
-    assert_eq!(
-        get_with_printer(&TestBackend, home.path(), "partial", |line| {
-            prompts.push(line.to_string());
-            Ok(true)
-        })
-        .unwrap(),
-        1
-    );
-    assert!(prompts.iter().any(|line| line.contains("visible")));
-}
-
-#[test]
-fn recognized_non_prompt_records_are_a_clean_empty_prompt_view() {
-    let home = tempfile::tempdir().unwrap();
-    write_session(home.path(), "empty");
-    assert_eq!(
-        list_with_printer(&TestBackend, home.path(), |_| Ok(true)).unwrap(),
         0
     );
+    assert_eq!(rows.len(), 1, "the empty prompt view must remain listable");
+    assert!(rows[0].starts_with("empty"), "{rows:?}");
     let mut output = Vec::new();
     assert_eq!(
         get_with_printer(&TestBackend, home.path(), "empty", |line| {
@@ -468,26 +450,6 @@ fn get_prints_numbered_timestamped_prompts_in_order() {
         ],
         "get numbers prompts from 1 and shows each turn's minute-precision timestamp"
     );
-}
-
-#[test]
-fn get_reports_a_session_with_no_typed_prompts() {
-    // A tool/injected-only shell resolves and exits 0 — it must say so
-    // rather than printing nothing at all.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("22222222.jsonl");
-    std::fs::write(&path, "{\"ts\":\"2026-07-14T02:16:00Z\"}\n").unwrap();
-    let backend = ExplicitFilesBackend::new(vec![path]);
-    let mut printed = Vec::new();
-
-    let code = get_with_printer(&backend, dir.path(), "2222", |line| {
-        printed.push(line.to_string());
-        Ok(true)
-    })
-    .unwrap();
-
-    assert_eq!(code, 0);
-    assert_eq!(printed, vec!["(no typed prompts in this session)"]);
 }
 
 #[test]

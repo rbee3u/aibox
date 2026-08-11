@@ -3,19 +3,22 @@ use crate::traffic_interpretation::{
     BodyContentCoding, ProtocolFamily, ProtocolObserver, ProtocolSummary, ResponseModeValue,
     body_content_coding,
 };
+#[cfg(test)]
+use crate::traffic_sse::is_first_token_data;
+use crate::traffic_sse::{ObservedSseEvent, PrefixSniff, SseIndexer, SsePrefixSniffer};
 use crate::traffic_store::{
     ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRecord, Outcome, RecordLocator, RecordedHeader,
-    ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle, TrafficStore, offset_ns,
-    utc_now,
+    RequestMetadata, ResponseMetadata, ResponseSource, RuntimeMeasurements, SummaryHandle,
+    TrafficStore, offset_ns, utc_now,
 };
 use anyhow::Context as _;
 use axum::body::Body;
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode, Version, header};
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use serde::Serialize;
 use std::collections::HashSet;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,121 +35,35 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
     let upstream = parsed
         .as_ref()
         .filter(|url| matches!(url.scheme(), "http" | "https"));
-    let host_hint = upstream.and_then(Url::host_str);
-    let begin = state.store.begin(
-        parts.method.as_str(),
-        &incoming_uri,
-        upstream.map(Url::as_str),
-        version_name(parts.version),
-        RecordedHeader::from_headers(&parts.headers),
-        host_hint,
-    );
-    let (record, request_metadata) = match begin {
-        Ok(value) => value,
+    let ActiveRecord {
+        mut guard,
+        measurements,
+        protocol,
+        request_metadata,
+    } = match begin_record(&state, &parts, &incoming_uri, upstream) {
+        Ok(record) => record,
         Err(error) => return bare_error(StatusCode::INSUFFICIENT_STORAGE, &error.to_string()),
     };
-    let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
-    let protocol = Arc::new(Mutex::new(ProtocolObserver::new(
-        request_metadata.upstream_url.as_deref(),
-    )));
-    let mut guard = RecordGuard::new(
-        state.store.clone(),
-        record,
-        measurements.clone(),
-        protocol.clone(),
-        Instant::now(),
-    );
 
-    if parts.method == Method::CONNECT {
+    if let Some(rejection) = request_rejection(&parts, upstream) {
         return reject_with_body(
             &mut guard,
             body,
             state.shutdown.clone(),
-            StatusCode::METHOD_NOT_ALLOWED,
-            "CONNECT is not supported by aibox Traffic",
-            Outcome::Rejected,
-            ErrorKind::ConnectNotSupported,
+            rejection.status,
+            rejection.message,
+            rejection.outcome,
+            rejection.kind,
         )
         .await;
     }
-    if is_upgrade(&parts.headers) {
-        return reject_with_body(
-            &mut guard,
-            body,
-            state.shutdown.clone(),
-            StatusCode::UPGRADE_REQUIRED,
-            "Upgrade and WebSocket traffic are not supported by aibox Traffic",
-            Outcome::Rejected,
-            ErrorKind::UpgradeNotSupported,
-        )
-        .await;
-    }
-    let Some(url) = upstream.cloned() else {
-        return reject_with_body(
-            &mut guard,
-            body,
-            state.shutdown.clone(),
-            StatusCode::BAD_REQUEST,
-            "proxy path must contain an absolute http:// or https:// target URL",
-            Outcome::Rejected,
-            ErrorKind::InvalidTargetUrl,
-        )
-        .await;
-    };
+    let url = upstream
+        .cloned()
+        .expect("a rejected request cannot have a missing target URL");
 
-    let resolved = tokio::select! {
-        _ = state.shutdown.cancelled() => {
-            return finish_proxy_response(
-                &mut guard,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "aibox Traffic is shutting down",
-                Outcome::ServerShutdown,
-                ErrorKind::ServerShutdown,
-            );
-        }
-        result = validate_and_resolve(&url, state.allow_private_upstream) => result,
-    };
-    let resolved = match resolved {
-        Ok(addresses) => addresses,
-        Err(TargetError::Rejected(message)) => {
-            return reject_with_body(
-                &mut guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::FORBIDDEN,
-                &message,
-                Outcome::Rejected,
-                ErrorKind::NonPublicTarget,
-            )
-            .await;
-        }
-        Err(TargetError::Upstream(message)) => {
-            return reject_with_body(
-                &mut guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::BAD_GATEWAY,
-                &message,
-                Outcome::UpstreamError,
-                ErrorKind::DnsError,
-            )
-            .await;
-        }
-    };
-    let client = match build_client(&url, &resolved) {
-        Ok(client) => client,
-        Err(error) => {
-            return reject_with_body(
-                &mut guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::BAD_GATEWAY,
-                &error.to_string(),
-                Outcome::UpstreamError,
-                ErrorKind::ClientConfiguration,
-            )
-            .await;
-        }
+    let (client, body) = match prepare_upstream(&state, &mut guard, body, &url).await {
+        Ok(prepared) => prepared,
+        Err(response) => return response,
     };
 
     let request_file = match guard.record.request_body.try_clone() {
@@ -184,7 +101,7 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
         .body(reqwest::Body::wrap_stream(request_stream));
 
     let upstream_response = tokio::select! {
-        _ = state.shutdown.cancelled() => {
+        () = state.shutdown.cancelled() => {
             return finish_proxy_response(
                 &mut guard,
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -197,49 +114,17 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
     };
     let upstream_response = match upstream_response {
         Ok(response) => response,
-        Err(error) => {
-            let recording = request_error
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            if let Some(failure) = recording {
-                let (status, outcome) = match failure.kind {
-                    ErrorKind::ClientDisconnected | ErrorKind::RequestBodyFailed => {
-                        (StatusCode::BAD_REQUEST, Outcome::ClientDisconnected)
-                    }
-                    ErrorKind::ServerShutdown => {
-                        (StatusCode::SERVICE_UNAVAILABLE, Outcome::ServerShutdown)
-                    }
-                    _ => (StatusCode::INSUFFICIENT_STORAGE, Outcome::RecordingFailed),
-                };
-                return finish_proxy_response(
-                    &mut guard,
-                    status,
-                    &failure.message,
-                    outcome,
-                    failure.kind,
-                );
-            }
-            let status = if error.is_timeout() {
-                StatusCode::GATEWAY_TIMEOUT
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
-            let kind = if error.is_timeout() {
-                ErrorKind::ConnectTimeout
-            } else {
-                ErrorKind::UpstreamRequestFailed
-            };
-            return finish_proxy_response(
-                &mut guard,
-                status,
-                &format!("upstream request failed: {error}"),
-                Outcome::UpstreamError,
-                kind,
-            );
-        }
+        Err(error) => return upstream_request_failure(&mut guard, &request_error, &error),
     };
 
+    stream_upstream_response(&state, upstream_response, guard)
+}
+
+fn stream_upstream_response(
+    state: &AppState,
+    upstream_response: reqwest::Response,
+    mut guard: RecordGuard,
+) -> Response<Body> {
     let status = upstream_response.status();
     let version = upstream_response.version();
     let original_headers = upstream_response.headers().clone();
@@ -302,6 +187,173 @@ pub(super) async fn handle(state: AppState, request: Request<Body>) -> Response<
         .unwrap_or_else(|error| bare_error(StatusCode::BAD_GATEWAY, &error.to_string()))
 }
 
+struct ActiveRecord {
+    guard: RecordGuard,
+    measurements: Arc<Mutex<RuntimeMeasurements>>,
+    protocol: Arc<Mutex<ProtocolObserver>>,
+    request_metadata: RequestMetadata,
+}
+
+fn begin_record(
+    state: &AppState,
+    parts: &Parts,
+    incoming_uri: &str,
+    upstream: Option<&Url>,
+) -> anyhow::Result<ActiveRecord> {
+    let host_hint = upstream.and_then(Url::host_str);
+    let (record, request_metadata) = state.store.begin(
+        parts.method.as_str(),
+        incoming_uri,
+        upstream.map(Url::as_str),
+        version_name(parts.version),
+        RecordedHeader::from_headers(&parts.headers),
+        host_hint,
+    )?;
+    let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
+    let protocol = Arc::new(Mutex::new(ProtocolObserver::new(
+        request_metadata.upstream_url.as_deref(),
+    )));
+    let guard = RecordGuard::new(
+        state.store.clone(),
+        record,
+        measurements.clone(),
+        protocol.clone(),
+    );
+    Ok(ActiveRecord {
+        guard,
+        measurements,
+        protocol,
+        request_metadata,
+    })
+}
+
+struct RequestRejection {
+    status: StatusCode,
+    message: &'static str,
+    outcome: Outcome,
+    kind: ErrorKind,
+}
+
+fn request_rejection(parts: &Parts, upstream: Option<&Url>) -> Option<RequestRejection> {
+    if parts.method == Method::CONNECT {
+        Some(RequestRejection {
+            status: StatusCode::METHOD_NOT_ALLOWED,
+            message: "CONNECT is not supported by aibox Traffic",
+            outcome: Outcome::Rejected,
+            kind: ErrorKind::ConnectNotSupported,
+        })
+    } else if is_upgrade(&parts.headers) {
+        Some(RequestRejection {
+            status: StatusCode::UPGRADE_REQUIRED,
+            message: "Upgrade and WebSocket traffic are not supported by aibox Traffic",
+            outcome: Outcome::Rejected,
+            kind: ErrorKind::UpgradeNotSupported,
+        })
+    } else if upstream.is_none() {
+        Some(RequestRejection {
+            status: StatusCode::BAD_REQUEST,
+            message: "proxy path must contain an absolute http:// or https:// target URL",
+            outcome: Outcome::Rejected,
+            kind: ErrorKind::InvalidTargetUrl,
+        })
+    } else {
+        None
+    }
+}
+
+async fn prepare_upstream(
+    state: &AppState,
+    guard: &mut RecordGuard,
+    body: Body,
+    url: &Url,
+) -> Result<(reqwest::Client, Body), Response<Body>> {
+    let resolved = tokio::select! {
+        () = state.shutdown.cancelled() => {
+            return Err(finish_proxy_response(
+                guard,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "aibox Traffic is shutting down",
+                Outcome::ServerShutdown,
+                ErrorKind::ServerShutdown,
+            ));
+        }
+        result = validate_and_resolve(url, state.allow_private_upstream) => result,
+    };
+    let resolved = match resolved {
+        Ok(addresses) => addresses,
+        Err(TargetError::Rejected(message)) => {
+            return Err(reject_with_body(
+                guard,
+                body,
+                state.shutdown.clone(),
+                StatusCode::FORBIDDEN,
+                &message,
+                Outcome::Rejected,
+                ErrorKind::NonPublicTarget,
+            )
+            .await);
+        }
+        Err(TargetError::Upstream(message)) => {
+            return Err(reject_with_body(
+                guard,
+                body,
+                state.shutdown.clone(),
+                StatusCode::BAD_GATEWAY,
+                &message,
+                Outcome::UpstreamError,
+                ErrorKind::DnsError,
+            )
+            .await);
+        }
+    };
+    match build_client(url, &resolved) {
+        Ok(client) => Ok((client, body)),
+        Err(error) => Err(reject_with_body(
+            guard,
+            body,
+            state.shutdown.clone(),
+            StatusCode::BAD_GATEWAY,
+            &error.to_string(),
+            Outcome::UpstreamError,
+            ErrorKind::ClientConfiguration,
+        )
+        .await),
+    }
+}
+
+fn upstream_request_failure(
+    guard: &mut RecordGuard,
+    request_error: &Mutex<Option<RequestStreamFailure>>,
+    error: &reqwest::Error,
+) -> Response<Body> {
+    let recording = request_error
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(failure) = recording {
+        let (status, outcome) = match failure.kind {
+            ErrorKind::ClientDisconnected | ErrorKind::RequestBodyFailed => {
+                (StatusCode::BAD_REQUEST, Outcome::ClientDisconnected)
+            }
+            ErrorKind::ServerShutdown => (StatusCode::SERVICE_UNAVAILABLE, Outcome::ServerShutdown),
+            _ => (StatusCode::INSUFFICIENT_STORAGE, Outcome::RecordingFailed),
+        };
+        return finish_proxy_response(guard, status, &failure.message, outcome, failure.kind);
+    }
+    let (status, kind) = if error.is_timeout() {
+        (StatusCode::GATEWAY_TIMEOUT, ErrorKind::ConnectTimeout)
+    } else {
+        (StatusCode::BAD_GATEWAY, ErrorKind::UpstreamRequestFailed)
+    };
+    finish_proxy_response(
+        guard,
+        status,
+        &format!("upstream request failed: {error}"),
+        Outcome::UpstreamError,
+        kind,
+    )
+}
+
 struct RecordGuard {
     store: TrafficStore,
     record: NewRecord,
@@ -317,7 +369,6 @@ impl RecordGuard {
         record: NewRecord,
         measurements: Arc<Mutex<RuntimeMeasurements>>,
         protocol: Arc<Mutex<ProtocolObserver>>,
-        _legacy_started: Instant,
     ) -> Self {
         Self {
             store,
@@ -586,7 +637,7 @@ fn recorded_request_stream_with_summary(
         let mut body_complete = false;
         loop {
             let next = tokio::select! {
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     let error = io::Error::new(io::ErrorKind::Interrupted, "Traffic Proxy is shutting down");
                     request_failure(&error_slot, ErrorKind::ServerShutdown, &error);
                     yield Err(error);
@@ -802,6 +853,31 @@ struct ResponseStreamConfig {
     headers: Vec<RecordedHeader>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DownstreamSend {
+    Sent,
+    Closed,
+    Shutdown,
+}
+
+async fn send_downstream(
+    sender: &mpsc::Sender<Result<Bytes, io::Error>>,
+    shutdown: &tokio_util::sync::CancellationToken,
+    item: Result<Bytes, io::Error>,
+) -> DownstreamSend {
+    tokio::select! {
+        biased;
+        () = shutdown.cancelled() => DownstreamSend::Shutdown,
+        result = sender.send(item) => {
+            if result.is_ok() {
+                DownstreamSend::Sent
+            } else {
+                DownstreamSend::Closed
+            }
+        }
+    }
+}
+
 enum ResponseBodyTracker {
     Normal,
     OpaqueEventStream,
@@ -832,8 +908,7 @@ impl ResponseBodyTracker {
         guard: &RecordGuard,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Normal => Ok(()),
-            Self::OpaqueEventStream => Ok(()),
+            Self::Normal | Self::OpaqueEventStream => Ok(()),
             Self::EventStream(indexer) => feed_sse_chunk(indexer, chunk, at_ns, guard),
             Self::Detect { sniffer, pending } => {
                 pending.push((chunk.clone(), at_ns));
@@ -912,7 +987,7 @@ fn feed_sse_chunk(
     at_ns: String,
     guard: &RecordGuard,
 ) -> anyhow::Result<()> {
-    let body_offset = indexer.body_offset;
+    let body_offset = indexer.body_offset();
     if let Err(error) = indexer.feed(chunk, body_offset, at_ns) {
         guard.add_warning("event_index_failed", error.to_string());
         indexer.disable_indexing();
@@ -942,7 +1017,7 @@ async fn record_response_stream_with_index(
     let mut terminal = loop {
         let next = tokio::select! {
             biased;
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 break (
                     Outcome::ServerShutdown,
                     Some(ErrorMetadata { kind: ErrorKind::ServerShutdown, message: "Traffic Proxy stopped while the response was streaming".to_string() })
@@ -952,7 +1027,7 @@ async fn record_response_stream_with_index(
             // the same time. This avoids turning a normal response into a
             // disconnect solely because the downstream body was dropped first.
             next = stream.try_next() => next,
-            _ = sender.closed() => {
+            () = sender.closed() => {
                 break client_closed_terminal(&tracker);
             }
         };
@@ -965,9 +1040,14 @@ async fn record_response_stream_with_index(
                         .is_none()
                 }) && let Err(error) = guard.mark_timing(|timing| {
                     timing.upstream_response_body_first_byte_at_ns =
-                        Some(offset_ns(guard.record.origin))
+                        Some(offset_ns(guard.record.origin));
                 }) {
-                    let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
+                    let _ = send_downstream(
+                        &sender,
+                        &shutdown,
+                        Err(io::Error::other(error.to_string())),
+                    )
+                    .await;
                     break (
                         Outcome::RecordingFailed,
                         Some(ErrorMetadata {
@@ -978,9 +1058,12 @@ async fn record_response_stream_with_index(
                 }
                 if let Err(error) = file.write_all(&chunk).await {
                     let message = format!("record response body: {error}");
-                    let _ = sender
-                        .send(Err(io::Error::new(error.kind(), message.clone())))
-                        .await;
+                    let _ = send_downstream(
+                        &sender,
+                        &shutdown,
+                        Err(io::Error::new(error.kind(), message.clone())),
+                    )
+                    .await;
                     break (
                         Outcome::RecordingFailed,
                         Some(ErrorMetadata {
@@ -991,9 +1074,12 @@ async fn record_response_stream_with_index(
                 }
                 if let Err(error) = file.flush().await {
                     let message = format!("flush response body: {error}");
-                    let _ = sender
-                        .send(Err(io::Error::new(error.kind(), message.clone())))
-                        .await;
+                    let _ = send_downstream(
+                        &sender,
+                        &shutdown,
+                        Err(io::Error::new(error.kind(), message.clone())),
+                    )
+                    .await;
                     break (
                         Outcome::RecordingFailed,
                         Some(ErrorMetadata {
@@ -1013,7 +1099,12 @@ async fn record_response_stream_with_index(
                 if let Err(error) =
                     tracker.observe_chunk(&chunk, offset_ns(guard.record.origin), guard)
                 {
-                    let _ = sender.send(Err(io::Error::other(error.to_string()))).await;
+                    let _ = send_downstream(
+                        &sender,
+                        &shutdown,
+                        Err(io::Error::other(error.to_string())),
+                    )
+                    .await;
                     break (
                         Outcome::RecordingFailed,
                         Some(ErrorMetadata {
@@ -1022,8 +1113,19 @@ async fn record_response_stream_with_index(
                         }),
                     );
                 }
-                if sender.send(Ok(chunk)).await.is_err() {
-                    break client_closed_terminal(&tracker);
+                match send_downstream(&sender, &shutdown, Ok(chunk)).await {
+                    DownstreamSend::Sent => {}
+                    DownstreamSend::Closed => break client_closed_terminal(&tracker),
+                    DownstreamSend::Shutdown => {
+                        break (
+                            Outcome::ServerShutdown,
+                            Some(ErrorMetadata {
+                                kind: ErrorKind::ServerShutdown,
+                                message: "Traffic Proxy stopped while the response was streaming"
+                                    .to_string(),
+                            }),
+                        );
+                    }
                 }
             }
             Ok(None) => {
@@ -1041,12 +1143,15 @@ async fn record_response_stream_with_index(
             }
             Err(error) => {
                 let message = format!("upstream response stream failed: {error}");
-                let _ = sender
-                    .send(Err(io::Error::new(
+                let _ = send_downstream(
+                    &sender,
+                    &shutdown,
+                    Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         message.clone(),
-                    )))
-                    .await;
+                    )),
+                )
+                .await;
                 break (
                     Outcome::UpstreamError,
                     Some(ErrorMetadata {
@@ -1059,9 +1164,12 @@ async fn record_response_stream_with_index(
     };
     if let Err(error) = file.sync_all().await {
         let message = format!("sync response body: {error}");
-        let _ = sender
-            .send(Err(io::Error::new(error.kind(), message.clone())))
-            .await;
+        let _ = send_downstream(
+            &sender,
+            &shutdown,
+            Err(io::Error::new(error.kind(), message.clone())),
+        )
+        .await;
         if let Err(finish_error) = guard.finish(
             Outcome::RecordingFailed,
             Some(ErrorMetadata {
@@ -1088,7 +1196,8 @@ async fn record_response_stream_with_index(
         }
         if response_completed
             && let Err(error) = guard.mark_timing(|timing| {
-                timing.upstream_response_body_completed_at_ns = Some(offset_ns(guard.record.origin))
+                timing.upstream_response_body_completed_at_ns =
+                    Some(offset_ns(guard.record.origin));
             })
         {
             terminal = (
@@ -1101,7 +1210,8 @@ async fn record_response_stream_with_index(
         }
         if let Err(error) = guard.finish(terminal.0, terminal.1) {
             let message = format!("finalize Traffic Record: {error:#}");
-            let _ = sender.send(Err(io::Error::other(message.clone()))).await;
+            let _ =
+                send_downstream(&sender, &shutdown, Err(io::Error::other(message.clone()))).await;
             eprintln!("warning: {message}");
         }
     }
@@ -1137,7 +1247,7 @@ async fn reject_with_body(
     let mut file = request_file;
     loop {
         let next = tokio::select! {
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 return finish_proxy_response(
                     guard,
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -1268,306 +1378,6 @@ fn response_stream_mode(
         return ResponseStreamMode::Detect;
     }
     ResponseStreamMode::Normal
-}
-
-#[derive(Default)]
-struct SsePrefixSniffer {
-    prefix: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PrefixSniff {
-    Pending,
-    EventStream,
-    Normal,
-}
-
-impl SsePrefixSniffer {
-    fn observe(&mut self, chunk: &[u8]) -> PrefixSniff {
-        const MAX_PREFIX_LEN: usize = 9;
-        let remaining = MAX_PREFIX_LEN.saturating_sub(self.prefix.len());
-        self.prefix
-            .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        classify_sse_prefix(&self.prefix)
-    }
-}
-
-fn classify_sse_prefix(bytes: &[u8]) -> PrefixSniff {
-    const BOM: &[u8] = b"\xef\xbb\xbf";
-    const SSE_PREFIXES: &[&[u8]] = &[b"event:", b"data:", b"id:", b"retry:", b":"];
-
-    let bytes = if bytes.starts_with(BOM) {
-        &bytes[BOM.len()..]
-    } else if BOM.starts_with(bytes) {
-        return PrefixSniff::Pending;
-    } else {
-        bytes
-    };
-    if SSE_PREFIXES.iter().any(|prefix| bytes.starts_with(prefix)) {
-        return PrefixSniff::EventStream;
-    }
-    if SSE_PREFIXES.iter().any(|prefix| prefix.starts_with(bytes)) {
-        return PrefixSniff::Pending;
-    }
-    PrefixSniff::Normal
-}
-
-#[derive(Serialize)]
-struct SseEventIndexEntry {
-    schema_version: u32,
-    record_id: String,
-    kind: String,
-    sequence: u64,
-    body_start: u64,
-    body_end: u64,
-    first_arrival_at_ns: String,
-    completed_at_ns: String,
-}
-
-type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
-
-struct SseIndexer {
-    file: Option<std::fs::File>,
-    record_id: String,
-    buffer: Vec<u8>,
-    buffer_start: u64,
-    body_offset: u64,
-    event_start: Option<u64>,
-    first_arrival_at_ns: Option<String>,
-    data_seen: bool,
-    event_name: Option<Vec<u8>>,
-    data: Vec<u8>,
-    protocol_events: Vec<ObservedSseEvent>,
-    first_token_seen: bool,
-    first_token_at_ns: Option<String>,
-    terminal_seen: bool,
-    sequence: u64,
-    indexing_disabled: bool,
-    last_arrival_at_ns: String,
-}
-
-impl SseIndexer {
-    fn new(file: Option<std::fs::File>, record_id: String) -> Self {
-        Self {
-            file,
-            record_id,
-            buffer: Vec::new(),
-            buffer_start: 0,
-            body_offset: 0,
-            event_start: None,
-            first_arrival_at_ns: None,
-            data_seen: false,
-            event_name: None,
-            data: Vec::new(),
-            protocol_events: Vec::new(),
-            first_token_seen: false,
-            first_token_at_ns: None,
-            terminal_seen: false,
-            sequence: 0,
-            indexing_disabled: false,
-            last_arrival_at_ns: "0".to_string(),
-        }
-    }
-
-    fn disable_indexing(&mut self) {
-        self.indexing_disabled = true;
-    }
-
-    fn terminal_seen(&self) -> bool {
-        self.terminal_seen
-    }
-
-    fn take_protocol_events(&mut self) -> Vec<ObservedSseEvent> {
-        std::mem::take(&mut self.protocol_events)
-    }
-
-    fn take_first_token_at_ns(&mut self) -> Option<String> {
-        self.first_token_at_ns.take()
-    }
-
-    fn feed(&mut self, chunk: &[u8], body_start: u64, at_ns: String) -> anyhow::Result<()> {
-        let contiguous = body_start == self.body_offset;
-        if !contiguous {
-            self.indexing_disabled = true;
-        }
-        self.body_offset = self.body_offset.saturating_add(chunk.len() as u64);
-        self.last_arrival_at_ns = at_ns.clone();
-        if self.event_start.is_none() && !chunk.is_empty() {
-            self.event_start = Some(body_start);
-            self.first_arrival_at_ns = Some(at_ns.clone());
-        }
-        self.buffer.extend_from_slice(chunk);
-        if self.buffer_start == 0 && self.buffer.starts_with(&[0xef, 0xbb, 0xbf]) {
-            self.buffer.drain(..3);
-            self.buffer_start = 3;
-            if self.buffer.is_empty() {
-                self.event_start = None;
-                self.first_arrival_at_ns = None;
-            } else {
-                self.event_start = Some(3);
-                self.first_arrival_at_ns = Some(at_ns.clone());
-            }
-        }
-        self.process(at_ns, false)?;
-        if !contiguous {
-            return Err(anyhow::anyhow!("SSE body offsets are not contiguous"));
-        }
-        Ok(())
-    }
-
-    fn process(&mut self, at_ns: String, final_input: bool) -> anyhow::Result<()> {
-        let mut consumed = 0usize;
-        while let Some((line_end, separator_len)) =
-            find_sse_line_end(&self.buffer[consumed..], final_input)
-        {
-            let line_end = consumed + line_end;
-            let line = &self.buffer[consumed..line_end];
-            let absolute_end = self.buffer_start + line_end as u64 + separator_len as u64;
-            if self.event_start.is_none() && !line.is_empty() {
-                self.event_start = Some(self.buffer_start + consumed as u64);
-                self.first_arrival_at_ns = Some(at_ns.clone());
-            }
-            if line.is_empty() {
-                if is_terminal_sse_event(self.event_name.as_deref(), &self.data) {
-                    self.terminal_seen = true;
-                }
-                if self.data_seen {
-                    self.protocol_events.push((
-                        self.event_name.clone(),
-                        self.data.clone(),
-                        at_ns.clone(),
-                    ));
-                }
-                if self.data_seen
-                    && !self.indexing_disabled
-                    && let Some(file) = self.file.as_mut()
-                {
-                    let entry = SseEventIndexEntry {
-                        schema_version: FORMAT_VERSION,
-                        record_id: self.record_id.clone(),
-                        kind: "sse_event".to_string(),
-                        sequence: self.sequence,
-                        body_start: self.event_start.unwrap_or(self.buffer_start),
-                        body_end: absolute_end,
-                        first_arrival_at_ns: self
-                            .first_arrival_at_ns
-                            .clone()
-                            .unwrap_or_else(|| at_ns.clone()),
-                        completed_at_ns: at_ns.clone(),
-                    };
-                    serde_json::to_writer(&mut *file, &entry)?;
-                    file.write_all(b"\n")?;
-                    file.flush()?;
-                    self.sequence = self.sequence.saturating_add(1);
-                }
-                self.event_start = None;
-                self.first_arrival_at_ns = None;
-                self.data_seen = false;
-                self.event_name = None;
-                self.data.clear();
-            } else if let Some(value) = sse_field_value(line, b"event") {
-                self.event_name = Some(value.to_vec());
-            } else if let Some(value) = sse_field_value(line, b"data") {
-                if !self.first_token_seen && is_first_token_data(value) {
-                    self.first_token_seen = true;
-                    self.first_token_at_ns = Some(at_ns.clone());
-                }
-                if self.data_seen {
-                    self.data.push(b'\n');
-                }
-                self.data.extend_from_slice(value);
-                self.data_seen = true;
-            }
-            consumed = line_end + separator_len;
-        }
-        if consumed > 0 {
-            self.buffer.drain(..consumed);
-            self.buffer_start += consumed as u64;
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) -> anyhow::Result<bool> {
-        self.process(self.last_arrival_at_ns.clone(), true)?;
-        if self.indexing_disabled {
-            return Ok(false);
-        }
-        if let Some(file) = self.file.as_mut() {
-            file.sync_all()?;
-        }
-        Ok(self.event_start.is_some() || !self.buffer.is_empty())
-    }
-}
-
-fn is_first_token_data(value: &[u8]) -> bool {
-    match std::str::from_utf8(value) {
-        Ok(value) => {
-            let value = value.trim();
-            !value.is_empty() && !value.starts_with("[DONE]")
-        }
-        Err(_) => true,
-    }
-}
-
-fn sse_field_value<'a>(line: &'a [u8], field: &[u8]) -> Option<&'a [u8]> {
-    if line == field {
-        return Some(&[]);
-    }
-    let value = line.strip_prefix(field)?.strip_prefix(b":")?;
-    Some(value.strip_prefix(b" ").unwrap_or(value))
-}
-
-fn is_terminal_sse_event(event_name: Option<&[u8]>, data: &[u8]) -> bool {
-    if matches!(
-        event_name,
-        Some(
-            b"message_stop"
-                | b"response.completed"
-                | b"response.failed"
-                | b"response.incomplete"
-                | b"response.cancelled"
-        )
-    ) {
-        return true;
-    }
-
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(data) else {
-        return false;
-    };
-    let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
-    if matches!(
-        kind,
-        "message_stop"
-            | "response.completed"
-            | "response.failed"
-            | "response.incomplete"
-            | "response.cancelled"
-    ) {
-        return true;
-    }
-    kind == "message_delta"
-        && value
-            .get("delta")
-            .and_then(|delta| delta.get("stop_reason"))
-            .is_some_and(|stop_reason| !stop_reason.is_null())
-}
-
-fn find_sse_line_end(bytes: &[u8], final_input: bool) -> Option<(usize, usize)> {
-    for (index, byte) in bytes.iter().enumerate() {
-        match byte {
-            b'\n' => return Some((index, 1)),
-            b'\r' => {
-                if index + 1 == bytes.len() {
-                    return final_input.then_some((index, 1));
-                }
-                return Some((index, usize::from(bytes[index + 1] == b'\n') + 1));
-            }
-            _ => {}
-        }
-    }
-    (final_input && !bytes.is_empty()).then_some((bytes.len(), 0))
 }
 
 pub(super) fn bare_error(status: StatusCode, message: &str) -> Response<Body> {
@@ -1831,7 +1641,6 @@ mod tests {
             record,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(None))),
-            Instant::now(),
         );
 
         std::fs::rename(&summary_path, &saved_summary_path).unwrap();
@@ -2001,13 +1810,7 @@ mod tests {
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
             "https://example.com/v1/responses",
         ))));
-        let guard = RecordGuard::new(
-            store.clone(),
-            record,
-            measurements,
-            protocol,
-            Instant::now(),
-        );
+        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -2046,6 +1849,23 @@ mod tests {
         assert_eq!(result.response_bytes, 27);
     }
 
+    #[tokio::test]
+    async fn downstream_send_does_not_block_shutdown_when_the_client_channel_is_full() {
+        let shutdown = CancellationToken::new();
+        let (sender, _receiver) = mpsc::channel(1);
+        sender
+            .send(Ok(Bytes::from_static(b"buffered")))
+            .await
+            .unwrap();
+        let send = send_downstream(&sender, &shutdown, Ok(Bytes::from_static(b"blocked")));
+        tokio::pin!(send);
+
+        assert!(futures_util::poll!(&mut send).is_pending());
+        shutdown.cancel();
+
+        assert_eq!(send.await, DownstreamSend::Shutdown);
+    }
+
     async fn run_client_close_after_response(
         upstream_url: &'static str,
         chunks: &[&'static [u8]],
@@ -2067,13 +1887,7 @@ mod tests {
         let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url))));
-        let guard = RecordGuard::new(
-            store.clone(),
-            record,
-            measurements,
-            protocol,
-            Instant::now(),
-        );
+        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -2215,7 +2029,6 @@ mod tests {
             record,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
-            Instant::now(),
         );
         guard
             .observe_response_headers(&headers, Some(true))
@@ -2317,7 +2130,6 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             record,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
-            Instant::now(),
         );
         let body = Bytes::from_static(
             br#"{"object":"response","model":"gpt-test","usage":{"input_tokens":12,"output_tokens":4}}"#,
@@ -2546,13 +2358,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
             "https://example.com/v1/responses",
         ))));
-        let guard = RecordGuard::new(
-            store.clone(),
-            record,
-            measurements,
-            protocol,
-            Instant::now(),
-        );
+        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(1);
         let (client_sender, client_receiver) = mpsc::channel(1);

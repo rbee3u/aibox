@@ -13,7 +13,7 @@ repository commits `package-lock.json`, so install the exact dependency tree
 with:
 
 ```sh
-make traffic-deps
+make traffic-ci
 ```
 
 ## Common Commands

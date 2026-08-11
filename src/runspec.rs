@@ -383,7 +383,6 @@ fn base_container_args(interactive: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::contains_pair;
     use std::fs;
 
     #[test]
@@ -689,40 +688,35 @@ mod tests {
             Path::new("/abs/tenant"),
             &["/abs/cache:/cache:ro".to_string()],
         );
-
-        assert_eq!(args.first().map(String::as_str), Some("--rm"));
-        assert_eq!(
-            args.get(1).map(String::as_str),
-            Some(if platform::has_tty() { "-it" } else { "-i" })
-        );
-        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
-        assert!(contains_pair(&args, "--cap-drop", "ALL"));
-        assert!(contains_pair(&args, "-v", "/abs/tenant:/home/aibox"));
-        assert!(contains_pair(&args, "-v", "/abs/workspace:/workspace"));
-        assert!(contains_pair(&args, "-v", "/abs/cache:/cache:ro"));
-        assert!(contains_pair(&args, "-w", "/workspace"));
-        assert!(
-            crate::testutil::pair_pos(&args, "-v", "/abs/tenant:/home/aibox")
-                < crate::testutil::pair_pos(&args, "-v", "/abs/workspace:/workspace")
-        );
-        assert!(
-            crate::testutil::pair_pos(&args, "-v", "/abs/workspace:/workspace")
-                < crate::testutil::pair_pos(&args, "-v", "/abs/cache:/cache:ro")
-        );
-        assert!(!args.iter().any(|arg| arg == "--env-file"));
-
+        let mut expected = vec![
+            "--rm".to_string(),
+            if platform::has_tty() { "-it" } else { "-i" }.to_string(),
+            "--security-opt".to_string(),
+            "no-new-privileges".to_string(),
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
+        ];
         if platform::is_linux() {
             let (uid, gid) = platform::uid_gid();
-            assert!(contains_pair(&args, "--user", &format!("{uid}:{gid}")));
-            assert!(contains_pair(
-                &args,
-                "--add-host",
-                "host.docker.internal:host-gateway"
-            ));
-        } else {
-            assert!(!args.iter().any(|arg| arg == "--user"));
-            assert!(!args.iter().any(|arg| arg == "--add-host"));
+            expected.extend([
+                "--user".to_string(),
+                format!("{uid}:{gid}"),
+                "--add-host".to_string(),
+                "host.docker.internal:host-gateway".to_string(),
+            ]);
         }
+        expected.extend([
+            "-v".to_string(),
+            "/abs/tenant:/home/aibox".to_string(),
+            "-v".to_string(),
+            "/abs/workspace:/workspace".to_string(),
+            "-w".to_string(),
+            "/workspace".to_string(),
+            "-v".to_string(),
+            "/abs/cache:/cache:ro".to_string(),
+        ]);
+
+        assert_eq!(args, expected);
     }
 
     #[test]
@@ -741,12 +735,30 @@ mod tests {
     #[test]
     fn component_run_args_mount_only_the_tenant_home() {
         let args = assemble_component_run_args(Path::new("/abs/tenant"));
-        assert_eq!(args.first().map(String::as_str), Some("--rm"));
-        assert!(contains_pair(&args, "--security-opt", "no-new-privileges"));
-        assert!(contains_pair(&args, "--cap-drop", "ALL"));
-        assert!(contains_pair(&args, "-v", "/abs/tenant:/home/aibox"));
-        assert!(contains_pair(&args, "-w", "/home/aibox"));
-        assert!(!args.iter().any(|arg| arg.contains("/workspace")));
+        let mut expected = vec![
+            "--rm".to_string(),
+            "--security-opt".to_string(),
+            "no-new-privileges".to_string(),
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
+        ];
+        if platform::is_linux() {
+            let (uid, gid) = platform::uid_gid();
+            expected.extend([
+                "--user".to_string(),
+                format!("{uid}:{gid}"),
+                "--add-host".to_string(),
+                "host.docker.internal:host-gateway".to_string(),
+            ]);
+        }
+        expected.extend([
+            "-v".to_string(),
+            "/abs/tenant:/home/aibox".to_string(),
+            "-w".to_string(),
+            "/home/aibox".to_string(),
+        ]);
+
+        assert_eq!(args, expected);
     }
 
     #[test]

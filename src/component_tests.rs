@@ -383,9 +383,9 @@ fn codex_statusline_install_preserves_unrelated_toml_and_comments() {
 
     let content = fs::read_to_string(&config).unwrap();
     assert!(content.contains("# keep this comment"), "{content}");
-    assert!(content.contains("model = \"custom\""), "{content}");
-    assert!(content.contains("animations = false"), "{content}");
     let document = content.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["model"].as_str(), Some("custom"));
+    assert_eq!(document["tui"]["animations"].as_bool(), Some(false));
     let status_line: Vec<_> = document["tui"]["status_line"]
         .as_array()
         .unwrap()
@@ -626,8 +626,9 @@ fn statusline_survives_repeated_config_applications() {
         ComponentStatus::Installed { version: None }
     );
     let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
-    assert!(config.contains("model = \"two\""), "{config}");
-    assert!(config.contains("status_line ="), "{config}");
+    let document = config.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["model"].as_str(), Some("two"));
+    assert!(document["tui"]["status_line"].is_array());
 }
 
 #[test]
@@ -642,9 +643,10 @@ fn statusline_install_after_config_apply_needs_no_config_coordination() {
         inspect(ComponentKind::ClaudeStatusline, &tenant.home_dir).unwrap(),
         ComponentStatus::Installed { version: None }
     );
-    let settings = fs::read_to_string(selected.state_file("settings.json")).unwrap();
-    assert!(settings.contains("ANTHROPIC_BASE_URL"), "{settings}");
-    assert!(settings.contains("statusLine"), "{settings}");
+    let settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(selected.state_file("settings.json")).unwrap()).unwrap();
+    assert!(settings["env"]["ANTHROPIC_BASE_URL"].is_string());
+    assert_eq!(settings["statusLine"]["type"], "command");
 }
 
 #[test]

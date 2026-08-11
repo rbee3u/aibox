@@ -884,17 +884,25 @@ fn codex_apply_preserves_toml_comments_unrelated_values_and_statusline() {
 
     let config = fs::read_to_string(selected.state_file("config.toml")).unwrap();
     assert!(config.contains("# keep comment"), "{config}");
-    assert!(config.contains("model = \"new\""), "{config}");
-    assert!(
-        config.contains(
-            "openai_base_url = \"http://host.docker.internal:9923/https://api.openai.com/v1\""
-        ),
-        "{config}"
+    let document = config.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["model"].as_str(), Some("new"));
+    assert_eq!(
+        document["openai_base_url"].as_str(),
+        Some("http://host.docker.internal:9923/https://api.openai.com/v1")
     );
-    assert!(!config.contains("sandbox_mode"), "{config}");
-    assert!(config.contains("keep = true"), "{config}");
-    assert!(config.contains("status_line ="), "{config}");
-    assert!(config.contains("status_line_use_colors = true"), "{config}");
+    assert!(document.get("sandbox_mode").is_none());
+    assert_eq!(document["keep"].as_bool(), Some(true));
+    assert_eq!(
+        document["tui"]["status_line"]
+            .as_array()
+            .and_then(|values| values.get(0))
+            .and_then(toml_edit::Value::as_str),
+        Some("model")
+    );
+    assert_eq!(
+        document["tui"]["status_line_use_colors"].as_bool(),
+        Some(true)
+    );
     let auth: Value =
         serde_json::from_str(&fs::read_to_string(selected.state_file("auth.json")).unwrap())
             .unwrap();
@@ -1249,8 +1257,15 @@ fn editor_command_parsing_preserves_quoted_escaped_and_empty_arguments() {
         .map(OsString::from)
     );
 
-    for invalid in ["   ", "code 'unterminated", "code trailing\\"] {
-        assert!(split_editor_command(OsStr::new(invalid)).is_err());
+    for (invalid, expected) in [
+        ("   ", "editor command is empty"),
+        ("code 'unterminated", "unterminated quote in editor command"),
+        ("code trailing\\", "trailing escape in editor command"),
+    ] {
+        let error = split_editor_command(OsStr::new(invalid))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{invalid:?}: {error}");
     }
 }
 

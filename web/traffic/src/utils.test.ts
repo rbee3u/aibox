@@ -13,10 +13,15 @@ import {
 
 describe("traffic display utilities", () => {
   it("formats timestamps in fixed UTC+08:00", () => {
-    expect(formatTimestamp("2026-08-06T04:00:00Z")).toBe("2026-08-06 12:00:00");
-    expect(formatTimestamp("2026-08-06T16:30:45Z")).toBe("2026-08-07 00:30:45");
-    expect(formatTimestamp("2026-08-06T04:00:00")).toBe("—");
-    expect(formatTimestamp("not-a-timestamp")).toBe("—");
+    for (const [input, expected] of [
+      ["2026-08-06T04:00:00Z", "2026-08-06 12:00:00"],
+      ["2026-08-06T16:30:45Z", "2026-08-07 00:30:45"],
+      ["2026-08-06T12:00:00+08:00", "2026-08-06 12:00:00"],
+      ["2026-08-06T04:00:00", "—"],
+      ["not-a-timestamp", "—"],
+    ] as const) {
+      expect(formatTimestamp(input), input).toBe(expected);
+    }
   });
 
   it("formats compact list durations with whole-second precision", () => {
@@ -31,12 +36,25 @@ describe("traffic display utilities", () => {
     expect(compactDuration(3723000)).toBe("1h2m3s");
   });
 
-  it("formats durations and byte counts", () => {
-    expect(duration(null)).toBe("—");
-    expect(duration(800)).toBe("800 ms");
-    expect(duration(1250)).toBe("1.25 s");
-    expect(bytes(12)).toBe("12 B");
-    expect(bytes(2048)).toBe("2.0 KB");
+  it("formats duration and byte-count unit boundaries", () => {
+    for (const [input, expected] of [
+      [null, "—"],
+      [0, "0 ms"],
+      [999, "999 ms"],
+      [1000, "1.00 s"],
+      [1250, "1.25 s"],
+    ] as const) {
+      expect(duration(input), String(input)).toBe(expected);
+    }
+    for (const [input, expected] of [
+      [null, "—"],
+      [0, "0 B"],
+      [1023, "1023 B"],
+      [1024, "1.0 KB"],
+      [1048576, "1.0 MB"],
+    ] as const) {
+      expect(bytes(input), String(input)).toBe(expected);
+    }
   });
 
   it("concatenates Body chunks and preserves binary headers as hex", () => {

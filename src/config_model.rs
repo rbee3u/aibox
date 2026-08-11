@@ -275,14 +275,15 @@ fn remove_json_path(object: &mut Map<String, Value>, path: &[&str]) -> bool {
     if !existing.is_object() {
         object.remove(*first);
         return true;
-    };
+    }
     let child = existing.as_object_mut().expect("object checked above");
-    let mut changed = remove_json_path(child, rest);
+    let changed = remove_json_path(child, rest);
     if child.is_empty() {
         object.remove(*first);
-        changed = true;
+        true
+    } else {
+        changed
     }
-    changed
 }
 
 fn set_codex_path(document: &mut DocumentMut, path: &[&str], value: &Value) -> Result<bool> {

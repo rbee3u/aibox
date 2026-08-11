@@ -23,8 +23,10 @@ mod tenant;
 #[cfg(test)]
 mod testutil;
 mod traffic;
+mod traffic_assessment;
 mod traffic_interpretation;
 mod traffic_proxy;
+mod traffic_sse;
 mod traffic_store;
 mod traffic_web;
 
@@ -32,8 +34,11 @@ use agent::AgentKind;
 use anyhow::{Context, Result};
 use cli::{BuildArgs, Cli, Command, RunArgs, SessionArgs};
 use docker::BuildCache;
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::ExitCode;
 use tenant::{ManagedTenant, Tenant, TenantAgent};
 
@@ -65,6 +70,91 @@ impl DockerSource {
             Self::System => docker::run(run_args, image, command, || {}),
             #[cfg(test)]
             Self::Injected(docker) => docker::run_with(docker, run_args, image, command, || {}),
+        }
+    }
+}
+
+enum CommandContext {
+    System,
+    #[cfg(test)]
+    Injected(TestCommandContext),
+}
+
+impl CommandContext {
+    fn root(&self) -> Result<Cow<'_, Path>> {
+        match self {
+            Self::System => tenant::aibox_root().map(Cow::Owned),
+            #[cfg(test)]
+            Self::Injected(context) => Ok(Cow::Borrowed(&context.root)),
+        }
+    }
+
+    fn image_override(&self) -> Result<Option<String>> {
+        match self {
+            Self::System => env_override("AIBOX_IMAGE"),
+            #[cfg(test)]
+            Self::Injected(context) => {
+                env_override_from("AIBOX_IMAGE", context.image_override.as_deref())
+            }
+        }
+    }
+
+    fn docker(&self) -> DockerSource {
+        match self {
+            Self::System => DockerSource::System,
+            #[cfg(test)]
+            Self::Injected(context) => DockerSource::Injected(context.docker.clone()),
+        }
+    }
+
+    fn resolve_tenant(&self, root: &Path, host: bool, name: &str) -> Result<Tenant> {
+        match self {
+            Self::System => Tenant::resolve(root, host, name),
+            #[cfg(test)]
+            Self::Injected(context) => {
+                Tenant::resolve_with_home(root, host, name, &context.host_home)
+            }
+        }
+    }
+
+    fn resolve_tenant_agent(
+        &self,
+        agent: AgentKind,
+        root: &Path,
+        host: bool,
+        name: &str,
+    ) -> Result<TenantAgent> {
+        match self {
+            Self::System => TenantAgent::resolve(agent, root, host, name),
+            #[cfg(test)]
+            Self::Injected(context) => {
+                TenantAgent::resolve_with_home(agent, root, host, name, &context.host_home)
+            }
+        }
+    }
+
+    fn dispatch_component(&self, args: &cli::ComponentArgs) -> Result<i32> {
+        match self {
+            Self::System => component::dispatch(args),
+            #[cfg(test)]
+            Self::Injected(context) => {
+                let image_override = self.image_override()?;
+                component::dispatch_with(
+                    args,
+                    &context.root,
+                    &context.host_home,
+                    image_override.as_deref(),
+                    &context.docker,
+                )
+            }
+        }
+    }
+
+    fn propagate_auth(&self, root: &Path) -> Result<i32> {
+        match self {
+            Self::System => config::propagate_auth(root),
+            #[cfg(test)]
+            Self::Injected(context) => config::propagate_auth_from(root, &context.host_home),
         }
     }
 }
@@ -166,11 +256,27 @@ fn write_bytes(out: &mut impl std::io::Write, bytes: &[u8]) -> Result<bool> {
 /// forwarded unchanged for the `run` command and rejected for other commands.
 /// The returned value is the process exit code to expose to the caller.
 fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
+    dispatch_command(cli, passthrough, &CommandContext::System)
+}
+
+fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext) -> Result<i32> {
     match cli.command {
-        Command::Run(args) => run_agent(args.agent.unwrap_or(AgentKind::Codex), &args, passthrough),
+        Command::Run(args) => {
+            let image_override = context.image_override()?;
+            let root = context.root()?;
+            run_agent_with(
+                args.agent.unwrap_or(AgentKind::Codex),
+                &args,
+                passthrough,
+                &root,
+                image_override.as_deref(),
+                context.docker(),
+            )
+        }
         Command::Build(args) => {
             reject_passthrough("build takes no pass-through args", passthrough)?;
-            run_build(&args)
+            let image_override = context.image_override()?;
+            run_build_with(&args, image_override.as_deref(), context.docker())
         }
         Command::Completion(args) => {
             reject_passthrough("completion takes no pass-through args", passthrough)?;
@@ -178,15 +284,15 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
         }
         Command::Tenant(args) => {
             reject_passthrough("tenant takes no pass-through args", passthrough)?;
-            tenant::dispatch(&args.command)
+            tenant::dispatch(&context.root()?, &args.command)
         }
         Command::Component(args) => {
             reject_passthrough("component takes no pass-through args", passthrough)?;
-            component::dispatch(&args)
+            context.dispatch_component(&args)
         }
         Command::Config(args) => {
             reject_passthrough("config takes no pass-through args", passthrough)?;
-            let root = tenant::aibox_root()?;
+            let root = context.root()?;
             if matches!(
                 &args.command,
                 crate::cli::ConfigCommand::PropagateAuth { .. }
@@ -197,10 +303,10 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
                 if args.agent == Some(AgentKind::Claude) {
                     anyhow::bail!("config propagate-auth supports only --agent codex");
                 }
-                config::propagate_auth(&root)
+                context.propagate_auth(&root)
             } else {
                 let agent = args.agent.unwrap_or(AgentKind::Codex);
-                let selected = TenantAgent::resolve(
+                let selected = context.resolve_tenant_agent(
                     agent,
                     &root,
                     args.tenant.host,
@@ -211,7 +317,7 @@ fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
         }
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
-            run_session_command(agent, &args, passthrough)
+            run_session_command(agent, &args, passthrough, context)
         }
         Command::Traffic(args) => {
             reject_passthrough("traffic takes no pass-through args", passthrough)?;
@@ -224,10 +330,11 @@ fn run_session_command(
     agent: AgentKind,
     args: &SessionArgs,
     passthrough: &[OsString],
+    context: &CommandContext,
 ) -> Result<i32> {
     reject_passthrough("session takes no pass-through args", passthrough)?;
-    let root = tenant::aibox_root()?;
-    let tenant = Tenant::resolve(&root, args.tenant.host, args.tenant.tenant_name())?;
+    let root = context.root()?;
+    let tenant = context.resolve_tenant(&root, args.tenant.host, args.tenant.tenant_name())?;
     tenant.validate_session_home()?;
     let selected = tenant.for_agent(agent);
     session::dispatch(agent, selected.home_dir(), args.command.as_ref())
@@ -238,11 +345,6 @@ fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()>
         anyhow::bail!("`-- <args>` applies only to a run; {restriction}");
     }
     Ok(())
-}
-
-fn run_build(args: &BuildArgs) -> Result<i32> {
-    let image_override = env_override("AIBOX_IMAGE")?;
-    run_build_with(args, image_override.as_deref(), DockerSource::System)
 }
 
 fn run_build_with(
@@ -266,19 +368,6 @@ fn run_build_with(
         .context("build aibox image")?;
 
     Ok(0)
-}
-
-fn run_agent(agent: AgentKind, run: &RunArgs, passthrough: &[OsString]) -> Result<i32> {
-    let image_override = env_override("AIBOX_IMAGE")?;
-    let root = tenant::aibox_root()?;
-    run_agent_with(
-        agent,
-        run,
-        passthrough,
-        &root,
-        image_override.as_deref(),
-        DockerSource::System,
-    )
 }
 
 fn run_agent_with(
@@ -317,96 +406,20 @@ fn run_agent_with(
 }
 
 #[cfg(test)]
-struct TestCommandContext<'a> {
-    root: &'a Path,
-    host_home: &'a Path,
-    image_override: Option<&'a OsStr>,
-    docker: &'a docker::DockerCli,
+struct TestCommandContext {
+    root: PathBuf,
+    host_home: PathBuf,
+    image_override: Option<OsString>,
+    docker: docker::DockerCli,
 }
 
 #[cfg(test)]
 fn run_with_context(
     cli: Cli,
     passthrough: &[OsString],
-    context: TestCommandContext<'_>,
+    context: TestCommandContext,
 ) -> Result<i32> {
-    let image_override = env_override_from("AIBOX_IMAGE", context.image_override)?;
-    match cli.command {
-        Command::Run(args) => run_agent_with(
-            args.agent.unwrap_or(AgentKind::Codex),
-            &args,
-            passthrough,
-            context.root,
-            image_override.as_deref(),
-            DockerSource::Injected(context.docker.clone()),
-        ),
-        Command::Build(args) => {
-            reject_passthrough("build takes no pass-through args", passthrough)?;
-            run_build_with(
-                &args,
-                image_override.as_deref(),
-                DockerSource::Injected(context.docker.clone()),
-            )
-        }
-        Command::Completion(args) => {
-            reject_passthrough("completion takes no pass-through args", passthrough)?;
-            completion::dispatch(&args)
-        }
-        Command::Tenant(args) => {
-            reject_passthrough("tenant takes no pass-through args", passthrough)?;
-            tenant::dispatch_at(context.root, &args.command)
-        }
-        Command::Component(args) => {
-            reject_passthrough("component takes no pass-through args", passthrough)?;
-            component::dispatch_with(
-                &args,
-                context.root,
-                context.host_home,
-                image_override.as_deref(),
-                context.docker,
-            )
-        }
-        Command::Config(args) => {
-            reject_passthrough("config takes no pass-through args", passthrough)?;
-            if matches!(
-                &args.command,
-                crate::cli::ConfigCommand::PropagateAuth { .. }
-            ) {
-                if args.tenant.tenant.is_some() {
-                    anyhow::bail!("config propagate-auth does not accept --tenant");
-                }
-                if args.agent == Some(AgentKind::Claude) {
-                    anyhow::bail!("config propagate-auth supports only --agent codex");
-                }
-                config::propagate_auth_from(context.root, context.host_home)
-            } else {
-                let selected = TenantAgent::resolve_with_home(
-                    args.agent.unwrap_or(AgentKind::Codex),
-                    context.root,
-                    args.tenant.host,
-                    args.tenant.tenant_name(),
-                    context.host_home,
-                )?;
-                config::dispatch(&selected, &args.command)
-            }
-        }
-        Command::Session(args) => {
-            reject_passthrough("session takes no pass-through args", passthrough)?;
-            let tenant = Tenant::resolve_with_home(
-                context.root,
-                args.tenant.host,
-                args.tenant.tenant_name(),
-                context.host_home,
-            )?;
-            tenant.validate_session_home()?;
-            let selected = tenant.for_agent(args.agent.unwrap_or(AgentKind::Codex));
-            session::dispatch(selected.agent, selected.home_dir(), args.command.as_ref())
-        }
-        Command::Traffic(args) => {
-            reject_passthrough("traffic takes no pass-through args", passthrough)?;
-            traffic::dispatch(&args)
-        }
-    }
+    dispatch_command(cli, passthrough, &CommandContext::Injected(context))
 }
 
 #[cfg(test)]

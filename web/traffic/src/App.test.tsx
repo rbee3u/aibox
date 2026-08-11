@@ -10,6 +10,7 @@ import {
   completedDetail,
   completedSummary,
   completedSummaryFor,
+  deferred,
   fakeApi,
   recordList,
   recordListFor,
@@ -19,16 +20,6 @@ import {
 import type { TrafficApi } from "./types";
 
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function renderApp(overrides: Partial<TrafficApi> = {}) {
   return render(<App api={fakeApi(overrides)} />);
@@ -953,10 +944,13 @@ describe("Traffic App", () => {
     };
     const firstDecode = deferred<Uint8Array>();
     const secondDecode = deferred<Uint8Array>();
+    const decodeSignals: AbortSignal[] = [];
     const loadDecodedBody = vi
       .fn<TrafficApi["loadDecodedBody"]>()
-      .mockReturnValueOnce(firstDecode.promise)
-      .mockReturnValueOnce(secondDecode.promise);
+      .mockImplementation((_id, _kind, signal) => {
+        decodeSignals.push(signal!);
+        return decodeSignals.length === 1 ? firstDecode.promise : secondDecode.promise;
+      });
     renderApp({
       getRecord: vi
         .fn()
@@ -975,6 +969,7 @@ describe("Traffic App", () => {
     await user.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
     await user.click(await screen.findByRole("tab", { name: "Request" }));
     await waitFor(() => expect(loadDecodedBody).toHaveBeenCalledTimes(2));
+    expect(decodeSignals.map((signal) => signal.aborted)).toEqual([true, false]);
 
     await act(async () => {
       firstDecode.reject(new Error("stale decode failed"));
@@ -1099,12 +1094,16 @@ describe("Traffic App", () => {
     expect(screen.getByRole("button", { name: "Delete all" })).toBeDisabled();
   });
 
-  it("ignores an older list response after a refresh", async () => {
+  it("aborts and ignores an older list response after a refresh", async () => {
     const initial = deferred<typeof recordList>();
     const refreshed = recordListFor([completedSummary]);
+    let initialSignal: AbortSignal | undefined;
     const listRecords = vi
       .fn<TrafficApi["listRecords"]>()
-      .mockReturnValueOnce(initial.promise)
+      .mockImplementationOnce((_page, signal) => {
+        initialSignal = signal;
+        return initial.promise;
+      })
       .mockResolvedValueOnce(refreshed);
     const api = fakeApi({ listRecords });
     const replacementApi = fakeApi({ listRecords: vi.fn().mockResolvedValue(refreshed) });
@@ -1113,6 +1112,7 @@ describe("Traffic App", () => {
     await flushEffects();
     rerender(<App api={replacementApi} />);
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
+    expect(initialSignal?.aborted).toBe(true);
 
     await act(async () => {
       initial.resolve(recordList);

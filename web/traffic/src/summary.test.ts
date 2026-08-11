@@ -12,12 +12,54 @@ describe("Summary presentation helpers", () => {
 
   it("builds the six streaming Timing Stages on one axis", () => {
     expect(timingStages(completedDetail)).toEqual([
-      expect.objectContaining({ label: "Proxy setup", durationMs: 100, status: "complete" }),
-      expect.objectContaining({ label: "Request upload", durationMs: 100, status: "complete" }),
-      expect.objectContaining({ label: "Response wait", durationMs: 300, status: "complete" }),
-      expect.objectContaining({ label: "First-token wait", durationMs: 400, status: "complete" }),
-      expect.objectContaining({ label: "Response stream", durationMs: 330, status: "complete" }),
-      expect.objectContaining({ label: "Finalization", durationMs: 20, status: "complete" }),
+      {
+        label: "Proxy setup",
+        tone: "request",
+        status: "complete",
+        startPercent: 0,
+        widthPercent: 8,
+        durationMs: 100,
+      },
+      {
+        label: "Request upload",
+        tone: "request",
+        status: "complete",
+        startPercent: 8,
+        widthPercent: 8,
+        durationMs: 100,
+      },
+      {
+        label: "Response wait",
+        tone: "wait",
+        status: "complete",
+        startPercent: 16,
+        widthPercent: 24,
+        durationMs: 300,
+      },
+      {
+        label: "First-token wait",
+        tone: "wait",
+        status: "complete",
+        startPercent: 40,
+        widthPercent: 32,
+        durationMs: 400,
+      },
+      {
+        label: "Response stream",
+        tone: "model",
+        status: "complete",
+        startPercent: 72,
+        widthPercent: 26.4,
+        durationMs: 330,
+      },
+      {
+        label: "Finalization",
+        tone: "finalize",
+        status: "complete",
+        startPercent: 98.4,
+        widthPercent: 1.6,
+        durationMs: 20,
+      },
     ]);
   });
 
@@ -132,17 +174,31 @@ describe("Summary presentation helpers", () => {
   it("stops before malformed or out-of-axis timing boundaries", () => {
     expect(timingStages({ ...completedDetail, timeline_end_at_ns: "not-a-number" })).toEqual([]);
 
-    expect(
-      timingStages({
+    for (const [caseName, timing, expectedLabels] of [
+      ["boundary beyond the axis", { upstream_request_started_at_ns: "2000000000" }, []],
+      [
+        "boundary before its predecessor",
+        {
+          upstream_request_started_at_ns: "300000000",
+          upstream_request_body_completed_at_ns: "200000000",
+        },
+        ["Proxy setup"],
+      ],
+    ] as const) {
+      const stages = timingStages({
         ...completedDetail,
         summary: {
           ...completedDetail.summary,
           timing: {
             ...completedDetail.summary.timing,
-            upstream_request_started_at_ns: "2000000000",
+            ...timing,
           },
         },
-      }),
-    ).toEqual([]);
+      });
+      expect(
+        stages.map((stage) => stage.label),
+        caseName,
+      ).toEqual(expectedLabels);
+    }
   });
 });

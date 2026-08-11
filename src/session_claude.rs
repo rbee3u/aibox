@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn summarize_prefers_ai_title() {
+    fn summarize_prefers_the_last_non_empty_ai_title() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let path = write_jsonl(
@@ -173,33 +173,16 @@ mod tests {
             ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
             &[
                 r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"first prompt"}}"#,
-                r#"{"type":"ai-title","aiTitle":"A Nice Title"}"#,
+                r#"{"type":"ai-title","aiTitle":"Draft Title"}"#,
+                r#"{"type":"ai-title","aiTitle":"Final Title"}"#,
+                r#"{"type":"ai-title","aiTitle":""}"#,
                 r#"{"type":"user","promptSource":"typed","message":{"role":"user","content":"second"}}"#,
             ],
         );
         let s = Claude.summarize(&path).unwrap();
-        assert_eq!(s.title, "A Nice Title");
+        assert_eq!(s.title, "Final Title");
         assert_eq!(s.start_ts, "2026-07-14T02:16:00Z");
         assert!(s.id.starts_with("3f2a1b6c"));
-    }
-
-    #[test]
-    fn summarize_uses_last_non_empty_ai_title() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_jsonl(
-            dir.path(),
-            ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000001.jsonl",
-            &[
-                r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","promptSource":"typed","message":{"role":"user","content":"fallback prompt"}}"#,
-                r#"{"type":"ai-title","aiTitle":"Draft Title"}"#,
-                r#"{"type":"ai-title","aiTitle":""}"#,
-                r#"{"type":"ai-title","aiTitle":"Final Title"}"#,
-            ],
-        );
-
-        let s = Claude.summarize(&path).unwrap();
-
-        assert_eq!(s.title, "Final Title");
     }
 
     #[test]

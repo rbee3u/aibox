@@ -298,12 +298,7 @@ impl TenantAgent {
 }
 
 /// Execute one parsed Tenant management command.
-pub fn dispatch(command: &TenantCommand) -> Result<i32> {
-    let root = aibox_root()?;
-    dispatch_at(&root, command)
-}
-
-pub(crate) fn dispatch_at(root: &Path, command: &TenantCommand) -> Result<i32> {
+pub fn dispatch(root: &Path, command: &TenantCommand) -> Result<i32> {
     match command {
         TenantCommand::List => {
             for tenant in list_tenants(root)? {
@@ -862,6 +857,11 @@ mod tests {
         ] {
             assert!(!is_safe_name(invalid), "{invalid}");
         }
+
+        assert_eq!(
+            validate_name("tenant", "Work").unwrap_err().to_string(),
+            "invalid tenant name 'Work': expected a 1-63 character lowercase DNS label"
+        );
     }
 
     #[test]
@@ -993,10 +993,11 @@ mod tests {
     fn listing_is_read_only_and_ignores_unrecognized_entries() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("unrelated")).unwrap();
+        let missing_root = root.path().join("missing");
+        assert!(list_tenants(&missing_root).unwrap().is_empty());
         assert!(
-            list_tenants(&root.path().join("missing"))
-                .unwrap()
-                .is_empty()
+            !missing_root.exists(),
+            "listing a missing root must not initialize it"
         );
         fs::create_dir(root.path().join(TENANTS_DIR)).unwrap();
         fs::write(root.path().join("tenants/not-a-dir"), b"x").unwrap();

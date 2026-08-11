@@ -142,7 +142,7 @@ impl RunFixture {
         image_override: Option<&std::ffi::OsStr>,
         docker_env: &[(&str, &str)],
     ) -> Result<i32> {
-        let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
+        let cli = Cli::try_parse_from(argv.iter().copied())?;
         let mut env = vec![
             (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
             (
@@ -160,10 +160,10 @@ impl RunFixture {
             cli,
             passthrough,
             TestCommandContext {
-                root,
-                host_home: self.host_home.path(),
-                image_override,
-                docker: &docker,
+                root: root.to_path_buf(),
+                host_home: self.host_home.path().to_path_buf(),
+                image_override: image_override.map(OsStr::to_os_string),
+                docker,
             },
         )
     }
@@ -276,10 +276,10 @@ fn build_uses_single_image_and_aibox_image_override() {
         cli,
         &passthrough,
         TestCommandContext {
-            root: root.path(),
-            host_home: host_home.path(),
-            image_override: Some(std::ffi::OsStr::new("local/aibox:dev")),
-            docker: &docker,
+            root: root.path().to_path_buf(),
+            host_home: host_home.path().to_path_buf(),
+            image_override: Some(OsString::from("local/aibox:dev")),
+            docker,
         },
     )
     .unwrap();
@@ -835,27 +835,29 @@ fn session_delete_routes_to_the_selected_tenant_without_docker() {
 
 #[cfg(unix)]
 #[test]
-fn duplicate_agent_flags_are_rejected_before_docker_is_consulted() {
+fn duplicate_run_agent_flags_are_rejected_before_side_effects() {
     let fx = RunFixture::new();
 
-    for argv in [
-        &["aibox", "run", "--agent", "claude", "--agent", "codex"][..],
-        &[
-            "aibox", "config", "--agent", "claude", "list", "--agent", "codex",
-        ][..],
-        &[
-            "aibox", "session", "--agent", "claude", "list", "--agent", "codex",
-        ][..],
-    ] {
-        assert!(
-            Cli::try_parse_from(argv).is_err(),
-            "{argv:?} should reject conflicting agent selectors"
-        );
-    }
+    let error = fx
+        .run(
+            &["aibox", "run", "--agent", "claude", "--agent", "codex"],
+            Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("--agent must be provided only once"),
+        "{error}"
+    );
     assert_eq!(
         fx.log(),
         "",
         "agent-selector errors should be resolved before docker is consulted"
+    );
+    assert!(
+        !fx.root.path().join("tenants/default").exists(),
+        "argument errors must not initialize a Tenant"
     );
 }
 

@@ -320,53 +320,84 @@ mod tests {
 
     #[test]
     fn is_wrapper_text_matches_all_branches() {
-        // Complete wrapper shapes.
-        assert!(is_wrapper_text(
-            "<environment_context>cwd=/work</environment_context>"
-        ));
-        assert!(is_wrapper_text(
-            "\n  <environment_context>cwd=/work</environment_context>"
-        ));
-        assert!(is_wrapper_text(
-            "<user_instructions>be nice</user_instructions>"
-        ));
-        assert!(is_wrapper_text("<app-context>x</app-context>"));
-        assert!(is_wrapper_text("<apps_instructions>x</apps_instructions>"));
-        assert!(is_wrapper_text("<user_shell name=\"ls\"></user_shell>"));
-        assert!(is_wrapper_text("<user_shell name=\"ls\" />"));
-        assert!(is_wrapper_text("<INSTRUCTIONS>x</INSTRUCTIONS>"));
-        assert!(is_wrapper_text("<skill>x</skill>"));
-        assert!(is_wrapper_text(
-            "<permissions instructions>x</permissions instructions>"
-        ));
-        assert!(is_wrapper_text(
-            "<plugins_instructions>x</plugins_instructions>"
-        ));
-        assert!(is_wrapper_text(
-            "<skills_instructions>x</skills_instructions>"
-        ));
-        assert!(is_wrapper_text(
-            "<collaboration_mode>x</collaboration_mode>"
-        ));
-        assert!(is_wrapper_text(
-            "<recommended_plugins>x</recommended_plugins>"
-        ));
-        assert!(is_wrapper_text("## My env\nlinux"));
-        assert!(is_wrapper_text("\n  ## My env\nlinux"));
-        // The `#… instructions for ` branch (stays on the first line).
-        assert!(is_wrapper_text("# Base instructions for gpt-5.5\nmore"));
-        assert!(is_wrapper_text("  # Base instructions for gpt-5.5\nmore"));
-        // A `#` line without the phrase, and the phrase not at string start.
-        assert!(!is_wrapper_text("# just a heading"));
-        assert!(!is_wrapper_text("preamble\n# instructions for x"));
-        // Prefix-only text is not enough to hide a prompt.
-        assert!(!is_wrapper_text("<environment_context>literal prompt"));
-        assert!(!is_wrapper_text(
-            "<environment_context>cwd=/work</environment_context>\nreal ask"
-        ));
-        assert!(!is_wrapper_text("## My env is literal text"));
-        // A real prompt.
-        assert!(!is_wrapper_text("the real ask"));
+        for (case, text) in [
+            (
+                "environment context",
+                "<environment_context>cwd=/work</environment_context>",
+            ),
+            (
+                "indented environment context",
+                "\n  <environment_context>cwd=/work</environment_context>",
+            ),
+            (
+                "user instructions",
+                "<user_instructions>be nice</user_instructions>",
+            ),
+            ("app context", "<app-context>x</app-context>"),
+            (
+                "application instructions",
+                "<apps_instructions>x</apps_instructions>",
+            ),
+            ("paired user shell", "<user_shell name=\"ls\"></user_shell>"),
+            ("self-closing user shell", "<user_shell name=\"ls\" />"),
+            ("instructions", "<INSTRUCTIONS>x</INSTRUCTIONS>"),
+            ("skill", "<skill>x</skill>"),
+            (
+                "permissions",
+                "<permissions instructions>x</permissions instructions>",
+            ),
+            (
+                "plugin instructions",
+                "<plugins_instructions>x</plugins_instructions>",
+            ),
+            (
+                "skill instructions",
+                "<skills_instructions>x</skills_instructions>",
+            ),
+            (
+                "collaboration mode",
+                "<collaboration_mode>x</collaboration_mode>",
+            ),
+            (
+                "recommended plugins",
+                "<recommended_plugins>x</recommended_plugins>",
+            ),
+            ("environment heading", "## My env\nlinux"),
+            ("indented environment heading", "\n  ## My env\nlinux"),
+            (
+                "instruction preamble",
+                "# Base instructions for gpt-5.5\nmore",
+            ),
+            (
+                "indented instruction preamble",
+                "  # Base instructions for gpt-5.5\nmore",
+            ),
+        ] {
+            assert!(is_wrapper_text(text), "{case} should be filtered: {text:?}");
+        }
+
+        for (case, text) in [
+            ("ordinary heading", "# just a heading"),
+            (
+                "instruction phrase after the first line",
+                "preamble\n# instructions for x",
+            ),
+            (
+                "unterminated wrapper-like text",
+                "<environment_context>literal prompt",
+            ),
+            (
+                "real prompt after wrapper",
+                "<environment_context>cwd=/work</environment_context>\nreal ask",
+            ),
+            ("longer environment heading", "## My env is literal text"),
+            ("plain prompt", "the real ask"),
+        ] {
+            assert!(
+                !is_wrapper_text(text),
+                "{case} must remain visible as user text: {text:?}"
+            );
+        }
     }
 
     #[test]

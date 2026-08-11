@@ -1,24 +1,27 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help format build test lint check install \
-	traffic-deps traffic-format traffic-build traffic-test traffic-lint traffic-check
+.PHONY: help install format build test lint check \
+	traffic-ci traffic-format traffic-build traffic-test traffic-lint traffic-check
 
 help:
 	@printf '%s\n' \
 		"Rust:" \
+		"  make install            Install the CLI with Cargo" \
 		"  make format             Format Rust sources" \
 		"  make build              Build the CLI" \
 		"  make test               Run Rust tests" \
 		"  make lint               Lint Rust sources" \
 		"  make check              Run all Rust checks" \
-		"  make install            Install the CLI with Cargo" \
 		"Traffic UI:" \
-		"  make traffic-deps       Install frontend dependencies with npm ci" \
+		"  make traffic-ci         Install frontend dependencies with npm ci" \
 		"  make traffic-format     Format frontend sources" \
 		"  make traffic-build      Build embedded frontend assets" \
 		"  make traffic-test       Run frontend tests" \
 		"  make traffic-lint       Lint frontend sources" \
 		"  make traffic-check      Run all frontend checks and build assets"
+
+install:
+	cargo install --locked --path .
 
 format:
 	cargo fmt
@@ -37,10 +40,7 @@ check:
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 
-install:
-	cargo install --locked --path .
-
-traffic-deps:
+traffic-ci:
 	npm --prefix web/traffic ci
 
 traffic-format:
