@@ -26,7 +26,6 @@ interface RecordStatusProps {
   status: number | null;
   state: RecordState;
   assessment: RecordAssessment;
-  compact?: boolean;
 }
 
 const TONE_CLASS: Record<RecordStatusTone, string> = {
@@ -37,7 +36,7 @@ const TONE_CLASS: Record<RecordStatusTone, string> = {
   warning: styles.warningTone,
 };
 
-export function RecordStatus({ status, state, assessment, compact = false }: RecordStatusProps) {
+export function RecordStatus({ status, state, assessment }: RecordStatusProps) {
   const presentation = recordStatusPresentation({ status, state, assessment });
 
   return (
@@ -51,7 +50,7 @@ export function RecordStatus({ status, state, assessment, compact = false }: Rec
           <span className={styles.dot} aria-hidden="true" /> {presentation.phase}
         </span>
       )}
-      {presentation.issue && compact && <CompactIssue issue={presentation.issue} />}
+      {presentation.issue && <CompactIssue issue={presentation.issue} />}
     </span>
   );
 }
@@ -184,7 +183,7 @@ function IssueTooltip({ issue, className, children, role, ariaLabel }: IssueTool
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+  return Math.min(Math.max(value, minimum), maximum);
 }
 
 interface RecordHeadlineStatusProps {

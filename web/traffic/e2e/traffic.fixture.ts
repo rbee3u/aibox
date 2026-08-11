@@ -1,0 +1,172 @@
+import type { Page, Route } from "@playwright/test";
+import type {
+  AssessmentPrimary,
+  ProtocolSummary,
+  RecordAssessment,
+  RecordDetail,
+  RecordList,
+  RecordSummary,
+} from "../src/types";
+
+const requestBody = '{"model":"gpt-5.6-sol"}';
+const responseBody = 'data: {"type":"response.completed"}\n\n';
+
+const protocol = {
+  family: "openai_responses",
+  response_terminal: true,
+  model: { requested: "gpt-5.6-sol", effective: "gpt-5.6-sol" },
+  reasoning_effort: { requested: "high", effective: "high" },
+  response_mode: { requested: "stream", observed: "stream" },
+  first_token_at_ns: "200000000",
+  token_usage: null,
+  errors: [],
+  warnings: [],
+} satisfies ProtocolSummary;
+
+export const providerError = {
+  source: "provider",
+  kind: "server_error",
+  message: "Our servers are currently overloaded. Please try again later.",
+} satisfies AssessmentPrimary;
+
+const assessment = {
+  level: "error",
+  primary: providerError,
+  issue_count: 1,
+} satisfies RecordAssessment;
+
+const primaryRecord = {
+  id: "019fe51f-82b7-7701-bfb0-231441977e27",
+  started_at: "2026-08-09T06:04:45Z",
+  ended_at: "2026-08-09T06:04:45.500Z",
+  method: "POST",
+  incoming_uri: "/https://relay.example.test/v1/responses",
+  upstream_url: "https://relay.example.test/v1/responses",
+  status: 200,
+  http_version: "HTTP/2",
+  outcome: "completed",
+  state: "completed",
+  total_ms: 500,
+  protocol,
+  assessment,
+} satisfies RecordSummary;
+
+const recordList = {
+  records: [primaryRecord],
+  total: 1,
+  deletable_count: 1,
+  has_next: false,
+} satisfies RecordList;
+
+const detail = {
+  request: {
+    id: primaryRecord.id,
+    started_at: primaryRecord.started_at,
+    method: primaryRecord.method,
+    incoming_uri: primaryRecord.incoming_uri,
+    upstream_url: primaryRecord.upstream_url,
+    http_version: "HTTP/2.0",
+    headers: [
+      header("content-type", "application/json"),
+      header("authorization", "Bearer test-token-not-a-secret"),
+    ],
+  },
+  response: {
+    status: 200,
+    source: "upstream",
+    headers_at: "2026-08-09T06:04:45.100Z",
+    http_version: "HTTP/2",
+    reason_phrase: "OK",
+    headers: [header("content-type", "text/event-stream")],
+  },
+  result: {
+    ended_at: primaryRecord.ended_at,
+    outcome: "completed",
+    total_ms: primaryRecord.total_ms,
+    error: null,
+  },
+  summary: {
+    schema_version: 1,
+    record_id: primaryRecord.id,
+    kind: "summary",
+    observed_at: primaryRecord.started_at,
+    request: {
+      method: primaryRecord.method,
+      incoming_uri: primaryRecord.incoming_uri,
+      upstream_url: primaryRecord.upstream_url,
+      http_version: "HTTP/2.0",
+    },
+    response: { status: 200, http_version: "HTTP/2" },
+    terminal: true,
+    timing: {
+      upstream_request_started_at_ns: "10000000",
+      upstream_request_body_first_byte_at_ns: "20000000",
+      upstream_request_body_completed_at_ns: "30000000",
+      upstream_response_headers_at_ns: "100000000",
+      upstream_response_body_first_byte_at_ns: "200000000",
+      upstream_response_body_completed_at_ns: "450000000",
+      finished_at_ns: "500000000",
+    },
+    coding_agent_session_id: null,
+    protocol,
+    outcome: "completed",
+    errors: [],
+    warnings: [],
+    assessment,
+  },
+  assessment,
+  diagnostics: {
+    traffic: [],
+    http: [],
+    provider: [{ ...providerError, level: "error", phase: "response", at_ns: "450000000" }],
+    warnings: [],
+  },
+  state: "completed",
+  request_body_bytes: byteLength(requestBody),
+  response_body_bytes: byteLength(responseBody),
+  live_total_ms: null,
+  timeline_end_at_ns: "500000000",
+} satisfies RecordDetail;
+
+export async function mockTraffic(page: Page) {
+  await page.route("**/_aibox/traffic/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/_aibox/traffic/api/records") return route.fulfill({ json: recordList });
+    if (path === `/_aibox/traffic/api/records/${primaryRecord.id}`) {
+      return route.fulfill({ json: detail });
+    }
+    if (path.endsWith("/request-body") || path.endsWith("/request-body-decoded")) {
+      return fulfillBody(route, requestBody);
+    }
+    if (path.endsWith("/response-body") || path.endsWith("/response-body-decoded")) {
+      return fulfillBody(route, responseBody);
+    }
+    if (path.endsWith("/response-event-timings")) {
+      return route.fulfill({
+        json: {
+          state: "available",
+          events: [{ sequence: 0, completed_at_ns: protocol.first_token_at_ns }],
+          next_sequence: 1,
+          warning: null,
+        },
+      });
+    }
+    throw new Error(`Unexpected Traffic API request: ${path}`);
+  });
+}
+
+function fulfillBody(route: Route, body: string) {
+  return route.fulfill({
+    contentType: "application/octet-stream",
+    headers: { "X-Aibox-Traffic-Next-Offset": String(byteLength(body)) },
+    body,
+  });
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).length;
+}
+
+function header(name: string, value: string) {
+  return { name, value_base64: btoa(value) };
+}

@@ -23,6 +23,11 @@ function detailProps(
     detail,
     bodies: { request: [], response: [] },
     bodyStatus: { request: "idle", response: "idle" },
+    decodedBodies: {
+      request: { bytes: null, error: null },
+      response: { bytes: null, error: null },
+    },
+    eventTimings: null,
     tab: "summary",
     onTabChange: vi.fn(),
     onDownload: vi.fn(),
@@ -81,7 +86,7 @@ describe("RecordDetail", () => {
       summary: {
         ...completedDetail.summary,
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           family: "claude_messages" as const,
           model: { requested: "claude-opus-5", effective: null },
           token_usage: {
@@ -184,10 +189,10 @@ describe("RecordDetail", () => {
       summary: {
         ...completedDetail.summary,
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           family: "claude_messages" as const,
           token_usage: {
-            ...completedDetail.summary.protocol!.token_usage!,
+            ...completedDetail.summary.protocol.token_usage,
             cache_write_tokens: null,
             cache_write_5m_tokens: 18,
             cache_write_1h_tokens: 20,
@@ -251,7 +256,7 @@ describe("RecordDetail", () => {
       summary: {
         ...completedDetail.summary,
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           model: { requested: "requested-model", effective: "effective-model" },
           reasoning_effort: { requested: "high", effective: null },
           response_mode: { requested: "stream" as const, observed: "normal" as const },
@@ -272,6 +277,31 @@ describe("RecordDetail", () => {
     expect(within(timingSection).getByRole("list", { name: "Timing stages" })).toHaveTextContent(
       "Response body",
     );
+  });
+
+  it("moves focus through detail tabs with the keyboard", () => {
+    const onTabChange = vi.fn();
+    renderDetail(completedDetail, { onTabChange });
+
+    const tabs = {
+      summary: screen.getByRole("tab", { name: "Summary" }),
+      request: screen.getByRole("tab", { name: "Request" }),
+      response: screen.getByRole("tab", { name: "Response" }),
+    };
+    const cases = [
+      ["summary", "ArrowRight", "request"],
+      ["summary", "ArrowLeft", "response"],
+      ["response", "ArrowRight", "summary"],
+      ["request", "Home", "summary"],
+      ["request", "End", "response"],
+    ] as const;
+
+    for (const [from, key, to] of cases) {
+      tabs[from].focus();
+      fireEvent.keyDown(tabs[from], { key });
+      expect(tabs[to]).toHaveFocus();
+      expect(onTabChange).toHaveBeenLastCalledWith(to);
+    }
   });
 
   it("shows no End Time while a Record is active", () => {
@@ -305,7 +335,7 @@ describe("RecordDetail", () => {
       summary: {
         ...completedDetail.summary,
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           model: { requested: null, effective: null },
           reasoning_effort: { requested: null, effective: null },
           response_mode: { requested: null, observed: null },
@@ -331,7 +361,7 @@ describe("RecordDetail", () => {
       ...completedDetail,
       summary: {
         ...completedDetail.summary,
-        protocol: { ...completedDetail.summary.protocol!, token_usage: null },
+        protocol: { ...completedDetail.summary.protocol, token_usage: null },
       },
     };
     rerender(<RecordDetail {...detailProps(terminalWithoutUsage)} />);
@@ -361,7 +391,7 @@ describe("RecordDetail", () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
     const detail = withTokenUsage(completedDetail, {
-      ...completedDetail.summary.protocol!.token_usage!,
+      ...completedDetail.summary.protocol.token_usage,
       output_tokens: 0,
     });
     const { rerender } = renderDetail(detail);

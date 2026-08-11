@@ -142,7 +142,7 @@ export function RecordList({
               title="Delete selected"
             >
               <Trash2 size={14} aria-hidden="true" />
-              <span className={styles.deleteSelectedLabel}>Delete selected</span>
+              Delete selected
             </button>
           ) : (
             <button
@@ -239,7 +239,6 @@ export function RecordList({
                       status={record.status}
                       state={record.state}
                       assessment={record.assessment}
-                      compact
                     />
                   </span>
                   <span className={styles.metadata}>
@@ -252,7 +251,7 @@ export function RecordList({
                     <span className={styles.timestamp} title={`Ended ${ended}`}>
                       {ended}
                     </span>
-                    <span id={metadataDescriptionId} className={styles.visuallyHidden}>
+                    <span id={metadataDescriptionId} className="srOnly">
                       {metadataDescription}
                     </span>
                   </span>

@@ -3,7 +3,6 @@ import {
   bytes,
   compactDuration,
   concatChunks,
-  decodeBytes,
   decodeHeader,
   duration,
   formatTimestamp,
@@ -40,10 +39,9 @@ describe("traffic display utilities", () => {
     expect(bytes(2048)).toBe("2.0 KB");
   });
 
-  it("preserves binary bodies and headers as hex", () => {
+  it("concatenates Body chunks and preserves binary headers as hex", () => {
     const chunks = [new Uint8Array([0x61, 0x62]), new Uint8Array([0xff])];
     expect(concatChunks(chunks)).toEqual(new Uint8Array([0x61, 0x62, 0xff]));
-    expect(decodeBytes(concatChunks(chunks), "body")).toBe("[non-UTF-8 body; hex view]\n61 62 ff");
     expect(decodeHeader({ name: "x-binary", value_base64: btoa("\xff") })).toBe("[hex] ff");
   });
 

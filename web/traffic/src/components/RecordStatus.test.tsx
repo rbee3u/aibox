@@ -116,22 +116,20 @@ describe("record status presentation", () => {
 });
 
 describe("RecordStatus", () => {
-  it("shows Waiting and Streaming text in compact list status", () => {
-    const { rerender } = render(
-      <RecordStatus status={null} state="active" assessment={active} compact />,
-    );
+  it("shows Waiting and Streaming text in list status", () => {
+    const { rerender } = render(<RecordStatus status={null} state="active" assessment={active} />);
     expect(screen.getByText("Waiting")).toBeInTheDocument();
 
-    rerender(<RecordStatus status={200} state="active" assessment={active} compact />);
+    rerender(<RecordStatus status={200} state="active" assessment={active} />);
     expect(screen.queryByText("HTTP/2")).not.toBeInTheDocument();
     expect(screen.getByText("200")).toBeInTheDocument();
     expect(screen.getByText("Streaming")).toBeInTheDocument();
   });
 
-  it("renders accessible compact issues and opens their tooltips", () => {
+  it("renders accessible list issues and opens their tooltips", () => {
     vi.useFakeTimers();
     const { rerender } = render(
-      <RecordStatus status={200} state="completed" assessment={providerError} compact />,
+      <RecordStatus status={200} state="completed" assessment={providerError} />,
     );
     expect(screen.getByText("200")).toBeInTheDocument();
     const errorMarker = screen.getByRole("img", {
@@ -154,9 +152,7 @@ describe("RecordStatus", () => {
     fireEvent.pointerLeave(errorMarker);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    rerender(
-      <RecordStatus status={null} state="completed" assessment={disconnectWarning} compact />,
-    );
+    rerender(<RecordStatus status={null} state="completed" assessment={disconnectWarning} />);
     const warningMarker = screen.getByRole("img", {
       name: /Record warning: Client disconnected/,
     });

@@ -1,15 +1,15 @@
 import { Check, ChevronDown, ChevronRight, Clipboard } from "lucide-react";
-import { isLosslessNumber } from "lossless-json";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import {
   isJsonContainer,
   jsonEntries,
+  jsonStringPreview,
   jsonValueType,
-  LONG_STRING_CHARACTERS,
-  shouldTruncateJsonString,
   stringifyJson,
   type JsonValue,
 } from "../bodyPresentation";
+import { useClipboardFeedback } from "../useClipboardFeedback";
 import styles from "./RecordDetail.module.css";
 
 interface JsonTreeProps {
@@ -29,9 +29,8 @@ export function JsonTree({
   onToggle,
   onToggleString,
 }: JsonTreeProps) {
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [copiedPath, copyValue] = useClipboardFeedback<string>();
   const [activePath, setActivePath] = useState(pathPrefix);
-  const copiedTimer = useRef<number | undefined>(undefined);
   const nodeRefs = useRef(new Map<string, HTMLDivElement>());
   const visibleNodes = useMemo(
     () => collectVisibleNodes(value, pathPrefix, expanded),
@@ -41,24 +40,9 @@ export function JsonTree({
     ? activePath
     : pathPrefix;
 
-  useEffect(
-    () => () => {
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-
-  async function copy(path: string, node: JsonValue) {
-    try {
-      await navigator.clipboard.writeText(
-        isJsonContainer(node) ? stringifyJson(node, true) : stringifyJson(node),
-      );
-      setCopiedPath(path);
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setCopiedPath(null), 1400);
-    } catch {
-      setCopiedPath(null);
-    }
+  function copy(path: string, node: JsonValue) {
+    const text = isJsonContainer(node) ? stringifyJson(node, true) : stringifyJson(node);
+    void copyValue(text, path);
   }
 
   function focusNode(path: string) {
@@ -66,36 +50,45 @@ export function JsonTree({
     nodeRefs.current.get(path)?.focus();
   }
 
-  function navigateTree(event: React.KeyboardEvent<HTMLDivElement>, path: string) {
+  function navigateTree(event: KeyboardEvent<HTMLDivElement>, path: string) {
     if (event.target !== event.currentTarget) return;
     const index = visibleNodes.findIndex((node) => node.path === path);
     const current = visibleNodes[index];
     if (!current) return;
     let destination: string | null = null;
-    if (event.key === "ArrowDown") destination = visibleNodes[index + 1]?.path ?? null;
-    if (event.key === "ArrowUp") destination = visibleNodes[index - 1]?.path ?? null;
-    if (event.key === "Home") destination = visibleNodes[0]?.path ?? null;
-    if (event.key === "End") destination = visibleNodes.at(-1)?.path ?? null;
-    if (event.key === "ArrowRight" && current.container) {
-      if (!current.open) onToggle(path);
-      else
-        destination =
-          visibleNodes[index + 1]?.parentPath === path ? visibleNodes[index + 1].path : null;
-    }
-    if (event.key === "ArrowLeft") {
-      if (current.container && current.open && path !== pathPrefix) onToggle(path);
-      else destination = current.parentPath;
-    }
-    if ((event.key === "Enter" || event.key === " ") && current.container && path !== pathPrefix) {
-      onToggle(path);
-    }
-    if (
-      destination === null &&
-      !["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End", "Enter", " "].includes(
-        event.key,
-      )
-    ) {
-      return;
+    switch (event.key) {
+      case "ArrowDown":
+        destination = visibleNodes[index + 1]?.path ?? null;
+        break;
+      case "ArrowUp":
+        destination = visibleNodes[index - 1]?.path ?? null;
+        break;
+      case "Home":
+        destination = visibleNodes[0]?.path ?? null;
+        break;
+      case "End":
+        destination = visibleNodes.at(-1)?.path ?? null;
+        break;
+      case "ArrowRight": {
+        if (!current.container) break;
+        if (!current.open) {
+          onToggle(path);
+        } else {
+          const next = visibleNodes[index + 1];
+          destination = next?.parentPath === path ? next.path : null;
+        }
+        break;
+      }
+      case "ArrowLeft":
+        if (current.container && current.open && path !== pathPrefix) onToggle(path);
+        else destination = current.parentPath;
+        break;
+      case "Enter":
+      case " ":
+        if (current.container && path !== pathPrefix) onToggle(path);
+        break;
+      default:
+        return;
     }
     event.preventDefault();
     if (destination) focusNode(destination);
@@ -119,7 +112,7 @@ export function JsonTree({
         onNodeKeyDown={navigateTree}
         onToggle={onToggle}
         onToggleString={onToggleString}
-        onCopy={(path, node) => void copy(path, node)}
+        onCopy={copy}
       />
     </div>
   );
@@ -136,7 +129,7 @@ interface JsonNodeProps {
   activePath: string;
   registerNode: (path: string, element: HTMLDivElement | null) => void;
   onNodeFocus: (path: string) => void;
-  onNodeKeyDown: (event: React.KeyboardEvent<HTMLDivElement>, path: string) => void;
+  onNodeKeyDown: (event: KeyboardEvent<HTMLDivElement>, path: string) => void;
   onToggle: (path: string) => void;
   onToggleString: (path: string) => void;
   onCopy: (path: string, value: JsonValue) => void;
@@ -147,7 +140,7 @@ function JsonNode(props: JsonNodeProps) {
   const container = isJsonContainer(value);
   const entries = container ? jsonEntries(value) : [];
   const open = depth === 0 || expanded.has(path);
-  const longString = typeof value === "string" && shouldTruncateJsonString(value);
+  const stringPreview = typeof value === "string" ? jsonStringPreview(value) : null;
   const stringOpen = expandedStrings.has(path);
 
   return (
@@ -188,9 +181,9 @@ function JsonNode(props: JsonNodeProps) {
             {entries.length === 1 ? "item" : "items"}
           </span>
         ) : (
-          <JsonScalar value={value} truncated={longString && !stringOpen} />
+          <JsonScalar value={value} preview={stringOpen ? null : stringPreview} />
         )}
-        {longString && (
+        {stringPreview !== null && (
           <button
             type="button"
             className={styles.jsonStringToggle}
@@ -258,22 +251,9 @@ function collectVisibleNodes(
   return nodes;
 }
 
-function JsonScalar({ value, truncated }: { value: JsonValue; truncated: boolean }) {
-  let rendered = stringifyJson(value);
-  if (truncated && typeof value === "string") {
-    rendered = `${JSON.stringify(stringPrefix(value, LONG_STRING_CHARACTERS))}…`;
-  }
-  const type = isLosslessNumber(value) ? "number" : value === null ? "null" : typeof value;
-  return <span className={styles[`json${capitalize(type)}`]}>{rendered}</span>;
-}
-
-function stringPrefix(value: string, characters: number): string {
-  let offset = 0;
-  for (let count = 0; count < characters && offset < value.length; count += 1) {
-    const codePoint = value.codePointAt(offset);
-    offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
-  }
-  return value.slice(0, offset);
+function JsonScalar({ value, preview }: { value: JsonValue; preview: string | null }) {
+  const rendered = preview === null ? stringifyJson(value) : `${JSON.stringify(preview)}…`;
+  return <span className={styles[`json${capitalize(jsonValueType(value))}`]}>{rendered}</span>;
 }
 
 function escapePath(value: string): string {

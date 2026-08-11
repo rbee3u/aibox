@@ -2,7 +2,7 @@ import type { AssessmentPrimary, RecordAssessment, RecordState, ResponseMetadata
 
 export type RecordStatusTone = "active" | "error" | "neutral" | "success" | "warning";
 
-export interface StatusPresentationInput {
+interface StatusPresentationInput {
   status: number | null;
   state: RecordState;
   assessment: RecordAssessment;
@@ -15,14 +15,14 @@ export interface AssessmentPresentation {
   additionalIssues: number;
 }
 
-export interface RecordStatusPresentation {
+interface RecordStatusPresentation {
   label: string;
   tone: RecordStatusTone;
   issue: AssessmentPresentation | null;
   phase: "Streaming" | null;
 }
 
-export interface RecordHeadlinePresentation {
+interface RecordHeadlinePresentation {
   statusText: string | null;
   tone: RecordStatusTone;
   tag: AssessmentPresentation | { label: "Waiting" | "Streaming"; tone: "active" } | null;
@@ -52,13 +52,11 @@ const ERROR_KIND_LABELS: Record<string, string> = {
   upstream_response_failed: "Upstream stream failed",
 };
 
-function humanize(value: string, fallback: string): string {
-  const words = value.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase();
-  return words ? `${words[0].toUpperCase()}${words.slice(1)}` : fallback;
-}
-
 export function errorKindLabel(kind: string): string {
-  return ERROR_KIND_LABELS[kind] ?? humanize(kind, "Unknown issue");
+  const known = ERROR_KIND_LABELS[kind];
+  if (known) return known;
+  const words = kind.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase();
+  return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "Unknown issue";
 }
 
 export function assessmentPrimaryLabel(primary: AssessmentPrimary): string {
@@ -67,10 +65,8 @@ export function assessmentPrimaryLabel(primary: AssessmentPrimary): string {
 }
 
 export function statusTone(status: number): RecordStatusTone {
-  if (status >= 200 && status <= 299) return "success";
-  if ((status >= 100 && status <= 199) || (status >= 300 && status <= 399)) {
-    return "neutral";
-  }
+  if (status >= 200 && status < 300) return "success";
+  if (status >= 100 && status < 400) return "neutral";
   return "error";
 }
 
@@ -98,11 +94,12 @@ export function recordStatusPresentation({
   assessment,
 }: StatusPresentationInput): RecordStatusPresentation {
   const active = state === "active";
+  const issue = active ? null : assessmentPresentation(assessment);
   if (status === null) {
     return {
       label: active ? "Waiting" : "No response",
       tone: active ? "active" : "neutral",
-      issue: active ? null : assessmentPresentation(assessment),
+      issue,
       phase: null,
     };
   }
@@ -110,7 +107,7 @@ export function recordStatusPresentation({
   return {
     label: String(status),
     tone: statusTone(status),
-    issue: active ? null : assessmentPresentation(assessment),
+    issue,
     phase: active ? "Streaming" : null,
   };
 }
@@ -121,17 +118,18 @@ export function recordHeadlinePresentation(
   assessment: RecordAssessment,
 ): RecordHeadlinePresentation {
   const active = state === "active";
-  const statusText = response
-    ? [response.http_version, response.status, response.reason_phrase].filter(Boolean).join(" ")
-    : active
-      ? null
-      : "No response";
-
+  if (!response) {
+    return {
+      statusText: active ? null : "No response",
+      tone: active ? "active" : "neutral",
+      tag: active ? { label: "Waiting", tone: "active" } : assessmentPresentation(assessment),
+    };
+  }
   return {
-    statusText,
-    tone: response ? statusTone(response.status) : active ? "active" : "neutral",
-    tag: active
-      ? { label: response ? "Streaming" : "Waiting", tone: "active" }
-      : assessmentPresentation(assessment),
+    statusText: [response.http_version, response.status, response.reason_phrase]
+      .filter(Boolean)
+      .join(" "),
+    tone: statusTone(response.status),
+    tag: active ? { label: "Streaming", tone: "active" } : assessmentPresentation(assessment),
   };
 }

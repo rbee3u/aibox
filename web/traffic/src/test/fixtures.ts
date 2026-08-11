@@ -8,19 +8,19 @@ import type {
   TrafficApi,
 } from "../types";
 
-export const okAssessment: RecordAssessment = {
+export const okAssessment = {
   level: "ok",
   primary: null,
   issue_count: 0,
-};
+} satisfies RecordAssessment;
 
-export const activeAssessment: RecordAssessment = {
+export const activeAssessment = {
   level: "active",
   primary: null,
   issue_count: 0,
-};
+} satisfies RecordAssessment;
 
-export const completedProtocol: ProtocolSummary = {
+export const completedProtocol = {
   family: "openai_responses",
   response_terminal: true,
   model: { requested: "gpt-5.6-sol", effective: "gpt-5.6-sol" },
@@ -39,18 +39,18 @@ export const completedProtocol: ProtocolSummary = {
   },
   errors: [],
   warnings: [],
-};
+} satisfies ProtocolSummary;
 
-export const activeProtocol: ProtocolSummary = {
+export const activeProtocol = {
   ...completedProtocol,
   response_terminal: false,
   model: { requested: "gpt-5.6-sol", effective: null },
   reasoning_effort: { requested: "high", effective: null },
   first_token_at_ns: null,
   token_usage: null,
-};
+} satisfies ProtocolSummary;
 
-export const completedSummary: RecordSummary = {
+export const completedSummary = {
   id: "0198-demo-completed",
   started_at: "2026-08-06T04:00:00Z",
   ended_at: "2026-08-06T04:00:01.250Z",
@@ -64,9 +64,9 @@ export const completedSummary: RecordSummary = {
   total_ms: 1250,
   protocol: completedProtocol,
   assessment: okAssessment,
-};
+} satisfies RecordSummary;
 
-export const activeSummary: RecordSummary = {
+export const activeSummary = {
   id: "0198-demo-active",
   started_at: "2026-08-06T04:01:00Z",
   ended_at: null,
@@ -80,7 +80,7 @@ export const activeSummary: RecordSummary = {
   total_ms: 500,
   protocol: activeProtocol,
   assessment: activeAssessment,
-};
+} satisfies RecordSummary;
 
 export function completedSummaryFor(id: string, host: string): RecordSummary {
   const upstreamUrl = `https://${host}/v1/responses`;
@@ -109,7 +109,7 @@ export const recordList = recordListFor([activeSummary, completedSummary]);
 
 export const activeRecordList = recordListFor([activeSummary]);
 
-export const completedDetail: RecordDetail = {
+export const completedDetail = {
   request: {
     id: completedSummary.id,
     started_at: completedSummary.started_at,
@@ -128,7 +128,7 @@ export const completedDetail: RecordDetail = {
     headers: [{ name: "content-type", value_base64: btoa("text/event-stream") }],
   },
   result: {
-    ended_at: completedSummary.ended_at!,
+    ended_at: completedSummary.ended_at,
     outcome: "completed",
     total_ms: 1250,
     error: null,
@@ -177,9 +177,9 @@ export const completedDetail: RecordDetail = {
   response_body_bytes: 8,
   live_total_ms: null,
   timeline_end_at_ns: "1250000000",
-};
+} satisfies RecordDetail;
 
-export const activeDetail: RecordDetail = {
+export const activeDetail = {
   ...completedDetail,
   request: {
     ...completedDetail.request,
@@ -218,7 +218,7 @@ export const activeDetail: RecordDetail = {
   response_body_bytes: 0,
   live_total_ms: 500,
   timeline_end_at_ns: "500000000",
-};
+} satisfies RecordDetail;
 
 export function withRequestEncoding(detail: RecordDetail, encoding: string): RecordDetail {
   return {

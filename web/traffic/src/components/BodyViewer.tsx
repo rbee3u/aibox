@@ -1,7 +1,9 @@
 import { Check, ChevronDown, ChevronRight, Clipboard, Download, LoaderCircle } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
+import type { ReactNode } from "react";
 import {
   bodyComplete,
+  bodyHeaders,
   bodyMediaType,
   contentCoding,
   decodeUtf8,
@@ -25,6 +27,7 @@ import type {
   EventTimingIndex,
   RecordDetail,
 } from "../types";
+import { useClipboardFeedback } from "../useClipboardFeedback";
 import { bytes, concatChunks, hex } from "../utils";
 import { JsonTree } from "./JsonTree";
 import styles from "./RecordDetail.module.css";
@@ -54,16 +57,13 @@ export function BodyViewer({
   onMemoryChange,
   onDownload,
 }: BodyViewerProps) {
-  const [bodyCopied, setBodyCopied] = useState(false);
-  const copiedTimer = useRef<number | undefined>(undefined);
-  const headers = kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
+  const [bodyCopied, copyBodyText] = useClipboardFeedback();
+  const headers = bodyHeaders(detail, kind);
   const coding = contentCoding(headers);
   const original = useMemo(() => concatChunks(bodyChunks), [bodyChunks]);
   const complete = bodyComplete(detail, kind);
-  const sourceBytes = useMemo(
-    () => (coding.kind === "identity" ? original : coding.kind === "zstd" ? decoded.bytes : null),
-    [coding.kind, decoded.bytes, original],
-  );
+  const sourceBytes =
+    coding.kind === "identity" ? original : coding.kind === "zstd" ? decoded.bytes : null;
   const decodedText = useMemo(
     () => (sourceBytes ? decodeUtf8(sourceBytes, complete) : null),
     [complete, sourceBytes],
@@ -92,29 +92,75 @@ export function BodyViewer({
   const originalSize = kind === "request" ? detail.request_body_bytes : detail.response_body_bytes;
   const decodedSize = coding.kind === "zstd" ? sourceBytes?.length : undefined;
 
-  useEffect(
-    () => () => {
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-
-  async function copyBody() {
-    if (!decodedText?.ok) return;
-    try {
-      await navigator.clipboard.writeText(decodedText.text);
-      setBodyCopied(true);
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setBodyCopied(false), 1400);
-    } catch {
-      setBodyCopied(false);
-    }
+  function copyBody() {
+    if (decodedText?.ok) void copyBodyText(decodedText.text, true);
   }
 
   const updateSet = (key: "expandedNodes" | "expandedStrings", value: string): BodyViewMemory => ({
     ...memory,
     [key]: toggleSet(memory[key], value),
   });
+
+  let bodyContent: ReactNode;
+  if (bodyStatus === "error") {
+    bodyContent = <BodyState>Original Body unavailable.</BodyState>;
+  } else if (bodyStatus === "idle") {
+    bodyContent = <BodyState loading>Loading Body…</BodyState>;
+  } else if (resolvedMode === "pretty" && pendingPretty) {
+    const message =
+      coding.kind === "zstd"
+        ? complete
+          ? "Decoding zstd Body…"
+          : "Waiting for the complete zstd Body before decoding…"
+        : "Waiting for the complete JSON Body…";
+    bodyContent = <BodyState loading>{message}</BodyState>;
+  } else if (resolvedMode === "pretty" && parsedEvents) {
+    bodyContent = (
+      <SseEventList
+        events={parsedEvents.events}
+        partial={parsedEvents.hasPartialTail}
+        active={detail.state === "active"}
+        observedAt={detail.request.started_at}
+        timings={timings}
+        memory={memory}
+        onMemoryChange={onMemoryChange}
+      />
+    );
+  } else if (resolvedMode === "pretty" && parsedJson?.ok) {
+    bodyContent = (
+      <JsonTree
+        value={parsedJson.value}
+        expanded={memory.expandedNodes}
+        expandedStrings={memory.expandedStrings}
+        onToggle={(path) => onMemoryChange(updateSet("expandedNodes", path))}
+        onToggleString={(path) => onMemoryChange(updateSet("expandedStrings", path))}
+      />
+    );
+  } else {
+    bodyContent = (
+      <SourceView
+        original={original}
+        decodedText={decodedText}
+        coding={coding.kind}
+        message={sourceMessage({
+          coding,
+          decoded,
+          invalidUtf8: decodedText?.ok === false,
+          declaredJson,
+          complete,
+          large: large && !memory.renderLarge,
+          parseError: parsedJson && !parsedJson.ok ? parsedJson.message : null,
+          mediaType,
+          prettyAvailable,
+        })}
+        onRenderLarge={
+          canRenderLarge
+            ? () => onMemoryChange({ ...memory, renderLarge: true, mode: "pretty" })
+            : undefined
+        }
+      />
+    );
+  }
 
   return (
     <>
@@ -150,7 +196,7 @@ export function BodyViewer({
           )}
           <button
             type="button"
-            onClick={() => void copyBody()}
+            onClick={copyBody}
             disabled={!decodedText?.ok}
             aria-label={bodyCopied ? "Body Source copied" : "Copy decoded Body Source"}
             title={bodyCopied ? "Body Source copied" : "Copy decoded Body Source"}
@@ -171,59 +217,7 @@ export function BodyViewer({
           </button>
         </div>
       </div>
-      {bodyStatus === "error" ? (
-        <BodyState>Original Body unavailable.</BodyState>
-      ) : bodyStatus === "idle" ? (
-        <BodyState loading>Loading Body…</BodyState>
-      ) : resolvedMode === "pretty" && pendingPretty ? (
-        <BodyState loading>
-          {coding.kind === "zstd"
-            ? complete
-              ? "Decoding zstd Body…"
-              : "Waiting for the complete zstd Body before decoding…"
-            : "Waiting for the complete JSON Body…"}
-        </BodyState>
-      ) : resolvedMode === "pretty" && parsedEvents ? (
-        <SseEventList
-          events={parsedEvents.events}
-          partial={parsedEvents.hasPartialTail}
-          active={detail.state === "active"}
-          observedAt={detail.request.started_at}
-          timings={timings}
-          memory={memory}
-          onMemoryChange={onMemoryChange}
-        />
-      ) : resolvedMode === "pretty" && parsedJson?.ok ? (
-        <JsonTree
-          value={parsedJson.value}
-          expanded={memory.expandedNodes}
-          expandedStrings={memory.expandedStrings}
-          onToggle={(path) => onMemoryChange(updateSet("expandedNodes", path))}
-          onToggleString={(path) => onMemoryChange(updateSet("expandedStrings", path))}
-        />
-      ) : (
-        <SourceView
-          original={original}
-          decodedText={decodedText}
-          coding={coding.kind}
-          message={sourceMessage({
-            coding,
-            decoded,
-            invalidUtf8: decodedText?.ok === false,
-            declaredJson,
-            complete,
-            large: large && !memory.renderLarge,
-            parseError: parsedJson && !parsedJson.ok ? parsedJson.message : null,
-            mediaType,
-            prettyAvailable,
-          })}
-          onRenderLarge={
-            canRenderLarge
-              ? () => onMemoryChange({ ...memory, renderLarge: true, mode: "pretty" })
-              : undefined
-          }
-        />
-      )}
+      {bodyContent}
     </>
   );
 }
@@ -237,7 +231,7 @@ function SourceView({
 }: {
   original: Uint8Array;
   decodedText: ReturnType<typeof decodeUtf8> | null;
-  coding: "identity" | "zstd" | "unsupported";
+  coding: ContentCoding["kind"];
   message: string | null;
   onRenderLarge?: () => void;
 }) {
@@ -283,8 +277,7 @@ function SseEventList({
   memory: BodyViewMemory;
   onMemoryChange: (memory: BodyViewMemory) => void;
 }) {
-  const [copiedEvent, setCopiedEvent] = useState<number | null>(null);
-  const copiedTimer = useRef<number | undefined>(undefined);
+  const [copiedEvent, copyEventText] = useClipboardFeedback<number>();
   const listRef = useRef<HTMLDivElement | null>(null);
   const followBottom = useRef(true);
   const timingBySequence = useMemo(
@@ -300,27 +293,14 @@ function SseEventList({
     [events],
   );
 
-  useEffect(
-    () => () => {
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
   useLayoutEffect(() => {
     const list = listRef.current;
     if (list && followBottom.current) list.scrollTop = list.scrollHeight;
   }, [events.length]);
 
-  async function copyEvent(event: ParsedSseEvent, parsed: ReturnType<typeof parseJson>) {
+  function copyEvent(event: ParsedSseEvent, parsed: ReturnType<typeof parseJson>) {
     const content = parsed.ok ? stringifyJson(parsed.value, true) : event.data;
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopiedEvent(event.sequence);
-      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setCopiedEvent(null), 1400);
-    } catch {
-      setCopiedEvent(null);
-    }
+    void copyEventText(content, event.sequence);
   }
 
   return (
@@ -377,7 +357,7 @@ function SseEventList({
                 <button
                   type="button"
                   className={styles.eventCopy}
-                  onClick={() => void copyEvent(event, parsed)}
+                  onClick={() => copyEvent(event, parsed)}
                   aria-label={
                     copiedEvent === event.sequence ? "SSE Event data copied" : "Copy SSE Event data"
                   }
@@ -432,13 +412,7 @@ function SseEventList({
   );
 }
 
-function BodyState({
-  children,
-  loading = false,
-}: {
-  children: React.ReactNode;
-  loading?: boolean;
-}) {
+function BodyState({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
   return (
     <div className={styles.bodyState} role="status">
       {loading && <LoaderCircle className={styles.loading} size={16} aria-hidden="true" />}

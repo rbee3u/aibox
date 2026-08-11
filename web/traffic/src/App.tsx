@@ -2,7 +2,7 @@ import { BookOpen, Box, GitFork, LoaderCircle, Radio, SunMoon } from "lucide-rea
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { ApiError, createTrafficApi } from "./api";
-import { bodyComplete, contentCoding, isSseResponse } from "./bodyPresentation";
+import { bodyComplete, bodyHeaders, contentCoding, isSseResponse } from "./bodyPresentation";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
@@ -41,8 +41,17 @@ const MIN_LIST_WIDTH = 360;
 const MAX_LIST_WIDTH = 640;
 const LIST_WIDTH_STEP = 16;
 const EMPTY_ERRORS: AppErrors = { list: null, detail: null, body: null, action: null };
+const EMPTY_BODIES: Record<BodyKind, Uint8Array[]> = { request: [], response: [] };
+const EMPTY_BODY_STATUS: Record<BodyKind, BodyLoadStatus> = {
+  request: "idle",
+  response: "idle",
+};
+const EMPTY_DECODED_BODIES: Record<BodyKind, DecodedBodyState> = {
+  request: EMPTY_DECODED_BODY,
+  response: EMPTY_DECODED_BODY,
+};
 
-export type ThemePreference = "system" | "light" | "dark";
+type ThemePreference = "system" | "light" | "dark";
 
 interface SplitDrag {
   pointerId: number;
@@ -72,18 +81,9 @@ export function App({ api: providedApi }: AppProps) {
   const currentIdRef = useRef<string | null>(null);
   const [currentState, setCurrentState] = useState<RecordState | null>(null);
   const [detail, setDetail] = useState<RecordDetailData | null>(null);
-  const [bodies, setBodies] = useState<{ request: Uint8Array[]; response: Uint8Array[] }>({
-    request: [],
-    response: [],
-  });
-  const [bodyStatus, setBodyStatus] = useState<Record<BodyKind, BodyLoadStatus>>({
-    request: "idle",
-    response: "idle",
-  });
-  const [decodedBodies, setDecodedBodies] = useState<Record<BodyKind, DecodedBodyState>>({
-    request: EMPTY_DECODED_BODY,
-    response: EMPTY_DECODED_BODY,
-  });
+  const [bodies, setBodies] = useState(EMPTY_BODIES);
+  const [bodyStatus, setBodyStatus] = useState(EMPTY_BODY_STATUS);
+  const [decodedBodies, setDecodedBodies] = useState(EMPTY_DECODED_BODIES);
   const [eventTimings, setEventTimings] = useState<EventTimingIndex | null>(null);
   const timingNextSequence = useRef(0);
   const offsets = useRef({ request: 0, response: 0 });
@@ -109,19 +109,16 @@ export function App({ api: providedApi }: AppProps) {
   const detailState = detail?.state ?? null;
   const responseAvailable = Boolean(detail?.response);
   const visibleBodyKind = tab === "summary" ? null : tab;
-  const visibleBodyHeaders =
-    visibleBodyKind === "request"
-      ? detail?.request.headers
-      : visibleBodyKind === "response"
-        ? detail?.response?.headers
-        : undefined;
-  const visibleBodyCodingKind = contentCoding(visibleBodyHeaders ?? []).kind;
+  const visibleBodyCodingKind =
+    detail && visibleBodyKind
+      ? contentCoding(bodyHeaders(detail, visibleBodyKind)).kind
+      : "identity";
   const visibleBodyComplete =
     detail !== null && visibleBodyKind !== null ? bodyComplete(detail, visibleBodyKind) : false;
   const shouldLoadVisibleTimings =
     visibleBodyKind === "response" && detail !== null && isSseResponse(detail);
   const visibleDetailError = errors.detail ?? errors.body;
-  const visibleDetailErrorSource: ErrorSource = errors.detail ? "detail" : "body";
+  const visibleDetailErrorSource = errors.detail ? "detail" : "body";
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -197,9 +194,9 @@ export function App({ api: providedApi }: AppProps) {
   }, []);
   const resetRecordData = useCallback(() => {
     setDetail(null);
-    setBodies({ request: [], response: [] });
-    setBodyStatus({ request: "idle", response: "idle" });
-    setDecodedBodies({ request: EMPTY_DECODED_BODY, response: EMPTY_DECODED_BODY });
+    setBodies(EMPTY_BODIES);
+    setBodyStatus(EMPTY_BODY_STATUS);
+    setDecodedBodies(EMPTY_DECODED_BODIES);
     setEventTimings(null);
     timingNextSequence.current = 0;
     decodedLoaded.current = { request: false, response: false };
@@ -254,8 +251,9 @@ export function App({ api: providedApi }: AppProps) {
         setList(payload);
         setPage(targetPage);
         pageRef.current = targetPage;
-        const currentSummary = currentIdRef.current
-          ? payload.records.find((record) => record.id === currentIdRef.current)
+        const selectedId = currentIdRef.current;
+        const currentSummary = selectedId
+          ? payload.records.find((record) => record.id === selectedId)
           : undefined;
         if (currentSummary) {
           setCurrentState((current) =>
@@ -532,8 +530,22 @@ export function App({ api: providedApi }: AppProps) {
     visibleBodyComplete,
   ]);
 
-  const selectedIds = useMemo(() => [...selected], [selected]);
-  const togglePageSelection = () => {
+  const selectedIds = [...selected];
+
+  function toggleRecordSelection(id: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.delete(id)) {
+        selectionPages.current.delete(id);
+      } else {
+        next.add(id);
+        selectionPages.current.set(id, pageRef.current);
+      }
+      return next;
+    });
+  }
+
+  function togglePageSelection() {
     setSelected((current) => {
       const next = new Set(current);
       const deletableIds = list.records
@@ -544,16 +556,14 @@ export function App({ api: providedApi }: AppProps) {
         if (pageSelected) {
           next.delete(id);
           selectionPages.current.delete(id);
-        } else {
-          if (!next.has(id)) {
-            next.add(id);
-            selectionPages.current.set(id, pageRef.current);
-          }
+        } else if (!next.has(id)) {
+          next.add(id);
+          selectionPages.current.set(id, pageRef.current);
         }
       });
       return next;
     });
-  };
+  }
 
   async function confirmDelete() {
     if (!dialog || !beginDeletion({ kind: "batch" })) return;
@@ -715,7 +725,6 @@ export function App({ api: providedApi }: AppProps) {
           {errors.list && (
             <div className={styles.scopedBanner}>
               <StatusBanner
-                kind="error"
                 message={errors.list}
                 action={
                   selectionMode ? undefined : { label: "Retry", onClick: () => void refreshPage() }
@@ -736,19 +745,7 @@ export function App({ api: providedApi }: AppProps) {
             onEnterSelection={() => setSelectionMode(true)}
             onExitSelection={exitSelectionMode}
             onTogglePage={togglePageSelection}
-            onToggle={(id) =>
-              setSelected((current) => {
-                const next = new Set(current);
-                if (next.has(id)) {
-                  next.delete(id);
-                  selectionPages.current.delete(id);
-                } else {
-                  next.add(id);
-                  selectionPages.current.set(id, pageRef.current);
-                }
-                return next;
-              })
-            }
+            onToggle={toggleRecordSelection}
             onSelect={(id) => void selectRecord(id)}
             onPrevious={() => void loadPage(page - 1)}
             onNext={() => void loadPage(page + 1)}
@@ -787,7 +784,6 @@ export function App({ api: providedApi }: AppProps) {
           {visibleDetailError && (
             <div className={styles.scopedBanner}>
               <StatusBanner
-                kind="error"
                 message={visibleDetailError}
                 action={
                   currentId
@@ -800,7 +796,7 @@ export function App({ api: providedApi }: AppProps) {
           )}
           {loadingDetail ? (
             <section className={styles.emptyDetail}>
-              <LoaderIcon />
+              <LoaderCircle className={styles.loader} size={28} aria-label="Loading" />
               <p>Loading record…</p>
             </section>
           ) : detail ? (
@@ -827,11 +823,7 @@ export function App({ api: providedApi }: AppProps) {
       </main>
       {errors.action && (
         <div className={styles.actionNotice}>
-          <StatusBanner
-            kind="error"
-            message={errors.action}
-            onDismiss={() => clearError("action")}
-          />
+          <StatusBanner message={errors.action} onDismiss={() => clearError("action")} />
         </div>
       )}
       {dialog && (
@@ -854,10 +846,6 @@ export function App({ api: providedApi }: AppProps) {
       )}
     </div>
   );
-}
-
-function LoaderIcon() {
-  return <LoaderCircle className={styles.loader} size={28} aria-label="Loading" />;
 }
 
 function readThemePreference(): ThemePreference {
@@ -891,6 +879,7 @@ function storePreference(key: string, value: string) {
     // Appearance preferences are optional; the viewer remains fully usable without storage.
   }
 }
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Traffic management request failed";
 }
@@ -956,5 +945,3 @@ function removeDeletedFromList(
     has_next: currentPage * RECORDS_PER_PAGE < total,
   };
 }
-
-export default App;

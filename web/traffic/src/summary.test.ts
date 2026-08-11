@@ -38,7 +38,7 @@ describe("Summary presentation helpers", () => {
           finished_at_ns: null,
         },
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           response_terminal: false,
           first_token_at_ns: null,
           token_usage: null,
@@ -70,7 +70,7 @@ describe("Summary presentation helpers", () => {
         summary: {
           ...completedDetail.summary,
           protocol: {
-            ...completedDetail.summary.protocol!,
+            ...completedDetail.summary.protocol,
             ...protocol,
           },
         },
@@ -102,7 +102,7 @@ describe("Summary presentation helpers", () => {
           finished_at_ns: null,
         },
         protocol: {
-          ...completedDetail.summary.protocol!,
+          ...completedDetail.summary.protocol,
           first_token_at_ns: null,
           token_usage: null,
         },
@@ -127,5 +127,22 @@ describe("Summary presentation helpers", () => {
     expect(elapsedNsMs("invalid")).toBeNull();
     expect(tokenCount(0)).toBe("0");
     expect(tokenCount(156770)).toBe("156,770");
+  });
+
+  it("stops before malformed or out-of-axis timing boundaries", () => {
+    expect(timingStages({ ...completedDetail, timeline_end_at_ns: "not-a-number" })).toEqual([]);
+
+    expect(
+      timingStages({
+        ...completedDetail,
+        summary: {
+          ...completedDetail.summary,
+          timing: {
+            ...completedDetail.summary.timing,
+            upstream_request_started_at_ns: "2000000000",
+          },
+        },
+      }),
+    ).toEqual([]);
   });
 });

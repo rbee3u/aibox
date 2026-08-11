@@ -1,4 +1,4 @@
-import type { BodyKind, EventTimingIndex, RecordDetail, RecordList, TrafficApi } from "./types";
+import type { EventTimingIndex, RecordDetail, RecordList, TrafficApi } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -24,6 +24,7 @@ async function readError(response: Response): Promise<string> {
 
 export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
   const csrf = document.querySelector<HTMLMetaElement>('meta[name="aibox-csrf"]')?.content ?? "";
+  const recordPath = (id: string) => `/_aibox/traffic/api/records/${encodeURIComponent(id)}`;
 
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
@@ -38,25 +39,37 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
     return response;
   }
 
+  async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await request(path, init);
+    return (await response.json()) as T;
+  }
+
+  async function deleteRecordsAt(
+    path: string,
+    body: object,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    const payload = await requestJson<{ deleted: number }>(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    return payload.deleted;
+  }
+
   return {
-    async listRecords(page = 1, signal) {
+    listRecords(page = 1, signal) {
       const query = page === 1 ? "" : `?page=${page}`;
-      const response = await request(`/_aibox/traffic/api/records${query}`, { signal });
-      return (await response.json()) as RecordList;
+      return requestJson<RecordList>(`/_aibox/traffic/api/records${query}`, { signal });
     },
 
-    async getRecord(id, signal) {
-      const response = await request(`/_aibox/traffic/api/records/${encodeURIComponent(id)}`, {
-        signal,
-      });
-      return (await response.json()) as RecordDetail;
+    getRecord(id, signal) {
+      return requestJson<RecordDetail>(recordPath(id), { signal });
     },
 
     async loadBody(id, kind, offset, signal) {
-      const response = await request(
-        `/_aibox/traffic/api/records/${encodeURIComponent(id)}/${kind}-body?offset=${offset}`,
-        { signal },
-      );
+      const response = await request(`${recordPath(id)}/${kind}-body?offset=${offset}`, { signal });
       const bytes = new Uint8Array(await response.arrayBuffer());
       const header = response.headers.get("X-Aibox-Traffic-Next-Offset");
       const fallbackOffset = offset + bytes.length;
@@ -71,45 +84,27 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
     },
 
     async loadDecodedBody(id, kind, signal) {
-      const response = await request(
-        `/_aibox/traffic/api/records/${encodeURIComponent(id)}/${decodedBodyPath(kind)}`,
-        { signal },
-      );
+      const response = await request(`${recordPath(id)}/${kind}-body-decoded`, { signal });
       return new Uint8Array(await response.arrayBuffer());
     },
 
-    async loadEventTimings(id, afterSequence, signal) {
-      const response = await request(
-        `/_aibox/traffic/api/records/${encodeURIComponent(id)}/response-event-timings?after_sequence=${afterSequence}`,
+    loadEventTimings(id, afterSequence, signal) {
+      return requestJson<EventTimingIndex>(
+        `${recordPath(id)}/response-event-timings?after_sequence=${afterSequence}`,
         { signal },
       );
-      return (await response.json()) as EventTimingIndex;
     },
 
-    async deleteRecords(ids, signal) {
-      const response = await request("/_aibox/traffic/api/records/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
-        signal,
-      });
-      const payload = (await response.json()) as { deleted: number };
-      return payload.deleted;
+    deleteRecords(ids, signal) {
+      return deleteRecordsAt("/_aibox/traffic/api/records/delete", { ids }, signal);
     },
 
-    async deleteAll(expectedDeletableCount, signal) {
-      const response = await request("/_aibox/traffic/api/records/delete-all", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_deletable_count: expectedDeletableCount }),
+    deleteAll(expectedDeletableCount, signal) {
+      return deleteRecordsAt(
+        "/_aibox/traffic/api/records/delete-all",
+        { expected_deletable_count: expectedDeletableCount },
         signal,
-      });
-      const payload = (await response.json()) as { deleted: number };
-      return payload.deleted;
+      );
     },
   };
-}
-
-function decodedBodyPath(kind: BodyKind): string {
-  return kind === "request" ? "request-body-decoded" : "response-body-decoded";
 }

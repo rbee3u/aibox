@@ -4,31 +4,14 @@
   min-height: 38px;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--danger-line);
   border-radius: var(--radius-md);
   padding: 7px 9px;
-  background: var(--surface-raised);
+  color: var(--danger);
+  background: var(--danger-soft);
   box-shadow: var(--shadow-sm);
   font-size: 11px;
   line-height: 1.45;
-}
-
-.error {
-  border-color: var(--danger-line);
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.info {
-  border-color: var(--info-line);
-  color: var(--accent);
-  background: var(--info-soft);
-}
-
-.success {
-  border-color: var(--success-line);
-  color: var(--success);
-  background: var(--success-soft);
 }
 
 .action,

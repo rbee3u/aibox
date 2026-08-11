@@ -1,4 +1,4 @@
-export type BodyViewMode = "pretty" | "source";
+type BodyViewMode = "pretty" | "source";
 
 export interface BodyViewMemory {
   mode: BodyViewMode;

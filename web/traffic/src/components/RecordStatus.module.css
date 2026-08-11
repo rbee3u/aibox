@@ -26,8 +26,7 @@
 .neutral {
   color: var(--muted);
 }
-.error,
-.anomaly {
+.error {
   color: var(--danger);
 }
 .warningTone {
@@ -37,12 +36,9 @@
 .phase {
   color: var(--warning);
 }
-.phase,
-.anomaly {
+.phase {
   font-weight: 700;
   white-space: nowrap;
-}
-.phase {
   gap: 4px;
 }
 .issue {

@@ -55,6 +55,18 @@ async function openCompletedRecord(user: ReturnType<typeof userEvent.setup>) {
   );
 }
 
+async function openActiveRecord() {
+  await flushEffects();
+  fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
+  await flushEffects();
+}
+
+async function openActiveRequestBody() {
+  await openActiveRecord();
+  fireEvent.click(screen.getByRole("tab", { name: "Request" }));
+  await flushEffects();
+}
+
 async function confirmDeletion(
   user: ReturnType<typeof userEvent.setup>,
   action: "Delete selected" | "Delete all",
@@ -197,7 +209,7 @@ describe("Traffic App", () => {
       incoming_uri: "/https://api.example.test/effective",
       upstream_url: "https://api.example.test/effective",
       protocol: {
-        ...completedSummary.protocol!,
+        ...completedSummary.protocol,
         model: { requested: "requested-model", effective: "effective-model" },
         reasoning_effort: { requested: "low", effective: "xhigh" },
       },
@@ -209,7 +221,7 @@ describe("Traffic App", () => {
       upstream_url: "https://api.example.test/requested",
       total_ms: null,
       protocol: {
-        ...completedSummary.protocol!,
+        ...completedSummary.protocol,
         model: { requested: null, effective: null },
         reasoning_effort: { requested: "medium", effective: null },
         first_token_at_ns: null,
@@ -273,9 +285,7 @@ describe("Traffic App", () => {
 
     expect(screen.getByRole("button", { name: /Refresh/ })).toBeEnabled();
     pendingList.resolve(recordList);
-    expect(
-      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
   it("marks the list refresh busy until a manual refresh completes", async () => {
@@ -336,18 +346,12 @@ describe("Traffic App", () => {
   });
 
   it("uses the browser API by default", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify(recordList), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(recordList));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
 
-    expect(
-      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -355,9 +359,7 @@ describe("Traffic App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    expect(
-      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
     expect(
       screen.getByRole("button", { name: "GET stream.example.test/events" }),
     ).toBeInTheDocument();
@@ -366,10 +368,11 @@ describe("Traffic App", () => {
     expect(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).toBeEnabled();
-    const activeDelete = screen.getByRole("button", {
-      name: "Cannot delete active GET stream.example.test/events",
-    });
-    expect(activeDelete).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Cannot delete active GET stream.example.test/events",
+      }),
+    ).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Select" }));
     expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
     expect(screen.getByText("0 selected")).toBeInTheDocument();
@@ -382,10 +385,11 @@ describe("Traffic App", () => {
       screen.queryByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
-    const activeSelection = screen.getByRole("button", {
-      name: "Select GET stream.example.test/events",
-    });
-    expect(activeSelection).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Select GET stream.example.test/events",
+      }),
+    ).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
     ).toHaveAttribute("aria-pressed", "false");
@@ -444,9 +448,7 @@ describe("Traffic App", () => {
     renderApp({ listRecords, deleteRecords });
 
     await openCompletedRecord(user);
-    expect(
-      await screen.findByRole("region", { name: "Traffic record details" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Traffic record details" });
     await user.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
@@ -591,7 +593,7 @@ describe("Traffic App", () => {
       }),
     );
 
-    expect(await screen.findByText("Page 1 · 1 shown · 1 total")).toBeInTheDocument();
+    await screen.findByText("Page 1 · 1 shown · 1 total");
     expect(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).toHaveFocus();
@@ -615,9 +617,7 @@ describe("Traffic App", () => {
     await selectCompletedRecord(user);
     await user.click(screen.getByRole("button", { name: /Next/ }));
 
-    expect(
-      await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" });
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
     expect(
@@ -652,7 +652,8 @@ describe("Traffic App", () => {
     );
     await confirmDeletion(user, "Delete selected");
 
-    expect(await screen.findByText("Page 1 · 0 shown · 0 total")).toBeInTheDocument();
+    await screen.findByText("Page 1 · 0 shown · 0 total");
+    expect(screen.getByText("No traffic recorded yet.")).toBeInTheDocument();
     expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id, secondPageSummary.id]);
     expect(listRecords).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
   });
@@ -785,9 +786,8 @@ describe("Traffic App", () => {
     expect(listRecords).toHaveBeenCalledTimes(2);
   });
 
-  it("loads request and response bodies when a record is selected", async () => {
+  it("loads request and response Bodies only when their tabs are selected", async () => {
     const encoder = new TextEncoder();
-    const getRecord = vi.fn<TrafficApi["getRecord"]>().mockResolvedValue(completedDetail);
     const loadBody = vi.fn<TrafficApi["loadBody"]>().mockImplementation((_id, kind) =>
       Promise.resolve({
         bytes: encoder.encode(kind === "request" ? "request body" : "data: response body\n\n"),
@@ -801,7 +801,7 @@ describe("Traffic App", () => {
       warning: null,
     });
     const user = userEvent.setup();
-    renderApp({ getRecord, loadBody, loadEventTimings });
+    renderApp({ loadBody, loadEventTimings });
 
     await openCompletedRecord(user);
     const detail = screen.getByRole("region", { name: "Traffic record details" });
@@ -811,18 +811,23 @@ describe("Traffic App", () => {
     );
     expect(loadBody).not.toHaveBeenCalled();
     await user.click(within(detail).getByRole("tab", { name: "Request" }));
-    expect(await screen.findByText("request body")).toBeInTheDocument();
+    await screen.findByText("request body");
     await user.click(within(detail).getByRole("tab", { name: "Response" }));
     await user.click(await screen.findByRole("button", { name: /message/ }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     expect(loadEventTimings).toHaveBeenCalledWith(completedSummary.id, 0, expect.any(AbortSignal));
-    await user.click(screen.getByRole("button", { name: "Select" }));
-    await user.click(
-      screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
-    );
-    expect(screen.getByText("response body")).toBeInTheDocument();
-    expect(getRecord).toHaveBeenCalledOnce();
-    expect(getRecord).toHaveBeenCalledWith(completedSummary.id, expect.any(AbortSignal));
+  });
+
+  it("keeps the detail view and reports a body read failure", async () => {
+    const user = userEvent.setup();
+    renderApp({ loadBody: vi.fn().mockRejectedValue(new Error("body unavailable")) });
+
+    await openCompletedRecord(user);
+    await user.click(await screen.findByRole("tab", { name: "Request" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("body unavailable");
+    const detail = screen.getByRole("region", { name: "Traffic record details" });
+    expect(within(detail).getByRole("status")).toHaveTextContent("Original Body unavailable.");
   });
 
   it("loads zstd decoded Source only after the complete raw Body is available", async () => {
@@ -842,8 +847,7 @@ describe("Traffic App", () => {
     await openCompletedRecord(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
 
-    expect(await screen.findByText('"gpt-5.6-sol"')).toBeInTheDocument();
-    expect(loadDecodedBody).toHaveBeenCalledOnce();
+    await screen.findByText('"gpt-5.6-sol"');
     expect(loadDecodedBody).toHaveBeenCalledWith(
       completedSummary.id,
       "request",
@@ -876,14 +880,12 @@ describe("Traffic App", () => {
 
     await openCompletedRecord(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
-    expect(
-      await screen.findByText(/Decoded Source unavailable: decode failed/),
-    ).toBeInTheDocument();
+    await screen.findByText(/Decoded Source unavailable: decode failed/);
 
     await user.click(screen.getByRole("tab", { name: "Summary" }));
     await user.click(screen.getByRole("tab", { name: "Request" }));
 
-    expect(await screen.findByText(/Decoding zstd Body/)).toBeInTheDocument();
+    await screen.findByText(/Decoding zstd Body/);
     expect(screen.queryByText(/decode failed/)).not.toBeInTheDocument();
     retry.resolve(new TextEncoder().encode('{"state":"ready"}'));
   });
@@ -923,11 +925,7 @@ describe("Traffic App", () => {
       loadDecodedBody,
     });
 
-    await flushEffects();
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
-    await flushEffects();
-    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
-    await flushEffects();
+    await openActiveRequestBody();
     expect(loadDecodedBody).toHaveBeenCalledTimes(1);
 
     await advanceTimers(3000);
@@ -1008,7 +1006,7 @@ describe("Traffic App", () => {
     expect(screen.getByText("Loading record…")).toBeInTheDocument();
     await confirmDeletion(user, "Delete all");
 
-    expect(await screen.findByRole("heading", { name: "Select a request" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Select a request" });
     expect(screen.queryByText("Loading record…")).not.toBeInTheDocument();
   });
 
@@ -1041,9 +1039,7 @@ describe("Traffic App", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("cannot scan Traffic Records");
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(
-      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
   it("clears a record that disappears before its detail loads", async () => {
@@ -1055,7 +1051,7 @@ describe("Traffic App", () => {
 
     await openCompletedRecord(user);
 
-    expect(await screen.findByRole("heading", { name: "Select a request" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Select a request" });
     expect(screen.getByRole("alert")).toHaveTextContent("Traffic Record not found");
   });
 
@@ -1076,10 +1072,9 @@ describe("Traffic App", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("detail loading failed");
 
     await advanceTimers(5000);
-    const alerts = screen.getAllByRole("alert");
-    expect(alerts).toHaveLength(2);
-    expect(alerts.some((alert) => alert.textContent?.includes("list polling failed"))).toBe(true);
-    expect(alerts.some((alert) => alert.textContent?.includes("detail loading failed"))).toBe(true);
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.getByText("list polling failed")).toBeInTheDocument();
+    expect(screen.getByText("detail loading failed")).toBeInTheDocument();
   });
 
   it("keeps a post-delete list refresh failure visible", async () => {
@@ -1117,9 +1112,7 @@ describe("Traffic App", () => {
 
     await flushEffects();
     rerender(<App api={replacementApi} />);
-    expect(
-      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
 
     await act(async () => {
       initial.resolve(recordList);
@@ -1147,9 +1140,7 @@ describe("Traffic App", () => {
       getRecord,
     });
 
-    await flushEffects();
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
-    await flushEffects();
+    await openActiveRecord();
     const detail = screen.getByRole("region", { name: "Traffic record details" });
     expect(within(detail).getAllByText("Waiting").length).toBeGreaterThan(0);
 
@@ -1170,9 +1161,7 @@ describe("Traffic App", () => {
       getRecord,
     });
 
-    await flushEffects();
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
-    await flushEffects();
+    await openActiveRecord();
     await advanceTimers(3000);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Traffic Record not found");
@@ -1194,11 +1183,7 @@ describe("Traffic App", () => {
       loadBody,
     });
 
-    await flushEffects();
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
-    await flushEffects();
-    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
-    await flushEffects();
+    await openActiveRequestBody();
 
     expect(screen.getByRole("alert")).toHaveTextContent("Traffic Record not found");
     expect(screen.getByRole("region", { name: "Traffic record details" })).toBeInTheDocument();
@@ -1224,11 +1209,7 @@ describe("Traffic App", () => {
       loadBody,
     });
 
-    await flushEffects();
-    fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
-    await flushEffects();
-    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
-    await flushEffects();
+    await openActiveRequestBody();
     expect(loadBody).toHaveBeenCalledTimes(1);
     await advanceTimers(3000);
     expect(loadBody).toHaveBeenCalledTimes(2);

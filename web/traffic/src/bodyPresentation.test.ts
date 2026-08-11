@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { completedDetail } from "./test/fixtures";
-import type { HeaderValue } from "./types";
+import { activeDetail, completedDetail, withIncompleteRequestBody } from "./test/fixtures";
+import type { HeaderValue, RecordDetail, ResponseModeValue } from "./types";
 import {
+  bodyComplete,
   bodyMediaType,
   contentCoding,
   decodeUtf8,
   eventAbsoluteTime,
   eventRelativeTime,
   isJsonMediaType,
+  isSseResponse,
+  jsonStringPreview,
   LARGE_PRETTY_BYTES,
   LONG_STRING_CHARACTERS,
   parseJson,
   parseSse,
   sseEventTypes,
   shouldDeferPretty,
-  shouldTruncateJsonString,
   stringifyJson,
 } from "./bodyPresentation";
 
@@ -22,7 +24,43 @@ function header(name: string, value: string): HeaderValue {
   return { name, value_base64: btoa(value) };
 }
 
+function detailWithResponse(mediaType: string, observed: ResponseModeValue): RecordDetail {
+  return {
+    ...completedDetail,
+    response: {
+      ...completedDetail.response,
+      headers: [header("content-type", mediaType)],
+    },
+    summary: {
+      ...completedDetail.summary,
+      protocol: {
+        ...completedDetail.summary.protocol,
+        response_mode: { requested: "normal", observed },
+      },
+    },
+  };
+}
+
 describe("Body presentation", () => {
+  it.each([
+    ["completed request", completedDetail, "request", true],
+    ["completed response", completedDetail, "response", true],
+    ["complete active request", activeDetail, "request", true],
+    ["incomplete active request", withIncompleteRequestBody(activeDetail), "request", false],
+    ["incomplete active response", activeDetail, "response", false],
+  ] as const)("reports Body completeness for %s", (_name, detail, kind, expected) => {
+    expect(bodyComplete(detail, kind)).toBe(expected);
+  });
+
+  it.each([
+    ["SSE media type", detailWithResponse("text/event-stream", "normal"), true],
+    ["observed stream mode", detailWithResponse("application/json", "stream"), true],
+    ["normal response mode", detailWithResponse("application/json", "normal"), false],
+    ["missing response", activeDetail, false],
+  ] as const)("recognizes SSE for %s", (_name, detail, expected) => {
+    expect(isSseResponse(detail)).toBe(expected);
+  });
+
   it("classifies Content-Encoding and JSON media types case-insensitively", () => {
     expect(contentCoding([])).toEqual({ kind: "identity" });
     expect(contentCoding([header("Content-Encoding", " IdEnTiTy ")])).toEqual({
@@ -71,8 +109,10 @@ describe("Body presentation", () => {
   it("applies the Pretty and string guards only above their exact boundaries", () => {
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES)).toBe(false);
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES + 1)).toBe(true);
-    expect(shouldTruncateJsonString("界".repeat(LONG_STRING_CHARACTERS))).toBe(false);
-    expect(shouldTruncateJsonString("😀".repeat(LONG_STRING_CHARACTERS + 1))).toBe(true);
+    expect(jsonStringPreview("界".repeat(LONG_STRING_CHARACTERS))).toBeNull();
+    expect(jsonStringPreview("😀".repeat(LONG_STRING_CHARACTERS + 1))).toBe(
+      "😀".repeat(LONG_STRING_CHARACTERS),
+    );
   });
 
   it("parses complete SSE Events with BOM, all line endings, multiline data, and comments", () => {

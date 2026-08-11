@@ -2,37 +2,33 @@ import type { EventTimingIndex, HeaderValue, RecordSummary } from "./types";
 
 const UTC_PLUS_EIGHT_MS = 8 * 60 * 60 * 1000;
 const EXPLICIT_TIME_ZONE = /(?:z|[+-]\d{2}:\d{2})$/i;
+type RecordTarget = Pick<RecordSummary, "upstream_url" | "incoming_uri">;
 
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
 export function formatTimestamp(value: string): string {
-  if (!EXPLICIT_TIME_ZONE.test(value)) return "—";
-  const parsed = new Date(value);
-  const timestamp = parsed.getTime();
-  if (!Number.isFinite(timestamp)) return "—";
-
-  const eastEight = new Date(timestamp + UTC_PLUS_EIGHT_MS);
-  if (!Number.isFinite(eastEight.getTime())) return "—";
-  return [
-    `${eastEight.getUTCFullYear()}-${twoDigits(eastEight.getUTCMonth() + 1)}-${twoDigits(eastEight.getUTCDate())}`,
-    `${twoDigits(eastEight.getUTCHours())}:${twoDigits(eastEight.getUTCMinutes())}:${twoDigits(eastEight.getUTCSeconds())}`,
-  ].join(" ");
+  return formatUtcPlusEight(value);
 }
 
 export function formatTimestampWithMilliseconds(value: string): string {
+  return formatUtcPlusEight(value, true);
+}
+
+function formatUtcPlusEight(value: string, includeMilliseconds = false): string {
   if (!EXPLICIT_TIME_ZONE.test(value)) return "—";
-  const parsed = new Date(value);
-  const timestamp = parsed.getTime();
+  const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return "—";
 
   const eastEight = new Date(timestamp + UTC_PLUS_EIGHT_MS);
   if (!Number.isFinite(eastEight.getTime())) return "—";
-  return [
-    `${eastEight.getUTCFullYear()}-${twoDigits(eastEight.getUTCMonth() + 1)}-${twoDigits(eastEight.getUTCDate())}`,
-    `${twoDigits(eastEight.getUTCHours())}:${twoDigits(eastEight.getUTCMinutes())}:${twoDigits(eastEight.getUTCSeconds())}.${eastEight.getUTCMilliseconds().toString().padStart(3, "0")}`,
-  ].join(" ");
+  const date = `${eastEight.getUTCFullYear()}-${twoDigits(eastEight.getUTCMonth() + 1)}-${twoDigits(eastEight.getUTCDate())}`;
+  const time = `${twoDigits(eastEight.getUTCHours())}:${twoDigits(eastEight.getUTCMinutes())}:${twoDigits(eastEight.getUTCSeconds())}`;
+  const milliseconds = includeMilliseconds
+    ? `.${eastEight.getUTCMilliseconds().toString().padStart(3, "0")}`
+    : "";
+  return `${date} ${time}${milliseconds}`;
 }
 
 export function compactDuration(ms: number | null | undefined): string {
@@ -64,41 +60,44 @@ export function bytes(value: number | null | undefined): string {
   return `${(value / 1048576).toFixed(1)} MB`;
 }
 
-export function recordUrl(record: Pick<RecordSummary, "upstream_url" | "incoming_uri">): {
+export function recordUrl(record: RecordTarget): {
   host: string;
   path: string;
   label: string;
   title: string;
 } {
-  try {
-    const target = record.upstream_url ?? "";
-    const url = new URL(target);
+  const url = parseUpstreamUrl(record);
+  if (url) {
     return {
       host: url.host,
       path: url.pathname,
       label: `${url.host}${url.pathname}`,
-      title: target,
-    };
-  } catch {
-    const host = "invalid target";
-    const path = record.incoming_uri;
-    return {
-      host,
-      path,
-      label: [host, path].filter(Boolean).join(" "),
-      title: record.incoming_uri,
+      title: record.upstream_url ?? "",
     };
   }
+
+  const host = "invalid target";
+  const path = record.incoming_uri;
+  return {
+    host,
+    path,
+    label: [host, path].filter(Boolean).join(" "),
+    title: record.incoming_uri,
+  };
 }
 
-export function recordDetailUrl(
-  record: Pick<RecordSummary, "upstream_url" | "incoming_uri">,
-): [string, string] {
+export function recordDetailUrl(record: RecordTarget): [string, string] {
+  const url = parseUpstreamUrl(record);
+  return url
+    ? [url.origin, `${url.pathname}${url.search}`]
+    : ["invalid target", record.incoming_uri];
+}
+
+function parseUpstreamUrl(record: RecordTarget): URL | null {
   try {
-    const url = new URL(record.upstream_url ?? "");
-    return [url.origin, `${url.pathname}${url.search}`];
+    return new URL(record.upstream_url ?? "");
   } catch {
-    return ["invalid target", record.incoming_uri];
+    return null;
   }
 }
 
@@ -106,37 +105,30 @@ export function hex(bytesValue: Uint8Array): string {
   return Array.from(bytesValue, (value) => value.toString(16).padStart(2, "0")).join(" ");
 }
 
-export function decodeBytes(bytesValue: Uint8Array, label: string): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytesValue);
-  } catch {
-    return `[non-UTF-8 ${label}; hex view]\n${hex(bytesValue)}`;
-  }
-}
-
 export function decodeHeader(header: HeaderValue): string {
   const decoded = tryDecodeHeader(header);
   if (decoded !== null) return decoded;
-  let binary: string;
-  try {
-    binary = window.atob(header.value_base64);
-  } catch {
+  const bytesValue = decodeBase64(header.value_base64);
+  if (bytesValue === null) {
     return "[invalid base64 header value]";
   }
-  const bytesValue = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   return `[hex] ${hex(bytesValue)}`;
 }
 
 export function tryDecodeHeader(header: HeaderValue): string | null {
-  let binary: string;
+  const bytesValue = decodeBase64(header.value_base64);
+  if (bytesValue === null) return null;
   try {
-    binary = window.atob(header.value_base64);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytesValue);
   } catch {
     return null;
   }
-  const bytesValue = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function decodeBase64(value: string): Uint8Array | null {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytesValue);
+    const binary = window.atob(value);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
   } catch {
     return null;
   }

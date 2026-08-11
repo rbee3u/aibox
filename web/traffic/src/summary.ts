@@ -1,9 +1,9 @@
 import type { RecordDetail, RequestedEffective } from "./types";
 
-export type TimingStageTone = "request" | "wait" | "model" | "finalize";
-export type TimingStageStatus = "complete" | "ongoing" | "incomplete";
+type TimingStageTone = "request" | "wait" | "model" | "finalize";
+type TimingStageStatus = "complete" | "ongoing" | "incomplete";
 
-export interface TimingStage {
+interface TimingStage {
   label: string;
   tone: TimingStageTone;
   status: TimingStageStatus;
@@ -45,9 +45,8 @@ export function elapsedNsMs(value: string | null | undefined): number | null {
 }
 
 export function timingStages(detail: RecordDetail): TimingStage[] {
-  const axisEnd = parseNs(detail.timeline_end_at_ns);
-  if (axisEnd === null || axisEnd <= 0n) return [];
-  const axis = axisEnd;
+  const axis = parseNs(detail.timeline_end_at_ns) ?? 0n;
+  if (axis <= 0n) return [];
 
   const timing = detail.summary.timing;
   const requestStarted = parseNs(timing.upstream_request_started_at_ns);
@@ -63,13 +62,9 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
   const stages: TimingStage[] = [];
   let cursor = 0n;
 
-  function add(
-    label: string,
-    tone: TimingStageTone,
-    boundary: bigint | null,
-  ): "advanced" | "ended" | "invalid" {
+  function addStage(label: string, tone: TimingStageTone, boundary: bigint | null): boolean {
     if (boundary !== null) {
-      if (boundary < cursor || boundary > axis) return "invalid";
+      if (boundary < cursor || boundary > axis) return false;
       stages.push({
         label,
         tone,
@@ -79,7 +74,7 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
         durationMs: nsToMs(boundary - cursor),
       });
       cursor = boundary;
-      return "advanced";
+      return true;
     }
     if (axis > cursor) {
       stages.push({
@@ -91,24 +86,24 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
         durationMs: nsToMs(axis - cursor),
       });
     }
-    return "ended";
+    return false;
   }
 
-  if (add("Proxy setup", "request", requestStarted) !== "advanced") return stages;
-  if (add("Request upload", "request", requestCompleted) !== "advanced") return stages;
-  if (add("Response wait", "wait", responseHeaders) !== "advanced") return stages;
+  if (!addStage("Proxy setup", "request", requestStarted)) return stages;
+  if (!addStage("Request upload", "request", requestCompleted)) return stages;
+  if (!addStage("Response wait", "wait", responseHeaders)) return stages;
 
   if (streaming && firstToken !== null) {
-    if (add("First-token wait", "wait", firstToken) !== "advanced") return stages;
-    if (add("Response stream", "model", responseCompleted) !== "advanced") return stages;
+    if (!addStage("First-token wait", "wait", firstToken)) return stages;
+    if (!addStage("Response stream", "model", responseCompleted)) return stages;
   } else if (streaming && active && responseCompleted === null) {
-    add("First-token wait", "wait", null);
+    addStage("First-token wait", "wait", null);
     return stages;
-  } else if (add("Response body", "model", responseCompleted) !== "advanced") {
+  } else if (!addStage("Response body", "model", responseCompleted)) {
     return stages;
   }
 
-  add("Finalization", "finalize", finished);
+  addStage("Finalization", "finalize", finished);
   return stages;
 }
 

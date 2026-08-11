@@ -15,7 +15,6 @@
   --muted: #657187;
   --faint: #8993a4;
   --accent: #5b55e7;
-  --accent-strong: #4942cb;
   --accent-soft: #efeeff;
   --accent-subtle: #f8f7ff;
   --focus: #7771f3;
@@ -24,15 +23,11 @@
   --danger-soft: #fff0f1;
   --danger-line: #efc7ca;
   --success: #0d7a55;
-  --success-soft: #eaf8f2;
-  --success-line: #bfe4d5;
   --warning: #92500d;
   --warning-soft: #fff6e8;
   --warning-line: #ead2a8;
-  --info-soft: #efeeff;
   --info-line: #d5d2ff;
   --code-bg: #f6f7fa;
-  --code-raised: #ffffff;
   --code-border: #d9dfe7;
   --code-text: #253042;
   --code-muted: #6d788b;
@@ -48,12 +43,6 @@
   --radius-lg: 12px;
   --transition-fast: 140ms ease;
   --transition-base: 180ms ease;
-  --bg: var(--bg-canvas);
-  --panel: var(--surface);
-  --green: var(--success);
-  --green-soft: var(--success-soft);
-  --orange: var(--warning);
-  --accent-hover: var(--surface-selected);
   font-family:
     Inter,
     ui-sans-serif,
@@ -82,7 +71,6 @@
   --muted: #9ba6b7;
   --faint: #788397;
   --accent: #9b96ff;
-  --accent-strong: #b4b0ff;
   --accent-soft: #292744;
   --accent-subtle: #211f35;
   --focus: #aaa6ff;
@@ -91,15 +79,11 @@
   --danger-soft: #3a2027;
   --danger-line: #6a343e;
   --success: #5bd4a4;
-  --success-soft: #17372d;
-  --success-line: #285d4c;
   --warning: #f1b262;
   --warning-soft: #382b1d;
   --warning-line: #655036;
-  --info-soft: #292744;
   --info-line: #4a4778;
   --code-bg: #11151d;
-  --code-raised: #171c25;
   --code-border: #313947;
   --code-text: #d9e0eb;
   --code-muted: #919daf;
@@ -130,7 +114,6 @@
     --muted: #9ba6b7;
     --faint: #788397;
     --accent: #9b96ff;
-    --accent-strong: #b4b0ff;
     --accent-soft: #292744;
     --accent-subtle: #211f35;
     --focus: #aaa6ff;
@@ -139,15 +122,11 @@
     --danger-soft: #3a2027;
     --danger-line: #6a343e;
     --success: #5bd4a4;
-    --success-soft: #17372d;
-    --success-line: #285d4c;
     --warning: #f1b262;
     --warning-soft: #382b1d;
     --warning-line: #655036;
-    --info-soft: #292744;
     --info-line: #4a4778;
     --code-bg: #11151d;
-    --code-raised: #171c25;
     --code-border: #313947;
     --code-text: #d9e0eb;
     --code-muted: #919daf;
@@ -185,13 +164,8 @@ body {
 }
 
 button,
-input,
 select {
   font: inherit;
-}
-
-button,
-select {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   color: var(--ink);
@@ -223,15 +197,10 @@ select:disabled {
 }
 
 button:focus-visible,
-input:focus-visible,
 select:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-input[type="checkbox"] {
-  accent-color: var(--accent);
 }
 
 .srOnly {

@@ -14,22 +14,26 @@ export function shouldDeferPretty(decodedBytes: number): boolean {
   return decodedBytes > LARGE_PRETTY_BYTES;
 }
 
-export function shouldTruncateJsonString(value: string): boolean {
-  let characters = 0;
+export function jsonStringPreview(value: string): string | null {
   let offset = 0;
-  while (offset < value.length) {
+  for (
+    let characters = 0;
+    characters < LONG_STRING_CHARACTERS && offset < value.length;
+    characters += 1
+  ) {
     const codePoint = value.codePointAt(offset);
     offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
-    characters += 1;
-    if (characters > LONG_STRING_CHARACTERS) return true;
   }
-  return false;
+  return offset < value.length ? value.slice(0, offset) : null;
 }
 
-export type JsonValue =
-  null | boolean | string | LosslessNumber | JsonValue[] | { [key: string]: JsonValue };
+interface JsonObject {
+  [key: string]: JsonValue;
+}
 
-export type JsonParseResult = { ok: true; value: JsonValue } | { ok: false; message: string };
+export type JsonValue = null | boolean | string | LosslessNumber | JsonValue[] | JsonObject;
+
+type JsonParseResult = { ok: true; value: JsonValue } | { ok: false; message: string };
 
 export type ContentCoding =
   { kind: "identity" } | { kind: "zstd" } | { kind: "unsupported"; message: string };
@@ -41,12 +45,12 @@ export interface ParsedSseEvent {
   explicitEventType: string | null;
 }
 
-export interface ParsedSseStream {
+interface ParsedSseStream {
   events: ParsedSseEvent[];
   hasPartialTail: boolean;
 }
 
-export type Utf8Result = { ok: true; text: string } | { ok: false; hex: string };
+type Utf8Result = { ok: true; text: string } | { ok: false; hex: string };
 
 export function decodeUtf8(bytes: Uint8Array, complete = true): Utf8Result {
   try {
@@ -84,9 +88,7 @@ export function stringifyJson(value: JsonValue, pretty = false): string {
   return stringifyLosslessJson(value, null, pretty ? 2 : undefined) ?? "null";
 }
 
-export function isJsonContainer(
-  value: JsonValue,
-): value is JsonValue[] | { [key: string]: JsonValue } {
+export function isJsonContainer(value: JsonValue): value is JsonValue[] | JsonObject {
   return (
     Array.isArray(value) ||
     (typeof value === "object" && value !== null && !isLosslessNumber(value))
@@ -108,9 +110,8 @@ export function jsonValueType(value: JsonValue): string {
 
 export function contentCoding(headers: HeaderValue[]): ContentCoding {
   const codings: string[] = [];
-  for (const header of headers.filter(
-    (candidate) => candidate.name.toLowerCase() === "content-encoding",
-  )) {
+  for (const header of headers) {
+    if (header.name.toLowerCase() !== "content-encoding") continue;
     const value = tryDecodeHeader(header);
     if (value === null) {
       return { kind: "unsupported", message: "Content-Encoding header is not valid UTF-8" };
@@ -137,6 +138,10 @@ export function bodyComplete(detail: RecordDetail, kind: BodyKind): boolean {
   return kind === "request"
     ? detail.summary.timing.upstream_request_body_completed_at_ns !== null
     : detail.summary.timing.upstream_response_body_completed_at_ns !== null;
+}
+
+export function bodyHeaders(detail: RecordDetail, kind: BodyKind): HeaderValue[] {
+  return kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
 }
 
 export function bodyMediaType(headers: HeaderValue[]): string | null {
@@ -193,7 +198,7 @@ export function parseSse(text: string): ParsedSseStream {
     let value = colon < 0 ? "" : line.slice(colon + 1);
     if (value.startsWith(" ")) value = value.slice(1);
     if (field === "event") eventType = value;
-    if (field === "data") data.push(value);
+    else if (field === "data") data.push(value);
   }
   return { events, hasPartialTail: blockTouched };
 }

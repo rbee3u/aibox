@@ -12,9 +12,7 @@ describe("Traffic API client", () => {
       .fn<typeof fetch>()
       .mockImplementation(() =>
         Promise.resolve(
-          new Response(
-            JSON.stringify({ records: [], total: 0, deletable_count: 0, has_next: false }),
-          ),
+          Response.json({ records: [], total: 0, deletable_count: 0, has_next: false }),
         ),
       );
     const api = createTrafficApi(fetchMock);
@@ -22,8 +20,23 @@ describe("Traffic API client", () => {
     await api.listRecords(1);
     await api.listRecords(3);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/_aibox/traffic/api/records");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/_aibox/traffic/api/records?page=3");
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/_aibox/traffic/api/records",
+      "/_aibox/traffic/api/records?page=3",
+    ]);
+  });
+
+  it("keeps read requests cache-free and forwards their abort signal", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({}));
+    const signal = new AbortController().signal;
+    const api = createTrafficApi(fetchMock);
+
+    await api.getRecord("record/id", signal);
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/_aibox/traffic/api/records/record%2Fid");
+    expect(init).toMatchObject({ cache: "no-store", signal });
+    expect(new Headers(init?.headers).has("X-Aibox-Traffic-CSRF")).toBe(false);
   });
 
   const mutations = [
@@ -31,23 +44,18 @@ describe("Traffic API client", () => {
       name: "selected records",
       run: (api: TrafficApi) => api.deleteRecords(["one", "two"]),
       path: "/_aibox/traffic/api/records/delete",
-      body: '{"ids":["one","two"]}',
+      body: JSON.stringify({ ids: ["one", "two"] }),
     },
     {
       name: "all records",
       run: (api: TrafficApi) => api.deleteAll(7),
       path: "/_aibox/traffic/api/records/delete-all",
-      body: '{"expected_deletable_count":7}',
+      body: JSON.stringify({ expected_deletable_count: 7 }),
     },
   ];
 
-  it.each(mutations)("adds CSRF and JSON headers to $name", async ({ run, path, body }) => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ deleted: 2 }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it.each(mutations)("sends $name as CSRF-protected JSON", async ({ run, path, body }) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
     const api = createTrafficApi(fetchMock);
 
     await expect(run(api)).resolves.toBe(2);
@@ -64,10 +72,13 @@ describe("Traffic API client", () => {
   it.each([
     [
       "JSON error",
-      new Response(JSON.stringify({ error: "active Traffic Records cannot be deleted" }), {
-        status: 409,
-        statusText: "Conflict",
-      }),
+      Response.json(
+        { error: "active Traffic Records cannot be deleted" },
+        {
+          status: 409,
+          statusText: "Conflict",
+        },
+      ),
       new ApiError("active Traffic Records cannot be deleted", 409),
     ],
     [
@@ -128,11 +139,7 @@ describe("Traffic API client", () => {
       next_sequence: 4,
       warning: "index is incomplete",
     };
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify(payload), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
     const api = createTrafficApi(fetchMock);
 
     await expect(api.loadEventTimings("record/id", 3)).resolves.toEqual(payload);

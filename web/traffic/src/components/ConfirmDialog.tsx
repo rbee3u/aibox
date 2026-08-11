@@ -1,5 +1,6 @@
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import type { KeyboardEvent } from "react";
 import styles from "./ConfirmDialog.module.css";
 
 interface ConfirmDialogProps {
@@ -58,7 +59,7 @@ export function ConfirmDialog({
     onCancel();
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLDialogElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
       cancelDialog();

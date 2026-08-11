@@ -2,11 +2,11 @@ export type RecordState = "active" | "completed" | "interrupted";
 export type BodyKind = "request" | "response";
 export type BodyLoadStatus = "idle" | "loaded" | "error";
 export type DetailTab = "summary" | BodyKind;
-export type EventTimingState = "available" | "unavailable" | "partial";
-export type AssessmentLevel = "active" | "ok" | "warning" | "error";
-export type AssessmentSource = "traffic" | "http" | "provider" | "diagnostic";
+type EventTimingState = "available" | "unavailable" | "partial";
+type AssessmentLevel = "active" | "ok" | "warning" | "error";
+type AssessmentSource = "traffic" | "http" | "provider" | "diagnostic";
 
-export interface EventTimingEntry {
+interface EventTimingEntry {
   sequence: number;
   completed_at_ns: string;
 }
@@ -28,7 +28,7 @@ export interface HeaderValue {
   value_base64: string;
 }
 
-export interface RequestMetadata {
+interface RequestMetadata {
   id: string;
   started_at: string;
   method: string;
@@ -47,12 +47,12 @@ export interface ResponseMetadata {
   headers: HeaderValue[];
 }
 
-export interface ErrorMetadata {
+interface ErrorMetadata {
   kind: string;
   message: string;
 }
 
-export interface SummaryTiming {
+interface SummaryTiming {
   upstream_request_started_at_ns: string | null;
   upstream_request_body_first_byte_at_ns: string | null;
   upstream_request_body_completed_at_ns: string | null;
@@ -62,21 +62,21 @@ export interface SummaryTiming {
   finished_at_ns: string | null;
 }
 
-export interface SummaryDiagnostic {
+interface SummaryDiagnostic {
   phase: string;
   kind: string;
   message: string;
   at_ns: string;
 }
 
-export interface SummaryRequestMetadata {
+interface SummaryRequestMetadata {
   method: string;
   incoming_uri: string;
   upstream_url: string | null;
   http_version: string;
 }
 
-export interface SummaryResponseMetadata {
+interface SummaryResponseMetadata {
   status: number;
   http_version: string;
 }
@@ -99,14 +99,9 @@ export interface AssessmentFinding extends AssessmentPrimary {
   at_ns: string | null;
 }
 
-export interface DiagnosticGroups {
-  traffic: AssessmentFinding[];
-  http: AssessmentFinding[];
-  provider: AssessmentFinding[];
-  warnings: AssessmentFinding[];
-}
+type DiagnosticGroups = Record<"traffic" | "http" | "provider" | "warnings", AssessmentFinding[]>;
 
-export interface SummaryMetadata {
+interface SummaryMetadata {
   schema_version: number;
   record_id: string;
   kind: string;
@@ -123,16 +118,15 @@ export interface SummaryMetadata {
   assessment: RecordAssessment;
 }
 
-export type ProtocolFamily = "openai_responses" | "claude_messages" | "unknown";
+type ProtocolFamily = "openai_responses" | "claude_messages" | "unknown";
 export type ResponseModeValue = "stream" | "normal";
-export type UsageState = "waiting" | "final" | "not_reported" | "unsupported";
 
 export interface RequestedEffective<T> {
   requested: T | null;
   effective: T | null;
 }
 
-export interface RequestedObserved<T> {
+interface RequestedObserved<T> {
   requested: T | null;
   observed: T | null;
 }
@@ -148,7 +142,7 @@ export interface TokenUsage {
   reasoning_output_tokens: number | null;
 }
 
-export interface ProtocolDiagnostic {
+interface ProtocolDiagnostic {
   kind: string;
   message: string;
   at_ns: string | null;
@@ -166,7 +160,7 @@ export interface ProtocolSummary {
   warnings: ProtocolDiagnostic[];
 }
 
-export interface ResultMetadata {
+interface ResultMetadata {
   ended_at: string;
   outcome: string;
   total_ms: number | null;

@@ -1,6 +1,6 @@
 import { Check, Clipboard, FileText } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
 import type {
   AssessmentFinding,
   BodyKind,
@@ -9,11 +9,11 @@ import type {
   DetailTab,
   EventTimingIndex,
   RecordDetail as RecordDetailData,
-  TokenUsage,
-  UsageState,
 } from "../types";
+import { bodyHeaders } from "../bodyPresentation";
 import { createBodyViewMemory, type BodyViewMemory } from "../bodyViewMemory";
 import { elapsedNsMs, resolveRequestedEffective, timingStages, tokenCount } from "../summary";
+import { useClipboardFeedback } from "../useClipboardFeedback";
 import { decodeHeader, duration, formatTimestamp, recordDetailUrl } from "../utils";
 import { BodyViewer } from "./BodyViewer";
 import styles from "./RecordDetail.module.css";
@@ -30,8 +30,8 @@ interface RecordDetailProps {
   detail: RecordDetailData;
   bodies: Record<BodyKind, Uint8Array[]>;
   bodyStatus: Record<BodyKind, BodyLoadStatus>;
-  decodedBodies?: Record<BodyKind, DecodedBodyState>;
-  eventTimings?: EventTimingIndex | null;
+  decodedBodies: Record<BodyKind, DecodedBodyState>;
+  eventTimings: EventTimingIndex | null;
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
   onDownload: (kind: BodyKind) => void;
@@ -42,11 +42,8 @@ export function RecordDetail({
   detail,
   bodies,
   bodyStatus,
-  decodedBodies = {
-    request: { bytes: null, error: null },
-    response: { bytes: null, error: null },
-  },
-  eventTimings = null,
+  decodedBodies,
+  eventTimings,
   tab,
   onTabChange,
   onDownload,
@@ -62,7 +59,7 @@ export function RecordDetail({
   const [origin, path] = recordDetailUrl(request);
   const panelId = `record-panel-${request.id}`;
 
-  function selectAdjacentTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+  function selectAdjacentTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
     if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
     if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
@@ -145,8 +142,7 @@ export function RecordDetail({
 }
 
 function Summary({ detail }: { detail: RecordDetailData }) {
-  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
-  const sessionCopiedTimer = useRef<number | undefined>(undefined);
+  const [copiedSessionId, copySessionIdText] = useClipboardFeedback<string>();
   const total = detail.result?.total_ms ?? detail.live_total_ms;
   const protocol = detail.summary.protocol;
   const model =
@@ -160,33 +156,10 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
   const responseMode = mode === "stream" ? "Streaming" : mode === "normal" ? "Non-streaming" : null;
   const diagnostics = detail.diagnostics;
-  const hasDiagnostics =
-    diagnostics.traffic.length > 0 ||
-    diagnostics.http.length > 0 ||
-    diagnostics.provider.length > 0 ||
-    diagnostics.warnings.length > 0;
+  const hasDiagnostics = Object.values(diagnostics).some((entries) => entries.length > 0);
 
-  useEffect(
-    () => () => {
-      if (sessionCopiedTimer.current !== undefined) {
-        window.clearTimeout(sessionCopiedTimer.current);
-      }
-    },
-    [],
-  );
-
-  async function copySessionId() {
-    if (!sessionId) return;
-    try {
-      await navigator.clipboard.writeText(sessionId);
-      setCopiedSessionId(sessionId);
-      if (sessionCopiedTimer.current !== undefined) {
-        window.clearTimeout(sessionCopiedTimer.current);
-      }
-      sessionCopiedTimer.current = window.setTimeout(() => setCopiedSessionId(null), 1400);
-    } catch {
-      setCopiedSessionId(null);
-    }
+  function copySessionId() {
+    if (sessionId) void copySessionIdText(sessionId, sessionId);
   }
 
   return (
@@ -216,7 +189,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
                 <button
                   className={styles.copySession}
                   type="button"
-                  onClick={() => void copySessionId()}
+                  onClick={copySessionId}
                   aria-label={sessionCopied ? "Session ID copied" : "Copy Session ID"}
                   title={sessionCopied ? "Session ID copied" : "Copy Session ID"}
                 >
@@ -230,7 +203,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
             </dd>
           </div>
         </dl>
-        <TokenUsageGroup detail={detail} usage={protocol?.token_usage ?? null} />
+        <TokenUsageGroup detail={detail} />
       </section>
       <section aria-labelledby="record-timing-title">
         <h2 id="record-timing-title">Timing</h2>
@@ -290,15 +263,9 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   );
 }
 
-function TokenUsageGroup({
-  detail,
-  usage,
-}: {
-  detail: RecordDetailData;
-  usage: TokenUsage | null;
-}) {
+function TokenUsageGroup({ detail }: { detail: RecordDetailData }) {
   const protocol = detail.summary.protocol;
-  const state = usageState(detail);
+  const usage = protocol?.token_usage ?? null;
   const claude = protocol?.family === "claude_messages";
   const hasCacheWriteBreakdown =
     claude && (usage?.cache_write_5m_tokens != null || usage?.cache_write_1h_tokens != null);
@@ -343,9 +310,9 @@ function TokenUsageGroup({
   ].some((value) => value != null);
   return (
     <section className={styles.usageGroup} aria-labelledby="record-token-title">
-      <div className={styles.usageHeading}>
-        <h3 id="record-token-title">Token usage</h3>
-      </div>
+      <h3 id="record-token-title" className={styles.usageHeading}>
+        Token usage
+      </h3>
       {hasUsageData ? (
         <div className={styles.tokenUsageGrid}>
           <div className={styles.tokenInputBlock}>
@@ -407,7 +374,7 @@ function TokenUsageGroup({
           </dl>
         </div>
       ) : (
-        <p className={styles.usageMessage}>{usageStateMessage(state)}</p>
+        <p className={styles.usageMessage}>{usageStateMessage(detail)}</p>
       )}
     </section>
   );
@@ -431,7 +398,7 @@ function DiagnosticGroup({
       aria-label={title}
     >
       <h3>
-        {title} <span>{entries.length || 1}</span>
+        {title} <span>{entries.length}</span>
       </h3>
       <div className={styles.diagnosticList}>
         {entries.map((entry, index) => (
@@ -452,21 +419,16 @@ function DiagnosticGroup({
   );
 }
 
-function usageState(detail: RecordDetailData): UsageState {
+function usageStateMessage(detail: RecordDetailData): string {
   const protocol = detail.summary.protocol;
-  if (!protocol || protocol.family === "unknown") return "unsupported";
-  if (protocol.token_usage) return "final";
-  if (detail.state === "active" && !protocol.response_terminal) return "waiting";
-  return "not_reported";
-}
-
-function usageStateMessage(state: UsageState): string {
-  return {
-    waiting: "Waiting for the upstream API to report token usage.",
-    final: "The upstream API reported no token counters.",
-    not_reported: "The completed response did not report token usage.",
-    unsupported: "Token usage is unavailable for this protocol.",
-  }[state];
+  if (!protocol || protocol.family === "unknown") {
+    return "Token usage is unavailable for this protocol.";
+  }
+  if (protocol.token_usage) return "The upstream API reported no token counters.";
+  if (detail.state === "active" && !protocol.response_terminal) {
+    return "Waiting for the upstream API to report token usage.";
+  }
+  return "The completed response did not report token usage.";
 }
 
 function displayTokenCount(value: number | null): string {
@@ -500,7 +462,7 @@ function MessageData({
   onMemoryChange: (memory: BodyViewMemory) => void;
   onDownload: () => void;
 }) {
-  const headers = kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
+  const headers = bodyHeaders(detail, kind);
 
   return (
     <div className={styles.messageData}>
@@ -540,13 +502,12 @@ function MessageData({
   );
 }
 
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className={styles.metric}>
       <dt>{label}</dt>
       <dd>
         <span className={styles.metricValue}>{value}</span>
-        {detail && <span className={styles.metricDetail}>{detail}</span>}
       </dd>
     </div>
   );
