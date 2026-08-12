@@ -3,10 +3,11 @@
 //! [`handle`] is the router fallback for every non-management request. It
 //! resolves and validates the upstream target, opens a Traffic Record, streams
 //! the request body upstream and the response back, and classifies the terminal
-//! Traffic Outcome. Recording is a side effect of forwarding, so an indexing,
-//! interpretation, or rename failure becomes a Record warning and never changes
-//! what the client receives. Only a failure to publish the canonical Traffic
-//! Record Summary is itself a recording failure.
+//! Traffic Outcome. Required raw-body, metadata, and Summary writes are in the
+//! forwarding path: failures terminate or truncate the exchange and return HTTP
+//! 507 when response headers can still be replaced. Best-effort SSE indexing,
+//! protocol parse degradation, and terminal-directory renames instead become
+//! Record warnings and never change what the client receives.
 //!
 //! Bodies are streamed rather than buffered, which is why recording state
 //! advances chunk by chunk alongside SSE indexing (`traffic_sse`) and Model
@@ -86,34 +87,26 @@ pub(crate) async fn handle(state: AppState, request: Request<Body>) -> Response<
         Err(response) => return response,
     };
 
-    let request_file = match guard.record.request_body.try_clone() {
-        Ok(file) => tokio::fs::File::from_std(file),
-        Err(error) => {
-            return recording_failure(&mut guard, format!("clone request body file: {error}"));
-        }
-    };
     let request_error = guard.request_error.clone();
-    let request_stream = recorded_request_stream_with_summary(
-        body,
-        request_file,
-        RequestStreamContext {
-            measurements: measurements.clone(),
-            error_slot: request_error.clone(),
-            summary: guard.record.summary.clone(),
-            protocol,
-            request_headers: request_metadata.headers,
-            store: Some(guard.store.clone()),
-            locator: Some(guard.record.locator.clone()),
-            directory: std::path::PathBuf::new(),
-            origin: guard.record.origin,
-            shutdown: state.shutdown.clone(),
-        },
-    );
-    if let Err(error) = guard.mark_timing(|timing| {
-        timing.upstream_request_started_at_ns = Some(offset_ns(guard.record.origin));
-    }) {
-        return recording_failure(&mut guard, format!("checkpoint request timing: {error:#}"));
-    }
+    let expected_body_bytes = declared_content_length(&parts.headers);
+    let request_context = RequestStreamContext {
+        measurements,
+        error_slot: request_error.clone(),
+        summary: guard.record.summary.clone(),
+        protocol,
+        request_headers: request_metadata.headers,
+        expected_body_bytes,
+        store: Some(guard.store.clone()),
+        locator: Some(guard.record.locator.clone()),
+        directory: std::path::PathBuf::new(),
+        origin: guard.record.origin,
+        shutdown: state.shutdown.clone(),
+    };
+    let request_stream =
+        match prepare_recorded_request_stream(&mut guard, body, request_context).await {
+            Ok(stream) => stream,
+            Err(response) => return response,
+        };
     let headers = forwarded_headers(&parts.headers);
     let upstream_request = client
         .request(parts.method.clone(), url)
@@ -583,11 +576,68 @@ struct RequestStreamContext {
     summary: SummaryHandle,
     protocol: Arc<Mutex<ProtocolObserver>>,
     request_headers: Vec<RecordedHeader>,
+    expected_body_bytes: Option<u64>,
     store: Option<TrafficStore>,
     locator: Option<RecordLocator>,
     directory: std::path::PathBuf,
     origin: Instant,
     shutdown: tokio_util::sync::CancellationToken,
+}
+
+async fn prepare_recorded_request_stream(
+    guard: &mut RecordGuard,
+    body: Body,
+    context: RequestStreamContext,
+) -> Result<
+    impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
+    Response<Body>,
+> {
+    let request_file = match guard.record.request_body.try_clone() {
+        Ok(file) => tokio::fs::File::from_std(file),
+        Err(error) => {
+            return Err(recording_failure(
+                guard,
+                format!("clone request body file: {error}"),
+            ));
+        }
+    };
+    if let Err(error) = guard.mark_timing(|timing| {
+        timing.upstream_request_started_at_ns = Some(offset_ns(guard.record.origin));
+    }) {
+        return Err(recording_failure(
+            guard,
+            format!("checkpoint request timing: {error:#}"),
+        ));
+    }
+    if context.expected_body_bytes == Some(0) {
+        if let Err(error) = request_file.sync_all().await {
+            return Err(recording_failure(
+                guard,
+                format!("sync request body: {error}"),
+            ));
+        }
+        lock_unpoisoned(&context.measurements).request_body_duration =
+            Some(guard.record.origin.elapsed());
+        if let Err(error) = checkpoint_request_complete(
+            context.store.as_ref(),
+            context.locator.as_ref(),
+            &context.directory,
+            &context.summary,
+            &context.protocol,
+            &context.request_headers,
+            offset_ns(context.origin),
+        ) {
+            return Err(recording_failure(
+                guard,
+                format!("checkpoint request completion: {error:#}"),
+            ));
+        }
+    }
+    Ok(recorded_request_stream_with_summary(
+        body,
+        request_file,
+        context,
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -612,63 +662,53 @@ fn recorded_request_stream_with_summary(
     mut file: tokio::fs::File,
     context: RequestStreamContext,
 ) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
-    let RequestStreamContext {
-        measurements,
-        error_slot,
-        summary,
-        protocol,
-        request_headers,
-        store,
-        locator,
-        directory,
-        origin,
-        shutdown,
-    } = context;
     let mut stream = body.into_data_stream();
     async_stream::stream! {
-        let mut body_complete = false;
+        let mut reached_eof = false;
+        let mut completed_by_length = context.expected_body_bytes == Some(0);
         loop {
             let next = tokio::select! {
-                () = shutdown.cancelled() => {
+                () = context.shutdown.cancelled() => {
                     let error = io::Error::new(io::ErrorKind::Interrupted, "Traffic Proxy is shutting down");
-                    request_failure(&error_slot, ErrorKind::ServerShutdown, &error);
+                    request_failure(&context.error_slot, ErrorKind::ServerShutdown, &error);
                     yield Err(error);
                     break;
                 }
                 next = stream.next() => next,
             };
             let Some(chunk) = next else {
-                body_complete = true;
+                reached_eof = true;
                 break;
             };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
                     let error = io::Error::new(io::ErrorKind::UnexpectedEof, error.to_string());
-                    request_failure(&error_slot, ErrorKind::RequestBodyFailed, &error);
+                    request_failure(&context.error_slot, ErrorKind::RequestBodyFailed, &error);
                     yield Err(error);
                     break;
                 }
             };
             if let Err(error) = file.write_all(&chunk).await {
-                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
+                request_failure(&context.error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(error);
                 break;
             }
             if let Err(error) = file.flush().await {
-                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
+                request_failure(&context.error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(error);
                 break;
             }
-            {
-                let mut values = lock_unpoisoned(&measurements);
+            let request_bytes = {
+                let mut values = lock_unpoisoned(&context.measurements);
                 values.request_bytes = values.request_bytes.saturating_add(chunk.len() as u64);
-            }
-            let at_ns = offset_ns(origin);
+                values.request_bytes
+            };
+            let at_ns = offset_ns(context.origin);
             let first_request_byte = checkpoint_summary_update(
-                store.as_ref(),
-                locator.as_ref(),
-                &summary,
+                context.store.as_ref(),
+                context.locator.as_ref(),
+                &context.summary,
                 |value| {
                     if value.timing.upstream_request_body_first_byte_at_ns.is_some() {
                         return false;
@@ -678,39 +718,50 @@ fn recorded_request_stream_with_summary(
                 },
             );
             if let Err(error) = first_request_byte {
-                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
+                request_failure(&context.error_slot, ErrorKind::RequestRecordingFailed, &error);
                 yield Err(io::Error::other(error.to_string()));
                 break;
             }
-            yield Ok(chunk);
-        }
-        match file.sync_all().await {
-            Ok(()) if body_complete => {
-                lock_unpoisoned(&measurements).request_body_duration = Some(origin.elapsed());
-                let at_ns = offset_ns(origin);
-                let checkpoint = checkpoint_request_complete(
-                    store.as_ref(),
-                    locator.as_ref(),
-                    &directory,
-                    &summary,
-                    &protocol,
-                    &request_headers,
-                    at_ns,
-                );
-                if let Err(error) = checkpoint {
-                    request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
-                    yield Err(io::Error::other(error.to_string()));
-                }
-            }
-            Ok(()) => {}
-            Err(error) => {
-                request_failure(&error_slot, ErrorKind::RequestRecordingFailed, &error);
-                if body_complete {
+            if context.expected_body_bytes == Some(request_bytes) {
+                if let Err(error) = complete_recorded_request(&mut file, &context).await {
+                    request_failure(&context.error_slot, ErrorKind::RequestRecordingFailed, &error);
                     yield Err(error);
+                    break;
                 }
+                completed_by_length = true;
             }
+            yield Ok(chunk);
+            if completed_by_length {
+                break;
+            }
+        }
+        if reached_eof
+            && !completed_by_length
+            && let Err(error) = complete_recorded_request(&mut file, &context).await
+        {
+            request_failure(&context.error_slot, ErrorKind::RequestRecordingFailed, &error);
+            yield Err(error);
         }
     }
+}
+
+async fn complete_recorded_request(
+    file: &mut tokio::fs::File,
+    context: &RequestStreamContext,
+) -> io::Result<()> {
+    file.sync_all().await?;
+    lock_unpoisoned(&context.measurements).request_body_duration = Some(context.origin.elapsed());
+    checkpoint_request_complete(
+        context.store.as_ref(),
+        context.locator.as_ref(),
+        &context.directory,
+        &context.summary,
+        &context.protocol,
+        &context.request_headers,
+        offset_ns(context.origin),
+    )
+    .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(())
 }
 
 fn checkpoint_request_complete(
@@ -722,7 +773,13 @@ fn checkpoint_request_complete(
     request_headers: &[RecordedHeader],
     at_ns: String,
 ) -> anyhow::Result<bool> {
-    if summary.read(|summary| summary.terminal) {
+    if summary.read(|summary| {
+        summary.terminal
+            || summary
+                .timing
+                .upstream_request_body_completed_at_ns
+                .is_some()
+    }) {
         return Ok(false);
     }
     let mut observer = lock_unpoisoned(protocol);
@@ -772,6 +829,7 @@ fn recorded_request_stream(
             summary,
             protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
             request_headers: Vec::new(),
+            expected_body_bytes: None,
             store: None,
             locator: None,
             directory: std::path::PathBuf::new(),
@@ -844,6 +902,7 @@ struct ResponseStreamConfig {
 }
 
 type ResponseTerminal = (Outcome, Option<ErrorMetadata>);
+type ResponseStreamEnd = (ResponseTerminal, Option<String>);
 
 const RESPONSE_SHUTDOWN_MESSAGE: &str = "Traffic Proxy stopped while the response was streaming";
 
@@ -875,7 +934,7 @@ async fn send_downstream(
 enum ResponseBodyTracker {
     Normal,
     OpaqueEventStream,
-    EventStream(SseIndexer),
+    EventStream(Box<SseIndexer>),
     Detect {
         sniffer: SsePrefixSniffer,
         pending: Vec<(Bytes, String)>,
@@ -886,7 +945,7 @@ impl ResponseBodyTracker {
     fn new(mode: ResponseStreamMode, guard: &RecordGuard) -> Self {
         match mode {
             ResponseStreamMode::Normal => Self::Normal,
-            ResponseStreamMode::EventStream => Self::EventStream(new_sse_indexer(guard)),
+            ResponseStreamMode::EventStream => Self::EventStream(Box::new(new_sse_indexer(guard))),
             ResponseStreamMode::OpaqueEventStream => Self::OpaqueEventStream,
             ResponseStreamMode::Detect => Self::Detect {
                 sniffer: SsePrefixSniffer::default(),
@@ -920,7 +979,7 @@ impl ResponseBodyTracker {
                         for (buffered_chunk, buffered_at_ns) in buffered {
                             feed_sse_chunk(&mut indexer, &buffered_chunk, &buffered_at_ns, guard)?;
                         }
-                        *self = Self::EventStream(indexer);
+                        *self = Self::EventStream(Box::new(indexer));
                         Ok(())
                     }
                 }
@@ -959,8 +1018,11 @@ impl ResponseBodyTracker {
         matches!(self, Self::EventStream(_) | Self::OpaqueEventStream)
     }
 
-    fn terminal_seen(&self) -> bool {
-        matches!(self, Self::EventStream(indexer) if indexer.terminal_seen())
+    fn terminal_at_ns(&self) -> Option<&str> {
+        match self {
+            Self::EventStream(indexer) => indexer.terminal_at_ns(),
+            _ => None,
+        }
     }
 }
 
@@ -1060,7 +1122,7 @@ async fn record_response_chunk(
     shutdown: &tokio_util::sync::CancellationToken,
     tracker: &mut ResponseBodyTracker,
     guard: &RecordGuard,
-) -> Option<ResponseTerminal> {
+) -> Option<ResponseStreamEnd> {
     if guard.record.summary.read(|summary| {
         summary
             .timing
@@ -1069,13 +1131,14 @@ async fn record_response_chunk(
     }) && let Err(error) = guard.mark_timing(|timing| {
         timing.upstream_response_body_first_byte_at_ns = Some(offset_ns(guard.record.origin));
     }) {
-        return Some(
+        return Some((
             notify_recording_error(sender, shutdown, io::Error::other(error.to_string())).await,
-        );
+            None,
+        ));
     }
 
     if let Err(error) = write_response_chunk(file, &chunk).await {
-        return Some(notify_recording_error(sender, shutdown, error).await);
+        return Some((notify_recording_error(sender, shutdown, error).await, None));
     }
 
     {
@@ -1083,9 +1146,10 @@ async fn record_response_chunk(
         values.response_bytes = values.response_bytes.saturating_add(chunk.len() as u64);
     }
     if let Err(error) = tracker.observe_chunk(&chunk, offset_ns(guard.record.origin), guard) {
-        return Some(
+        return Some((
             notify_recording_error(sender, shutdown, io::Error::other(error.to_string())).await,
-        );
+            None,
+        ));
     }
 
     match send_downstream(sender, shutdown, Ok(chunk)).await {
@@ -1093,10 +1157,13 @@ async fn record_response_chunk(
         DownstreamSend::Closed => Some(client_closed_terminal(tracker, guard)),
         DownstreamSend::Shutdown => {
             notify_shutdown_truncation(sender);
-            Some(response_error(
-                Outcome::ServerShutdown,
-                ErrorKind::ServerShutdown,
-                RESPONSE_SHUTDOWN_MESSAGE,
+            Some((
+                response_error(
+                    Outcome::ServerShutdown,
+                    ErrorKind::ServerShutdown,
+                    RESPONSE_SHUTDOWN_MESSAGE,
+                ),
+                None,
             ))
         }
     }
@@ -1109,7 +1176,7 @@ async fn stream_response_body(
     sender: &mpsc::Sender<Result<Bytes, io::Error>>,
     tracker: &mut ResponseBodyTracker,
     guard: &RecordGuard,
-) -> (ResponseTerminal, bool) {
+) -> ResponseStreamEnd {
     let mut stream = Box::pin(stream);
     loop {
         let next = tokio::select! {
@@ -1122,33 +1189,36 @@ async fn stream_response_body(
                         ErrorKind::ServerShutdown,
                         RESPONSE_SHUTDOWN_MESSAGE,
                     ),
-                    false,
+                    None,
                 );
             }
             // Prefer an already-ready upstream EOF when the client closes at
             // the same time. This avoids turning a normal response into a
             // disconnect solely because the downstream body was dropped first.
             next = stream.try_next() => next,
-            () = sender.closed() => return (client_closed_terminal(tracker, guard), false),
+            () = sender.closed() => return client_closed_terminal(tracker, guard),
         };
         match next {
             Ok(Some(chunk)) => {
                 if let Some(terminal) =
                     record_response_chunk(chunk, file, sender, shutdown, tracker, guard).await
                 {
-                    return (terminal, false);
+                    return terminal;
                 }
             }
             Ok(None) => {
                 return match tracker.finish(guard) {
-                    Ok(()) => ((Outcome::Completed, None), true),
+                    Ok(()) => (
+                        (Outcome::Completed, None),
+                        Some(offset_ns(guard.record.origin)),
+                    ),
                     Err(error) => (
                         response_error(
                             Outcome::RecordingFailed,
                             ErrorKind::ResponseRecordingFailed,
                             error.to_string(),
                         ),
-                        false,
+                        None,
                     ),
                 };
             }
@@ -1174,7 +1244,7 @@ async fn stream_response_body(
                         failure.kind,
                     )
                     .await;
-                    return (terminal, false);
+                    return (terminal, None);
                 }
                 let terminal = notify_response_error(
                     sender,
@@ -1187,7 +1257,7 @@ async fn stream_response_body(
                     ErrorKind::UpstreamResponseFailed,
                 )
                 .await;
-                return (terminal, false);
+                return (terminal, None);
             }
         }
     }
@@ -1207,7 +1277,7 @@ async fn record_response_stream_with_index(
         headers: response_headers,
     } = config;
     let mut tracker = ResponseBodyTracker::new(mode, guard);
-    let (mut terminal, response_completed) =
+    let (mut terminal, response_completed_at_ns) =
         stream_response_body(&shutdown, stream, &mut file, &sender, &mut tracker, guard).await;
     if let Err(error) = file.sync_all().await {
         let message = format!("sync response body: {error}");
@@ -1227,7 +1297,7 @@ async fn record_response_stream_with_index(
             eprintln!("warning: cannot finalize failed Traffic Record: {finish_error:#}");
         }
     } else {
-        let semantic_result = if response_completed && !tracker.is_event_stream() {
+        let semantic_result = if response_completed_at_ns.is_some() && !tracker.is_event_stream() {
             guard.observe_json_response(response_status, &response_headers)
         } else {
             Ok(())
@@ -1239,10 +1309,9 @@ async fn record_response_stream_with_index(
                 error.to_string(),
             );
         }
-        if response_completed
+        if let Some(completed_at_ns) = response_completed_at_ns
             && let Err(error) = guard.mark_timing(|timing| {
-                timing.upstream_response_body_completed_at_ns =
-                    Some(offset_ns(guard.record.origin));
+                timing.upstream_response_body_completed_at_ns = Some(completed_at_ns);
             })
         {
             terminal = response_error(
@@ -1260,15 +1329,33 @@ async fn record_response_stream_with_index(
     }
 }
 
-fn client_closed_terminal(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> ResponseTerminal {
-    if tracker.terminal_seen() || encoded_terminal_seen_on_close(tracker, guard) {
-        return (Outcome::Completed, None);
+fn client_closed_terminal(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> ResponseStreamEnd {
+    if let Some(at_ns) = tracker.terminal_at_ns() {
+        return ((Outcome::Completed, None), Some(at_ns.to_string()));
     }
-    response_error(
-        Outcome::ClientDisconnected,
-        ErrorKind::ClientDisconnected,
-        "client disconnected while the upstream response was streaming",
+    if encoded_terminal_seen_on_close(tracker, guard) {
+        return (
+            (Outcome::Completed, None),
+            Some(offset_ns(guard.record.origin)),
+        );
+    }
+    (
+        response_error(
+            Outcome::ClientDisconnected,
+            ErrorKind::ClientDisconnected,
+            "client disconnected while the upstream response was streaming",
+        ),
+        None,
     )
+}
+
+fn declared_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
 }
 
 /// An Agent's normal close immediately after a complete SSE response must not
@@ -1790,6 +1877,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn declared_request_length_checkpoints_without_an_extra_eof_poll() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("request.body");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
+        let body = Body::from_stream(ReceiverStream::new(receiver));
+        let summary = SummaryHandle::new(SummaryMetadata::test(
+            String::new(),
+            Some(ProtocolSummary::default()),
+        ));
+        let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
+        let error = Arc::new(Mutex::new(None));
+        let chunks = [Bytes::from_static(b"com"), Bytes::from_static(b"plete")];
+        let stream = recorded_request_stream_with_summary(
+            body,
+            tokio::fs::File::from_std(file),
+            RequestStreamContext {
+                measurements: measurements.clone(),
+                error_slot: error.clone(),
+                summary: summary.clone(),
+                protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
+                request_headers: Vec::new(),
+                expected_body_bytes: Some(8),
+                store: None,
+                locator: None,
+                directory: temp.path().to_path_buf(),
+                origin: Instant::now(),
+                shutdown: CancellationToken::new(),
+            },
+        );
+        futures_util::pin_mut!(stream);
+
+        sender.send(Ok(chunks[0].clone())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), chunks[0]);
+        summary.read(|value| {
+            assert!(value.timing.upstream_request_body_completed_at_ns.is_none());
+        });
+
+        sender.send(Ok(chunks[1].clone())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), chunks[1]);
+        assert!(stream.next().await.is_none());
+        assert_eq!(std::fs::read(path).unwrap(), b"complete");
+        summary.read(|value| {
+            assert!(value.timing.upstream_request_body_completed_at_ns.is_some());
+        });
+        assert!(
+            lock_unpoisoned(&measurements)
+                .request_body_duration
+                .is_some()
+        );
+        assert!(lock_unpoisoned(&error).is_none());
+    }
+
+    #[tokio::test]
+    async fn declared_empty_request_is_checkpointed_before_the_body_is_polled() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = TrafficStore::open(temp.path()).unwrap();
+        let (record, _) = store
+            .begin(ObservedRequest::test("POST", "/empty"))
+            .unwrap();
+        let id = record.id.clone();
+        let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
+        let protocol = Arc::new(Mutex::new(ProtocolObserver::new(None)));
+        let mut guard = RecordGuard::new(store.clone(), record, measurements.clone(), protocol);
+        let summary = guard.record.summary.clone();
+        let body = Body::from_stream(futures_util::stream::pending::<Result<Bytes, Infallible>>());
+        let context = RequestStreamContext {
+            measurements: measurements.clone(),
+            error_slot: guard.request_error.clone(),
+            summary: summary.clone(),
+            protocol: guard.protocol.clone(),
+            request_headers: Vec::new(),
+            expected_body_bytes: Some(0),
+            store: Some(store.clone()),
+            locator: Some(guard.record.locator.clone()),
+            directory: std::path::PathBuf::new(),
+            origin: guard.record.origin,
+            shutdown: CancellationToken::new(),
+        };
+
+        let stream = prepare_recorded_request_stream(&mut guard, body, context)
+            .await
+            .unwrap_or_else(|response| {
+                panic!(
+                    "empty request preparation failed with {}",
+                    response.status()
+                )
+            });
+
+        summary.read(|value| {
+            assert!(value.timing.upstream_request_started_at_ns.is_some());
+            assert!(value.timing.upstream_request_body_completed_at_ns.is_some());
+        });
+        assert!(
+            lock_unpoisoned(&measurements)
+                .request_body_duration
+                .is_some()
+        );
+        let persisted = store.find(&id).unwrap();
+        assert!(
+            persisted
+                .summary
+                .timing
+                .upstream_request_body_completed_at_ns
+                .is_some()
+        );
+        assert!(
+            std::fs::read(persisted.directory.join("request.body"))
+                .unwrap()
+                .is_empty()
+        );
+        drop(stream);
+    }
+
+    #[test]
+    fn declared_content_length_ignores_unusable_values() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(declared_content_length(&headers), None);
+
+        for (value, expected) in [
+            ("0", Some(0)),
+            ("42", Some(42)),
+            ("1.0", None),
+            ("unknown", None),
+            ("18446744073709551616", None),
+        ] {
+            headers.insert(header::CONTENT_LENGTH, value.parse().unwrap());
+            assert_eq!(declared_content_length(&headers), expected, "{value}");
+        }
+
+        headers.insert(
+            header::CONTENT_LENGTH,
+            axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        assert_eq!(declared_content_length(&headers), None);
+    }
+
+    #[tokio::test]
     async fn failed_request_body_is_not_marked_complete_or_interpreted() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("request.body");
@@ -1826,6 +2057,7 @@ mod tests {
                     "https://example.test/v1/responses",
                 )))),
                 request_headers: Vec::new(),
+                expected_body_bytes: None,
                 store: None,
                 locator: None,
                 directory: temp.path().to_path_buf(),
@@ -1931,7 +2163,7 @@ mod tests {
         upstream_url: &'static str,
         chunks: &[&'static [u8]],
         mode: ResponseStreamMode,
-    ) -> (Outcome, ProtocolSummary) {
+    ) -> (Outcome, ProtocolSummary, TimingMetadata) {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, _) = store
@@ -1980,12 +2212,13 @@ mod tests {
         (
             record.result.unwrap().outcome,
             record.summary.protocol.unwrap(),
+            record.summary.timing,
         )
     }
 
     #[tokio::test]
     async fn client_close_after_claude_terminal_event_is_completed() {
-        let (outcome, protocol) = run_client_close_after_response(
+        let (outcome, protocol, timing) = run_client_close_after_response(
             "https://example.com/v1/messages",
             &[b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"],
             ResponseStreamMode::EventStream,
@@ -1993,8 +2226,9 @@ mod tests {
         .await;
         assert_eq!(outcome, Outcome::Completed);
         assert!(!protocol.response_terminal);
+        assert!(timing.upstream_response_body_completed_at_ns.is_some());
 
-        let (outcome, protocol) = run_client_close_after_response(
+        let (outcome, protocol, timing) = run_client_close_after_response(
             "https://example.com/v1/messages",
             &[b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"],
             ResponseStreamMode::EventStream,
@@ -2002,11 +2236,12 @@ mod tests {
         .await;
         assert_eq!(outcome, Outcome::Completed);
         assert!(protocol.response_terminal);
+        assert!(timing.upstream_response_body_completed_at_ns.is_some());
     }
 
     #[tokio::test]
     async fn client_close_after_codex_terminal_event_is_completed() {
-        let (outcome, protocol) = run_client_close_after_response(
+        let (outcome, protocol, timing) = run_client_close_after_response(
             "https://example.com/v1/responses",
             &[b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n"],
             ResponseStreamMode::EventStream,
@@ -2015,6 +2250,7 @@ mod tests {
         assert_eq!(outcome, Outcome::Completed);
         assert!(protocol.response_terminal);
         assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
+        assert!(timing.upstream_response_body_completed_at_ns.is_some());
     }
 
     #[tokio::test]
@@ -2033,7 +2269,7 @@ mod tests {
                 "claude-test",
             ),
         ] {
-            let (outcome, protocol) =
+            let (outcome, protocol, _) =
                 run_client_close_after_response(url, &[event], ResponseStreamMode::EventStream)
                     .await;
 
@@ -2045,7 +2281,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_sse_data_still_publishes_first_token_and_diagnostics() {
-        let (_, protocol) = run_client_close_after_response(
+        let (_, protocol, _) = run_client_close_after_response(
             "https://example.com/v1/messages",
             &[b"data: {malformed json\n\n"],
             ResponseStreamMode::EventStream,
@@ -2114,6 +2350,13 @@ mod tests {
 
         let record = store.find(&id).unwrap();
         assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
+        assert!(
+            record
+                .summary
+                .timing
+                .upstream_response_body_completed_at_ns
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -2189,7 +2432,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
 
     #[tokio::test]
     async fn client_close_before_sse_terminal_event_is_disconnected() {
-        let (outcome, protocol) = run_client_close_after_response(
+        let (outcome, protocol, timing) = run_client_close_after_response(
             "https://example.com/v1/messages",
             &[b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n"],
             ResponseStreamMode::EventStream,
@@ -2199,11 +2442,12 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         assert!(!protocol.response_terminal);
         assert!(protocol.first_token_at_ns.is_some());
         assert!(protocol.token_usage.is_none());
+        assert!(timing.upstream_response_body_completed_at_ns.is_none());
     }
 
     #[tokio::test]
     async fn headerless_split_sse_is_completed_when_client_closes_after_terminal_event() {
-        let (outcome, protocol) = run_client_close_after_response(
+        let (outcome, protocol, timing) = run_client_close_after_response(
             "https://example.com/v1/responses",
             &[
                 b"eve",
@@ -2218,6 +2462,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             protocol.response_mode.observed,
             Some(ResponseModeValue::Stream)
         );
+        assert!(timing.upstream_response_body_completed_at_ns.is_some());
         assert!(protocol.response_terminal);
         assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
     }
@@ -2442,7 +2687,8 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             .unwrap();
 
         assert!(indexer.terminal_seen());
-        let tracker = ResponseBodyTracker::EventStream(indexer);
+        assert_eq!(indexer.terminal_at_ns(), Some("2"));
+        let tracker = ResponseBodyTracker::EventStream(Box::new(indexer));
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, _) = store
@@ -2454,10 +2700,9 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(None))),
         );
-        assert_eq!(
-            client_closed_terminal(&tracker, &guard).0,
-            Outcome::Completed
-        );
+        let terminal = client_closed_terminal(&tracker, &guard);
+        assert_eq!(terminal.0.0, Outcome::Completed);
+        assert_eq!(terminal.1.as_deref(), Some("2"));
     }
 
     #[tokio::test]

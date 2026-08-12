@@ -61,32 +61,43 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
   const streaming = responseMode === "stream";
   const stages: TimingStage[] = [];
   let cursor = 0n;
+  let pending: Array<{ label: string; tone: TimingStageTone }> = [];
 
   function addStage(label: string, tone: TimingStageTone, boundary: bigint | null): boolean {
-    if (boundary !== null) {
-      if (boundary < cursor || boundary > axis) return false;
-      stages.push({
-        label,
-        tone,
-        status: "complete",
-        startPercent: percent(cursor, axis),
-        widthPercent: percent(boundary - cursor, axis),
-        durationMs: nsToMs(boundary - cursor),
-      });
-      cursor = boundary;
+    if (boundary === null) {
+      pending.push({ label, tone });
       return true;
     }
+    if (boundary < cursor || boundary > axis) return false;
+
+    const combined = [...pending, { label, tone }];
+    stages.push({
+      label: combined.map((stage) => stage.label).join(" + "),
+      tone: combined[0].tone,
+      status: pending.length > 0 ? "incomplete" : "complete",
+      startPercent: percent(cursor, axis),
+      widthPercent: percent(boundary - cursor, axis),
+      durationMs: nsToMs(boundary - cursor),
+    });
+    pending = [];
+    cursor = boundary;
+    return true;
+  }
+
+  function finishPending(): TimingStage[] {
+    if (pending.length === 0 || axis <= cursor) return stages;
     if (axis > cursor) {
       stages.push({
-        label,
-        tone,
+        label: pending.map((stage) => stage.label).join(" + "),
+        tone: pending[0].tone,
         status: active ? "ongoing" : "incomplete",
         startPercent: percent(cursor, axis),
         widthPercent: percent(axis - cursor, axis),
         durationMs: nsToMs(axis - cursor),
       });
     }
-    return false;
+    pending = [];
+    return stages;
   }
 
   if (!addStage("Proxy setup", "request", requestStarted)) return stages;
@@ -98,13 +109,13 @@ export function timingStages(detail: RecordDetail): TimingStage[] {
     if (!addStage("Response stream", "model", responseCompleted)) return stages;
   } else if (streaming && active && responseCompleted === null) {
     addStage("First-token wait", "wait", null);
-    return stages;
+    return finishPending();
   } else if (!addStage("Response body", "model", responseCompleted)) {
     return stages;
   }
 
   addStage("Finalization", "finalize", finished);
-  return stages;
+  return finishPending();
 }
 
 const TOKEN_FORMAT = new Intl.NumberFormat("en-US");

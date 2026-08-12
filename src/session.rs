@@ -15,6 +15,8 @@ use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+// Transcripts stream line by line, but a container-written JSONL record still
+// needs a bound before it is buffered for parsing.
 const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const UUID_TEXT_LEN: usize = 36;
 const UUID_SUFFIX_LEN: usize = 12;

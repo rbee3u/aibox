@@ -27,6 +27,8 @@ const CODEX_STATUSLINE_ITEMS: [&str; 5] = [
 ];
 const RUST_INSTALLER: &str = include_str!("../assets/install-rust.sh");
 const GO_INSTALLER: &str = include_str!("../assets/install-go.sh");
+// Status-line inspection rewrites native Current Config in memory, so bound
+// container- or host-written input before parsing it.
 const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 
 /// One optional capability that aibox can install into a Tenant Home.

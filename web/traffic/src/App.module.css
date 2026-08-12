@@ -197,28 +197,6 @@
   user-select: none !important;
 }
 
-.scopedBanner {
-  padding: 8px 10px 0;
-  background: var(--surface);
-}
-
-.actionNotice {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 70;
-  width: min(430px, calc(100vw - 36px));
-  filter: drop-shadow(var(--shadow-md));
-  animation: noticeIn var(--transition-base);
-}
-
-@keyframes noticeIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
 .emptyDetail {
   display: grid;
   min-width: 0;

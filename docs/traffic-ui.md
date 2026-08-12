@@ -26,6 +26,19 @@ make traffic-lint       # ESLint frontend source files
 make traffic-check      # Format check, typecheck, build, node check, test, lint
 ```
 
+Routine Rust Traffic tests are part of `make check` and do not bind sockets.
+Run the ignored Reqwest/TCP bridge smoke test only in a network-permitted host
+or CI environment:
+
+```sh
+cargo test \
+  traffic::tests::reqwest_tcp_smoke_preserves_bytes_headers_query_and_redirect_policy \
+  -- --ignored --exact
+```
+
+That test binds loopback listeners and is intentionally excluded from the
+default suite.
+
 Optional desktop browser smoke tests use a loopback-only Vite development
 listener. They deliberately avoid committed screenshot baselines and remain
 separate from the routine socket-free checks:
@@ -66,6 +79,14 @@ the 5-second list / 3-second active-record polling. The Summary is
 the default detail tab, and request/response bodies load only for the visible
 body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
+
+Request and action failures use one top-centered notification stack keyed by
+list, inspection, and action source. A notice remains for eight visible
+seconds, pausing while hovered, focused, covered by a confirmation dialog, or
+while the page is hidden or unfocused. Repeated polling failures notify once
+until that source succeeds. List, detail, Body, and download failures offer a
+scoped retry; destructive actions require confirmation again. Decoding and SSE
+timing degradation remain local to the affected Body view.
 
 ## Record Assessment and Diagnostics
 
@@ -208,6 +229,12 @@ interrupted Records therefore appear first by start time, followed by terminal
 Records by End Time; host and UUID break same-millisecond ties. Diagnostics and
 the other detail tabs do not use this presentation.
 
+When an older or partial Record lacks one Timing boundary but retains later
+boundaries, the timeline combines the adjacent phases around that unknown
+boundary and marks the combined interval `incomplete`. It continues with later
+independently measurable stages instead of inventing a missing duration or
+hiding the remaining checkpoints.
+
 The Record list uses one-based pages of 50 from the current complete ordering.
 Each poll opens only each Record's `summary.json`, which contains the complete
 list projection and persisted Assessment. Detail reads remain strict over raw
@@ -218,4 +245,8 @@ moves Records between pages. An empty page falls back through earlier pages to
 the closest non-empty page or page 1. Multi-page selection pauses polling;
 after deletion the viewer returns to the lowest page containing a selected
 Record and applies the same empty-page fallback. Single-record and delete-all
-operations return to their originating page.
+operations return to their originating page. A confirmation dialog pauses and
+cancels list, detail, and Body polling, then refreshes the applicable views when
+it closes. Delete all removes every completed or interrupted Record in the
+server-side snapshot taken under the Traffic store write lock; active Records
+at that point remain.

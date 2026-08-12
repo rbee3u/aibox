@@ -212,8 +212,9 @@ For Claude, set the native configuration for the selected Tenant:
 
 Docker Desktop supplies `host.docker.internal`. Native Linux Docker usually
 needs `aibox traffic --listen 0.0.0.0:9923 --allow-remote`; the management page
-remains loopback-only. Traffic Records contain unredacted authorization
-headers, prompts, and responses. See
+remains loopback-only. The non-loopback proxy has no client authentication, so
+prefer a specific trusted address and restrict access with a firewall. Traffic
+Records contain unredacted authorization headers, prompts, and responses. See
 [Traffic Proxy](docs/sandbox.md#traffic-proxy) before use and delete Records
 from its viewer afterward.
 
@@ -252,8 +253,17 @@ Tenant or modify Current Config.
 
 Before changing behavior, read the repository constraints in
 [AGENTS.md](AGENTS.md), the relevant domain definitions in
-[CONTEXT.md](CONTEXT.md), and the decisions in [docs/adr](docs/adr/). AGENTS.md
-also lists the required Rust checks.
+[CONTEXT.md](CONTEXT.md), and the [ADR index](docs/adr/README.md). AGENTS.md also
+maps behavior to its owning modules. Run the complete Rust checks with:
+
+```sh
+make check
+```
+
+Changes under `web/traffic/` also require `make traffic-check`; install its
+locked dependencies first with `make traffic-ci`. See
+[Traffic UI Development](docs/traffic-ui.md) for the generated-asset and
+optional browser-test workflow.
 
 ## License
 

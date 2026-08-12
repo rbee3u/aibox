@@ -90,6 +90,7 @@ pub(crate) struct SseIndexer {
     first_token_seen: bool,
     first_token_at_ns: Option<String>,
     terminal_seen: bool,
+    terminal_at_ns: Option<String>,
     sequence: u64,
     indexing_disabled: bool,
     last_arrival_at_ns: String,
@@ -113,6 +114,7 @@ impl SseIndexer {
             first_token_seen: false,
             first_token_at_ns: None,
             terminal_seen: false,
+            terminal_at_ns: None,
             sequence: 0,
             indexing_disabled: false,
             last_arrival_at_ns: "0".to_string(),
@@ -125,6 +127,10 @@ impl SseIndexer {
 
     pub(crate) fn terminal_seen(&self) -> bool {
         self.terminal_seen
+    }
+
+    pub(crate) fn terminal_at_ns(&self) -> Option<&str> {
+        self.terminal_at_ns.as_deref()
     }
 
     pub(crate) fn body_offset(&self) -> u64 {
@@ -196,6 +202,9 @@ impl SseIndexer {
             if line.is_empty() {
                 if is_terminal_sse_event(self.event_name.as_deref(), &self.data) {
                     self.terminal_seen = true;
+                    if self.terminal_at_ns.is_none() {
+                        self.terminal_at_ns = Some(at_ns.to_string());
+                    }
                 }
                 if self.data_seen {
                     self.protocol_events.push((

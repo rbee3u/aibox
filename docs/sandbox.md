@@ -56,7 +56,7 @@ authority grant.
 
 ## Runtime Boundary
 
-Each Coding Agent Run:
+Each Run:
 
 - drops all Linux capabilities;
 - enables `no-new-privileges`;
@@ -116,7 +116,7 @@ Run or a Rust/Go Component installation.
 
 `aibox traffic` is an independent foreground HTTP intermediary for temporary
 model API debugging. It does not start Docker and may run in a separate process
-alongside a Coding Agent Run:
+alongside a Run:
 
 ```sh
 aibox traffic
@@ -132,6 +132,20 @@ covers it. The viewer is advertised at `http://127.0.0.1:<port>/`, also answers
 the loopback Host values `localhost:<port>` and `[::1]:<port>`, and rejects
 non-loopback peers, non-loopback Host values, cross-origin and cross-site
 requests, and invalid per-start CSRF tokens. It sends no CORS permission.
+
+The proxy and management viewer do not authenticate clients. The per-start
+token is a browser CSRF defense, not a local-user boundary: a process that can
+connect to the loopback listener can fetch the viewer and its token. Do not
+publish the management routes through port forwarding or a reverse proxy, and
+treat other processes and users on the host as trusted while Traffic is
+running.
+
+`--allow-remote` exposes the unauthenticated proxy surface to every peer that
+can reach the selected address. Those peers can make requests to permitted
+public upstreams and create unbounded Traffic Records. Prefer a specific
+trusted interface over a wildcard listener, restrict it with a firewall, and
+stop the proxy when debugging ends. The management routes remain loopback-only
+even on that listener.
 
 Docker Desktop provides `host.docker.internal`. aibox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
@@ -285,13 +299,16 @@ There is no size limit, retention policy, redaction, database, or cross-process
 lock. Authorization values, API keys, prompts, tool data, and model output are
 stored in full and remain after the proxy exits. Use the viewer's selected
 delete or separately confirmed **Delete all** action when debugging ends. An
-active Record cannot be deleted; delete-all uses the confirmed current
-non-active count and returns a conflict if that count changes.
+active Record cannot be deleted; delete-all removes every completed or
+interrupted Record in a single server-side snapshot and preserves Records that
+are still active when that snapshot is taken. It strictly validates every
+target before deleting any of them.
 
 Claude Messages and OpenAI Responses streaming are HTTP SSE and work through
-this path. WebSocket transport is outside v1; if native Codex configuration
-manually sets `supports_websockets = true` for the selected custom provider,
-set it to `false` while using Traffic. Config Fields are unchanged.
+this path. WebSocket transport is outside the Traffic Proxy's supported
+surface; if native Codex configuration manually sets
+`supports_websockets = true` for the selected custom provider, set it to
+`false` while using Traffic. Config Fields are unchanged.
 See [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
 [OpenAI Responses streaming](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl),
 and [Docker host networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/).
@@ -317,7 +334,7 @@ persistent Managed Tenant; see
 
 ## Custom Images
 
-Set `AIBOX_IMAGE` to make image builds, Coding Agent Runs, and Rust/Go Component
+Set `AIBOX_IMAGE` to make image builds, Runs, and Rust/Go Component
 installations use another image tag:
 
 ```sh
@@ -336,9 +353,10 @@ exist locally. To support a Run, a replacement image must:
 
 For complete output, an installed Claude status-line Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the
-branch field. It renders the model/reasoning, full current directory, branch,
-compact context-window size, and context-used percentage in that order. The
-Codex status line uses native TUI support and adds no image dependency.
+branch field. It renders the model/reasoning, current directory (abbreviating
+Home as `~`), branch, compact context-window size, and context-used percentage
+in that order. The Codex status line uses native TUI support and adds no image
+dependency.
 
 Both toolchain installers require `HOME=/home/aibox`, no incompatible
 `ENTRYPOINT`, Bash, curl, and standard Unix command-line utilities including

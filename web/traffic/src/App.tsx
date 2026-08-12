@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createTrafficApi, requestErrorMessage, requestWasCancelled } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { NotificationCenter, type NotificationItemData } from "./components/NotificationCenter";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
-import { StatusBanner } from "./components/StatusBanner";
-import { useRecordInspection } from "./useRecordInspection";
+import { useRecordInspection, type InspectionFailure } from "./useRecordInspection";
 import { MAX_LIST_WIDTH, MIN_LIST_WIDTH, useResizableListWidth } from "./useResizableListWidth";
 import { usePersistentTheme, type ThemePreference } from "./usePersistentTheme";
 import type { RecordList as RecordListData, RecordSummary, TrafficApi } from "./types";
@@ -15,14 +15,12 @@ import styles from "./App.module.css";
 interface AppProps {
   api?: TrafficApi;
 }
-type Dialog = { kind: "selected"; ids: string[] } | { kind: "all"; count: number } | null;
+type Dialog = { kind: "selected"; ids: string[] } | { kind: "all" } | null;
 type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
-type ErrorSource = "list" | "action";
-type AppErrors = Record<ErrorSource, string | null>;
+type NotificationSource = NotificationItemData["source"];
 
 const LIST_POLL_INTERVAL_MS = 5000;
 const RECORDS_PER_PAGE = 50;
-const EMPTY_ERRORS: AppErrors = { list: null, action: null };
 
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
@@ -49,30 +47,83 @@ export function App({ api: providedApi }: AppProps) {
   const selectionPages = useRef<Map<string, number>>(new Map());
   const [loadingList, setLoadingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [errors, setErrors] = useState<AppErrors>(EMPTY_ERRORS);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [deletion, setDeletion] = useState<Deletion>(null);
+  const [notifications, setNotifications] = useState<NotificationItemData[]>([]);
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
+  const failureSignatures = useRef<Map<NotificationSource, string>>(new Map());
+  const notificationSequence = useRef(0);
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
   const deleting = deletion?.kind === "batch";
   const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
   const deletionBusy = deletion !== null;
+  const dialogOpen = dialog !== null;
 
-  const reportError = useCallback((source: ErrorSource, cause: unknown) => {
-    const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
-    setErrors((current) => ({ ...current, [source]: message }));
+  const reportFailure = useCallback(
+    (source: NotificationSource, title: string, cause: unknown, retry = false) => {
+      const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
+      const signature = `${title}\n${message}`;
+      if (failureSignatures.current.get(source) === signature) return;
+      failureSignatures.current.set(source, signature);
+      notificationSequence.current += 1;
+      const notification: NotificationItemData = {
+        id: notificationSequence.current,
+        source,
+        tone: "error",
+        title,
+        message,
+        actionLabel: retry ? "Retry" : undefined,
+      };
+      setNotifications((current) =>
+        [...current.filter((item) => item.source !== source), notification].slice(-3),
+      );
+    },
+    [],
+  );
+  const resolveFailure = useCallback((source: NotificationSource) => {
+    failureSignatures.current.delete(source);
+    setNotifications((current) =>
+      current.some((item) => item.source === source)
+        ? current.filter((item) => item.source !== source)
+        : current,
+    );
   }, []);
-  const clearError = useCallback((source: ErrorSource) => {
-    setErrors((current) => (current[source] === null ? current : { ...current, [source]: null }));
+  const dismissNotification = useCallback((source: NotificationSource) => {
+    setNotifications((current) =>
+      current.some((item) => item.source === source)
+        ? current.filter((item) => item.source !== source)
+        : current,
+    );
   }, []);
-  const inspection = useRecordInspection({ api, records: list.records });
+  const handleInspectionFailure = useCallback(
+    (failure: InspectionFailure) => {
+      const title =
+        failure.kind === "detail"
+          ? "Couldn’t load record"
+          : failure.kind === "body"
+            ? "Couldn’t load Body"
+            : "Couldn’t download Body";
+      reportFailure("inspection", title, failure.message, failure.retryable !== false);
+    },
+    [reportFailure],
+  );
+  const handleInspectionRecovery = useCallback(
+    () => resolveFailure("inspection"),
+    [resolveFailure],
+  );
+  const inspection = useRecordInspection({
+    api,
+    records: list.records,
+    paused: dialogOpen,
+    onFailure: handleInspectionFailure,
+    onRecovery: handleInspectionRecovery,
+  });
   const {
     bodies,
     bodyStatus,
     clearCurrentRecord,
-    clearVisibleError,
     clearRecordIfCurrent,
     currentId,
     currentState,
@@ -80,9 +131,9 @@ export function App({ api: providedApi }: AppProps) {
     detail,
     download,
     eventTimings,
-    error: inspectionError,
     loadingBody,
     loadingDetail,
+    retryFailure: retryInspectionFailure,
     selectRecord,
     setTab,
     syncCurrentState,
@@ -124,11 +175,11 @@ export function App({ api: providedApi }: AppProps) {
         setPage(targetPage);
         pageRef.current = targetPage;
         syncCurrentState(payload.records);
-        clearError("list");
+        resolveFailure("list");
         return payload;
       } catch (cause) {
         if (listController.current === controller && !requestWasCancelled(cause, controller.signal))
-          reportError("list", cause);
+          reportFailure("list", "Couldn’t load traffic records", cause, true);
         return null;
       } finally {
         if (listController.current === controller) {
@@ -140,7 +191,7 @@ export function App({ api: providedApi }: AppProps) {
         }
       }
     },
-    [api, clearError, reportError, syncCurrentState],
+    [api, reportFailure, resolveFailure, syncCurrentState],
   );
 
   const refreshWithFallback = useCallback(
@@ -166,7 +217,7 @@ export function App({ api: providedApi }: AppProps) {
   }, [page, refreshWithFallback]);
 
   useEffect(() => {
-    if (selectionMode) {
+    if (selectionMode || dialogOpen) {
       listController.current?.abort();
       return;
     }
@@ -182,7 +233,7 @@ export function App({ api: providedApi }: AppProps) {
       listController.current?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [refreshWithFallback, selectionMode]);
+  }, [dialogOpen, refreshWithFallback, selectionMode]);
 
   const selectedIds = [...selected];
 
@@ -221,6 +272,7 @@ export function App({ api: providedApi }: AppProps) {
 
   async function confirmDelete() {
     if (!dialog || !beginDeletion({ kind: "batch" })) return;
+    resolveFailure("action");
     const targetPage =
       dialog.kind === "selected"
         ? dialog.ids.reduce(
@@ -230,9 +282,7 @@ export function App({ api: providedApi }: AppProps) {
         : pageRef.current;
     try {
       const deletedCount =
-        dialog.kind === "selected"
-          ? await api.deleteRecords(dialog.ids)
-          : await api.deleteAll(dialog.count);
+        dialog.kind === "selected" ? await api.deleteRecords(dialog.ids) : await api.deleteAll();
       const deletedIds = dialog.kind === "selected" ? dialog.ids : [];
       setList((current) =>
         removeDeletedFromList(
@@ -257,11 +307,16 @@ export function App({ api: providedApi }: AppProps) {
         clearCurrentRecord();
       }
       setDialog(null);
-      clearError("action");
+      resolveFailure("action");
       await refreshWithFallback(targetPage);
       setFocusAfterDelete(null);
     } catch (cause) {
-      reportError("action", cause);
+      const title =
+        dialog.kind === "selected" && dialog.ids.length === 1
+          ? "Couldn’t delete record"
+          : "Couldn’t delete records";
+      setDialog(null);
+      reportFailure("action", title, cause);
     } finally {
       finishDeletion();
     }
@@ -271,7 +326,7 @@ export function App({ api: providedApi }: AppProps) {
     if (!beginDeletion({ kind: "record", id })) return;
     const originPage = pageRef.current;
     const originRecords = list.records;
-    clearError("action");
+    resolveFailure("action");
     try {
       await api.deleteRecords([id]);
       clearRecordIfCurrent(id);
@@ -296,9 +351,18 @@ export function App({ api: providedApi }: AppProps) {
         );
       }
     } catch (cause) {
-      reportError("action", cause);
+      reportFailure("action", "Couldn’t delete record", cause);
     } finally {
       finishDeletion();
+    }
+  }
+
+  function handleNotificationAction(notification: NotificationItemData) {
+    resolveFailure(notification.source);
+    if (notification.source === "list") {
+      void refreshPage();
+    } else if (notification.source === "inspection") {
+      retryInspectionFailure();
     }
   }
 
@@ -353,17 +417,6 @@ export function App({ api: providedApi }: AppProps) {
         style={{ "--list-width": `${listWidth}px` } as CSSProperties}
       >
         <div className={styles.listColumn}>
-          {errors.list && (
-            <div className={styles.scopedBanner}>
-              <StatusBanner
-                message={errors.list}
-                action={
-                  selectionMode ? undefined : { label: "Retry", onClick: () => void refreshPage() }
-                }
-                onDismiss={() => clearError("list")}
-              />
-            </div>
-          )}
           <RecordList
             records={list.records}
             total={list.total}
@@ -385,7 +438,7 @@ export function App({ api: providedApi }: AppProps) {
             deletableCount={list.deletable_count}
             onRefresh={() => void refreshPage()}
             onDeleteSelected={() => setDialog({ kind: "selected", ids: selectedIds })}
-            onDeleteAll={() => setDialog({ kind: "all", count: list.deletable_count })}
+            onDeleteAll={() => setDialog({ kind: "all" })}
             onDeleteRecord={(id) => void deleteRecord(id)}
             deletingRecordId={deletingRecordId}
             deletionBusy={deletionBusy}
@@ -412,19 +465,6 @@ export function App({ api: providedApi }: AppProps) {
           <span aria-hidden="true" />
         </div>
         <div className={styles.detailColumn}>
-          {inspectionError && (
-            <div className={styles.scopedBanner}>
-              <StatusBanner
-                message={inspectionError}
-                action={
-                  currentId
-                    ? { label: "Retry", onClick: () => void selectRecord(currentId) }
-                    : undefined
-                }
-                onDismiss={clearVisibleError}
-              />
-            </div>
-          )}
           {loadingDetail ? (
             <section className={styles.emptyDetail}>
               <LoaderCircle className={styles.loader} size={28} aria-label="Loading" />
@@ -452,21 +492,30 @@ export function App({ api: providedApi }: AppProps) {
           )}
         </div>
       </main>
-      {errors.action && (
-        <div className={styles.actionNotice}>
-          <StatusBanner message={errors.action} onDismiss={() => clearError("action")} />
-        </div>
-      )}
+      <NotificationCenter
+        notifications={
+          selectionMode
+            ? notifications.map((notification) =>
+                notification.source === "list"
+                  ? { ...notification, actionLabel: undefined }
+                  : notification,
+              )
+            : notifications
+        }
+        paused={dialogOpen}
+        onAction={handleNotificationAction}
+        onDismiss={dismissNotification}
+      />
       {dialog && (
         <ConfirmDialog
           title={
             dialog.kind === "all"
-              ? "Delete all records?"
+              ? "Delete all non-active records?"
               : `Delete ${dialog.ids.length} selected record${dialog.ids.length === 1 ? "" : "s"}?`
           }
           message={
             dialog.kind === "all"
-              ? `This permanently deletes ${dialog.count} non-active record${dialog.count === 1 ? "" : "s"}, including raw request and response data.`
+              ? "This permanently deletes every completed or interrupted record, including raw request and response data. Active records are not affected."
               : "This permanently deletes the selected raw request and response data."
           }
           confirmLabel="Delete permanently"

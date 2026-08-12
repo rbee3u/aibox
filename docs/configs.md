@@ -121,10 +121,17 @@ file can be repaired in its turn.
 
 Current Config edits intentionally do not parse or validate content. They may
 therefore save invalid TOML, JSON, or arbitrary bytes that the Coding Agent
-later rejects. Editing initializes a missing Managed Tenant and Agent state
-directory. A missing Claude file starts as `{}`, a missing Codex main file as
-empty TOML, and a missing Codex auth file as `{}`. New files use mode `0600`;
-existing file modes are preserved. Host Home directory modes are never changed.
+later rejects. Editing initializes a missing Managed Tenant and the selected
+Agent state directory. In the Host Tenant, the real Host Home must already
+exist, but editing may create its `.codex` or `.claude` directory. A missing
+Claude file starts as `{}`, a missing Codex main file as empty TOML, and a
+missing Codex auth file as `{}`. New files use mode `0600`; existing file modes
+are preserved. Existing Host Home directory modes are never changed.
+
+Operations that read Config content cap each native file at 16 MiB, including
+`get`, `edit`, Application, and Credential Propagation. Reduce a larger file
+outside aibox before using one of those operations; `config list` and deletion
+do not parse its content.
 
 Deletion requires names or `--all`; the forms are mutually exclusive and an
 empty selection is an error. Both can remove safe invalid or incomplete Named
@@ -252,7 +259,8 @@ Missing native files are treated as semantically empty. An absent file whose
 desired result is still empty remains absent. If an existing file becomes
 empty, it remains present using a valid empty representation. Applying a Named
 Config preserves existing Current Config file modes and creates files at mode
-`0600`.
+`0600`. When an Application has a file to write, it may create the selected
+native Agent state directory at mode `0700` beneath the existing Home.
 
 Each changed file is replaced atomically, but Codex main and auth replacement
 is not atomic as a pair. Re-running the same application converges after an

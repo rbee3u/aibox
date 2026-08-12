@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, createTrafficApi } from "./api";
-import type { TrafficApi } from "./types";
 
 describe("Traffic API client", () => {
   beforeEach(() => {
@@ -62,7 +61,7 @@ describe("Traffic API client", () => {
       api.loadDecodedBody("record", "response", signal),
       api.loadEventTimings("record", 0, signal),
       api.deleteRecords([], signal),
-      api.deleteAll(0, signal),
+      api.deleteAll(signal),
     ]);
 
     expect(fetchMock.mock.calls).toHaveLength(7);
@@ -71,34 +70,39 @@ describe("Traffic API client", () => {
     }
   });
 
-  const mutations = [
-    {
-      name: "selected records",
-      run: (api: TrafficApi) => api.deleteRecords(["one", "two"]),
-      path: "/_aibox/traffic/api/records/delete",
-      body: JSON.stringify({ ids: ["one", "two"] }),
-    },
-    {
-      name: "all records",
-      run: (api: TrafficApi) => api.deleteAll(7),
-      path: "/_aibox/traffic/api/records/delete-all",
-      body: JSON.stringify({ expected_deletable_count: 7 }),
-    },
-  ];
-
-  it.each(mutations)("sends $name as CSRF-protected JSON", async ({ run, path, body }) => {
+  it("sends selected records as CSRF-protected JSON", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
     const api = createTrafficApi(fetchMock);
 
-    await expect(run(api)).resolves.toBe(2);
+    await expect(api.deleteRecords(["one", "two"])).resolves.toBe(2);
     expect(fetchMock).toHaveBeenCalledWith(
-      path,
-      expect.objectContaining({ method: "POST", body, cache: "no-store" }),
+      "/_aibox/traffic/api/records/delete",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ids: ["one", "two"] }),
+        cache: "no-store",
+      }),
     );
     const [, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(headers.get("X-Aibox-Traffic-CSRF")).toBe("test-token");
     expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("sends delete-all as a CSRF-protected request without a body", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
+    const api = createTrafficApi(fetchMock);
+
+    await expect(api.deleteAll()).resolves.toBe(2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/_aibox/traffic/api/records/delete-all",
+      expect.objectContaining({ method: "POST", cache: "no-store" }),
+    );
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.body).toBeUndefined();
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-Aibox-Traffic-CSRF")).toBe("test-token");
+    expect(headers.has("Content-Type")).toBe(false);
   });
 
   it.each([

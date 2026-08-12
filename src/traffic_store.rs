@@ -1095,27 +1095,33 @@ impl TrafficStore {
         Ok(selected.len())
     }
 
-    pub fn delete_all(&self, expected: usize) -> Result<usize> {
+    pub fn delete_all(&self) -> Result<usize> {
         let _namespace = write_unpoisoned(&self.namespace);
-        let records: Vec<_> = self
-            .scan_unlocked()?
+        let summaries = self.scan_summaries_unlocked()?;
+        let ids: HashSet<_> = summaries
             .into_iter()
             .filter(|record| !record.active)
+            .map(|record| record.summary.record_id)
             .collect();
-        if records.len() != expected {
-            bail!(
-                "deletable Traffic Record count changed (expected {expected}, now {})",
-                records.len()
-            );
-        }
-        for record in &records {
+        let requested: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let records = self.find_many_unlocked(&requested)?;
+        let mut selected = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let record = records
+                .get(id)
+                .with_context(|| format!("Traffic Record not found: {id}"))?;
+            if record.active {
+                continue;
+            }
             validate_record_ancestor(&self.root, &record.directory)?;
+            validate_controlled_record_dir(&record.directory)?;
+            selected.push(record.directory.clone());
         }
-        for record in &records {
-            remove_controlled_record_dir(&record.directory)?;
+        for path in &selected {
+            remove_controlled_record_dir(path)?;
         }
         tenant::sync_dir(&self.root)?;
-        Ok(records.len())
+        Ok(selected.len())
     }
 }
 
@@ -1639,6 +1645,15 @@ fn atomic_write_json(path: &Path, name: &str, value: &impl Serialize) -> Result<
 }
 
 fn remove_controlled_record_dir(path: &Path) -> Result<()> {
+    let files = validate_controlled_record_dir(path)?;
+    for file in files {
+        fs::remove_file(&file)
+            .with_context(|| format!("delete Traffic file {}", file.display()))?;
+    }
+    fs::remove_dir(path).with_context(|| format!("delete Traffic Record {}", path.display()))
+}
+
+fn validate_controlled_record_dir(path: &Path) -> Result<Vec<PathBuf>> {
     if !tenant::real_dir_exists(path, "Traffic Record")? {
         bail!("Traffic Record disappeared: {}", path.display());
     }
@@ -1654,11 +1669,7 @@ fn remove_controlled_record_dir(path: &Path) -> Result<()> {
         }
         files.push(entry.path());
     }
-    for file in files {
-        fs::remove_file(&file)
-            .with_context(|| format!("delete Traffic file {}", file.display()))?;
-    }
-    fs::remove_dir(path).with_context(|| format!("delete Traffic Record {}", path.display()))
+    Ok(files)
 }
 
 fn restrict_dir(path: &Path) -> Result<()> {

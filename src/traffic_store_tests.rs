@@ -1,5 +1,5 @@
 use super::*;
-use crate::traffic_interpretation::ProtocolDiagnostic;
+use crate::traffic_interpretation::{ProtocolDiagnostic, ResponseModeValue};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -496,6 +496,87 @@ fn client_disconnect_and_request_abort_are_warnings_but_recording_failure_is_err
 }
 
 #[test]
+fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing() {
+    for (label, url, requested, observed, response_terminal, outcome, expected) in [
+        (
+            "observed model stream",
+            "https://api.example.test/v1/responses",
+            None,
+            Some(ResponseModeValue::Stream),
+            false,
+            Outcome::Completed,
+            true,
+        ),
+        (
+            "requested model stream without response metadata",
+            "https://api.example.test/v1/responses",
+            Some(ResponseModeValue::Stream),
+            None,
+            false,
+            Outcome::Completed,
+            true,
+        ),
+        (
+            "normal model response",
+            "https://api.example.test/v1/responses",
+            None,
+            Some(ResponseModeValue::Normal),
+            false,
+            Outcome::Completed,
+            false,
+        ),
+        (
+            "unknown streaming protocol",
+            "https://example.test/v1/health",
+            None,
+            Some(ResponseModeValue::Stream),
+            false,
+            Outcome::Completed,
+            false,
+        ),
+        (
+            "terminal model stream",
+            "https://api.example.test/v1/responses",
+            None,
+            Some(ResponseModeValue::Stream),
+            true,
+            Outcome::Completed,
+            false,
+        ),
+        (
+            "failed model stream",
+            "https://api.example.test/v1/responses",
+            None,
+            Some(ResponseModeValue::Stream),
+            false,
+            Outcome::UpstreamError,
+            false,
+        ),
+    ] {
+        let mut protocol = ProtocolSummary::for_url(Some(url));
+        protocol.response_mode.requested = requested;
+        protocol.response_mode.observed = observed;
+        protocol.response_terminal = response_terminal;
+        let mut summary =
+            SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", Some(protocol));
+        summary.terminal = true;
+        summary.outcome = Some(outcome);
+        summary.timing.upstream_response_body_completed_at_ns = Some("25".to_string());
+
+        let findings = diagnostic_findings(&summary, false);
+        let terminal_warning = findings
+            .iter()
+            .find(|finding| finding.kind == "model_response_terminal_not_observed");
+        assert_eq!(terminal_warning.is_some(), expected, "{label}");
+        if let Some(warning) = terminal_warning {
+            assert_eq!(warning.level, AssessmentLevel::Warning, "{label}");
+            assert_eq!(warning.source, AssessmentSource::Diagnostic, "{label}");
+            assert_eq!(warning.at_ns.as_deref(), Some("25"), "{label}");
+        }
+    }
+}
+
+#[test]
 fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
     let temp = tempfile::tempdir().unwrap();
     let store = TrafficStore::open(temp.path()).unwrap();
@@ -899,7 +980,7 @@ fn deletion_rejects_symlinked_record_entries_without_touching_targets() {
 }
 
 #[test]
-fn delete_all_rechecks_the_non_active_count_and_preserves_active_records() {
+fn delete_all_removes_every_non_active_record_and_preserves_active_records() {
     let temp = tempfile::tempdir().unwrap();
     let store = TrafficStore::open(temp.path()).unwrap();
     for _ in 0..2 {
@@ -914,20 +995,53 @@ fn delete_all_rechecks_the_non_active_count_and_preserves_active_records() {
             )
             .unwrap();
     }
+    let (interrupted, _) = store
+        .begin(ObservedRequest::test("GET", "/interrupted"))
+        .unwrap();
+    store.abandon_active(&interrupted.id);
     let (active, _) = store
         .begin(ObservedRequest::test("GET", "/active"))
         .unwrap();
-    let error = store.delete_all(1).unwrap_err().to_string();
-    assert_eq!(
-        error,
-        "deletable Traffic Record count changed (expected 1, now 2)"
-    );
-    assert_eq!(store.scan().unwrap().len(), 3);
-    assert_eq!(store.delete_all(2).unwrap(), 2);
+    assert_eq!(store.scan_summaries().unwrap().len(), 4);
+    assert_eq!(store.delete_all().unwrap(), 3);
     let remaining = store.scan().unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].request.id, active.id);
     assert!(remaining[0].active);
+}
+
+#[cfg(unix)]
+#[test]
+fn delete_all_preflights_every_target_before_removing_anything() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("secret");
+    fs::write(&target, b"keep").unwrap();
+    let store = TrafficStore::open(temp.path()).unwrap();
+    let finish = |uri| {
+        let (record, _) = store.begin(ObservedRequest::test("GET", uri)).unwrap();
+        store
+            .finish(
+                &record,
+                Instant::now(),
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
+                None,
+            )
+            .unwrap();
+        record.locator.path()
+    };
+    let safe = finish("/safe");
+    let unsafe_record = finish("/unsafe");
+    symlink(&target, unsafe_record.join("unsafe-link")).unwrap();
+
+    let error = store.delete_all().unwrap_err().to_string();
+    assert!(error.contains("unsafe entry"), "{error}");
+    assert_eq!(fs::read(target).unwrap(), b"keep");
+    assert!(safe.exists());
+    assert!(unsafe_record.exists());
 }
 
 #[test]

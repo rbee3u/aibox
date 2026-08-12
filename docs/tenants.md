@@ -201,6 +201,11 @@ may show readable rows and exit nonzero; `get` and `delete` fail without acting
 on a partial view. Symlinked Tenant Homes, Coding Agent state directories,
 Transcript roots, and Transcript files are rejected.
 
+Transcript files are streamed rather than loaded whole, but one JSONL record
+is limited to 64 MiB. An oversized record makes `list` or `get` fail for that
+Transcript instead of buffering unbounded container-written input; deletion
+remains format-independent.
+
 Deletion requires explicit ids or `--all`, asks before each selected
 Transcript unless `--yes` is used, and is irreversible. Host Tenant Session
 commands operate on the real host Transcripts described above.
@@ -264,6 +269,10 @@ renders plain text. Codex statuslines are explicitly configured without native
 colors. Changing the bundled definition marks an older installation as
 `modified` until it is explicitly reinstalled.
 
+Status-line inspection, installation, and removal cap the native Current Config
+file at 16 MiB because they parse and rewrite it in memory. Reduce a larger file
+outside aibox before managing that status-line Component.
+
 Remove a Component explicitly:
 
 ```sh
@@ -299,8 +308,8 @@ aibox component install go@1.25.6 --tenant work
 When installation work is needed, the selected aibox image must already exist
 locally. An explicitly requested healthy version is skipped before the image
 check. The installer container mounts only the Tenant Home, keeps normal
-network access, and uses the same cleanup and Linux uid/gid handling as an
-Agent Run. Rust resolves releases from the official stable channel; Go uses
+network access, and uses the same cleanup and Linux uid/gid handling as a Run.
+Rust resolves releases from the official stable channel; Go uses
 official release metadata and verifies the archive SHA-256.
 
 Health checks require the actual SDK executable and executable permission; a

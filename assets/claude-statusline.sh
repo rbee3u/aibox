@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Claude Code status line: model, directory, branch, and context usage.
+# Claude Code status line: model/reasoning, directory, branch, and context
+# size/usage.
 # `jq` provides the payload fields; the Git branch is best-effort.
 input=$(cat)
 

@@ -14,17 +14,23 @@ import type {
 } from "./types";
 import { mergeEventTimings } from "./utils";
 
-type InspectionErrorSource = "detail" | "body";
-type InspectionErrors = Record<InspectionErrorSource, string | null>;
+export interface InspectionFailure {
+  kind: "detail" | "body" | "download";
+  message: string;
+  bodyKind?: BodyKind;
+  retryable?: boolean;
+}
 
 interface UseRecordInspectionOptions {
   api: TrafficApi;
   records: RecordSummary[];
+  paused: boolean;
+  onFailure: (failure: InspectionFailure) => void;
+  onRecovery: () => void;
 }
 
 const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
 const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, error: null };
-const EMPTY_ERRORS: InspectionErrors = { detail: null, body: null };
 const EMPTY_BODIES: Record<BodyKind, Uint8Array[]> = { request: [], response: [] };
 const EMPTY_BODY_STATUS: Record<BodyKind, BodyLoadStatus> = {
   request: "idle",
@@ -35,7 +41,13 @@ const EMPTY_DECODED_BODIES: Record<BodyKind, DecodedBodyState> = {
   response: EMPTY_DECODED_BODY,
 };
 
-export function useRecordInspection({ api, records }: UseRecordInspectionOptions) {
+export function useRecordInspection({
+  api,
+  records,
+  paused,
+  onFailure,
+  onRecovery,
+}: UseRecordInspectionOptions) {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const currentIdRef = useRef<string | null>(null);
   const [currentState, setCurrentState] = useState<RecordState | null>(null);
@@ -50,17 +62,32 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
   const [tab, setTab] = useState<DetailTab>("summary");
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingBody, setLoadingBody] = useState(false);
-  const [errors, setErrors] = useState<InspectionErrors>(EMPTY_ERRORS);
+  const [failure, setFailure] = useState<InspectionFailure | null>(null);
+  const failureRef = useRef<InspectionFailure | null>(null);
+  const [bodyRetry, setBodyRetry] = useState(0);
   const detailController = useRef<AbortController | null>(null);
   const bodyController = useRef<AbortController | null>(null);
-
-  const reportError = useCallback((source: InspectionErrorSource, cause: unknown) => {
-    const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
-    setErrors((current) => ({ ...current, [source]: message }));
-  }, []);
-  const clearError = useCallback((source: InspectionErrorSource) => {
-    setErrors((current) => (current[source] === null ? current : { ...current, [source]: null }));
-  }, []);
+  const downloadController = useRef<AbortController | null>(null);
+  const resumeDetailAfterPause = useRef(false);
+  const refreshActiveAfterPause = useRef(false);
+  const reportFailure = useCallback(
+    (next: InspectionFailure) => {
+      failureRef.current = next;
+      setFailure(next);
+      onFailure(next);
+    },
+    [onFailure],
+  );
+  const clearFailure = useCallback(
+    (kind?: InspectionFailure["kind"]) => {
+      if (kind && failureRef.current?.kind !== kind) return;
+      if (failureRef.current === null) return;
+      failureRef.current = null;
+      setFailure(null);
+      onRecovery();
+    },
+    [onRecovery],
+  );
   const resetRecordData = useCallback(() => {
     setDetail(null);
     setBodies(EMPTY_BODIES);
@@ -72,16 +99,16 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
     offsets.current = { request: 0, response: 0 };
     setTab("summary");
     setLoadingBody(false);
-    setErrors((current) =>
-      current.detail === null && current.body === null ? current : EMPTY_ERRORS,
-    );
-  }, []);
+    clearFailure();
+  }, [clearFailure]);
   const clearCurrentRecord = useCallback(() => {
     detailController.current?.abort();
     bodyController.current?.abort();
     detailController.current = null;
     bodyController.current = null;
     currentIdRef.current = null;
+    resumeDetailAfterPause.current = false;
+    refreshActiveAfterPause.current = false;
     setCurrentId(null);
     setCurrentState(null);
     setLoadingDetail(false);
@@ -104,20 +131,48 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
         if (detailController.current !== controller || controller.signal.aborted) return;
         setDetail(record);
         setCurrentState(record.state);
+        clearFailure("detail");
       } catch (cause) {
         if (
           detailController.current === controller &&
           !requestWasCancelled(cause, controller.signal)
         ) {
-          if (isNotFound(cause)) clearCurrentRecord();
-          reportError("detail", cause);
+          const notFound = isNotFound(cause);
+          if (notFound) clearCurrentRecord();
+          reportFailure({
+            kind: "detail",
+            message: requestErrorMessage(cause),
+            retryable: !notFound,
+          });
         }
       } finally {
         if (detailController.current === controller) setLoadingDetail(false);
       }
     },
-    [api, clearCurrentRecord, records, reportError, resetRecordData],
+    [api, clearCurrentRecord, clearFailure, records, reportFailure, resetRecordData],
   );
+
+  useEffect(() => {
+    if (!paused) return;
+    resumeDetailAfterPause.current =
+      resumeDetailAfterPause.current || (currentIdRef.current !== null && detail === null);
+    refreshActiveAfterPause.current = refreshActiveAfterPause.current || detail?.state === "active";
+    detailController.current?.abort();
+    bodyController.current?.abort();
+    downloadController.current?.abort();
+    detailController.current = null;
+    bodyController.current = null;
+    downloadController.current = null;
+    setLoadingDetail(false);
+    setLoadingBody(false);
+  }, [detail, paused]);
+
+  useEffect(() => {
+    if (paused || !resumeDetailAfterPause.current) return;
+    const id = currentIdRef.current;
+    resumeDetailAfterPause.current = false;
+    if (id) void selectRecord(id);
+  }, [paused, selectRecord]);
 
   const syncCurrentState = useCallback((freshRecords: RecordSummary[]) => {
     const selectedId = currentIdRef.current;
@@ -141,10 +196,12 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
   const activeId = detail?.state === "active" ? detail.request.id : null;
 
   useEffect(() => {
-    if (loadingDetail || !activeId) return;
+    if (paused || loadingDetail || !activeId) return;
     const id = activeId;
-    const controller = detailController.current;
-    if (!controller) return;
+    const controller = detailController.current?.signal.aborted
+      ? new AbortController()
+      : (detailController.current ?? new AbortController());
+    detailController.current = controller;
     let disposed = false;
     let timer: number | undefined;
     let shouldContinue = true;
@@ -160,7 +217,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
         if (!ownsRequest()) return;
         setDetail(fresh);
         setCurrentState(fresh.state);
-        clearError("detail");
+        clearFailure("detail");
         shouldContinue = fresh.state === "active";
       } catch (cause) {
         if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
@@ -168,7 +225,11 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
             shouldContinue = false;
             clearCurrentRecord();
           }
-          reportError("detail", cause);
+          reportFailure({
+            kind: "detail",
+            message: requestErrorMessage(cause),
+            retryable: !isNotFound(cause),
+          });
         }
       } finally {
         if (shouldContinue && ownsRequest()) {
@@ -176,12 +237,17 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
         }
       }
     };
-    timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
+    if (refreshActiveAfterPause.current) {
+      refreshActiveAfterPause.current = false;
+      void poll();
+    } else {
+      timer = window.setTimeout(() => void poll(), ACTIVE_DETAIL_POLL_INTERVAL_MS);
+    }
     return () => {
       disposed = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeId, api, clearCurrentRecord, clearError, loadingDetail, reportError]);
+  }, [activeId, api, clearCurrentRecord, clearFailure, loadingDetail, paused, reportFailure]);
 
   const detailState = detail?.state ?? null;
   const responseAvailable = Boolean(detail?.response);
@@ -197,7 +263,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
 
   useEffect(() => {
     bodyController.current?.abort();
-    if (loadingDetail || detailState === null || !currentId || tab === "summary") return;
+    if (paused || loadingDetail || detailState === null || !currentId || tab === "summary") return;
     if (tab === "response" && !responseAvailable) return;
 
     const id = currentId;
@@ -276,7 +342,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
             }));
           }
         }
-        clearError("body");
+        clearFailure("body");
       } catch (cause) {
         if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
           if (isNotFound(cause)) shouldContinue = false;
@@ -284,7 +350,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
             ...current,
             [kind]: current[kind] === "loaded" ? "loaded" : "error",
           }));
-          reportError("body", cause);
+          reportFailure({ kind: "body", message: requestErrorMessage(cause), bodyKind: kind });
         }
       } finally {
         if (bodyController.current === controller) setLoadingBody(false);
@@ -306,11 +372,13 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
     };
   }, [
     api,
-    clearError,
+    bodyRetry,
+    clearFailure,
     currentId,
     detailState,
     loadingDetail,
-    reportError,
+    paused,
+    reportFailure,
     responseAvailable,
     shouldLoadVisibleTimings,
     tab,
@@ -322,6 +390,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
     () => () => {
       detailController.current?.abort();
       bodyController.current?.abort();
+      downloadController.current?.abort();
     },
     [],
   );
@@ -329,11 +398,14 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
   const download = useCallback(
     async (kind: BodyKind) => {
       const id = currentIdRef.current;
-      const controller = detailController.current;
-      if (!id || !controller) return;
+      if (!id || paused) return;
+      downloadController.current?.abort();
+      const controller = new AbortController();
+      downloadController.current = controller;
+      clearFailure("download");
       try {
         const { bytes: data } = await api.loadBody(id, kind, 0, controller.signal);
-        if (controller.signal.aborted || detailController.current !== controller) return;
+        if (controller.signal.aborted || downloadController.current !== controller) return;
         const bodyBuffer = data.buffer.slice(
           data.byteOffset,
           data.byteOffset + data.byteLength,
@@ -346,37 +418,61 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (cause) {
         if (
-          detailController.current === controller &&
+          downloadController.current === controller &&
           !requestWasCancelled(cause, controller.signal)
         ) {
-          reportError("body", cause);
+          reportFailure({
+            kind: "download",
+            message: requestErrorMessage(cause),
+            bodyKind: kind,
+          });
         }
+      } finally {
+        if (downloadController.current === controller) downloadController.current = null;
       }
     },
-    [api, reportError],
+    [api, clearFailure, paused, reportFailure],
   );
 
-  const error = errors.detail ?? errors.body;
-  const errorSource = errors.detail ? "detail" : "body";
-  const clearVisibleError = useCallback(() => clearError(errorSource), [clearError, errorSource]);
+  const retryFailure = useCallback(() => {
+    if (!failure) return;
+    const current = failure;
+    clearFailure();
+    if (current.kind === "detail") {
+      const id = currentIdRef.current;
+      if (id) void selectRecord(id);
+    } else if (current.kind === "body") {
+      setBodyRetry((value) => value + 1);
+    } else if (current.bodyKind) {
+      void download(current.bodyKind);
+    }
+  }, [clearFailure, download, failure, selectRecord]);
+
+  const selectTab = useCallback(
+    (value: DetailTab) => {
+      clearFailure();
+      setTab(value);
+    },
+    [clearFailure],
+  );
 
   return {
     bodies,
     bodyStatus,
     clearCurrentRecord,
-    clearVisibleError,
     clearRecordIfCurrent,
     currentId,
     currentState,
     decodedBodies,
     detail,
     download,
-    error,
+    failure,
     eventTimings,
     loadingBody,
     loadingDetail,
+    retryFailure,
     selectRecord,
-    setTab,
+    setTab: selectTab,
     syncCurrentState,
     tab,
   };

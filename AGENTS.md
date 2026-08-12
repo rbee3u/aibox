@@ -11,6 +11,26 @@ and the core safety model. Advanced behavior has one canonical home in
 `docs/traffic-ui.md`; keep examples and clap help aligned without copying full
 references between them.
 
+## Implementation Map
+
+- `src/cli.rs` defines the Clap surface and pass-through boundary;
+  `src/lib.rs` resolves command scope and orchestrates commands.
+- `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
+  Tenant resolution, lifecycle, layout, permissions, and shared path safety.
+- `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
+  catalog operations, Config Application, and Credential Propagation.
+- `src/runspec.rs`, `src/docker.rs`, and `src/docker_image.rs` own mount
+  validation, cleanup-aware container execution, and image construction.
+  `src/component.rs` owns status-line and toolchain Components.
+- `src/session.rs` owns shared Session discovery and dispatch;
+  `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
+- `src/traffic.rs` wires listeners and routing. `src/traffic_proxy.rs`,
+  `src/traffic_store.rs`, `src/traffic_interpretation.rs`, and
+  `src/traffic_assessment.rs` own forwarding, persistence, protocol facts, and
+  assessment. `src/traffic_web.rs` owns the management API.
+- `web/traffic/` is the editable Traffic viewer. `assets/traffic.*` is generated
+  output; use the workflow in `docs/traffic-ui.md`.
+
 ## Constraints
 
 **Centralize Coding Agent contracts.** Put agent-specific paths, Config
@@ -95,10 +115,10 @@ Rust and Go remain Managed Tenant-only and install through the shared image with
 only the Tenant Home mounted. Status-line Components directly manage their
 script when applicable and their native configuration values. Status-line paths
 are not Config Fields, so Config Application preserves them without ownership
-or overlap machinery. Expose repairable partial state as `incomplete`. Remove
-prompts before deleting any existing Component state and requires `--yes` in a
-non-interactive shell; it does not require a separate discard flag. Preserve
-Cargo and GOPATH user state across SDK replacement and removal.
+or overlap machinery. Expose repairable partial state as `incomplete`.
+Component removal prompts before deleting any existing state and requires
+`--yes` in a non-interactive shell; it does not require a separate discard
+flag. Preserve Cargo and GOPATH user state across SDK replacement and removal.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
@@ -164,7 +184,7 @@ or dispatch APIs.
 marker. Keep deletion structurally scoped and document that users must not
 point the root at a general-purpose directory.
 
-**Keep Docker runs cleanup-aware.** Agent Runs and toolchain installers go
+**Keep Docker runs cleanup-aware.** Runs and toolchain installers go
 through `docker::run`; its child/cidfile registry supports one active container
 operation per process. Register the cidfile before spawning Docker, register
 the child immediately afterward, and keep cleanup armed until `finish_child`

@@ -164,6 +164,43 @@ describe("Summary presentation helpers", () => {
     );
   });
 
+  it("combines phases around missing checkpoints without hiding later timings", () => {
+    const detail = {
+      ...completedDetail,
+      summary: {
+        ...completedDetail.summary,
+        timing: {
+          ...completedDetail.summary.timing,
+          upstream_request_body_completed_at_ns: null,
+          upstream_response_body_completed_at_ns: null,
+        },
+      },
+    };
+
+    expect(timingStages(detail)).toEqual([
+      expect.objectContaining({
+        label: "Proxy setup",
+        status: "complete",
+        durationMs: 100,
+      }),
+      expect.objectContaining({
+        label: "Request upload + Response wait",
+        status: "incomplete",
+        durationMs: 400,
+      }),
+      expect.objectContaining({
+        label: "First-token wait",
+        status: "complete",
+        durationMs: 400,
+      }),
+      expect.objectContaining({
+        label: "Response stream + Finalization",
+        status: "incomplete",
+        durationMs: 350,
+      }),
+    ]);
+  });
+
   it("formats nanosecond offsets and token counters without losing zero", () => {
     expect(elapsedNsMs("77581959")).toBeCloseTo(77.581959);
     expect(elapsedNsMs("invalid")).toBeNull();

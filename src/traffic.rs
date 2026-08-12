@@ -413,6 +413,25 @@ mod tests {
             }
         }
 
+        let mut legacy_delete_all = Request::builder()
+            .method("POST")
+            .uri("/_aibox/traffic/api/records/delete-all")
+            .header(header::HOST, "127.0.0.1:9923")
+            .header(header::ORIGIN, "http://127.0.0.1:9923")
+            .header("sec-fetch-site", "same-origin")
+            .header("x-aibox-traffic-csrf", &state.csrf)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"expected_deletable_count":99}"#))
+            .unwrap();
+        legacy_delete_all.extensions_mut().insert(peer);
+        let response = service.clone().oneshot(legacy_delete_all).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"deleted": 0})
+        );
+
         let mut remote_request = Request::builder()
             .uri("/")
             .header(header::HOST, "127.0.0.1:9923")

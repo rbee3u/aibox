@@ -16,7 +16,7 @@
 //! watched only when it was not already ignored, preserving `nohup` behavior.
 //!
 //! The child pid, cidfile, and run state intentionally support one active
-//! container operation per aibox process, whether a Coding Agent Run or a
+//! container operation per aibox process, whether a Run or a
 //! toolchain installation. Cleanup is best-effort for uncatchable termination
 //! such as SIGKILL.
 

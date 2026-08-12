@@ -220,5 +220,5 @@ export interface TrafficApi {
     signal?: AbortSignal,
   ): Promise<EventTimingIndex>;
   deleteRecords(ids: string[], signal?: AbortSignal): Promise<number>;
-  deleteAll(expectedDeletableCount: number, signal?: AbortSignal): Promise<number>;
+  deleteAll(signal?: AbortSignal): Promise<number>;
 }

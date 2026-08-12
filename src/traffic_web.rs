@@ -3,7 +3,8 @@
 //! [`security_middleware`] fronts every route in this module and is the single
 //! place enforcing the loopback-only, same-origin, CSRF-checked boundary. Proxy
 //! traffic may be allowed on a non-loopback listener; management traffic never
-//! is.
+//! is. The token defends browsers from cross-site requests; it does not
+//! authenticate other processes that can connect to the loopback listener.
 //!
 //! List handlers read only the materialized Traffic Record Summary while detail
 //! reads stay strict over raw metadata, following
@@ -739,24 +740,11 @@ pub(crate) async fn delete_records(
     }
 }
 
-#[derive(Deserialize)]
-pub(crate) struct DeleteAllRequest {
-    expected_deletable_count: usize,
-}
-
-pub(crate) async fn delete_all(
-    State(state): State<AppState>,
-    Json(request): Json<DeleteAllRequest>,
-) -> Response<Body> {
+pub(crate) async fn delete_all(State(state): State<AppState>) -> Response<Body> {
     let store = state.store.clone();
-    let deleted =
-        tokio::task::spawn_blocking(move || store.delete_all(request.expected_deletable_count))
-            .await;
+    let deleted = tokio::task::spawn_blocking(move || store.delete_all()).await;
     match deleted {
         Ok(Ok(deleted)) => json_response(StatusCode::OK, &json!({"deleted": deleted})),
-        Ok(Err(error)) if error.to_string().contains("count changed") => {
-            json_error(StatusCode::CONFLICT, &error.to_string())
-        }
         Ok(Err(error)) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1711,35 +1699,10 @@ mod tests {
                 None,
             )
             .unwrap();
-        let stale_count = delete_all(
-            State(state.clone()),
-            Json(DeleteAllRequest {
-                expected_deletable_count: 0,
-            }),
-        )
-        .await;
-        assert_eq!(stale_count.status(), StatusCode::CONFLICT);
-
-        let deleted = delete_records(
-            State(state.clone()),
-            Json(DeleteRequest {
-                ids: vec![active.id],
-            }),
-        )
-        .await;
-        assert_eq!(deleted.status(), StatusCode::OK);
-        assert_eq!(response_json(deleted).await, json!({"deleted": 1}));
-
         finished_record(&state.store, "/delete-all", b"", b"");
-        let deleted = delete_all(
-            State(state),
-            Json(DeleteAllRequest {
-                expected_deletable_count: 1,
-            }),
-        )
-        .await;
+        let deleted = delete_all(State(state)).await;
         assert_eq!(deleted.status(), StatusCode::OK);
-        assert_eq!(response_json(deleted).await, json!({"deleted": 1}));
+        assert_eq!(response_json(deleted).await, json!({"deleted": 2}));
     }
 
     #[test]

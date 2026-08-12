@@ -247,6 +247,10 @@ impl TenantAgent {
     }
 
     /// Ensure the selected native Agent state directory exists.
+    ///
+    /// Managed scope repairs the complete Tenant baseline. Host scope requires
+    /// an existing real Home and creates only the Agent state child, without
+    /// changing the Home directory's mode.
     pub fn ensure_agent_state_dir(&self) -> Result<()> {
         match &self.tenant {
             Tenant::Managed(tenant) => tenant.ensure_initialized()?,
@@ -683,6 +687,8 @@ pub(crate) fn ensure_real_dir(path: &Path, kind: &str) -> Result<()> {
     }
 }
 
+/// Create the Agent state child beneath an already validated or initialized
+/// Home. This inherits [`ensure_real_dir`]'s ancestor-validation obligation.
 pub(crate) fn ensure_agent_state(agent: AgentKind, home: &Path) -> Result<()> {
     let agent_dir = home.join(agent.state_dir_name());
     ensure_real_dir(&agent_dir, "Agent state directory")

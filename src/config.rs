@@ -20,6 +20,8 @@ use auth::{
     plan_auth_propagation_from,
 };
 
+// Config commands buffer one native file at a time. Bound both untrusted
+// Current Config input and an editor's replacement before allocating it all.
 const MAX_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

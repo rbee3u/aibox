@@ -110,12 +110,12 @@ export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
       return deleteRecordsAt("/_aibox/traffic/api/records/delete", { ids }, signal);
     },
 
-    deleteAll(expectedDeletableCount, signal) {
-      return deleteRecordsAt(
+    async deleteAll(signal) {
+      const payload = await requestJson<{ deleted: number }>(
         "/_aibox/traffic/api/records/delete-all",
-        { expected_deletable_count: expectedDeletableCount },
-        signal,
+        { method: "POST", signal },
       );
+      return payload.deleted;
     },
   };
 }

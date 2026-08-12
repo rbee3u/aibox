@@ -67,6 +67,7 @@ async function confirmDeletion(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   window.localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
 });
@@ -741,16 +742,17 @@ describe("Traffic App", () => {
     expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
-  it("keeps selection mode and selected ids when deletion fails", async () => {
+  it("closes confirmation but keeps selection mode and selected ids when deletion fails", async () => {
     const user = userEvent.setup();
     renderApp({ deleteRecords: vi.fn().mockRejectedValue(new Error("delete failed")) });
 
     await selectCompletedRecord(user);
     await confirmDeletion(user, "Delete selected");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("delete failed");
-    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected record?" });
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t delete record");
+    expect(alert).toHaveTextContent("delete failed");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     expect(
@@ -775,6 +777,73 @@ describe("Traffic App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flushEffects();
     expect(listRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses stable delete-all copy and pauses every request stream while confirmation is open", async () => {
+    vi.useFakeTimers();
+    const listPoll = deferred<typeof recordList>();
+    const detailPoll = deferred<typeof activeDetail>();
+    const bodyPoll = deferred<{ bytes: Uint8Array; nextOffset: number }>();
+    let listSignal: AbortSignal | undefined;
+    let detailSignal: AbortSignal | undefined;
+    let bodySignal: AbortSignal | undefined;
+    const listRecords = vi
+      .fn<TrafficApi["listRecords"]>()
+      .mockResolvedValueOnce(recordList)
+      .mockImplementationOnce((_page, signal) => {
+        listSignal = signal;
+        return listPoll.promise;
+      })
+      .mockResolvedValue(recordList);
+    const getRecord = vi
+      .fn<TrafficApi["getRecord"]>()
+      .mockResolvedValueOnce(activeDetail)
+      .mockImplementationOnce((_id, signal) => {
+        detailSignal = signal;
+        return detailPoll.promise;
+      })
+      .mockResolvedValue(activeDetail);
+    const loadBody = vi
+      .fn<TrafficApi["loadBody"]>()
+      .mockImplementationOnce((_id, _kind, _offset, signal) => {
+        bodySignal = signal;
+        return bodyPoll.promise;
+      })
+      .mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 });
+    renderApp({ listRecords, getRecord, loadBody });
+
+    await openActiveRecord();
+    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
+    await flushEffects();
+    await advanceTimers(3000);
+    await advanceTimers(2000);
+    expect([listSignal?.aborted, detailSignal?.aborted, bodySignal?.aborted]).toEqual([
+      false,
+      false,
+      false,
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete all" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete all non-active records?" });
+    expect(dialog).toHaveTextContent(
+      "This permanently deletes every completed or interrupted record, including raw request and response data. Active records are not affected.",
+    );
+    await flushEffects();
+    expect([listSignal?.aborted, detailSignal?.aborted, bodySignal?.aborted]).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    await advanceTimers(10_000);
+    expect(listRecords).toHaveBeenCalledTimes(2);
+    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(loadBody).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await flushEffects();
+    expect(listRecords).toHaveBeenCalledTimes(3);
+    expect(getRecord).toHaveBeenCalledTimes(3);
+    expect(loadBody).toHaveBeenCalledTimes(2);
   });
 
   it("loads request and response Bodies only when their tabs are selected", async () => {
@@ -809,16 +878,69 @@ describe("Traffic App", () => {
     expect(loadEventTimings).toHaveBeenCalledWith(completedSummary.id, 0, expect.any(AbortSignal));
   });
 
-  it("keeps the detail view and reports a body read failure", async () => {
+  it("keeps the detail view and retries a body read failure from its current offset", async () => {
+    const loadBody = vi
+      .fn<TrafficApi["loadBody"]>()
+      .mockRejectedValueOnce(new Error("body unavailable"))
+      .mockResolvedValue({
+        bytes: new TextEncoder().encode("recovered body"),
+        nextOffset: 14,
+      });
     const user = userEvent.setup();
-    renderApp({ loadBody: vi.fn().mockRejectedValue(new Error("body unavailable")) });
+    renderApp({ loadBody });
 
     await openCompletedRecord(user);
     await user.click(await screen.findByRole("tab", { name: "Request" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("body unavailable");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t load Body");
+    expect(alert).toHaveTextContent("body unavailable");
     const detail = screen.getByRole("region", { name: "Traffic record details" });
     expect(within(detail).getByRole("status")).toHaveTextContent("Original Body unavailable.");
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("recovered body")).toBeInTheDocument();
+    expect(loadBody).toHaveBeenLastCalledWith(
+      completedSummary.id,
+      "request",
+      0,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("retries downloading the same Body after a download failure", async () => {
+    const bytes = new TextEncoder().encode("body");
+    const loadBody = vi
+      .fn<TrafficApi["loadBody"]>()
+      .mockResolvedValueOnce({ bytes, nextOffset: bytes.length })
+      .mockRejectedValueOnce(new Error("download unavailable"))
+      .mockResolvedValue({ bytes, nextOffset: bytes.length });
+    const createObjectURL = vi.fn().mockReturnValue("blob:test");
+    const NativeURL = URL;
+    class TestURL extends NativeURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = vi.fn();
+    }
+    vi.stubGlobal("URL", TestURL);
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    renderApp({ loadBody });
+
+    await openCompletedRecord(user);
+    await user.click(await screen.findByRole("tab", { name: "Request" }));
+    await screen.findByText("body");
+    await user.click(screen.getByRole("button", { name: "Download original body" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t download Body");
+    expect(alert).toHaveTextContent("download unavailable");
+
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(loadBody).toHaveBeenLastCalledWith(
+      completedSummary.id,
+      "request",
+      0,
+      expect.any(AbortSignal),
+    );
   });
 
   it("loads zstd decoded Source only after the complete raw Body is available", async () => {
@@ -872,6 +994,7 @@ describe("Traffic App", () => {
     await openCompletedRecord(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
     await screen.findByText(/Decoded Source unavailable: decode failed/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Summary" }));
     await user.click(screen.getByRole("tab", { name: "Request" }));
@@ -1018,7 +1141,7 @@ describe("Traffic App", () => {
     expect(screen.getByText("Loading record…")).toBeInTheDocument();
     await confirmDeletion(user, "Delete all");
 
-    await waitFor(() => expect(deleteAll).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(deleteAll).toHaveBeenCalledWith());
     expect(screen.getByText("Loading record…")).toBeInTheDocument();
     detailRequest.resolve(activeDetail);
   });
@@ -1037,6 +1160,25 @@ describe("Traffic App", () => {
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
+  it("retries the currently selected record from its inspection notification", async () => {
+    const getRecord = vi
+      .fn<TrafficApi["getRecord"]>()
+      .mockRejectedValueOnce(new Error("detail unavailable"))
+      .mockResolvedValue(completedDetail);
+    const user = userEvent.setup();
+    renderApp({ getRecord });
+
+    await openCompletedRecord(user);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t load record");
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByRole("region", { name: "Traffic record details" }),
+    ).toBeInTheDocument();
+    expect(getRecord).toHaveBeenCalledTimes(2);
+  });
+
   it("clears a record that disappears before its detail loads", async () => {
     const getRecord = vi
       .fn<TrafficApi["getRecord"]>()
@@ -1050,7 +1192,7 @@ describe("Traffic App", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Traffic Record not found");
   });
 
-  it("keeps simultaneous list and detail failures in their own regions", async () => {
+  it("stacks simultaneous list and detail failures by source", async () => {
     vi.useFakeTimers();
     const listRecords = vi
       .fn<TrafficApi["listRecords"]>()
@@ -1070,6 +1212,57 @@ describe("Traffic App", () => {
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(screen.getByText("list polling failed")).toBeInTheDocument();
     expect(screen.getByText("detail loading failed")).toBeInTheDocument();
+  });
+
+  it("orders the three notification sources with the newest failure first", async () => {
+    vi.useFakeTimers();
+    const listRecords = vi
+      .fn<TrafficApi["listRecords"]>()
+      .mockResolvedValueOnce(recordList)
+      .mockRejectedValue(new Error("list failed"));
+    renderApp({
+      listRecords,
+      getRecord: vi.fn().mockRejectedValue(new Error("detail failed")),
+      deleteRecords: vi.fn().mockRejectedValue(new Error("delete failed")),
+    });
+
+    await flushEffects();
+    fireEvent.click(screen.getByRole("button", { name: "POST api.example.test/v1/responses" }));
+    await flushEffects();
+    await advanceTimers(5000);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
+    );
+    await flushEffects();
+
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+      expect.stringContaining("Couldn’t delete record"),
+      expect.stringContaining("Couldn’t load traffic records"),
+      expect.stringContaining("Couldn’t load record"),
+    ]);
+  });
+
+  it("does not re-notify a continuous polling failure until a successful request", async () => {
+    vi.useFakeTimers();
+    const listRecords = vi
+      .fn<TrafficApi["listRecords"]>()
+      .mockResolvedValueOnce(recordList)
+      .mockRejectedValue(new Error("polling remains unavailable"));
+    renderApp({ listRecords });
+
+    await flushEffects();
+    await advanceTimers(5000);
+    expect(screen.getByRole("alert")).toHaveTextContent("polling remains unavailable");
+    await advanceTimers(8000);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    listRecords
+      .mockResolvedValueOnce(recordList)
+      .mockRejectedValueOnce(new Error("polling remains unavailable"));
+    await advanceTimers(2000);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advanceTimers(5000);
+    expect(screen.getByRole("alert")).toHaveTextContent("polling remains unavailable");
   });
 
   it("keeps a post-delete list refresh failure visible", async () => {
