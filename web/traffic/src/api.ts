@@ -10,6 +10,17 @@ export class ApiError extends Error {
   }
 }
 
+export function requestErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : "Traffic management request failed";
+}
+
+export function requestWasCancelled(cause: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted ||
+    (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "AbortError")
+  );
+}
+
 async function readError(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as { error?: unknown };

@@ -1,5 +1,7 @@
 # Materialize the Traffic list projection and Record Assessment
 
+Status: accepted
+
 Traffic Record format v2 makes `summary.json` the complete list projection and
 persists a Record Assessment derived from independent Traffic Outcome, HTTP,
 Provider Error, and diagnostic evidence. The list reads only this projection;

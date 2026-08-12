@@ -1,3 +1,16 @@
+//! The management surface: embedded viewer assets and the JSON API.
+//!
+//! [`security_middleware`] fronts every route in this module and is the single
+//! place enforcing the loopback-only, same-origin, CSRF-checked boundary. Proxy
+//! traffic may be allowed on a non-loopback listener; management traffic never
+//! is.
+//!
+//! List handlers read only the materialized Traffic Record Summary while detail
+//! reads stay strict over raw metadata, following
+//! `docs/adr/0011-materialize-traffic-summary-assessment.md`. Bodies stream from
+//! disk as recorded; the decoded variants only undo a recorded content coding.
+//! Nothing here redacts, truncates, or expires a Traffic Record.
+
 use crate::traffic::AppState;
 use crate::traffic_assessment::{diagnostic_findings, effective_assessment};
 use crate::traffic_interpretation::{
@@ -5,9 +18,9 @@ use crate::traffic_interpretation::{
 };
 use crate::traffic_proxy;
 use crate::traffic_store::{
-    AssessmentFinding, AssessmentLevel, AssessmentSource, RecordAssessment, RecordDetailReadError,
-    RecordedHeader, ResponseMetadata, ResponseSource, StoredRecordSummary, SummaryMetadata,
-    TrafficStore, anchored_at,
+    AssessmentFinding, AssessmentLevel, AssessmentSource, FORMAT_VERSION, RecordAssessment,
+    RecordDetailReadError, RecordedHeader, RequestMetadata, ResponseMetadata, ResponseSource,
+    ResultMetadata, StoredRecordSummary, SummaryMetadata, TrafficStore, anchored_at,
 };
 use anyhow::Context as _;
 use axum::Json;
@@ -29,7 +42,7 @@ const HTML: &str = include_str!("../assets/traffic.html");
 const CSS: &str = include_str!("../assets/traffic.css");
 const JS: &str = include_str!("../assets/traffic.js");
 
-pub(super) async fn security_middleware(
+pub(crate) async fn security_middleware(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
@@ -141,20 +154,20 @@ fn secure_response(mut response: Response<Body>) -> Response<Body> {
     response
 }
 
-pub(super) async fn index(State(state): State<AppState>) -> Response<Body> {
+pub(crate) async fn index(State(state): State<AppState>) -> Response<Body> {
     let html = HTML.replace("__AIBOX_CSRF__", &state.csrf);
     content(StatusCode::OK, "text/html; charset=utf-8", html)
 }
 
-pub(super) async fn css() -> Response<Body> {
+pub(crate) async fn css() -> Response<Body> {
     content(StatusCode::OK, "text/css; charset=utf-8", CSS)
 }
 
-pub(super) async fn js() -> Response<Body> {
+pub(crate) async fn js() -> Response<Body> {
     content(StatusCode::OK, "application/javascript; charset=utf-8", JS)
 }
 
-pub(super) async fn not_found() -> Response<Body> {
+pub(crate) async fn not_found() -> Response<Body> {
     traffic_proxy::bare_error(StatusCode::NOT_FOUND, "Traffic management route not found")
 }
 
@@ -172,7 +185,7 @@ fn content(
 }
 
 #[derive(Deserialize)]
-pub(super) struct ListQuery {
+pub(crate) struct ListQuery {
     page: Option<u64>,
 }
 
@@ -201,7 +214,7 @@ struct RecordList {
     has_next: bool,
 }
 
-pub(super) async fn list_records(
+pub(crate) async fn list_records(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Response<Body> {
@@ -245,14 +258,24 @@ fn list_records_inner(store: &TrafficStore, page: Option<u64>) -> anyhow::Result
     })
 }
 
+/// Name the display state of a Record. A terminal Record carries an Outcome,
+/// so a non-active Record without one was interrupted before it finished.
+fn state_name(active: bool, terminal: bool) -> &'static str {
+    if active {
+        "active"
+    } else if terminal {
+        "completed"
+    } else {
+        "interrupted"
+    }
+}
+
 fn summary(record: &StoredRecordSummary) -> RecordSummary {
     let value = &record.summary;
-    let (state, outcome) = if record.active {
-        ("active", "active")
-    } else if let Some(outcome) = value.outcome {
-        ("completed", outcome.as_str())
-    } else {
-        ("interrupted", "interrupted")
+    let state = state_name(record.active, value.outcome.is_some());
+    let outcome = match value.outcome {
+        Some(outcome) if !record.active => outcome.as_str(),
+        _ => state,
     };
     let ended_at = value
         .terminal
@@ -285,8 +308,7 @@ fn summary(record: &StoredRecordSummary) -> RecordSummary {
                 .timing
                 .finished_at_ns
                 .as_deref()
-                .and_then(|value| value.parse::<u128>().ok())
-                .and_then(|value| u64::try_from(value / 1_000_000).ok())
+                .and_then(elapsed_ns_ms)
         },
         protocol: value.protocol.clone(),
         assessment: effective_assessment(value, record.active),
@@ -311,7 +333,7 @@ impl From<ResponseMetadata> for ResponseDetail {
             .and_then(|status| status.canonical_reason())
             .map(str::to_string);
         Self {
-            format_version: crate::traffic_store::FORMAT_VERSION,
+            format_version: FORMAT_VERSION,
             source: metadata.source,
             headers_at: metadata.headers_at,
             status: metadata.status,
@@ -324,9 +346,9 @@ impl From<ResponseMetadata> for ResponseDetail {
 
 #[derive(Serialize)]
 struct RecordDetail {
-    request: crate::traffic_store::RequestMetadata,
+    request: RequestMetadata,
     response: Option<ResponseDetail>,
-    result: Option<crate::traffic_store::ResultMetadata>,
+    result: Option<ResultMetadata>,
     summary: SummaryMetadata,
     assessment: RecordAssessment,
     diagnostics: DiagnosticGroups,
@@ -367,7 +389,7 @@ fn diagnostic_groups(summary: &SummaryMetadata, interrupted: bool) -> Diagnostic
     groups
 }
 
-pub(super) async fn record_detail(
+pub(crate) async fn record_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
@@ -377,15 +399,10 @@ pub(super) async fn record_detail(
         tokio::task::spawn_blocking(move || store.find_with_event_index_warnings(&lookup_id)).await;
     match lookup {
         Ok(Ok(record)) => {
-            let state_name = if record.active {
-                "active"
-            } else if record.result.is_none() {
-                "interrupted"
-            } else {
-                "completed"
-            };
+            let terminal = record.result.is_some();
+            let state = state_name(record.active, terminal);
             let live_total_ms = record.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
-            let interrupted = !record.active && record.result.is_none();
+            let interrupted = !record.active && !terminal;
             let assessment = effective_assessment(&record.summary, record.active);
             let diagnostics = diagnostic_groups(&record.summary, interrupted);
             let timeline_end_at_ns = timeline_end_at_ns(&record, record.live_elapsed_ns.clone());
@@ -411,7 +428,7 @@ pub(super) async fn record_detail(
                     summary: record.summary,
                     assessment,
                     diagnostics,
-                    state: state_name.to_string(),
+                    state: state.to_string(),
                     request_body_bytes: record.request_body_bytes,
                     response_body_bytes: record.response_body_bytes,
                     live_total_ms,
@@ -440,12 +457,12 @@ fn elapsed_ns_ms(elapsed_ns: &str) -> Option<u64> {
 }
 
 #[derive(Deserialize)]
-pub(super) struct BodyQuery {
+pub(crate) struct BodyQuery {
     #[serde(default)]
     offset: u64,
 }
 
-pub(super) async fn request_body(
+pub(crate) async fn request_body(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<BodyQuery>,
@@ -453,7 +470,7 @@ pub(super) async fn request_body(
     body_response(&state.store, &id, false, query.offset).await
 }
 
-pub(super) async fn response_body(
+pub(crate) async fn response_body(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<BodyQuery>,
@@ -461,14 +478,14 @@ pub(super) async fn response_body(
     body_response(&state.store, &id, true, query.offset).await
 }
 
-pub(super) async fn decoded_request_body(
+pub(crate) async fn decoded_request_body(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
     decoded_body_response(&state.store, &id, false).await
 }
 
-pub(super) async fn decoded_response_body(
+pub(crate) async fn decoded_response_body(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
@@ -635,7 +652,7 @@ fn zstd_body(file: std::fs::File) -> Body {
 }
 
 #[derive(Deserialize)]
-pub(super) struct EventTimingQuery {
+pub(crate) struct EventTimingQuery {
     #[serde(default)]
     after_sequence: u64,
 }
@@ -654,7 +671,7 @@ struct EventTimingResponse {
     warning: Option<String>,
 }
 
-pub(super) async fn response_event_timings(
+pub(crate) async fn response_event_timings(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<EventTimingQuery>,
@@ -695,11 +712,11 @@ pub(super) async fn response_event_timings(
 }
 
 #[derive(Deserialize)]
-pub(super) struct DeleteRequest {
+pub(crate) struct DeleteRequest {
     ids: Vec<String>,
 }
 
-pub(super) async fn delete_records(
+pub(crate) async fn delete_records(
     State(state): State<AppState>,
     Json(request): Json<DeleteRequest>,
 ) -> Response<Body> {
@@ -723,11 +740,11 @@ pub(super) async fn delete_records(
 }
 
 #[derive(Deserialize)]
-pub(super) struct DeleteAllRequest {
+pub(crate) struct DeleteAllRequest {
     expected_deletable_count: usize,
 }
 
-pub(super) async fn delete_all(
+pub(crate) async fn delete_all(
     State(state): State<AppState>,
     Json(request): Json<DeleteAllRequest>,
 ) -> Response<Body> {
@@ -767,6 +784,8 @@ fn json_error(status: StatusCode, message: &str) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traffic_interpretation::ProtocolDiagnostic;
+    use crate::traffic_store::{ObservedRequest, Outcome, RuntimeMeasurements};
     use axum::http::Request;
     use base64::Engine as _;
     use http_body_util::BodyExt as _;
@@ -803,7 +822,7 @@ mod tests {
         response_body: &[u8],
     ) -> String {
         let (mut record, _) = store
-            .begin("POST", incoming_uri, None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("POST", incoming_uri))
             .unwrap();
         record.request_body.write_all(request_body).unwrap();
         record.request_body.flush().unwrap();
@@ -814,8 +833,8 @@ mod tests {
             .finish(
                 &record,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
                 None,
             )
             .unwrap();
@@ -999,27 +1018,27 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let first_process = TrafficStore::open(temp.path()).unwrap();
         let (interrupted, _) = first_process
-            .begin("GET", "/interrupted", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/interrupted"))
             .unwrap();
-        let interrupted_id = interrupted.id.clone();
+        let interrupted_id = interrupted.id;
         drop(first_process);
 
         let store = TrafficStore::open(temp.path()).unwrap();
         let (completed, _) = store
-            .begin("GET", "/completed", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/completed"))
             .unwrap();
         let completed_id = completed.id.clone();
         store
             .finish(
                 &completed,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
                 None,
             )
             .unwrap();
         let (active, _) = store
-            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
         let list = list_records_inner(&store, None).unwrap();
 
@@ -1071,14 +1090,14 @@ mod tests {
         );
 
         let (responded, _) = store
-            .begin("GET", "/responded", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/responded"))
             .unwrap();
         store
             .write_response(
                 &responded.locator,
                 &responded.summary,
                 &ResponseMetadata {
-                    format_version: crate::traffic_store::FORMAT_VERSION,
+                    format_version: FORMAT_VERSION,
                     source: ResponseSource::Upstream,
                     headers_at: "2026-08-06T04:00:00Z".to_string(),
                     status: 204,
@@ -1091,8 +1110,8 @@ mod tests {
             .finish(
                 &responded,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Completed,
+                &RuntimeMeasurements::default(),
+                Outcome::Completed,
                 None,
             )
             .unwrap();
@@ -1115,14 +1134,11 @@ mod tests {
         for (status, provider_error) in [(401, false), (200, true)] {
             let (record, _) = state
                 .store
-                .begin(
-                    "POST",
-                    "/https://api.example.test/v1/responses",
-                    Some("https://api.example.test/v1/responses"),
-                    "HTTP/1.1",
-                    Vec::new(),
-                    Some("api.example.test"),
-                )
+                .begin(ObservedRequest {
+                    upstream_url: Some("https://api.example.test/v1/responses"),
+                    host_hint: Some("api.example.test"),
+                    ..ObservedRequest::test("POST", "/https://api.example.test/v1/responses")
+                })
                 .unwrap();
             state
                 .store
@@ -1130,7 +1146,7 @@ mod tests {
                     &record.locator,
                     &record.summary,
                     &ResponseMetadata {
-                        format_version: crate::traffic_store::FORMAT_VERSION,
+                        format_version: FORMAT_VERSION,
                         source: ResponseSource::Upstream,
                         headers_at: "2026-08-06T04:00:00Z".to_string(),
                         status,
@@ -1143,15 +1159,18 @@ mod tests {
                 state
                     .store
                     .update_summary(&record.locator, &record.summary, |summary| {
-                        summary.protocol.as_mut().unwrap().errors.push(
-                            crate::traffic_interpretation::ProtocolDiagnostic {
+                        summary
+                            .protocol
+                            .as_mut()
+                            .unwrap()
+                            .errors
+                            .push(ProtocolDiagnostic {
                                 kind: "service_unavailable_error".to_string(),
                                 message:
                                     "Our servers are currently overloaded. Please try again later."
                                         .to_string(),
                                 at_ns: Some("20".to_string()),
-                            },
-                        );
+                            });
                         true
                     })
                     .unwrap();
@@ -1161,8 +1180,8 @@ mod tests {
                 .finish(
                     &record,
                     std::time::Instant::now(),
-                    &crate::traffic_store::RuntimeMeasurements::default(),
-                    crate::traffic_store::Outcome::Completed,
+                    &RuntimeMeasurements::default(),
+                    Outcome::Completed,
                     None,
                 )
                 .unwrap();
@@ -1211,14 +1230,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (mut record, _) = store
-            .begin(
-                "POST",
-                "/https://example.test/v1/responses",
-                Some("https://example.test/v1/responses"),
-                "HTTP/1.1",
-                Vec::new(),
-                Some("example.test"),
-            )
+            .begin(ObservedRequest {
+                upstream_url: Some("https://example.test/v1/responses"),
+                host_hint: Some("example.test"),
+                ..ObservedRequest::test("POST", "/https://example.test/v1/responses")
+            })
             .unwrap();
         record.request_body.write_all(b"not request json").unwrap();
         record
@@ -1247,7 +1263,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, _) = store
-            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
         let mut index = store.create_event_index(&record).unwrap();
         writeln!(index, "not json").unwrap();
@@ -1263,7 +1279,7 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (record, _) = state
             .store
-            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
         state
             .store
@@ -1295,7 +1311,7 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (record, _) = state
             .store
-            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
         let mut index = state.store.create_event_index(&record).unwrap();
         writeln!(index, "not json").unwrap();
@@ -1319,7 +1335,7 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (record, _) = state
             .store
-            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
         let mut index = state.store.create_event_index(&record).unwrap();
         write!(index, "{{\"schema_version\":").unwrap();
@@ -1340,7 +1356,7 @@ mod tests {
     #[test]
     fn detail_response_adds_canonical_reason_without_mutating_raw_metadata() {
         let detail = ResponseDetail::from(ResponseMetadata {
-            format_version: crate::traffic_store::FORMAT_VERSION,
+            format_version: FORMAT_VERSION,
             source: ResponseSource::Upstream,
             headers_at: "2026-08-06T04:00:00Z".to_string(),
             status: 200,
@@ -1359,14 +1375,11 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (mut record, _) = state
             .store
-            .begin(
-                "POST",
-                "/https://example.test/v1/responses",
-                Some("https://example.test/v1/responses"),
-                "HTTP/1.1",
-                Vec::new(),
-                Some("example.test"),
-            )
+            .begin(ObservedRequest {
+                upstream_url: Some("https://example.test/v1/responses"),
+                host_hint: Some("example.test"),
+                ..ObservedRequest::test("POST", "/https://example.test/v1/responses")
+            })
             .unwrap();
         record.request_body.write_all(b"not request json").unwrap();
         record
@@ -1388,8 +1401,8 @@ mod tests {
             .finish(
                 &record,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Completed,
+                &RuntimeMeasurements::default(),
+                Outcome::Completed,
                 None,
             )
             .unwrap();
@@ -1464,14 +1477,10 @@ mod tests {
         let request_compressed = zstd::stream::encode_all(request_source.as_slice(), 0).unwrap();
         let response_compressed = zstd::stream::encode_all(response_source.as_slice(), 0).unwrap();
         let (mut record, _) = store
-            .begin(
-                "POST",
-                "/zstd",
-                None,
-                "HTTP/1.1",
-                vec![recorded_header("content-encoding", " ZsTd ")],
-                None,
-            )
+            .begin(ObservedRequest {
+                headers: vec![recorded_header("content-encoding", " ZsTd ")],
+                ..ObservedRequest::test("POST", "/zstd")
+            })
             .unwrap();
         record.request_body.write_all(&request_compressed).unwrap();
         record
@@ -1483,7 +1492,7 @@ mod tests {
                 &record.locator,
                 &record.summary,
                 &ResponseMetadata {
-                    format_version: crate::traffic_store::FORMAT_VERSION,
+                    format_version: FORMAT_VERSION,
                     source: ResponseSource::Upstream,
                     headers_at: "2026-08-09T00:00:00Z".to_string(),
                     status: 200,
@@ -1497,8 +1506,8 @@ mod tests {
             .finish(
                 &record,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Completed,
+                &RuntimeMeasurements::default(),
+                Outcome::Completed,
                 None,
             )
             .unwrap();
@@ -1531,28 +1540,20 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (mut active, _) = store
-            .begin(
-                "POST",
-                "/active",
-                None,
-                "HTTP/1.1",
-                vec![recorded_header("content-encoding", "zstd")],
-                None,
-            )
+            .begin(ObservedRequest {
+                headers: vec![recorded_header("content-encoding", "zstd")],
+                ..ObservedRequest::test("POST", "/active")
+            })
             .unwrap();
         active.request_body.write_all(b"partial").unwrap();
         let waiting = decoded_body_response(&store, &active.id, false).await;
         assert_eq!(waiting.status(), StatusCode::CONFLICT);
 
         let (mut unsupported, _) = store
-            .begin(
-                "POST",
-                "/unsupported",
-                None,
-                "HTTP/1.1",
-                vec![recorded_header("content-encoding", "gzip, zstd")],
-                None,
-            )
+            .begin(ObservedRequest {
+                headers: vec![recorded_header("content-encoding", "gzip, zstd")],
+                ..ObservedRequest::test("POST", "/unsupported")
+            })
             .unwrap();
         unsupported.request_body.write_all(b"encoded").unwrap();
         let unsupported_id = unsupported.id.clone();
@@ -1560,8 +1561,8 @@ mod tests {
             .finish(
                 &unsupported,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
                 None,
             )
             .unwrap();
@@ -1569,14 +1570,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
         let (mut corrupt, _) = store
-            .begin(
-                "POST",
-                "/corrupt",
-                None,
-                "HTTP/1.1",
-                vec![recorded_header("content-encoding", "zstd")],
-                None,
-            )
+            .begin(ObservedRequest {
+                headers: vec![recorded_header("content-encoding", "zstd")],
+                ..ObservedRequest::test("POST", "/corrupt")
+            })
             .unwrap();
         corrupt.request_body.write_all(b"not zstd").unwrap();
         let corrupt_id = corrupt.id.clone();
@@ -1584,8 +1581,8 @@ mod tests {
             .finish(
                 &corrupt,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
                 None,
             )
             .unwrap();
@@ -1600,7 +1597,7 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (record, _) = state
             .store
-            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
         let mut index = state.store.create_event_index(&record).unwrap();
         for (sequence, completed_at_ns) in [(0, "1000000"), (1, "2500000")] {
@@ -1608,7 +1605,7 @@ mod tests {
                 index,
                 "{}",
                 json!({
-                    "schema_version": crate::traffic_store::FORMAT_VERSION,
+                    "schema_version": FORMAT_VERSION,
                     "record_id": record.id,
                     "kind": "sse_event",
                     "sequence": sequence,
@@ -1628,8 +1625,8 @@ mod tests {
             .finish(
                 &record,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Completed,
+                &RuntimeMeasurements::default(),
+                Outcome::Completed,
                 None,
             )
             .unwrap();
@@ -1654,7 +1651,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
         let (record, _) = store
-            .begin("GET", "/events", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
         let mut index = store.create_event_index(&record).unwrap();
         write!(index, "{{\"schema_version\":1").unwrap();
@@ -1692,7 +1689,7 @@ mod tests {
         let state = AppState::for_test(temp.path(), 9923).unwrap();
         let (active, _) = state
             .store
-            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
 
         let conflict = delete_records(
@@ -1709,8 +1706,8 @@ mod tests {
             .finish(
                 &active,
                 std::time::Instant::now(),
-                &crate::traffic_store::RuntimeMeasurements::default(),
-                crate::traffic_store::Outcome::Rejected,
+                &RuntimeMeasurements::default(),
+                Outcome::Rejected,
                 None,
             )
             .unwrap();
@@ -1795,11 +1792,9 @@ mod tests {
     fn record_list_uses_terminal_end_order() {
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();
-        let (first, _) = store
-            .begin("GET", "/first", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
+        let (first, _) = store.begin(ObservedRequest::test("GET", "/first")).unwrap();
         let (second, _) = store
-            .begin("GET", "/second", None, "HTTP/1.1", Vec::new(), None)
+            .begin(ObservedRequest::test("GET", "/second"))
             .unwrap();
 
         for record in [&second, &first] {
@@ -1807,8 +1802,8 @@ mod tests {
                 .finish(
                     record,
                     std::time::Instant::now(),
-                    &crate::traffic_store::RuntimeMeasurements::default(),
-                    crate::traffic_store::Outcome::Completed,
+                    &RuntimeMeasurements::default(),
+                    Outcome::Completed,
                     None,
                 )
                 .unwrap();

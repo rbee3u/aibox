@@ -257,7 +257,7 @@ pub enum Command {
     Completion(CompletionArgs),
     /// Manage aibox-managed Tenants.
     Tenant(TenantArgs),
-    /// Manage optional components in a Tenant.
+    /// Manage optional Tenant Components.
     Component(ComponentArgs),
     /// Manage Named Configs, Current Config, and credential propagation.
     Config(ConfigArgs),

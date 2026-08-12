@@ -155,7 +155,20 @@ A structured failure reported by a recognized model API response, distinct
 from the Traffic Outcome and HTTP response status.
 _Avoid_: Traffic Outcome, HTTP error status
 
+**Diagnostics**:
+The normalized grouping of one Traffic Record's proxy/transport, HTTP, model
+API, and warning findings. Every finding remains listed here even when the
+compact Record Assessment names only the primary one.
+_Avoid_: Record Assessment, Traffic Outcome
+
 ### Persistent identity
+
+**aibox Root**:
+The dedicated host directory holding every Managed Tenant Home, Named Config
+catalog, and Traffic Record. `AIBOX_ROOT` selects it and defaults to
+`$HOME/.aibox`. It carries no ownership marker, so it must not be a
+general-purpose directory.
+_Avoid_: Data directory, install prefix, Tenant Home
 
 **Tenant**:
 A persistent identity that scopes Coding Agent state, Named Configs, Tenant
@@ -177,6 +190,12 @@ The Home that contains one Tenant's native Coding Agent state. Only a Managed
 Tenant's Home can be mounted into a Run.
 _Avoid_: Namespace Home, profile home
 
+**Host Home**:
+The real user Home that backs the Host Tenant's native Coding Agent state.
+aibox neither creates nor mounts it, although a Host Tenant Component may
+initialize an Agent state directory inside an existing one.
+_Avoid_: Tenant Home, aibox Root
+
 **Tenant Component**:
 An optional capability installed into one Tenant's Tenant Home, such as a
 Coding Agent status line or a Managed Tenant-local toolchain. Status-line
@@ -195,6 +214,11 @@ _Avoid_: Agent Configuration, active config, effective config, working config
 A named, Agent-specific set of Config Field values belonging to exactly one
 Tenant and one Coding Agent.
 _Avoid_: Agent Profile, Saved Config, Config Template, preset
+
+**Named Config catalog**:
+The directory in the aibox Root that holds one Tenant and Coding Agent scope's
+Named Configs. It stays host-only and is never mounted into a Run.
+_Avoid_: Config store, Tenant Home, registry
 
 **Config Field**:
 One fixed logical location in a Named Config schema. A Config Field may be a

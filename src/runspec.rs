@@ -487,12 +487,12 @@ mod tests {
             ("src:/cache:rw", "only :ro is supported"),
             ("src:/cache:ro:extra", "invalid mount"),
         ] {
-            let err = resolve_mounts(&[mount.to_string()])
+            let error = resolve_mounts(&[mount.to_string()])
                 .unwrap_err()
                 .to_string();
             assert!(
-                err.contains(expected),
-                "{mount:?} should fail with {expected:?}, got {err:?}"
+                error.contains(expected),
+                "{mount:?} should fail with {expected:?}, got {error:?}"
             );
         }
     }
@@ -512,10 +512,10 @@ mod tests {
             "/home/aibox/..",
             "/home/aibox/.cache/../..",
         ] {
-            let err = validate_extra_mount_targets(&[format!("/host:{target}:ro")])
+            let error = validate_extra_mount_targets(&[format!("/host:{target}:ro")])
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("would override or shadow"));
+            assert!(error.contains("would override or shadow"));
         }
         validate_extra_mount_targets(&[
             "/host:/legacy-work:ro".to_string(),
@@ -552,10 +552,13 @@ mod tests {
             &host_catalog,
             root.path().parent().unwrap(),
         ] {
-            let err = validate_aibox_mount_sources(rejected.to_str().unwrap(), &[], root.path())
+            let error = validate_aibox_mount_sources(rejected.to_str().unwrap(), &[], root.path())
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("aibox internal data"), "{rejected:?}: {err}");
+            assert!(
+                error.contains("aibox internal data"),
+                "{rejected:?}: {error}"
+            );
         }
 
         validate_aibox_mount_sources(tenant_home.to_str().unwrap(), &[], root.path()).unwrap();
@@ -578,11 +581,11 @@ mod tests {
         let linked_config = links.path().join("config");
         symlink(&catalog, &linked_config).unwrap();
 
-        let err = validate_aibox_mount_sources(linked_config.to_str().unwrap(), &[], root.path())
+        let error = validate_aibox_mount_sources(linked_config.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("aibox internal data"), "{err}");
+        assert!(error.contains("aibox internal data"), "{error}");
     }
 
     #[cfg(unix)]
@@ -592,13 +595,13 @@ mod tests {
         let invalid_home = root.path().join("tenants/bad_name");
         fs::create_dir_all(&invalid_home).unwrap();
 
-        let err = validate_aibox_mount_sources(invalid_home.to_str().unwrap(), &[], root.path())
+        let error = validate_aibox_mount_sources(invalid_home.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
 
         assert!(
-            err.contains("only Managed Tenant Home trees may be mounted"),
-            "{err}"
+            error.contains("only Managed Tenant Home trees may be mounted"),
+            "{error}"
         );
     }
 
@@ -614,16 +617,16 @@ mod tests {
         fs::create_dir_all(&catalog).unwrap();
 
         let workspace = tenant_home.join("..");
-        let err = validate_aibox_mount_sources(workspace.to_str().unwrap(), &[], root.path())
+        let error = validate_aibox_mount_sources(workspace.to_str().unwrap(), &[], root.path())
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("aibox internal data"),
-            "a dotdot Workspace path that resolves to the tenant root must fail: {err}"
+            error.contains("aibox internal data"),
+            "a dotdot Workspace path that resolves to the tenant root must fail: {error}"
         );
 
         let mount_source = tenant_home.join("../../codex/default");
-        let err = validate_aibox_mount_sources(
+        let error = validate_aibox_mount_sources(
             tenant_home.to_str().unwrap(),
             &[format!("{}:/secrets:ro", mount_source.display())],
             root.path(),
@@ -631,8 +634,8 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("aibox internal data"),
-            "a dotdot mount source that resolves into a Named Config catalog must be rejected: {err}"
+            error.contains("aibox internal data"),
+            "a dotdot mount source that resolves into a Named Config catalog must be rejected: {error}"
         );
     }
 
@@ -654,11 +657,12 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let future_root = parent.path().join("future/.aibox");
 
-        let err = validate_aibox_mount_sources(parent.path().to_str().unwrap(), &[], &future_root)
-            .unwrap_err()
-            .to_string();
+        let error =
+            validate_aibox_mount_sources(parent.path().to_str().unwrap(), &[], &future_root)
+                .unwrap_err()
+                .to_string();
 
-        assert!(err.contains("aibox internal data"), "{err}");
+        assert!(error.contains("aibox internal data"), "{error}");
         assert!(!future_root.exists());
     }
 
@@ -766,10 +770,10 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let colon_dir = parent.path().join("a:b");
         fs::create_dir(&colon_dir).unwrap();
-        let err = resolve_workspace(Some(colon_dir.to_str().unwrap()))
+        let error = resolve_workspace(Some(colon_dir.to_str().unwrap()))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("contains ':'"));
+        assert!(error.contains("contains ':'"));
 
         #[cfg(unix)]
         {
@@ -778,13 +782,13 @@ mod tests {
             let opaque = PathBuf::from(std::ffi::OsString::from_vec(vec![
                 b'w', b'o', b'r', b'k', 0xff,
             ]));
-            let err = reject_colon_in_bind_source("mount host", &opaque)
+            let error = reject_colon_in_bind_source("mount host", &opaque)
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("not valid UTF-8"), "{err}");
+            assert!(error.contains("not valid UTF-8"), "{error}");
             assert!(
-                err.contains("cannot be represented safely for docker"),
-                "{err}"
+                error.contains("cannot be represented safely for docker"),
+                "{error}"
             );
         }
     }
@@ -803,14 +807,14 @@ mod tests {
         fs::create_dir(&opaque_dir).unwrap();
         symlink(&opaque_dir, &link).unwrap();
 
-        let err = resolve_workspace(Some(link.to_str().unwrap()))
+        let error = resolve_workspace(Some(link.to_str().unwrap()))
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("not valid UTF-8"), "{err}");
+        assert!(error.contains("not valid UTF-8"), "{error}");
         assert!(
-            err.contains("cannot be represented safely for docker"),
-            "{err}"
+            error.contains("cannot be represented safely for docker"),
+            "{error}"
         );
     }
 }

@@ -811,89 +811,6 @@ const SIGNAL_HELPER_DIR: &str = "AIBOX_TEST_SIGNAL_HELPER_DIR";
 #[cfg(unix)]
 const IGNORED_HUP_HELPER_DIR: &str = "AIBOX_TEST_IGNORED_HUP_HELPER_DIR";
 
-#[cfg(unix)]
-#[test]
-fn ignored_hup_helper_process() {
-    let Some(dir) = std::env::var_os(IGNORED_HUP_HELPER_DIR) else {
-        return;
-    };
-    let dir = PathBuf::from(dir);
-
-    // SAFETY: the initialized action uses the platform's SIG_IGN sentinel and
-    // an initialized empty mask; both pointers remain valid for the call and
-    // the return value is checked.
-    unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = libc::SIG_IGN;
-        libc::sigemptyset(&mut action.sa_mask);
-        let rc = libc::sigaction(signal_hook::consts::SIGHUP, &action, std::ptr::null_mut());
-        assert_eq!(
-            rc,
-            0,
-            "set SIGHUP to SIG_IGN: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-
-    assert!(signal_is_ignored(signal_hook::consts::SIGHUP));
-    install_signal_handler().unwrap();
-    assert!(
-        signal_is_ignored(signal_hook::consts::SIGHUP),
-        "installing cleanup handlers must not un-ignore inherited SIGHUP"
-    );
-
-    // SAFETY: SIGHUP is a valid signal number and this helper has just verified
-    // that it is ignored, so raising it cannot invoke arbitrary test code.
-    unsafe {
-        libc::raise(signal_hook::consts::SIGHUP);
-    }
-    std::fs::write(dir.join("survived"), "survived\n").unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
-    let scratch = stable_tempdir();
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .arg("--exact")
-        .arg("docker::tests::ignored_hup_helper_process")
-        .env(IGNORED_HUP_HELPER_DIR, scratch.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap();
-
-    assert!(
-        status.success(),
-        "helper should survive ignored SIGHUP, got {status:?}"
-    );
-    assert!(
-        scratch.path().join("survived").exists(),
-        "helper did not continue after raising ignored SIGHUP"
-    );
-}
-
-// Arm the same daemon-side cleanup handle as a real run, report ready, and
-// block until the parent delivers the signal under test.
-#[cfg(unix)]
-#[test]
-fn signal_helper_process() {
-    let Some(dir) = std::env::var_os(SIGNAL_HELPER_DIR) else {
-        return;
-    };
-    let dir = PathBuf::from(dir);
-    let cid_path = dir.join("cid");
-    std::fs::write(&cid_path, "signal-container\n").unwrap();
-    // Installs the watcher thread and marks the run active, exactly as
-    // `docker::run` does before spawning the Docker CLI.
-    set_cidfile(&cid_path, &DockerCli::system()).unwrap();
-
-    std::fs::write(dir.join("ready"), "ready\n").unwrap();
-    // Park until the watcher exits us.
-    std::thread::sleep(Duration::from_secs(60));
-}
-
 // Run the helper with a stubbed Docker, wait for its cidfile, then signal it.
 #[cfg(unix)]
 fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) {
@@ -939,38 +856,6 @@ fn run_signal_helper(sig: i32) -> (tempfile::TempDir, std::process::ExitStatus) 
         "signal helper did not exit after receiving the signal",
     );
     (scratch, status)
-}
-
-// Exercise the fatal-signal path in a subprocess because unwinding and
-// `Drop` cannot cover it.
-#[cfg(unix)]
-#[test]
-fn fatal_signal_stops_the_container() {
-    use std::os::unix::process::ExitStatusExt;
-
-    for sig in [
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGTERM,
-        signal_hook::consts::SIGHUP,
-    ] {
-        let (scratch, status) = run_signal_helper(sig);
-
-        // The container is stopped through the daemon — the only route that
-        // works when the Docker CLI has a TTY and does not proxy signals.
-        let log = std::fs::read_to_string(scratch.path().join("docker.log")).unwrap_or_default();
-        assert!(
-            log.contains("signal-container"),
-            "sig {sig}: container was not stopped via the daemon; docker log:\n{log}"
-        );
-
-        // Death still looks like the signal to the caller's shell, whether
-        // by re-raise or the 128+n fallback.
-        let died_of_signal = status.signal() == Some(sig);
-        assert!(
-            died_of_signal || status.code() == Some(128 + sig),
-            "sig {sig}: exit status must reflect the signal, got {status:?}"
-        );
-    }
 }
 
 #[cfg(unix)]
@@ -1061,6 +946,121 @@ impl Drop for SignalCountGuard {
 
 #[cfg(unix)]
 #[test]
+fn ignored_hup_helper_process() {
+    let Some(dir) = std::env::var_os(IGNORED_HUP_HELPER_DIR) else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+
+    // SAFETY: the initialized action uses the platform's SIG_IGN sentinel and
+    // an initialized empty mask; both pointers remain valid for the call and
+    // the return value is checked.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = libc::SIG_IGN;
+        libc::sigemptyset(&mut action.sa_mask);
+        let rc = libc::sigaction(signal_hook::consts::SIGHUP, &action, std::ptr::null_mut());
+        assert_eq!(
+            rc,
+            0,
+            "set SIGHUP to SIG_IGN: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    assert!(signal_is_ignored(signal_hook::consts::SIGHUP));
+    install_signal_handler().unwrap();
+    assert!(
+        signal_is_ignored(signal_hook::consts::SIGHUP),
+        "installing cleanup handlers must not un-ignore inherited SIGHUP"
+    );
+
+    // SAFETY: SIGHUP is a valid signal number and this helper has just verified
+    // that it is ignored, so raising it cannot invoke arbitrary test code.
+    unsafe {
+        libc::raise(signal_hook::consts::SIGHUP);
+    }
+    std::fs::write(dir.join("survived"), "survived\n").unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_sighup_stays_ignored_when_handlers_are_installed() {
+    let scratch = stable_tempdir();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("docker::tests::ignored_hup_helper_process")
+        .env(IGNORED_HUP_HELPER_DIR, scratch.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+
+    assert!(
+        status.success(),
+        "helper should survive ignored SIGHUP, got {status:?}"
+    );
+    assert!(
+        scratch.path().join("survived").exists(),
+        "helper did not continue after raising ignored SIGHUP"
+    );
+}
+
+// Arm the same daemon-side cleanup handle as a real run, report ready, and
+// block until the parent delivers the signal under test.
+#[cfg(unix)]
+#[test]
+fn signal_helper_process() {
+    let Some(dir) = std::env::var_os(SIGNAL_HELPER_DIR) else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let cid_path = dir.join("cid");
+    std::fs::write(&cid_path, "signal-container\n").unwrap();
+    // Installs the watcher thread and marks the run active, exactly as
+    // `docker::run` does before spawning the Docker CLI.
+    set_cidfile(&cid_path, &DockerCli::system()).unwrap();
+
+    std::fs::write(dir.join("ready"), "ready\n").unwrap();
+    // Park until the watcher exits us.
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+// Exercise the fatal-signal path in a subprocess because unwinding and
+// `Drop` cannot cover it.
+#[cfg(unix)]
+#[test]
+fn fatal_signal_stops_the_container() {
+    use std::os::unix::process::ExitStatusExt;
+
+    for sig in [
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGHUP,
+    ] {
+        let (scratch, status) = run_signal_helper(sig);
+
+        // The container is stopped through the daemon — the only route that
+        // works when the Docker CLI has a TTY and does not proxy signals.
+        let log = std::fs::read_to_string(scratch.path().join("docker.log")).unwrap_or_default();
+        assert!(
+            log.contains("signal-container"),
+            "sig {sig}: container was not stopped via the daemon; docker log:\n{log}"
+        );
+
+        // Death still looks like the signal to the caller's shell, whether
+        // by re-raise or the 128+n fallback.
+        let died_of_signal = status.signal() == Some(sig);
+        assert!(
+            died_of_signal || status.code() == Some(128 + sig),
+            "sig {sig}: exit status must reflect the signal, got {status:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn stop_container_id_waits_out_a_container_that_stops_on_the_signal() {
     let _run_lock = run_registry_test_lock();
     let scratch = stable_tempdir();
@@ -1093,7 +1093,7 @@ fn stop_container_id_waits_out_a_container_that_stops_on_the_signal() {
         "the graceful signal goes through the daemon: {log}"
     );
     assert!(
-        !log.lines().any(|l| l == "kill graceful-container"),
+        !log.lines().any(|line| line == "kill graceful-container"),
         "a container that exited on the signal must not also be SIGKILLed:\n{log}"
     );
 }
@@ -1134,7 +1134,7 @@ fn stop_container_id_escalates_to_sigkill_on_a_second_signal() {
         "SIGINT maps to the container's INT: {log}"
     );
     assert!(
-        log.lines().any(|l| l == "kill stubborn-container"),
+        log.lines().any(|line| line == "kill stubborn-container"),
         "a container that ignored the signal must be SIGKILLed:\n{log}"
     );
 }
@@ -1358,7 +1358,7 @@ fn finish_child_kills_a_container_that_outlived_its_detached_client() {
     );
     let log = std::fs::read_to_string(&log_path).unwrap();
     assert!(
-        log.lines().any(|l| l == "kill detached-container"),
+        log.lines().any(|line| line == "kill detached-container"),
         "the lingering container must be SIGKILLed by id:\n{log}"
     );
 }
@@ -1418,7 +1418,7 @@ fn finish_child_leaves_a_cleanly_exited_run_alone() {
     );
     let log = std::fs::read_to_string(&log_path).unwrap_or_default();
     assert!(
-        !log.lines().any(|l| l.starts_with("kill")),
+        !log.lines().any(|line| line.starts_with("kill")),
         "a cleanly exited run must trigger no docker kill:\n{log}"
     );
 }

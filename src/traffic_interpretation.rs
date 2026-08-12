@@ -1,3 +1,16 @@
+//! Deriving the Model Protocol Summary from recorded bodies.
+//!
+//! [`ProtocolObserver`] accumulates one [`ProtocolSummary`] for the OpenAI
+//! Responses and Claude Messages families, keeping requested and effective
+//! values separate and holding Token Usage in memory until the protocol response
+//! is terminal. Anything else stays [`ProtocolFamily::Unknown`], which
+//! short-circuits interpretation entirely.
+//!
+//! Interpretation is observational, never authoritative: a failure becomes a
+//! deduplicated warning on the Summary and leaves the raw bodies, forwarding, and
+//! Traffic Outcome untouched. See
+//! `docs/adr/0007-upstream-semantic-traffic-records.md`.
+
 use crate::traffic_store::{RecordedHeader, StoredRecord};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -10,7 +23,7 @@ use std::fs;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ProtocolFamily {
+pub(crate) enum ProtocolFamily {
     OpenaiResponses,
     ClaudeMessages,
     #[default]
@@ -19,19 +32,19 @@ pub(super) enum ProtocolFamily {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ResponseModeValue {
+pub(crate) enum ResponseModeValue {
     Stream,
     Normal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum BodyContentCoding {
+pub(crate) enum BodyContentCoding {
     Identity,
     Zstd,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct RequestedEffective<T> {
+pub(crate) struct RequestedEffective<T> {
     pub requested: Option<T>,
     pub effective: Option<T>,
 }
@@ -46,7 +59,7 @@ impl<T> Default for RequestedEffective<T> {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct RequestedObserved<T> {
+pub(crate) struct RequestedObserved<T> {
     pub requested: Option<T>,
     pub observed: Option<T>,
 }
@@ -61,7 +74,7 @@ impl<T> Default for RequestedObserved<T> {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct TokenUsage {
+pub(crate) struct TokenUsage {
     pub total_input_tokens: Option<u64>,
     pub base_input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -73,14 +86,14 @@ pub(super) struct TokenUsage {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct ProtocolDiagnostic {
+pub(crate) struct ProtocolDiagnostic {
     pub kind: String,
     pub message: String,
     pub at_ns: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct ProtocolSummary {
+pub(crate) struct ProtocolSummary {
     pub family: ProtocolFamily,
     pub response_terminal: bool,
     pub model: RequestedEffective<String>,
@@ -93,7 +106,7 @@ pub(super) struct ProtocolSummary {
 }
 
 impl ProtocolSummary {
-    pub(super) fn for_url(url: Option<&str>) -> Self {
+    pub(crate) fn for_url(url: Option<&str>) -> Self {
         Self {
             family: family_from_url(url),
             ..Self::default()
@@ -250,25 +263,25 @@ fn push_unique(target: &mut Vec<ProtocolDiagnostic>, value: ProtocolDiagnostic) 
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ProtocolObserver {
+pub(crate) struct ProtocolObserver {
     summary: ProtocolSummary,
     usage: UsageAccumulator,
     has_usage: bool,
 }
 
 impl ProtocolObserver {
-    pub(super) fn new(url: Option<&str>) -> Self {
+    pub(crate) fn new(url: Option<&str>) -> Self {
         Self {
             summary: ProtocolSummary::for_url(url),
             ..Self::default()
         }
     }
 
-    pub(super) fn snapshot(&self) -> ProtocolSummary {
+    pub(crate) fn snapshot(&self) -> ProtocolSummary {
         self.summary.clone()
     }
 
-    pub(super) fn observe_request(
+    pub(crate) fn observe_request(
         &mut self,
         path: &Path,
         headers: &[RecordedHeader],
@@ -310,7 +323,7 @@ impl ProtocolObserver {
         changed
     }
 
-    pub(super) fn observe_response_headers(
+    pub(crate) fn observe_response_headers(
         &mut self,
         headers: &[RecordedHeader],
         event_stream: Option<bool>,
@@ -326,7 +339,7 @@ impl ProtocolObserver {
         changed
     }
 
-    pub(super) fn observe_response_mode(&mut self, event_stream: bool, at_ns: String) -> bool {
+    pub(crate) fn observe_response_mode(&mut self, event_stream: bool, at_ns: String) -> bool {
         self.summary.set_observed_mode(
             Some(if event_stream {
                 ResponseModeValue::Stream
@@ -337,7 +350,7 @@ impl ProtocolObserver {
         )
     }
 
-    pub(super) fn observe_first_token(&mut self, at_ns: String) -> bool {
+    pub(crate) fn observe_first_token(&mut self, at_ns: String) -> bool {
         if self.summary.family == ProtocolFamily::Unknown
             || self.summary.first_token_at_ns.is_some()
         {
@@ -348,11 +361,11 @@ impl ProtocolObserver {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn observe_sse_data(&mut self, data: &[u8], at_ns: String) -> bool {
+    pub(crate) fn observe_sse_data(&mut self, data: &[u8], at_ns: String) -> bool {
         self.observe_sse_event(None, data, at_ns)
     }
 
-    pub(super) fn observe_json_response(
+    pub(crate) fn observe_json_response(
         &mut self,
         path: &Path,
         _status: u16,
@@ -415,7 +428,7 @@ impl ProtocolObserver {
                         changed |= self.summary.add_error(
                             "response_incomplete",
                             format!("OpenAI response was incomplete: {reason}"),
-                            Some(at_ns.clone()),
+                            Some(at_ns),
                         );
                     }
                 }
@@ -424,7 +437,7 @@ impl ProtocolObserver {
                 changed |= self.summary.add_warning(
                     "response_interpretation_failed",
                     format!("Cannot interpret model response metadata: {error:#}"),
-                    Some(at_ns.clone()),
+                    Some(at_ns),
                 );
             }
             Err(_) => {}
@@ -436,7 +449,7 @@ impl ProtocolObserver {
         changed | self.commit_final_usage()
     }
 
-    pub(super) fn observe_sse_event(
+    pub(crate) fn observe_sse_event(
         &mut self,
         event_name: Option<&[u8]>,
         data: &[u8],
@@ -858,7 +871,7 @@ fn parse_request(path: &Path, headers: &[RecordedHeader]) -> Result<RequestEnvel
     .context("parse request JSON")
 }
 
-pub(super) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyContentCoding> {
+pub(crate) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyContentCoding> {
     let mut codings = Vec::new();
     for header in headers
         .iter()
@@ -902,7 +915,7 @@ fn family_from_url(value: Option<&str>) -> ProtocolFamily {
     }
 }
 
-pub(super) fn coding_agent_session_id(
+pub(crate) fn coding_agent_session_id(
     upstream_url: Option<&str>,
     headers: &[RecordedHeader],
 ) -> Option<String> {
@@ -1040,7 +1053,7 @@ fn error_parts(error: &Value, fallback_kind: &str, fallback_message: &str) -> (S
     (kind, message)
 }
 
-pub(super) fn timeline_end_at_ns(record: &StoredRecord, live: Option<String>) -> Option<String> {
+pub(crate) fn timeline_end_at_ns(record: &StoredRecord, live: Option<String>) -> Option<String> {
     if record.active {
         return live;
     }

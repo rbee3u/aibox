@@ -8,9 +8,9 @@ continues to embed the generated files in `assets/traffic.html`,
 ## Requirements
 
 Use Node 24, matching the bundled aibox development image (`v24.19.0`). With
-`nvm`, install and select it with `nvm install 24.19.0` and `nvm use 24.19.0`. The
-repository commits `package-lock.json`, so install the exact dependency tree
-with:
+`nvm`, install and select it with `nvm install 24.19.0` and `nvm use 24.19.0`.
+The repository commits `package-lock.json`, so install the exact dependency
+tree with:
 
 ```sh
 make traffic-ci
@@ -48,7 +48,9 @@ check the complete page and real Traffic API.
 Do not edit the generated files in `assets/traffic.*` directly. Change the
 source in `web/traffic/src/` and rebuild them before committing. The
 generated HTML keeps the Rust-injected `__AIBOX_CSRF__` placeholder and the
-existing management routes.
+existing management routes. The publish step also rewrites the asset
+references, so `assets/traffic.css` and `assets/traffic.js` are served as
+`/_aibox/traffic/app.css` and `/_aibox/traffic/app.js`.
 
 ## Code Boundaries
 
@@ -70,14 +72,8 @@ Vitest.
 Traffic Outcome, HTTP response status, Provider Error, and diagnostic warnings
 remain independent evidence. The backend derives one Record Assessment for
 consistent display; the browser never reclassifies a Record from `outcome`,
-status, or Body content.
-
-| Evidence | Assessment | Examples |
-| --- | --- | --- |
-| The Record is still active | Active | Waiting for response metadata; streaming a response |
-| Terminal with no findings | OK | HTTP 2xx/3xx and a complete recognized model response |
-| Explicit failure evidence | Error | proxy rejection or transport failure, recording failure, HTTP 4xx/5xx, Provider Error, `response.failed`, `response.incomplete` |
-| Incomplete or degraded evidence | Warning | client disconnect or request upload abort, process interruption, missing model terminal event, diagnostics degradation, unaccompanied `response.cancelled` |
+status, or Body content. [Traffic Proxy](sandbox.md#traffic-proxy) is the
+canonical reference for which evidence produces Active, OK, Warning, or Error.
 
 Active takes visual precedence until the Traffic Record terminates. Every
 terminal warning elevates OK to Warning. Duplicate findings with the same
@@ -97,7 +93,8 @@ Diagnostics renders the normalized `Proxy / transport`, `HTTP response`,
 ## Body Views
 
 The Request and Response tabs open in `Pretty` when the complete decoded Body
-has a renderer. The viewer keeps three deliberately separate representations:
+has a renderer. The viewer keeps three deliberately separate representations.
+The Body routes named below are suffixes of `/_aibox/traffic/api/records/{id}/`:
 
 - The Traffic Record and the existing `request-body` / `response-body` routes
   contain the exact original application-visible bytes. Download always uses
@@ -179,8 +176,9 @@ The browser never parses model bodies for Summary. It receives decimal
 nanosecond offsets, uses `BigInt` to build Timing Stages on a shared axis, and
 falls back to a single Response body stage when a protocol has no observable
 First Token. Unknown protocols retain generic Timing and diagnostics while
-Token Usage reports unsupported. Recognized active protocols without final
-usage report waiting; terminal records without final usage report not reported.
+Token Usage states that the protocol is unsupported. A recognized active
+protocol without final usage says it is still waiting for the provider, and a
+terminal Record without usage says the completed response reported none.
 For streaming responses with First Token, the interval after that checkpoint
 is named `Response stream` rather than implying that every byte is model
 output.

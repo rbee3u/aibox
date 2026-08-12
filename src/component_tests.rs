@@ -1,6 +1,7 @@
 use super::*;
 use std::ffi::OsString;
 use std::fs;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[cfg(unix)]
@@ -92,6 +93,192 @@ fn write_go_state(home: &Path, version: &str, complete: bool) {
             fs::set_permissions(goroot.join("bin/go"), fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
+}
+
+#[cfg(unix)]
+fn write_fake_docker(dir: &Path) {
+    crate::testutil::write_stub_script(
+        dir,
+        "docker",
+        r#"#!/bin/sh
+if [ -n "$AIBOX_FAKE_DOCKER_LOG" ]; then
+    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
+fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then
+    [ "$AIBOX_FAKE_DOCKER_MODE" = missing ] && exit 1
+    printf 'sha256:fake\n'
+    exit 0
+fi
+if [ "$1" = image ] && [ "$2" = ls ]; then
+    exit 0
+fi
+if [ "$1" = container ] && [ "$2" = ls ]; then
+    exit 0
+fi
+if [ "$1" = run ]; then
+    shift
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = --cidfile ]; then
+            printf 'fake-container\n' > "$2"
+            exit 0
+        fi
+        shift
+    done
+fi
+exit 99
+"#,
+    );
+}
+
+#[cfg(unix)]
+fn run_installer(
+    script: &str,
+    home: &Path,
+    bin: &Path,
+    version: &str,
+    env: impl IntoIterator<Item = (&'static str, OsString)>,
+) -> std::process::Output {
+    let path = std::env::join_paths([bin, Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let mut command = Command::new("bash");
+    command
+        .arg(script)
+        .arg(version)
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", path)
+        .env("LC_ALL", "C")
+        .envs(env);
+    command.output().unwrap()
+}
+
+#[cfg(unix)]
+fn expose_host_command(bin: &Path, name: &str) {
+    use std::os::unix::fs::symlink;
+
+    let output = Command::new("sh")
+        .args(["-c", &format!("command -v {name}")])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "required test command {name} is missing"
+    );
+    let target = String::from_utf8(output.stdout).unwrap();
+    symlink(target.trim(), bin.join(name)).unwrap();
+}
+
+/// Stub the network fetch and `rustup` that `install-rust.sh` drives, recording
+/// every `rustup` invocation in `$AIBOX_FAKE_RUSTUP_LOG`.
+#[cfg(unix)]
+fn write_rust_installer_stubs(bin: &Path) {
+    crate::testutil::write_stub_script(
+        bin,
+        "curl",
+        r#"#!/bin/sh
+out=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then out=$2; shift 2; else shift; fi
+done
+cat > "$out" <<'BOOTSTRAP'
+#!/bin/sh
+mkdir -p "$CARGO_HOME/bin" "$RUSTUP_HOME"
+cp "$AIBOX_FAKE_RUSTUP" "$CARGO_HOME/bin/rustup"
+chmod +x "$CARGO_HOME/bin/rustup"
+BOOTSTRAP
+"#,
+    );
+    crate::testutil::write_stub_script(
+        bin,
+        "fake-rustup",
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$AIBOX_FAKE_RUSTUP_LOG"
+case "$1 $2" in
+    "toolchain list")
+        old=$(sed -n 's/^default_toolchain = "\(.*\)"/\1/p' "$RUSTUP_HOME/settings.toml" 2>/dev/null)
+        [ -n "$old" ] && [ -d "$RUSTUP_HOME/toolchains/$old" ] && printf '%s (default)\n' "$old"
+        ;;
+    "toolchain uninstall")
+        rm -rf "$RUSTUP_HOME/toolchains/$3"
+        ;;
+    "toolchain install")
+        mkdir -p "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin"
+        cat > "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc" <<EOF
+#!/bin/sh
+printf 'rustc $3\n'
+EOF
+        chmod +x "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc"
+        cp "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc" "$CARGO_HOME/bin/rustc"
+        ;;
+    "default "*)
+        printf 'version = "12"\ndefault_toolchain = "%s-x86_64-unknown-linux-gnu"\n' "$2" > "$RUSTUP_HOME/settings.toml"
+        ;;
+esac
+"#,
+    );
+}
+
+/// Pack a fake Go release archive with release metadata carrying its real
+/// checksum, so the installer's own verification runs unmodified.
+#[cfg(unix)]
+fn write_fake_go_release(scratch: &Path) -> (PathBuf, PathBuf) {
+    let fixture = scratch.join("fixture");
+    let archive = scratch.join("go.tar.gz");
+    let metadata = scratch.join("releases.json");
+    fs::create_dir_all(fixture.join("go/bin")).unwrap();
+    fs::write(fixture.join("go/VERSION"), "go1.25.6\n").unwrap();
+    crate::testutil::write_stub_script(
+        &fixture.join("go/bin"),
+        "go",
+        "#!/bin/sh\nprintf 'go version go1.25.6 linux/amd64\n'\n",
+    );
+    let status = Command::new("tar")
+        .args(["-C", fixture.to_str().unwrap(), "-czf"])
+        .arg(&archive)
+        .arg("go")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let checksum = Command::new("sha256sum").arg(&archive).output().unwrap();
+    let checksum = String::from_utf8(checksum.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    fs::write(
+        &metadata,
+        format!(
+            r#"[{{"version":"go1.25.6","stable":true,"files":[{{"filename":"go1.25.6.linux-amd64.tar.gz","os":"linux","arch":"amd64","kind":"archive","sha256":"{checksum}"}}]}}]"#
+        ),
+    )
+    .unwrap();
+    (archive, metadata)
+}
+
+/// Stub the architecture probe and the fetch that `install-go.sh` drives,
+/// serving the fake release from `$AIBOX_FAKE_GO_METADATA`/`$AIBOX_FAKE_GO_ARCHIVE`.
+#[cfg(unix)]
+fn write_go_installer_stubs(bin: &Path) {
+    crate::testutil::write_stub_script(bin, "dpkg", "#!/bin/sh\nprintf 'amd64\n'\n");
+    crate::testutil::write_stub_script(
+        bin,
+        "curl",
+        r#"#!/bin/sh
+url=
+out=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) out=$2; shift 2 ;;
+        http*) url=$1; shift ;;
+        *) shift ;;
+    esac
+done
+case "$url" in
+    *mode=json*) cp "$AIBOX_FAKE_GO_METADATA" "$out" ;;
+    *) cp "$AIBOX_FAKE_GO_ARCHIVE" "$out" ;;
+esac
+"#,
+    );
 }
 
 #[test]
@@ -326,6 +513,23 @@ fn host_component_list_stays_read_only_when_home_is_missing() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("Host Home does not exist"), "{error}");
+}
+
+#[test]
+fn list_reports_one_unreadable_component_without_hiding_the_others() {
+    let (_root, tenant) = initialized_tenant();
+    fs::write(
+        tenant.home_dir.join(".codex/config.toml"),
+        "[tui\nstatus_line = broken",
+    )
+    .unwrap();
+
+    let error = inspect(ComponentKind::CodexStatusline, &tenant.home_dir)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("parse Codex configuration"), "{error}");
+
+    assert_eq!(list(&managed_scope(&tenant)).unwrap(), 1);
 }
 
 #[test]
@@ -980,78 +1184,6 @@ fn status_inspection_rejects_symlinked_owned_paths() {
 }
 
 #[cfg(unix)]
-fn write_fake_docker(dir: &Path) {
-    crate::testutil::write_stub_script(
-        dir,
-        "docker",
-        r#"#!/bin/sh
-if [ -n "$AIBOX_FAKE_DOCKER_LOG" ]; then
-    printf '%s\n' "$*" >> "$AIBOX_FAKE_DOCKER_LOG"
-fi
-if [ "$1" = image ] && [ "$2" = inspect ]; then
-    [ "$AIBOX_FAKE_DOCKER_MODE" = missing ] && exit 1
-    printf 'sha256:fake\n'
-    exit 0
-fi
-if [ "$1" = image ] && [ "$2" = ls ]; then
-    exit 0
-fi
-if [ "$1" = container ] && [ "$2" = ls ]; then
-    exit 0
-fi
-if [ "$1" = run ]; then
-    shift
-    while [ "$#" -gt 0 ]; do
-        if [ "$1" = --cidfile ]; then
-            printf 'fake-container\n' > "$2"
-            exit 0
-        fi
-        shift
-    done
-fi
-exit 99
-"#,
-    );
-}
-
-#[cfg(unix)]
-fn run_installer(
-    script: &str,
-    home: &Path,
-    bin: &Path,
-    version: &str,
-    env: impl IntoIterator<Item = (&'static str, OsString)>,
-) -> std::process::Output {
-    let path = std::env::join_paths([bin, Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
-    let mut command = Command::new("bash");
-    command
-        .arg(script)
-        .arg(version)
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", path)
-        .env("LC_ALL", "C")
-        .envs(env);
-    command.output().unwrap()
-}
-
-#[cfg(unix)]
-fn expose_host_command(bin: &Path, name: &str) {
-    use std::os::unix::fs::symlink;
-
-    let output = Command::new("sh")
-        .args(["-c", &format!("command -v {name}")])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "required test command {name} is missing"
-    );
-    let target = String::from_utf8(output.stdout).unwrap();
-    symlink(target.trim(), bin.join(name)).unwrap();
-}
-
-#[cfg(unix)]
 #[test]
 fn rust_installer_skips_same_version_and_uninstalls_before_switching() {
     let scratch = tempfile::tempdir().unwrap();
@@ -1061,50 +1193,8 @@ fn rust_installer_skips_same_version_and_uninstalls_before_switching() {
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&bin).unwrap();
     expose_host_command(&bin, "python3");
-    crate::testutil::write_stub_script(
-        &bin,
-        "curl",
-        r#"#!/bin/sh
-out=
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = -o ]; then out=$2; shift 2; else shift; fi
-done
-cat > "$out" <<'BOOTSTRAP'
-#!/bin/sh
-mkdir -p "$CARGO_HOME/bin" "$RUSTUP_HOME"
-cp "$AIBOX_FAKE_RUSTUP" "$CARGO_HOME/bin/rustup"
-chmod +x "$CARGO_HOME/bin/rustup"
-BOOTSTRAP
-"#,
-    );
-    crate::testutil::write_stub_script(
-        &bin,
-        "fake-rustup",
-        r#"#!/bin/sh
-printf '%s\n' "$*" >> "$AIBOX_FAKE_RUSTUP_LOG"
-case "$1 $2" in
-    "toolchain list")
-        old=$(sed -n 's/^default_toolchain = "\(.*\)"/\1/p' "$RUSTUP_HOME/settings.toml" 2>/dev/null)
-        [ -n "$old" ] && [ -d "$RUSTUP_HOME/toolchains/$old" ] && printf '%s (default)\n' "$old"
-        ;;
-    "toolchain uninstall")
-        rm -rf "$RUSTUP_HOME/toolchains/$3"
-        ;;
-    "toolchain install")
-        mkdir -p "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin"
-        cat > "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc" <<EOF
-#!/bin/sh
-printf 'rustc $3\n'
-EOF
-        chmod +x "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc"
-        cp "$RUSTUP_HOME/toolchains/$3-x86_64-unknown-linux-gnu/bin/rustc" "$CARGO_HOME/bin/rustc"
-        ;;
-    "default "*)
-        printf 'version = "12"\ndefault_toolchain = "%s-x86_64-unknown-linux-gnu"\n' "$2" > "$RUSTUP_HOME/settings.toml"
-        ;;
-esac
-"#,
-    );
+    write_rust_installer_stubs(&bin);
+    let installer = format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR"));
     let installer_env = || {
         [
             ("AIBOX_FAKE_RUSTUP", bin.join("fake-rustup").into()),
@@ -1112,13 +1202,7 @@ esac
         ]
     };
 
-    let first = run_installer(
-        &format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR")),
-        &home,
-        &bin,
-        "1.90.0",
-        installer_env(),
-    );
+    let first = run_installer(&installer, &home, &bin, "1.90.0", installer_env());
     assert!(
         first.status.success(),
         "{}",
@@ -1126,13 +1210,7 @@ esac
     );
     let first_log = fs::read_to_string(&log).unwrap();
 
-    let same = run_installer(
-        &format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR")),
-        &home,
-        &bin,
-        "1.90.0",
-        installer_env(),
-    );
+    let same = run_installer(&installer, &home, &bin, "1.90.0", installer_env());
     assert!(
         same.status.success(),
         "{}",
@@ -1145,13 +1223,7 @@ esac
         format!("{first_log}run 1.90.0-x86_64-unknown-linux-gnu rustc --version\n")
     );
 
-    let switch = run_installer(
-        &format!("{}/assets/install-rust.sh", env!("CARGO_MANIFEST_DIR")),
-        &home,
-        &bin,
-        "1.89.0",
-        installer_env(),
-    );
+    let switch = run_installer(&installer, &home, &bin, "1.89.0", installer_env());
     assert!(
         switch.status.success(),
         "{}",
@@ -1170,74 +1242,24 @@ fn go_installer_verifies_and_replaces_only_goroot() {
     let scratch = tempfile::tempdir().unwrap();
     let home = scratch.path().join("home");
     let bin = scratch.path().join("bin");
-    let fixture = scratch.path().join("fixture");
-    let archive = scratch.path().join("go.tar.gz");
-    let metadata = scratch.path().join("releases.json");
     fs::create_dir_all(home.join(".goroot")).unwrap();
     fs::create_dir_all(home.join(".gopath")).unwrap();
     fs::write(home.join(".goroot/old"), "old").unwrap();
     fs::write(home.join(".gopath/keep"), "keep").unwrap();
-    fs::create_dir_all(fixture.join("go/bin")).unwrap();
-    fs::write(fixture.join("go/VERSION"), "go1.25.6\n").unwrap();
-    crate::testutil::write_stub_script(
-        &fixture.join("go/bin"),
-        "go",
-        "#!/bin/sh\nprintf 'go version go1.25.6 linux/amd64\n'\n",
-    );
-    let status = Command::new("tar")
-        .args(["-C", fixture.to_str().unwrap(), "-czf"])
-        .arg(&archive)
-        .arg("go")
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let checksum = Command::new("sha256sum").arg(&archive).output().unwrap();
-    let checksum = String::from_utf8(checksum.stdout)
-        .unwrap()
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
-    fs::write(
-            &metadata,
-            format!(
-                r#"[{{"version":"go1.25.6","stable":true,"files":[{{"filename":"go1.25.6.linux-amd64.tar.gz","os":"linux","arch":"amd64","kind":"archive","sha256":"{checksum}"}}]}}]"#
-            ),
-        )
-        .unwrap();
+    let (archive, metadata) = write_fake_go_release(scratch.path());
     fs::create_dir_all(&bin).unwrap();
     expose_host_command(&bin, "python3");
     expose_host_command(&bin, "sha256sum");
-    crate::testutil::write_stub_script(&bin, "dpkg", "#!/bin/sh\nprintf 'amd64\n'\n");
-    crate::testutil::write_stub_script(
-        &bin,
-        "curl",
-        r#"#!/bin/sh
-url=
-out=
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -o) out=$2; shift 2 ;;
-        http*) url=$1; shift ;;
-        *) shift ;;
-    esac
-done
-case "$url" in
-    *mode=json*) cp "$AIBOX_FAKE_GO_METADATA" "$out" ;;
-    *) cp "$AIBOX_FAKE_GO_ARCHIVE" "$out" ;;
-esac
-"#,
-    );
-    let output = run_installer(
-        &format!("{}/assets/install-go.sh", env!("CARGO_MANIFEST_DIR")),
-        &home,
-        &bin,
-        "1.25.6",
+    write_go_installer_stubs(&bin);
+    let installer = format!("{}/assets/install-go.sh", env!("CARGO_MANIFEST_DIR"));
+    let installer_env = || {
         [
             ("AIBOX_FAKE_GO_METADATA", metadata.as_os_str().into()),
             ("AIBOX_FAKE_GO_ARCHIVE", archive.as_os_str().into()),
-        ],
-    );
+        ]
+    };
+
+    let output = run_installer(&installer, &home, &bin, "1.25.6", installer_env());
     assert!(
         output.status.success(),
         "{}",
@@ -1253,16 +1275,7 @@ esac
         "keep"
     );
 
-    let same = run_installer(
-        &format!("{}/assets/install-go.sh", env!("CARGO_MANIFEST_DIR")),
-        &home,
-        &bin,
-        "1.25.6",
-        [
-            ("AIBOX_FAKE_GO_METADATA", metadata.as_os_str().into()),
-            ("AIBOX_FAKE_GO_ARCHIVE", archive.as_os_str().into()),
-        ],
-    );
+    let same = run_installer(&installer, &home, &bin, "1.25.6", installer_env());
     assert!(
         same.status.success(),
         "{}",

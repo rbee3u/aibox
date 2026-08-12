@@ -1,5 +1,7 @@
 # Materialize Traffic Record end order in directory names
 
+Status: accepted
+
 Traffic Record UUIDs are stable identities, while their direct-child directory
 names are mutable materialized ordering hints. A Record begins under an
 `active-` name derived from its start time and, after its terminal Summary is

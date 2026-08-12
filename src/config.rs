@@ -1,4 +1,5 @@
-//! Tenant-local Named Config catalog and one-time application commands.
+//! Named Config catalog, Current Config access, one-shot Config Application,
+//! and the entry points for global Codex Credential Propagation.
 
 use crate::cli::ConfigCommand;
 use crate::config_model::NamedConfigDefinition;
@@ -33,7 +34,7 @@ impl NamedConfigLayout {
     }
 }
 
-/// Execute one parsed Config command.
+/// Execute one parsed Config command and return its process exit code.
 pub fn dispatch(selected: &TenantAgent, command: &ConfigCommand) -> Result<i32> {
     match command {
         ConfigCommand::List => {
@@ -77,7 +78,8 @@ pub fn dispatch(selected: &TenantAgent, command: &ConfigCommand) -> Result<i32> 
     Ok(0)
 }
 
-/// Propagate newer Host ChatGPT credentials to every matching existing Codex Config.
+/// Propagate newer Host ChatGPT credentials to every matching existing Codex
+/// Config.
 pub fn propagate_auth(root: &Path) -> Result<i32> {
     let host_home = tenant::host_home()?;
     propagate_auth_from(root, &host_home)
@@ -366,7 +368,7 @@ fn read_apply_confirmation(
     input
         .read_line(&mut answer)
         .context("read Config Application confirmation")?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 fn current_config_target(selected: &TenantAgent) -> String {
@@ -594,11 +596,28 @@ fn inspect_named_config_directory(
             layout.main = true;
         } else if selected.agent.native_auth_file() == Some(name.as_str()) {
             layout.auth = true;
+        } else if is_stale_temporary_file(selected, &name) {
+            // An interrupted aibox write leaves its temporary file behind;
+            // tolerating it keeps the Named Config usable and deletable.
         } else {
             bail!("Named Config contains an unknown entry: {name}");
         }
     }
     Ok(Some(layout))
+}
+
+/// True when `name` matches a Named Config temporary file that aibox can have
+/// left behind after an interrupted write or edit. Keep this exact: unknown
+/// entries must not become silently deletable just because they share a prefix.
+fn is_stale_temporary_file(selected: &TenantAgent, name: &str) -> bool {
+    selected.agent.config_files().iter().any(|file| {
+        ["write", "edit", "propagate-auth"].iter().any(|purpose| {
+            let prefix = format!(".{file}.aibox-{purpose}-");
+            name.strip_prefix(&prefix).is_some_and(|suffix| {
+                suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            })
+        })
+    })
 }
 
 fn deletable_named_config_names(selected: &TenantAgent) -> Result<Vec<String>> {
@@ -645,7 +664,9 @@ fn inspect_deletable_named_config(selected: &TenantAgent, config: &str) -> Resul
             .to_str()
             .context("Named Config file name is not valid UTF-8")?
             .to_string();
-        if !selected.agent.config_files().contains(&name.as_str()) {
+        if !selected.agent.config_files().contains(&name.as_str())
+            && !is_stale_temporary_file(selected, &name)
+        {
             bail!("Named Config contains an unknown entry: {name}");
         }
         let kind = entry.file_type()?;
@@ -670,6 +691,16 @@ fn remove_named_config_directory(selected: &TenantAgent, config: &str) -> Result
         )?;
     }
     let path = selected.named_config_dir(config);
+    for entry in fs::read_dir(&path).with_context(|| format!("read {}", path.display()))? {
+        let entry = entry?;
+        let is_stale = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| is_stale_temporary_file(selected, name));
+        if is_stale {
+            tenant::remove_real_file_if_exists(&entry.path(), "stale temporary file")?;
+        }
+    }
     fs::remove_dir(&path)
         .with_context(|| format!("remove Named Config directory {}", path.display()))?;
     tenant::sync_dir(selected.named_config_catalog_dir())
@@ -728,10 +759,14 @@ fn edit_file(
         bail!("editor exited with status {status}");
     }
 
-    let edited = read_regular_bytes(temp.path())?;
+    // Some editors save by replacing the file rather than rewriting it, so
+    // reopen the temporary path: mode and fsync must apply to the inode that
+    // `persist` will rename into place, not to the pre-editor handle.
+    let edited_file = tenant::open_real_file(temp.path(), "edited configuration file")?;
+    let edited = read_open_bytes(&edited_file, temp.path())?;
     validate(&edited)?;
-    set_file_mode(temp.as_file(), mode)?;
-    temp.as_file().sync_all()?;
+    set_file_mode(&edited_file, mode)?;
+    edited_file.sync_all()?;
     temp.persist(path)
         .map_err(|error| error.error)
         .with_context(|| format!("replace {}", path.display()))?;
@@ -771,6 +806,10 @@ fn read_regular_string(path: &Path) -> Result<String> {
 
 fn read_regular_bytes(path: &Path) -> Result<Vec<u8>> {
     let file = tenant::open_real_file(path, "configuration file")?;
+    read_open_bytes(&file, path)
+}
+
+fn read_open_bytes(file: &fs::File, path: &Path) -> Result<Vec<u8>> {
     let size = file.metadata()?.len();
     if size > MAX_CONFIG_BYTES {
         bail!(
@@ -1030,7 +1069,7 @@ fn confirm_delete(config: &str) -> Result<bool> {
     io::stderr().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 #[cfg(test)]

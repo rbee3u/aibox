@@ -33,7 +33,8 @@ aibox tenant delete --all
 Deletion removes the Tenant Home and both Coding Agents' Named Config catalogs,
 including credentials, settings, Sessions, caches, Named Configs, and local
 toolchains. It does not delete the shared Docker image or any Workspace. aibox
-asks before each deletion; non-interactive callers must use `--yes`. There is no
+asks before deleting a Tenant that has stored data; non-interactive callers must
+use `--yes`. A selected name with nothing stored is a silent no-op. There is no
 deletion backup.
 
 An empty deletion selection is an error. `--all` cannot be combined with
@@ -65,7 +66,7 @@ $AIBOX_ROOT/
     __host/
       ...
   traffic/
-    <UTC-time>-<upstream-host>-<uuid-v7>/
+    <UTC-time>-<upstream-host>-<uuid-v7>/   # `active-` prefix until terminal
       request.json
       request.body
       response.json
@@ -111,10 +112,9 @@ or digit. `__host` is an internal storage key and cannot collide with a Managed
 Tenant name. `host` remains a valid Managed Tenant name.
 
 Managed Tenant listing ignores lifecycle staging entries, invalid names, files,
-and symlinks. Named Config listing likewise ignores invalid names, unsafe entry
-types, and incomplete configs. A structurally complete Named Config remains visible
-even when its contents are invalid so it can be inspected, edited, or deleted.
-Explicitly selected structural paths reject symlinks and unexpected entries.
+and symlinks. Named Config listing applies the equivalent rules described in
+[Configs](configs.md). Explicitly selected structural paths reject symlinks and
+unexpected entries.
 
 ## Lifecycle Recovery
 
@@ -125,9 +125,10 @@ safely finishes interrupted work.
 
 A missing Managed Tenant is an empty read scope: `config list` and
 `session list` are empty, and every Component is not installed. Read-only
-commands and completion do not create it. `run`, `config create`, `config edit
---current`, and `component install` may initialize it. Targeted `config get
---current` fails for a missing Managed Tenant without creating it.
+commands and completion do not create it. `tenant create`, `run`,
+`config create`, `config edit --current`, and `component install` may initialize
+it. Targeted `config get --current` fails for a missing Managed Tenant without
+creating it.
 
 ## Tenant Home Initialization
 
@@ -208,11 +209,9 @@ commands operate on the real host Transcripts described above.
 
 aibox does not provide cross-process locks for Tenant or Named Config
 operations. Avoid changing the same Tenant and Coding Agent from multiple aibox
-processes at once. Interrupted Tenant lifecycle work is resumable. Each Config
-Application replaces individual files atomically, but it has no cross-file
-transaction; rerunning the command converges after an interruption. Config
-edits likewise commit files one at a time, and a later editor failure does not
-roll back an earlier file.
+processes at once. Interrupted Tenant lifecycle work is resumable.
+[Configs](configs.md) describes how Config Application and Config edits behave
+when they are interrupted.
 
 One aibox process supports only one active container operation: a Run or a
 toolchain installation.

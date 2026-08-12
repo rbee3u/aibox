@@ -1,21 +1,35 @@
+//! Best-effort `text/event-stream` recognition and event indexing.
+//!
+//! [`SsePrefixSniffer`] classifies a response body from its first few bytes,
+//! because a streaming response must be recognized before a declared content
+//! type can be trusted. [`SseIndexer`] then parses the byte stream as it is
+//! forwarded, appending `response.events.jsonl` entries that point into the
+//! unchanged `response.body` rather than copying payloads.
+//!
+//! Indexing is deliberately subordinate to forwarding: a non-contiguous chunk or
+//! a write failure disables it and becomes a Record warning without altering the
+//! recorded bytes or the Traffic Outcome. The indexer also notes the first token
+//! and the provider terminal event, so a Coding Agent that closes immediately
+//! after a complete stream is not recorded as a client disconnect.
+
 use crate::traffic_store::FORMAT_VERSION;
 use serde::Serialize;
 use std::io::Write as _;
 
 #[derive(Default)]
-pub(super) struct SsePrefixSniffer {
+pub(crate) struct SsePrefixSniffer {
     prefix: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PrefixSniff {
+pub(crate) enum PrefixSniff {
     Pending,
     EventStream,
     Normal,
 }
 
 impl SsePrefixSniffer {
-    pub(super) fn observe(&mut self, chunk: &[u8]) -> PrefixSniff {
+    pub(crate) fn observe(&mut self, chunk: &[u8]) -> PrefixSniff {
         const MAX_PREFIX_LEN: usize = 9;
         let remaining = MAX_PREFIX_LEN.saturating_sub(self.prefix.len());
         self.prefix
@@ -56,12 +70,15 @@ struct SseEventIndexEntry {
     completed_at_ns: String,
 }
 
-pub(super) type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
+pub(crate) type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
 
-pub(super) struct SseIndexer {
+pub(crate) struct SseIndexer {
     file: Option<std::fs::File>,
     record_id: String,
     buffer: Vec<u8>,
+    /// Buffer offset below which no line terminator exists, so feeding one
+    /// long line chunk by chunk does not rescan the accumulated prefix.
+    scanned: usize,
     buffer_start: u64,
     body_offset: u64,
     event_start: Option<u64>,
@@ -79,11 +96,12 @@ pub(super) struct SseIndexer {
 }
 
 impl SseIndexer {
-    pub(super) fn new(file: Option<std::fs::File>, record_id: String) -> Self {
+    pub(crate) fn new(file: Option<std::fs::File>, record_id: String) -> Self {
         Self {
             file,
             record_id,
             buffer: Vec::new(),
+            scanned: 0,
             buffer_start: 0,
             body_offset: 0,
             event_start: None,
@@ -101,52 +119,53 @@ impl SseIndexer {
         }
     }
 
-    pub(super) fn disable_indexing(&mut self) {
+    pub(crate) fn disable_indexing(&mut self) {
         self.indexing_disabled = true;
     }
 
-    pub(super) fn terminal_seen(&self) -> bool {
+    pub(crate) fn terminal_seen(&self) -> bool {
         self.terminal_seen
     }
 
-    pub(super) fn body_offset(&self) -> u64 {
+    pub(crate) fn body_offset(&self) -> u64 {
         self.body_offset
     }
 
-    pub(super) fn take_protocol_events(&mut self) -> Vec<ObservedSseEvent> {
+    pub(crate) fn take_protocol_events(&mut self) -> Vec<ObservedSseEvent> {
         std::mem::take(&mut self.protocol_events)
     }
 
-    pub(super) fn take_first_token_at_ns(&mut self) -> Option<String> {
+    pub(crate) fn take_first_token_at_ns(&mut self) -> Option<String> {
         self.first_token_at_ns.take()
     }
 
-    pub(super) fn feed(
+    pub(crate) fn feed(
         &mut self,
         chunk: &[u8],
         body_start: u64,
-        at_ns: String,
+        at_ns: &str,
     ) -> anyhow::Result<()> {
         let contiguous = body_start == self.body_offset;
         if !contiguous {
             self.indexing_disabled = true;
         }
         self.body_offset = self.body_offset.saturating_add(chunk.len() as u64);
-        self.last_arrival_at_ns = at_ns.clone();
+        self.last_arrival_at_ns = at_ns.to_string();
         if self.event_start.is_none() && !chunk.is_empty() {
             self.event_start = Some(body_start);
-            self.first_arrival_at_ns = Some(at_ns.clone());
+            self.first_arrival_at_ns = Some(at_ns.to_string());
         }
         self.buffer.extend_from_slice(chunk);
         if self.buffer_start == 0 && self.buffer.starts_with(&[0xef, 0xbb, 0xbf]) {
             self.buffer.drain(..3);
+            self.scanned = self.scanned.saturating_sub(3);
             self.buffer_start = 3;
             if self.buffer.is_empty() {
                 self.event_start = None;
                 self.first_arrival_at_ns = None;
             } else {
                 self.event_start = Some(3);
-                self.first_arrival_at_ns = Some(at_ns.clone());
+                self.first_arrival_at_ns = Some(at_ns.to_string());
             }
         }
         self.process(at_ns, false)?;
@@ -156,17 +175,23 @@ impl SseIndexer {
         Ok(())
     }
 
-    fn process(&mut self, at_ns: String, final_input: bool) -> anyhow::Result<()> {
+    fn process(&mut self, at_ns: &str, final_input: bool) -> anyhow::Result<()> {
         let mut consumed = 0usize;
-        while let Some((line_end, separator_len)) =
-            find_sse_line_end(&self.buffer[consumed..], final_input)
-        {
-            let line_end = consumed + line_end;
+        loop {
+            // A terminator cannot hide below `scanned`, so a line's content
+            // may start there while its end is searched further ahead.
+            let search_start = consumed.max(self.scanned);
+            let Some((line_end, separator_len)) =
+                find_sse_line_end(&self.buffer[search_start..], final_input)
+            else {
+                break;
+            };
+            let line_end = search_start + line_end;
             let line = &self.buffer[consumed..line_end];
             let absolute_end = self.buffer_start + line_end as u64 + separator_len as u64;
             if self.event_start.is_none() && !line.is_empty() {
                 self.event_start = Some(self.buffer_start + consumed as u64);
-                self.first_arrival_at_ns = Some(at_ns.clone());
+                self.first_arrival_at_ns = Some(at_ns.to_string());
             }
             if line.is_empty() {
                 if is_terminal_sse_event(self.event_name.as_deref(), &self.data) {
@@ -176,7 +201,7 @@ impl SseIndexer {
                     self.protocol_events.push((
                         self.event_name.clone(),
                         self.data.clone(),
-                        at_ns.clone(),
+                        at_ns.to_string(),
                     ));
                 }
                 if self.data_seen
@@ -193,8 +218,8 @@ impl SseIndexer {
                         first_arrival_at_ns: self
                             .first_arrival_at_ns
                             .clone()
-                            .unwrap_or_else(|| at_ns.clone()),
-                        completed_at_ns: at_ns.clone(),
+                            .unwrap_or_else(|| at_ns.to_string()),
+                        completed_at_ns: at_ns.to_string(),
                     };
                     serde_json::to_writer(&mut *file, &entry)?;
                     file.write_all(b"\n")?;
@@ -211,7 +236,7 @@ impl SseIndexer {
             } else if let Some(value) = sse_field_value(line, b"data") {
                 if !self.first_token_seen && is_first_token_data(value) {
                     self.first_token_seen = true;
-                    self.first_token_at_ns = Some(at_ns.clone());
+                    self.first_token_at_ns = Some(at_ns.to_string());
                 }
                 if self.data_seen {
                     self.data.push(b'\n');
@@ -225,11 +250,15 @@ impl SseIndexer {
             self.buffer.drain(..consumed);
             self.buffer_start += consumed as u64;
         }
+        // Everything left is terminator-free except a possible trailing `\r`
+        // that must pair with the next chunk's first byte.
+        self.scanned = self.buffer.len().saturating_sub(1);
         Ok(())
     }
 
-    pub(super) fn finish(&mut self) -> anyhow::Result<bool> {
-        self.process(self.last_arrival_at_ns.clone(), true)?;
+    pub(crate) fn finish(&mut self) -> anyhow::Result<bool> {
+        let last_arrival_at_ns = self.last_arrival_at_ns.clone();
+        self.process(&last_arrival_at_ns, true)?;
         if self.indexing_disabled {
             return Ok(false);
         }
@@ -240,7 +269,7 @@ impl SseIndexer {
     }
 }
 
-pub(super) fn is_first_token_data(value: &[u8]) -> bool {
+pub(crate) fn is_first_token_data(value: &[u8]) -> bool {
     match std::str::from_utf8(value) {
         Ok(value) => {
             let value = value.trim();

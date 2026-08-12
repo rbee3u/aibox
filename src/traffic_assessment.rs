@@ -1,14 +1,27 @@
+//! Classifying one Traffic Record into its display Record Assessment.
+//!
+//! A Record Assessment is a presentation label derived from independent evidence
+//! — Traffic Outcome, HTTP status, Provider Error, and protocol diagnostics — not
+//! a replacement for it. Active takes temporary visual precedence, every finding
+//! stays separately available for Diagnostics, and one prioritized primary
+//! finding supplies the compact label.
+//!
+//! [`refresh_assessment`] materializes the value into the Summary on the write
+//! path so lists never recompute it, while [`effective_assessment`] re-derives
+//! the interrupted case at read time. See
+//! `docs/adr/0011-materialize-traffic-summary-assessment.md`.
+
 use crate::traffic_interpretation::{ProtocolFamily, ResponseModeValue};
 use crate::traffic_store::{
     AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, Outcome,
     RecordAssessment, SummaryMetadata,
 };
 
-pub(super) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RecordAssessment {
+pub(crate) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RecordAssessment {
     calculate_assessment(summary, active, !summary.terminal && !active)
 }
 
-pub(super) fn diagnostic_findings(
+pub(crate) fn diagnostic_findings(
     summary: &SummaryMetadata,
     interrupted: bool,
 ) -> Vec<AssessmentFinding> {
@@ -177,7 +190,7 @@ fn collect_diagnostic_warnings(summary: &SummaryMetadata, findings: &mut Vec<Ass
     }
 }
 
-pub(super) fn calculate_assessment(
+pub(crate) fn calculate_assessment(
     summary: &SummaryMetadata,
     active: bool,
     interrupted: bool,
@@ -203,7 +216,7 @@ pub(super) fn calculate_assessment(
     }
 }
 
-pub(super) fn refresh_assessment(summary: &mut SummaryMetadata) {
+pub(crate) fn refresh_assessment(summary: &mut SummaryMetadata) {
     summary.assessment = calculate_assessment(summary, !summary.terminal, false);
 }
 

@@ -166,7 +166,7 @@ fn validate_stable_version(version: &str) -> Result<String, String> {
     Ok(version.to_string())
 }
 
-/// Execute one parsed Component command.
+/// Execute one parsed Component command and return its process exit code.
 pub fn dispatch(args: &ComponentArgs) -> Result<i32> {
     let root = tenant::aibox_root()?;
     let selected = Tenant::resolve(&root, args.tenant.host, args.tenant.tenant_name())?;
@@ -198,9 +198,19 @@ pub(crate) fn dispatch_with(
 
 fn list(selected: &Tenant) -> Result<i32> {
     let exists = tenant_home_exists(selected)?;
+    let mut failed = false;
     for &kind in component_catalog(selected) {
         let status = if exists {
-            inspect(kind, selected.home_dir())?
+            // One unreadable native file must not hide the other Components,
+            // so report it as a row-level error like `session list` does.
+            match inspect(kind, selected.home_dir()) {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("!! {}: {error:#}", kind.name());
+                    failed = true;
+                    continue;
+                }
+            }
         } else {
             ComponentStatus::NotInstalled
         };
@@ -208,7 +218,7 @@ fn list(selected: &Tenant) -> Result<i32> {
             break;
         }
     }
-    Ok(0)
+    Ok(i32::from(failed))
 }
 
 fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
@@ -630,10 +640,7 @@ fn install_codex_statusline(tenant: &Tenant) -> Result<i32> {
 }
 
 fn prepare_statusline_install(tenant: &Tenant, agent: AgentKind) -> Result<TenantAgent> {
-    let selected = match tenant {
-        Tenant::Managed(tenant) => tenant.for_agent(agent),
-        Tenant::Host { .. } => tenant.for_agent(agent),
-    };
+    let selected = tenant.for_agent(agent);
     selected.ensure_agent_state_dir()?;
     Ok(selected)
 }
@@ -793,7 +800,7 @@ fn confirm_remove(kind: ComponentKind) -> Result<bool> {
     io::stderr().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 fn write_atomic(path: &Path, content: &[u8], mode: Option<u32>) -> Result<()> {

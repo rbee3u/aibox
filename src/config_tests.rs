@@ -4,6 +4,8 @@ use crate::tenant::{ManagedTenant, Tenant};
 use serde_json::Value;
 use std::cell::Cell;
 use std::io::{self, BufRead, Cursor, IsTerminal};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 fn selected(root: &Path, agent: AgentKind) -> TenantAgent {
@@ -485,7 +487,6 @@ fn create_repairs_only_safe_valid_incomplete_configs() {
         .to_string();
     assert!(error.contains("unknown entry"), "{error}");
 
-    use std::os::unix::fs::symlink;
     let linked = selected.named_config_dir("linked");
     tenant::ensure_real_dir(&linked, "Named Config directory").unwrap();
     symlink(&main, linked.join("config.toml")).unwrap();
@@ -495,6 +496,82 @@ fn create_repairs_only_safe_valid_incomplete_configs() {
     assert!(error.contains("non-regular file"), "{error}");
 
     assert_eq!(list_named_configs(&selected).unwrap(), ["partial"]);
+}
+
+#[test]
+fn stale_temporary_files_do_not_wedge_a_named_config() {
+    // A killed process (editor Ctrl-C, SIGKILL) leaves the atomic-write
+    // temporary file behind; the Named Config must stay usable and deletable.
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let stale_edit = selected
+        .named_config_dir("custom")
+        .join(".config.toml.aibox-edit-a1b2c3");
+    let stale_propagation = selected
+        .named_config_dir("custom")
+        .join(".auth.json.aibox-propagate-auth-d4e5f6");
+    fs::write(&stale_edit, "interrupted edit").unwrap();
+    fs::write(&stale_propagation, "interrupted propagation").unwrap();
+
+    assert_eq!(list_named_configs(&selected).unwrap(), ["custom"]);
+    get_named_config(&selected, "custom").unwrap();
+
+    delete_named_configs(&selected, &["custom".to_string()], false, true).unwrap();
+
+    assert!(!stale_edit.exists());
+    assert!(!stale_propagation.exists());
+    assert!(!selected.named_config_dir("custom").exists());
+}
+
+#[test]
+fn named_config_deletion_rejects_similar_non_aibox_temporary_files() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let similar = selected
+        .named_config_dir("custom")
+        .join(".config.toml.aibox-edit-a1b2c3-backup");
+    fs::write(&similar, "user backup").unwrap();
+
+    let error = delete_named_configs(&selected, &["custom".to_string()], false, true)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("unknown entry"), "{error}");
+    assert_eq!(fs::read_to_string(&similar).unwrap(), "user backup");
+    assert!(selected.named_config_dir("custom").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_keeps_0600_when_the_editor_replaces_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let editor_dir = tempfile::tempdir().unwrap();
+    // Save like editors that write a new file and rename it into place: the
+    // committed inode is not the one aibox created for the editor.
+    let editor = crate::testutil::write_stub_script(
+        editor_dir.path(),
+        "editor",
+        "#!/bin/sh\numask 022\ncase \"$1\" in\n  *config.toml*) printf 'model = \"replaced\"\\n' > \"$1.new\" && mv \"$1.new\" \"$1\" ;;\n  *auth.json*) printf '{}\\n' > \"$1.new\" && mv \"$1.new\" \"$1\" ;;\nesac\n",
+    );
+
+    edit_named_config_with_editor(&selected, "custom", editor.as_os_str()).unwrap();
+
+    for file in ["config.toml", "auth.json"] {
+        let path = selected.named_config_file("custom", file);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{file}");
+    }
+    assert!(
+        fs::read_to_string(selected.named_config_file("custom", "config.toml"))
+            .unwrap()
+            .contains("model = \"replaced\"")
+    );
 }
 
 #[test]

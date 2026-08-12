@@ -22,9 +22,9 @@ pub fn uid_gid() -> (u32, u32) {
     (getuid().as_raw(), getgid().as_raw())
 }
 
-#[cfg(not(unix))]
 /// Compatibility fallback for non-Unix builds. Run assembly calls this only on
 /// Linux.
+#[cfg(not(unix))]
 pub fn uid_gid() -> (u32, u32) {
     (0, 0)
 }

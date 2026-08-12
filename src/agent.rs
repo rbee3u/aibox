@@ -204,9 +204,8 @@ impl AgentKind {
     /// Empty native content used when editing a missing Current Config file.
     pub fn empty_config_file(self, file: &str) -> Option<&'static str> {
         match (self, file) {
-            (Self::Claude, "settings.json") => Some("{}\n"),
+            (Self::Claude, "settings.json") | (Self::Codex, "auth.json") => Some("{}\n"),
             (Self::Codex, "config.toml") => Some(""),
-            (Self::Codex, "auth.json") => Some("{}\n"),
             _ => None,
         }
     }
@@ -235,7 +234,8 @@ impl AgentKind {
         }
     }
 
-    /// Parse the Coding Agent's native main configuration into a JSON object.
+    /// Parse the Coding Agent's native main configuration (Claude JSON or
+    /// Codex TOML) into a generic object map.
     pub(crate) fn parse_main_config(self, content: &str) -> Result<Map<String, Value>> {
         if self == Self::Codex && content.trim().is_empty() {
             return Ok(Map::new());

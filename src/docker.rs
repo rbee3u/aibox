@@ -2,13 +2,9 @@
 //!
 //! Image inspection, [`build_image`] (invoked by `aibox build`), and [`run`]
 //! (which spawns `docker run` for a Coding Agent or toolchain installer) all
-//! shell out to the Docker CLI.
-//!
-//! ## Why the Dockerfile comes from stdin
-//!
-//! The embedded Dockerfile has no `COPY`; it fetches everything with
-//! apt/curl/npm. So the build context is unused, and we feed the Dockerfile to
-//! `docker build -f - <ctx>` on stdin with an empty context directory.
+//! shell out to the Docker CLI. Image build and inspection live in the
+//! `docker_image.rs` submodule, which documents the context-free build; this
+//! module owns the run path and its cleanup.
 //!
 //! ## Signal-aware cleanup
 //!
@@ -24,6 +20,8 @@
 //! toolchain installation. Cleanup is best-effort for uncatchable termination
 //! such as SIGKILL.
 
+#[cfg(test)]
+use crate::sync::lock_unpoisoned;
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::io::Read;
@@ -88,11 +86,12 @@ impl DockerCli {
 
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
 /// exit code. A child (not `exec`) so the caller's container cleanup still runs
-/// after it returns. The child's pid and `--cidfile` are registered with `creds`
-/// for the run's duration, so a SIGINT/SIGTERM aimed at the wrapper alone stops
+/// after it returns. The child's pid and `--cidfile` are registered in the
+/// process-wide run registry (`set_cidfile`, `set_child`, `finish_child`) for
+/// the run's duration, so a SIGINT/SIGTERM aimed at the wrapper alone stops
 /// the container instead of leaving it running unsupervised — killing just the
 /// docker CLI is not enough when a TTY is attached (the CLI only proxies
-/// signals without one; see `creds`).
+/// signals without one).
 ///
 /// `after_container_created` runs at most once, after Docker has written a
 /// container id and before this function waits for the container to exit. It is
@@ -146,10 +145,10 @@ pub(crate) fn run_with(
         .args(cmd)
         .spawn();
     let child = match spawned {
-        Ok(c) => c,
-        Err(e) => {
+        Ok(child) => child,
+        Err(error) => {
             clear_child();
-            return Err(e).context("spawn docker run (is docker installed?)");
+            return Err(error).context("spawn docker run (is docker installed?)");
         }
     };
 
@@ -343,9 +342,7 @@ static RUN_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn run_registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    RUN_REGISTRY_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    lock_unpoisoned(&RUN_REGISTRY_TEST_LOCK)
 }
 
 /// The pid of the running `docker run` child, or 0 when none. The watcher
@@ -728,9 +725,10 @@ fn stop_active_run(sig: i32) {
 /// `docker stop`'s default.
 ///
 /// On the signal path, the main thread normally stays blocked in `child.wait()`
-/// while the watcher performs this escalation; that is why the watcher stops
-/// the container *before* touching the CLI child. The post-wait orphan check
-/// takes a separate immediate-kill path because no attached client remains.
+/// while the watcher performs this escalation, so the grace wait cannot race
+/// the exit path; [`stop_active_run`] decides whether it runs before or after
+/// the CLI child is signalled. The post-wait orphan check takes a separate
+/// immediate-kill path because no attached client remains.
 fn stop_container_id(docker: &DockerCli, sig: i32, cid: &str) {
     let name = match sig {
         s if s == signal_hook::consts::SIGINT => "INT",
@@ -817,22 +815,22 @@ fn install_signal_handler() -> Result<()> {
         };
         match registration {
             Ok(id) => registrations.push(id),
-            Err(e) => {
+            Err(error) => {
                 for id in registrations {
                     signal_hook::low_level::unregister(id);
                 }
-                return Err(e).context("install signal state handler");
+                return Err(error).context("install signal state handler");
             }
         }
     }
 
     let mut signals = match signal_hook::iterator::Signals::new(&watched) {
-        Ok(s) => s,
-        Err(e) => {
+        Ok(signals) => signals,
+        Err(error) => {
             for id in registrations {
                 signal_hook::low_level::unregister(id);
             }
-            return Err(e).context("install signal cleanup handler");
+            return Err(error).context("install signal cleanup handler");
         }
     };
     let spawned = std::thread::Builder::new()
@@ -864,11 +862,11 @@ fn install_signal_handler() -> Result<()> {
                 }
             }
         }
-        Err(e) => {
+        Err(error) => {
             for id in registrations {
                 signal_hook::low_level::unregister(id);
             }
-            return Err(e).context("spawn signal cleanup thread");
+            return Err(error).context("spawn signal cleanup thread");
         }
     }
     Ok(())

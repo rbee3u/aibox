@@ -31,8 +31,9 @@ aibox run -m ./cache:/cache
 The accepted form is `host:container[:ro]`. The source rules below apply to the
 Workspace as well as Extra Mounts:
 
-- The source must already exist. Relative sources resolve from the launch
-  directory.
+- The source must already exist. An Extra Mount source may be a file or a
+  directory; a Workspace must be a directory. Relative sources resolve from the
+  launch directory.
 - Workspace and Extra Mount sources are resolved to their canonical paths
   before validation and before they are passed to Docker. A source symlink
   therefore grants access to its destination, not to the symlink entry.
@@ -127,7 +128,8 @@ The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
 `IP:PORT` with a nonzero port, and every non-loopback address requires
 `--allow-remote`. When a specific external or IPv6 address is selected, aibox
 also binds `127.0.0.1` on the same port for management; wildcard IPv4 already
-covers it. The viewer is always `http://127.0.0.1:<port>/` and rejects
+covers it. The viewer is advertised at `http://127.0.0.1:<port>/`, also answers
+the loopback Host values `localhost:<port>` and `[::1]:<port>`, and rejects
 non-loopback peers, non-loopback Host values, cross-origin and cross-site
 requests, and invalid per-start CSRF tokens. It sends no CORS permission.
 
@@ -310,7 +312,8 @@ installed packages and pinned Coding Agent versions.
 
 The image includes common Unix development and diagnostic tools, Python with
 pip/venv/uv, and Node.js with npm. Rust and Go are installed on demand into a
-persistent Managed Tenant; see [Tenant Components](tenants.md#tenant-components).
+persistent Managed Tenant; see
+[Tenant Components](tenants.md#tenant-components).
 
 ## Custom Images
 

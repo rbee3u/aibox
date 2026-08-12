@@ -1,3 +1,30 @@
+//! The on-disk Traffic Record layout and its lifecycle.
+//!
+//! [`TrafficStore`] owns the flat `$AIBOX_ROOT/traffic/<record>/` collection.
+//! Each Record directory holds raw evidence — `request.json`, `request.body`,
+//! `response.json`, `response.body`, and the optional `response.events.jsonl`
+//! index — plus `summary.json`, the complete list projection.
+//!
+//! ## Summary is the lifecycle authority
+//!
+//! `summary.json` exists from [`TrafficStore::begin`] onward and is atomically
+//! checkpointed at observable milestones, so an interrupted attempt still has
+//! meaningful state and timing. A directory name is only a materialized ordering
+//! hint: a Record starts under an `active-` name and [`TrafficStore::finish`]
+//! renames it after the terminal Summary is committed. Readers accept both sides
+//! of that non-transactional boundary and never infer state from the name. See
+//! `docs/adr/0010-materialize-traffic-record-end-order.md`.
+//!
+//! ## Reads do not trust the filesystem
+//!
+//! The collection sits in the owner's aibox root, so every read confirms that an
+//! entry is a real file or directory and that a Record is still a direct child of
+//! the collection. Listing tolerates per-Record corruption while detail reads
+//! stay strict, and a [`FORMAT_VERSION`] mismatch is unsupported rather than
+//! migrated.
+
+use crate::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
+use crate::tenant;
 #[cfg(test)]
 use crate::traffic_assessment::diagnostic_findings;
 use crate::traffic_assessment::{calculate_assessment, refresh_assessment};
@@ -14,7 +41,7 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub(super) const FORMAT_VERSION: u32 = 2;
+pub(crate) const FORMAT_VERSION: u32 = 2;
 const REQUEST_JSON: &str = "request.json";
 const REQUEST_BODY: &str = "request.body";
 const RESPONSE_JSON: &str = "response.json";
@@ -24,7 +51,7 @@ const SUMMARY_JSON: &str = "summary.json";
 const RESULT_JSON: &str = "result.json";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct RecordedHeader {
+pub(crate) struct RecordedHeader {
     pub name: String,
     pub value_base64: String,
 }
@@ -73,7 +100,7 @@ fn is_hop_by_hop(name: &str) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct RequestMetadata {
+pub(crate) struct RequestMetadata {
     pub format_version: u32,
     pub id: String,
     pub started_at: String,
@@ -86,13 +113,13 @@ pub(super) struct RequestMetadata {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ResponseSource {
+pub(crate) enum ResponseSource {
     Upstream,
     Proxy,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct ResponseMetadata {
+pub(crate) struct ResponseMetadata {
     pub format_version: u32,
     pub source: ResponseSource,
     pub headers_at: String,
@@ -103,7 +130,7 @@ pub(super) struct ResponseMetadata {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Outcome {
+pub(crate) enum Outcome {
     Completed,
     Rejected,
     UpstreamError,
@@ -126,14 +153,14 @@ impl Outcome {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct ErrorMetadata {
+pub(crate) struct ErrorMetadata {
     pub kind: ErrorKind,
     pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ErrorKind {
+pub(crate) enum ErrorKind {
     ClientConfiguration,
     ClientDisconnected,
     ConnectNotSupported,
@@ -153,7 +180,7 @@ pub(super) enum ErrorKind {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(super) struct TimingMetadata {
+pub(crate) struct TimingMetadata {
     pub upstream_request_started_at_ns: Option<String>,
     pub upstream_request_body_first_byte_at_ns: Option<String>,
     pub upstream_request_body_completed_at_ns: Option<String>,
@@ -164,7 +191,7 @@ pub(super) struct TimingMetadata {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct DiagnosticMetadata {
+pub(crate) struct DiagnosticMetadata {
     pub phase: String,
     pub kind: String,
     pub message: String,
@@ -172,7 +199,7 @@ pub(super) struct DiagnosticMetadata {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct SummaryRequestMetadata {
+pub(crate) struct SummaryRequestMetadata {
     pub method: String,
     pub incoming_uri: String,
     pub upstream_url: Option<String>,
@@ -180,14 +207,14 @@ pub(super) struct SummaryRequestMetadata {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct SummaryResponseMetadata {
+pub(crate) struct SummaryResponseMetadata {
     pub status: u16,
     pub http_version: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum AssessmentLevel {
+pub(crate) enum AssessmentLevel {
     Active,
     Ok,
     Warning,
@@ -196,7 +223,7 @@ pub(super) enum AssessmentLevel {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum AssessmentSource {
+pub(crate) enum AssessmentSource {
     Traffic,
     Http,
     Provider,
@@ -204,21 +231,21 @@ pub(super) enum AssessmentSource {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct AssessmentPrimary {
+pub(crate) struct AssessmentPrimary {
     pub source: AssessmentSource,
     pub kind: String,
     pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct RecordAssessment {
+pub(crate) struct RecordAssessment {
     pub level: AssessmentLevel,
     pub primary: Option<AssessmentPrimary>,
     pub issue_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub(super) struct AssessmentFinding {
+pub(crate) struct AssessmentFinding {
     pub level: AssessmentLevel,
     pub source: AssessmentSource,
     pub kind: String,
@@ -228,7 +255,7 @@ pub(super) struct AssessmentFinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct SummaryMetadata {
+pub(crate) struct SummaryMetadata {
     pub schema_version: u32,
     pub record_id: String,
     pub kind: String,
@@ -249,7 +276,7 @@ pub(super) struct SummaryMetadata {
 
 #[cfg(test)]
 impl SummaryMetadata {
-    pub(super) fn test(record_id: impl Into<String>, protocol: Option<ProtocolSummary>) -> Self {
+    pub(crate) fn test(record_id: impl Into<String>, protocol: Option<ProtocolSummary>) -> Self {
         Self {
             schema_version: FORMAT_VERSION,
             record_id: record_id.into(),
@@ -275,36 +302,30 @@ impl SummaryMetadata {
 }
 
 #[derive(Clone)]
-pub(super) struct SummaryHandle {
+pub(crate) struct SummaryHandle {
     inner: Arc<Mutex<SummaryMetadata>>,
 }
 
 impl SummaryHandle {
-    pub(super) fn new(summary: SummaryMetadata) -> Self {
+    pub(crate) fn new(summary: SummaryMetadata) -> Self {
         Self {
             inner: Arc::new(Mutex::new(summary)),
         }
     }
 
-    pub(super) fn update<R>(&self, update: impl FnOnce(&mut SummaryMetadata) -> R) -> R {
-        let mut summary = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(crate) fn update<R>(&self, update: impl FnOnce(&mut SummaryMetadata) -> R) -> R {
+        let mut summary = lock_unpoisoned(&self.inner);
         update(&mut summary)
     }
 
-    pub(super) fn read<R>(&self, read: impl FnOnce(&SummaryMetadata) -> R) -> R {
-        let summary = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(crate) fn read<R>(&self, read: impl FnOnce(&SummaryMetadata) -> R) -> R {
+        let summary = lock_unpoisoned(&self.inner);
         read(&summary)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct ResultMetadata {
+pub(crate) struct ResultMetadata {
     pub format_version: u32,
     pub ended_at: String,
     pub request_bytes: u64,
@@ -316,21 +337,21 @@ pub(super) struct ResultMetadata {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct RuntimeMeasurements {
+pub(crate) struct RuntimeMeasurements {
     pub request_bytes: u64,
     pub response_bytes: u64,
     pub request_body_duration: Option<Duration>,
 }
 
 #[derive(Clone)]
-pub(super) struct TrafficStore {
+pub(crate) struct TrafficStore {
     root: PathBuf,
     active: Arc<Mutex<HashMap<String, Instant>>>,
     namespace: Arc<RwLock<()>>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct RecordLocator {
+pub(crate) struct RecordLocator {
     inner: Arc<Mutex<PathBuf>>,
     host: Arc<str>,
 }
@@ -343,22 +364,49 @@ impl RecordLocator {
         }
     }
 
-    pub(super) fn path(&self) -> PathBuf {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    pub(crate) fn path(&self) -> PathBuf {
+        lock_unpoisoned(&self.inner).clone()
     }
 
     fn set_path(&self, path: PathBuf) {
-        *self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+        *lock_unpoisoned(&self.inner) = path;
     }
 }
 
-pub(super) struct NewRecord {
+/// The application-visible request that opens one Traffic Record.
+///
+/// [`TrafficStore::begin`] takes this as a whole because its fields are mostly
+/// interchangeable strings: `method`, `incoming_uri`, and `http_version` share a
+/// type, as do `upstream_url` and `host_hint`, so positional arguments would
+/// accept a wrong order.
+pub(crate) struct ObservedRequest<'a> {
+    pub method: &'a str,
+    pub incoming_uri: &'a str,
+    /// Absent when the incoming URI could not be resolved to an upstream target.
+    pub upstream_url: Option<&'a str>,
+    pub http_version: &'a str,
+    pub headers: Vec<RecordedHeader>,
+    /// Names the Record directory; a missing hint records `invalid`.
+    pub host_hint: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl<'a> ObservedRequest<'a> {
+    /// A plain HTTP/1.1 request with no upstream target, headers, or host hint.
+    /// Combine with struct-update syntax so a test names only what it varies.
+    pub fn test(method: &'a str, incoming_uri: &'a str) -> Self {
+        Self {
+            method,
+            incoming_uri,
+            upstream_url: None,
+            http_version: "HTTP/1.1",
+            headers: Vec::new(),
+            host_hint: None,
+        }
+    }
+}
+
+pub(crate) struct NewRecord {
     pub id: String,
     // The creation path is retained for tests and diagnostics. Runtime path-based
     // operations must use `locator`, because terminalization renames the directory.
@@ -372,7 +420,7 @@ pub(super) struct NewRecord {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct StoredRecord {
+pub(crate) struct StoredRecord {
     pub directory: PathBuf,
     pub sort_key: String,
     pub request: RequestMetadata,
@@ -386,7 +434,7 @@ pub(super) struct StoredRecord {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct StoredRecordSummary {
+pub(crate) struct StoredRecordSummary {
     pub sort_key: String,
     pub summary: SummaryMetadata,
     pub active: bool,
@@ -394,7 +442,7 @@ pub(super) struct StoredRecordSummary {
 }
 
 impl RecordAssessment {
-    pub(super) fn active(issue_count: usize) -> Self {
+    pub(crate) fn active(issue_count: usize) -> Self {
         Self {
             level: AssessmentLevel::Active,
             primary: None,
@@ -402,7 +450,7 @@ impl RecordAssessment {
         }
     }
 
-    pub(super) fn ok() -> Self {
+    pub(crate) fn ok() -> Self {
         Self {
             level: AssessmentLevel::Ok,
             primary: None,
@@ -412,13 +460,13 @@ impl RecordAssessment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StoredEventTiming {
+pub(crate) struct StoredEventTiming {
     pub sequence: u64,
     pub completed_at_ns: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StoredEventTimings {
+pub(crate) struct StoredEventTimings {
     pub available: bool,
     pub partial: bool,
     pub events: Vec<StoredEventTiming>,
@@ -426,16 +474,16 @@ pub(super) struct StoredEventTimings {
     pub warning: Option<String>,
 }
 
-pub(super) enum RecordDetailReadError {
+pub(crate) enum RecordDetailReadError {
     Lookup(anyhow::Error),
     EventIndex(anyhow::Error),
 }
 
 impl TrafficStore {
     pub fn open(aibox_root: &Path) -> Result<Self> {
-        crate::tenant::ensure_real_dir(aibox_root, "aibox root")?;
+        tenant::ensure_real_dir(aibox_root, "aibox root")?;
         let root = aibox_root.join("traffic");
-        crate::tenant::ensure_real_dir(&root, "Traffic Record collection")?;
+        tenant::ensure_real_dir(&root, "Traffic Record collection")?;
         restrict_dir(&root)?;
         Ok(Self {
             root,
@@ -448,20 +496,17 @@ impl TrafficStore {
         &self.root
     }
 
-    pub fn begin(
-        &self,
-        method: &str,
-        incoming_uri: &str,
-        upstream_url: Option<&str>,
-        version: &str,
-        headers: Vec<RecordedHeader>,
-        host_hint: Option<&str>,
-    ) -> Result<(NewRecord, RequestMetadata)> {
-        let _namespace = self
-            .namespace
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::tenant::real_dir_exists(&self.root, "Traffic Record collection")?;
+    pub fn begin(&self, observed: ObservedRequest<'_>) -> Result<(NewRecord, RequestMetadata)> {
+        let ObservedRequest {
+            method,
+            incoming_uri,
+            upstream_url,
+            http_version,
+            headers,
+            host_hint,
+        } = observed;
+        let _namespace = write_unpoisoned(&self.namespace);
+        tenant::real_dir_exists(&self.root, "Traffic Record collection")?;
         let id = Uuid::now_v7().to_string();
         let observed_at = utc_now();
         let origin = Instant::now();
@@ -473,10 +518,7 @@ impl TrafficStore {
         fs::create_dir(&directory)
             .with_context(|| format!("create Traffic Record {}", directory.display()))?;
         restrict_dir(&directory)?;
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.clone(), origin);
+        lock_unpoisoned(&self.active).insert(id.clone(), origin);
 
         let created = (|| -> Result<_> {
             let request_body = create_private_file(&directory.join(REQUEST_BODY))?;
@@ -488,7 +530,7 @@ impl TrafficStore {
                 method: method.to_string(),
                 incoming_uri: incoming_uri.to_string(),
                 upstream_url: upstream_url.map(str::to_string),
-                http_version: version.to_string(),
+                http_version: http_version.to_string(),
                 headers,
             };
             let file = RequestFile {
@@ -522,8 +564,8 @@ impl TrafficStore {
             };
             atomic_write_json(&directory, REQUEST_JSON, &file)?;
             atomic_write_json(&directory, SUMMARY_JSON, &summary)?;
-            crate::tenant::sync_dir(&directory)?;
-            crate::tenant::sync_dir(&self.root)?;
+            tenant::sync_dir(&directory)?;
+            tenant::sync_dir(&self.root)?;
             Ok((
                 request_body,
                 response_body,
@@ -534,10 +576,7 @@ impl TrafficStore {
         let (request_body, response_body, request, summary) = match created {
             Ok(value) => value,
             Err(error) => {
-                self.active
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&id);
+                lock_unpoisoned(&self.active).remove(&id);
                 let _ = remove_controlled_record_dir(&directory);
                 return Err(error);
             }
@@ -562,16 +601,10 @@ impl TrafficStore {
         handle: &SummaryHandle,
         update: impl FnOnce(&mut SummaryMetadata) -> bool,
     ) -> Result<bool> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         let directory = locator.path();
         validate_record_ancestor(&self.root, &directory)?;
-        let mut summary = handle
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut summary = lock_unpoisoned(&handle.inner);
         if summary.terminal {
             return Ok(false);
         }
@@ -589,16 +622,10 @@ impl TrafficStore {
         handle: &SummaryHandle,
         metadata: &ResponseMetadata,
     ) -> Result<()> {
-        let _namespace = self
-            .namespace
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = write_unpoisoned(&self.namespace);
         let directory = locator.path();
         validate_record_ancestor(&self.root, &directory)?;
-        let mut summary = handle
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut summary = lock_unpoisoned(&handle.inner);
         if !summary.terminal {
             summary.response = Some(SummaryResponseMetadata {
                 status: metadata.status,
@@ -621,10 +648,7 @@ impl TrafficStore {
     }
 
     pub fn create_event_index(&self, record: &NewRecord) -> Result<fs::File> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         let directory = record.locator.path();
         validate_record_ancestor(&self.root, &directory)?;
         create_private_file(&directory.join(RESPONSE_EVENTS_JSONL))
@@ -635,10 +659,7 @@ impl TrafficStore {
         locator: &RecordLocator,
         operation: impl FnOnce(&Path) -> R,
     ) -> Result<R> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         let directory = locator.path();
         validate_record_ancestor(&self.root, &directory)?;
         Ok(operation(&directory))
@@ -652,27 +673,17 @@ impl TrafficStore {
         outcome: Outcome,
         error: Option<ErrorMetadata>,
     ) -> Result<ResultMetadata> {
-        let _namespace = self
-            .namespace
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = write_unpoisoned(&self.namespace);
         let directory = record.locator.path();
         validate_record_ancestor(&self.root, &directory)?;
         let at_ns = offset_ns(record.origin);
-        let mut summary = record
-            .summary
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut summary = lock_unpoisoned(&record.summary.inner);
         if summary.terminal {
             let snapshot = summary.clone();
             drop(summary);
             let ended_at = summary_ended_at(&snapshot);
             self.finalize_directory_unlocked(record, &ended_at);
-            self.active
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&record.id);
+            lock_unpoisoned(&self.active).remove(&record.id);
             let mut result = summary_to_result(&snapshot);
             result.request_bytes = measurements.request_bytes;
             result.response_bytes = measurements.response_bytes;
@@ -710,10 +721,7 @@ impl TrafficStore {
         drop(summary);
         let ended_at = summary_ended_at(&snapshot);
         self.finalize_directory_unlocked(record, &ended_at);
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&record.id);
+        lock_unpoisoned(&self.active).remove(&record.id);
         let total_ms = snapshot
             .timing
             .finished_at_ns
@@ -753,7 +761,7 @@ impl TrafficStore {
         match rename_noreplace(&directory, &target) {
             Ok(()) => {
                 record.locator.set_path(target.clone());
-                if let Err(error) = crate::tenant::sync_dir(&self.root) {
+                if let Err(error) = tenant::sync_dir(&self.root) {
                     eprintln!(
                         "warning: finalized Traffic Record {} but cannot sync renamed directory {}: {error:#}",
                         record.id,
@@ -771,39 +779,25 @@ impl TrafficStore {
     }
 
     pub fn abandon_active(&self, id: &str) {
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
+        lock_unpoisoned(&self.active).remove(id);
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn scan(&self) -> Result<Vec<StoredRecord>> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         self.scan_unlocked()
     }
 
     pub fn scan_summaries(&self) -> Result<Vec<StoredRecordSummary>> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         self.scan_summaries_unlocked()
     }
 
-    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRecordSummary>> {
-        if !crate::tenant::real_dir_exists(&self.root, "Traffic Record collection")? {
+    fn record_directories(&self) -> Result<Vec<PathBuf>> {
+        if !tenant::real_dir_exists(&self.root, "Traffic Record collection")? {
             return Ok(Vec::new());
         }
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let mut records = Vec::new();
+        let mut directories = Vec::new();
         for entry in fs::read_dir(&self.root)
             .with_context(|| format!("read Traffic Record collection {}", self.root.display()))?
         {
@@ -832,6 +826,16 @@ impl TrafficStore {
                 );
                 continue;
             }
+            directories.push(path);
+        }
+        Ok(directories)
+    }
+
+    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRecordSummary>> {
+        let directories = self.record_directories()?;
+        let active = lock_unpoisoned(&self.active).clone();
+        let mut records = Vec::new();
+        for path in directories {
             match read_record_summary(&path, &active) {
                 Ok(record) => records.push(record),
                 Err(error) => eprintln!(
@@ -845,43 +849,10 @@ impl TrafficStore {
     }
 
     fn scan_unlocked(&self) -> Result<Vec<StoredRecord>> {
-        if !crate::tenant::real_dir_exists(&self.root, "Traffic Record collection")? {
-            return Ok(Vec::new());
-        }
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let directories = self.record_directories()?;
+        let active = lock_unpoisoned(&self.active).clone();
         let mut records = Vec::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read Traffic Record collection {}", self.root.display()))?
-        {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    eprintln!("warning: cannot inspect Traffic Record entry: {error}");
-                    continue;
-                }
-            };
-            let path = entry.path();
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!(
-                        "warning: cannot inspect Traffic Record {}: {error}",
-                        path.display()
-                    );
-                    continue;
-                }
-            };
-            if !metadata.file_type().is_dir() {
-                eprintln!(
-                    "warning: ignoring unexpected Traffic entry {}",
-                    path.display()
-                );
-                continue;
-            }
+        for path in directories {
             match read_record(&path, &active) {
                 Ok(record) => records.push(record),
                 Err(error) => eprintln!(
@@ -906,14 +877,10 @@ impl TrafficStore {
     }
 
     fn find_many_unlocked(&self, ids: &HashSet<&str>) -> Result<HashMap<String, StoredRecord>> {
-        if !crate::tenant::real_dir_exists(&self.root, "Traffic Record collection")? {
+        if !tenant::real_dir_exists(&self.root, "Traffic Record collection")? {
             return Ok(HashMap::new());
         }
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let active = lock_unpoisoned(&self.active).clone();
         let mut records = HashMap::with_capacity(ids.len());
         for entry in fs::read_dir(&self.root)
             .with_context(|| format!("read Traffic Record collection {}", self.root.display()))?
@@ -960,19 +927,13 @@ impl TrafficStore {
     }
 
     pub fn find(&self, id: &str) -> Result<StoredRecord> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         self.find_unlocked(id)
     }
 
     pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         let record = self.find_unlocked(id)?;
         self.open_record_body_unlocked(&record, response, offset)
@@ -984,10 +945,7 @@ impl TrafficStore {
         response: bool,
         offset: u64,
     ) -> Result<(fs::File, u64)> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         let current = self.find_unlocked(&record.request.id)?;
         self.open_record_body_unlocked(&current, response, offset)
     }
@@ -1005,7 +963,7 @@ impl TrafficStore {
             REQUEST_BODY
         });
         validate_regular_file(&path, "Traffic body")?;
-        let mut file = crate::tenant::open_real_file(&path, "Traffic body")?;
+        let mut file = tenant::open_real_file(&path, "Traffic body")?;
         let length = file.metadata()?.len();
         if offset > length {
             bail!("body offset {offset} exceeds current length {length}");
@@ -1015,15 +973,12 @@ impl TrafficStore {
     }
 
     pub fn read_event_timings(&self, id: &str, after_sequence: u64) -> Result<StoredEventTimings> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         let record = self.find_unlocked(id)?;
         validate_record_ancestor(&self.root, &record.directory)?;
         let path = record.directory.join(RESPONSE_EVENTS_JSONL);
-        if !crate::tenant::real_file_exists(&path, "Traffic SSE event index")? {
+        if !tenant::real_file_exists(&path, "Traffic SSE event index")? {
             return Ok(StoredEventTimings {
                 available: false,
                 partial: false,
@@ -1033,7 +988,7 @@ impl TrafficStore {
             });
         }
 
-        let file = crate::tenant::open_real_file(&path, "Traffic SSE event index")?;
+        let file = tenant::open_real_file(&path, "Traffic SSE event index")?;
         let mut reader = std::io::BufReader::new(file);
         let mut events = Vec::new();
         let mut warnings = Vec::new();
@@ -1094,10 +1049,7 @@ impl TrafficStore {
         &self,
         id: &str,
     ) -> std::result::Result<StoredRecord, RecordDetailReadError> {
-        let _namespace = self
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id).map_err(RecordDetailReadError::Lookup)?;
         let mut record = self
             .find_unlocked(id)
@@ -1108,10 +1060,7 @@ impl TrafficStore {
     }
 
     pub fn delete_ids(&self, ids: &[String]) -> Result<usize> {
-        let _namespace = self
-            .namespace
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = write_unpoisoned(&self.namespace);
         if ids.is_empty() {
             bail!("at least one Traffic Record id is required");
         }
@@ -1122,11 +1071,7 @@ impl TrafficStore {
         for id in ids {
             validate_id(id)?;
         }
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let active = lock_unpoisoned(&self.active).clone();
         if ids.iter().any(|id| active.contains_key(id)) {
             bail!("active Traffic Records cannot be deleted");
         }
@@ -1146,15 +1091,12 @@ impl TrafficStore {
         for path in &selected {
             remove_controlled_record_dir(path)?;
         }
-        crate::tenant::sync_dir(&self.root)?;
+        tenant::sync_dir(&self.root)?;
         Ok(selected.len())
     }
 
     pub fn delete_all(&self, expected: usize) -> Result<usize> {
-        let _namespace = self
-            .namespace
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _namespace = write_unpoisoned(&self.namespace);
         let records: Vec<_> = self
             .scan_unlocked()?
             .into_iter()
@@ -1172,7 +1114,7 @@ impl TrafficStore {
         for record in &records {
             remove_controlled_record_dir(&record.directory)?;
         }
-        crate::tenant::sync_dir(&self.root)?;
+        tenant::sync_dir(&self.root)?;
         Ok(records.len())
     }
 }
@@ -1232,12 +1174,8 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
     {
         bail!("Traffic request metadata does not match its Summary projection");
     }
-    let _ = crate::tenant::real_file_exists(
-        &path.join(RESPONSE_EVENTS_JSONL),
-        "Traffic SSE event index",
-    )?;
-    if crate::tenant::real_file_exists(path.join(RESULT_JSON).as_path(), "legacy result metadata")?
-    {
+    let _ = tenant::real_file_exists(&path.join(RESPONSE_EVENTS_JSONL), "Traffic SSE event index")?;
+    if tenant::real_file_exists(path.join(RESULT_JSON).as_path(), "legacy result metadata")? {
         bail!("legacy result.json is unsupported");
     }
     let response_file: Option<ResponseFile> =
@@ -1493,10 +1431,10 @@ fn append_event_index_warnings(
     active: bool,
 ) -> Result<()> {
     let index_path = path.join(RESPONSE_EVENTS_JSONL);
-    if !crate::tenant::real_file_exists(&index_path, "Traffic SSE event index")? {
+    if !tenant::real_file_exists(&index_path, "Traffic SSE event index")? {
         return Ok(());
     }
-    let file = crate::tenant::open_real_file(&index_path, "Traffic SSE event index")?;
+    let file = tenant::open_real_file(&index_path, "Traffic SSE event index")?;
     let mut reader = std::io::BufReader::new(file);
     let mut line_number = 0usize;
     loop {
@@ -1507,7 +1445,7 @@ fn append_event_index_warnings(
                 let warning = event_index_warning(
                     summary,
                     line_number + 1,
-                    format!("cannot read SSE event index line: {error}"),
+                    &format!("cannot read SSE event index line: {error}"),
                 );
                 summary.warnings.push(warning);
                 break;
@@ -1534,7 +1472,7 @@ fn append_event_index_warnings(
             Ok(_) => "SSE event index line has invalid metadata".to_string(),
             Err(error) => format!("cannot parse SSE event index line: {error}"),
         };
-        let warning = event_index_warning(summary, line_number, warning);
+        let warning = event_index_warning(summary, line_number, &warning);
         summary.warnings.push(warning);
     }
     Ok(())
@@ -1543,7 +1481,7 @@ fn append_event_index_warnings(
 fn event_index_warning(
     summary: &SummaryMetadata,
     line_number: usize,
-    message: String,
+    message: &str,
 ) -> DiagnosticMetadata {
     DiagnosticMetadata {
         phase: "recording".to_string(),
@@ -1558,12 +1496,12 @@ fn event_index_warning(
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path, kind: &str) -> Result<T> {
-    let file = crate::tenant::open_real_file(path, kind)?;
+    let file = tenant::open_real_file(path, kind)?;
     serde_json::from_reader(file).with_context(|| format!("parse {kind} {}", path.display()))
 }
 
 fn optional_json<T: serde::de::DeserializeOwned>(path: &Path, kind: &str) -> Result<Option<T>> {
-    if !crate::tenant::real_file_exists(path, kind)? {
+    if !tenant::real_file_exists(path, kind)? {
         return Ok(None);
     }
     read_json(path, kind).map(Some)
@@ -1575,7 +1513,7 @@ fn regular_file_length(path: &Path, kind: &str) -> Result<u64> {
 }
 
 fn validate_regular_file(path: &Path, kind: &str) -> Result<()> {
-    if !crate::tenant::real_file_exists(path, kind)? {
+    if !tenant::real_file_exists(path, kind)? {
         bail!("{kind} does not exist: {}", path.display());
     }
     Ok(())
@@ -1585,8 +1523,8 @@ fn validate_record_ancestor(root: &Path, directory: &Path) -> Result<()> {
     if directory.parent() != Some(root) {
         bail!("Traffic Record is not a direct child of the Traffic collection");
     }
-    if !crate::tenant::real_dir_exists(root, "Traffic Record collection")?
-        || !crate::tenant::real_dir_exists(directory, "Traffic Record")?
+    if !tenant::real_dir_exists(root, "Traffic Record collection")?
+        || !tenant::real_dir_exists(directory, "Traffic Record")?
     {
         bail!("Traffic Record disappeared: {}", directory.display());
     }
@@ -1692,7 +1630,7 @@ fn atomic_write_json(path: &Path, name: &str, value: &impl Serialize) -> Result<
                 final_path.display()
             )
         })?;
-        crate::tenant::sync_dir(path)
+        tenant::sync_dir(path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -1701,7 +1639,7 @@ fn atomic_write_json(path: &Path, name: &str, value: &impl Serialize) -> Result<
 }
 
 fn remove_controlled_record_dir(path: &Path) -> Result<()> {
-    if !crate::tenant::real_dir_exists(path, "Traffic Record")? {
+    if !tenant::real_dir_exists(path, "Traffic Record")? {
         bail!("Traffic Record disappeared: {}", path.display());
     }
     let mut files = Vec::new();
@@ -1733,7 +1671,7 @@ fn restrict_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn utc_now() -> String {
+pub(crate) fn utc_now() -> String {
     let format = time::format_description::parse_borrowed::<1>(
         "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z",
     )
@@ -1743,7 +1681,7 @@ pub(super) fn utc_now() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00.000000000Z".to_string())
 }
 
-pub(super) fn anchored_at(observed_at: &str, offset_ns: &str) -> Option<String> {
+pub(crate) fn anchored_at(observed_at: &str, offset_ns: &str) -> Option<String> {
     use time::format_description::well_known::Rfc3339;
     let observed = OffsetDateTime::parse(observed_at, &Rfc3339).ok()?;
     let offset = offset_ns.parse::<i64>().ok()?;
@@ -1818,1047 +1756,10 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(super) fn offset_ns(origin: Instant) -> String {
+pub(crate) fn offset_ns(origin: Instant) -> String {
     origin.elapsed().as_nanos().to_string()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::traffic_interpretation::ProtocolDiagnostic;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn host_slug_and_flat_record_layout_are_safe() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, request) = store
-            .begin(
-                "POST",
-                "/https://example.com/v1",
-                Some("https://example.com/v1"),
-                "HTTP/1.1",
-                Vec::new(),
-                Some("example.com"),
-            )
-            .unwrap();
-        assert_eq!(record.directory.parent(), Some(store.root()));
-        assert_eq!(request.format_version, FORMAT_VERSION);
-        assert!(
-            record
-                .directory
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("active-")
-        );
-        assert!(
-            record
-                .directory
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .contains("example.com")
-        );
-        assert_eq!(
-            fs::metadata(store.root()).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        assert_eq!(
-            fs::metadata(record.directory.join(REQUEST_BODY))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        assert!(record.directory.join(SUMMARY_JSON).exists());
-        assert!(!record.directory.join(RESULT_JSON).exists());
-    }
-
-    #[test]
-    fn summary_is_terminal_and_legacy_result_is_derived() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Rejected,
-                None,
-            )
-            .unwrap();
-        let found = store.find(&record.id).unwrap();
-        assert!(found.summary.terminal);
-        let result = found.result.unwrap();
-        assert_eq!(result.outcome, Outcome::Rejected);
-        assert!(!result.ended_at.is_empty());
-        let terminal_name = found.directory.file_name().unwrap().to_string_lossy();
-        assert!(!terminal_name.starts_with("active-"));
-        assert_eq!(terminal_name, found.sort_key);
-        assert_eq!(record.locator.path(), found.directory);
-    }
-
-    #[test]
-    fn every_terminal_outcome_has_an_end_time_and_terminal_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        for outcome in [
-            Outcome::Completed,
-            Outcome::Rejected,
-            Outcome::UpstreamError,
-            Outcome::ClientDisconnected,
-            Outcome::RecordingFailed,
-            Outcome::ServerShutdown,
-        ] {
-            let (record, _) = store
-                .begin(
-                    "GET",
-                    "/outcome",
-                    None,
-                    "HTTP/1.1",
-                    Vec::new(),
-                    Some("example.test"),
-                )
-                .unwrap();
-            let result = store
-                .finish(
-                    &record,
-                    Instant::now(),
-                    &RuntimeMeasurements::default(),
-                    outcome,
-                    None,
-                )
-                .unwrap();
-            let stored = store.find(&record.id).unwrap();
-            assert_eq!(stored.result.as_ref().unwrap().ended_at, result.ended_at);
-            assert_eq!(stored.result.as_ref().unwrap().outcome, outcome);
-            assert!(
-                !stored
-                    .directory
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("active-")
-            );
-        }
-    }
-
-    #[test]
-    fn terminal_summary_is_immutable_to_late_checkpoints() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin("GET", "/late", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Completed,
-                None,
-            )
-            .unwrap();
-        let before = serde_json::to_value(store.find(&record.id).unwrap().summary).unwrap();
-
-        let changed = store
-            .update_summary(&record.locator, &record.summary, |summary| {
-                summary.timing.upstream_request_body_completed_at_ns = Some("999".to_string());
-                true
-            })
-            .unwrap();
-
-        assert!(!changed);
-        assert_eq!(
-            serde_json::to_value(store.find(&record.id).unwrap().summary).unwrap(),
-            before
-        );
-    }
-
-    #[test]
-    fn response_metadata_publication_excludes_detail_readers() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin("GET", "/response", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let reader = store
-            .namespace
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(0);
-        let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(0);
-        let writer_store = store.clone();
-        let locator = record.locator.clone();
-        let summary = record.summary.clone();
-        let writer = std::thread::spawn(move || {
-            started_sender.send(()).unwrap();
-            let result = writer_store.write_response(
-                &locator,
-                &summary,
-                &ResponseMetadata {
-                    format_version: FORMAT_VERSION,
-                    source: ResponseSource::Upstream,
-                    headers_at: utc_now(),
-                    status: 200,
-                    http_version: "HTTP/1.1".to_string(),
-                    headers: Vec::new(),
-                },
-            );
-            finished_sender.send(result).unwrap();
-        });
-
-        started_receiver.recv().unwrap();
-        assert!(matches!(
-            finished_receiver.recv_timeout(Duration::from_millis(100)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-        drop(reader);
-        finished_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .unwrap();
-        writer.join().unwrap();
-
-        assert_eq!(
-            store.find(&record.id).unwrap().response.unwrap().status,
-            200
-        );
-    }
-
-    #[test]
-    fn safe_unprefixed_nonterminal_directory_remains_readable_without_migration() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = first
-            .begin(
-                "GET",
-                "/legacy",
-                None,
-                "HTTP/1.1",
-                Vec::new(),
-                Some("legacy.test"),
-            )
-            .unwrap();
-        let active_name = record.directory.file_name().unwrap().to_string_lossy();
-        let legacy_name = active_name.strip_prefix("active-").unwrap();
-        let legacy_path = first.root().join(legacy_name);
-        fs::rename(&record.directory, &legacy_path).unwrap();
-        drop(first);
-
-        let reopened = TrafficStore::open(temp.path()).unwrap();
-        let stored = reopened.find(&record.id).unwrap();
-        assert!(!stored.active);
-        assert!(stored.result.is_none());
-        assert_eq!(stored.directory, legacy_path);
-        assert!(stored.sort_key.starts_with("active-"));
-    }
-
-    #[test]
-    fn terminal_summary_under_active_name_stays_terminal_and_uses_expected_sort_key() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin(
-                "GET",
-                "/stranded",
-                None,
-                "HTTP/1.1",
-                Vec::new(),
-                Some("example.test"),
-            )
-            .unwrap();
-        let active_path = record.directory.clone();
-        store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::UpstreamError,
-                None,
-            )
-            .unwrap();
-        let terminal_path = record.locator.path();
-        fs::rename(&terminal_path, &active_path).unwrap();
-
-        let reopened = TrafficStore::open(temp.path()).unwrap();
-        let stored = reopened.find(&record.id).unwrap();
-        assert_eq!(stored.result.unwrap().outcome, Outcome::UpstreamError);
-        assert!(
-            stored
-                .directory
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("active-")
-        );
-        assert!(!stored.sort_key.starts_with("active-"));
-    }
-
-    #[test]
-    fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin(
-                "GET",
-                "/collision",
-                None,
-                "HTTP/1.1",
-                Vec::new(),
-                Some("example.test"),
-            )
-            .unwrap();
-        let active_path = record.directory.clone();
-        let first = store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::ServerShutdown,
-                None,
-            )
-            .unwrap();
-        let target = record.locator.path();
-        fs::rename(&target, &active_path).unwrap();
-        record.locator.set_path(active_path.clone());
-        fs::create_dir(&target).unwrap();
-
-        let repeated = store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Completed,
-                None,
-            )
-            .unwrap();
-
-        assert_eq!(repeated.outcome, Outcome::ServerShutdown);
-        assert_eq!(repeated.ended_at, first.ended_at);
-        assert!(active_path.exists());
-        assert!(target.exists());
-        let listed = store.scan().unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].request.id, record.id);
-        assert!(!listed[0].active);
-        let error = format!("{:#}", store.find(&record.id).unwrap_err());
-        assert!(
-            error.contains("Traffic request metadata does not exist"),
-            "the preserved collision directory must remain visibly invalid: {error}"
-        );
-    }
-
-    #[test]
-    fn normal_directory_order_matches_scanned_sort_keys_exactly() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (first_active, _) = store
-            .begin(
-                "GET",
-                "/first",
-                None,
-                "HTTP/1.1",
-                Vec::new(),
-                Some("z.test"),
-            )
-            .unwrap();
-        let (terminal, _) = store
-            .begin(
-                "GET",
-                "/terminal",
-                None,
-                "HTTP/1.1",
-                Vec::new(),
-                Some("a.test"),
-            )
-            .unwrap();
-        store
-            .finish(
-                &terminal,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Completed,
-                None,
-            )
-            .unwrap();
-        let (last_active, _) = store
-            .begin("GET", "/last", None, "HTTP/1.1", Vec::new(), Some("a.test"))
-            .unwrap();
-
-        let scan = store.scan().unwrap();
-        let scanned: Vec<_> = scan.iter().map(|record| record.sort_key.clone()).collect();
-        let mut names: Vec<_> = fs::read_dir(store.root())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort_by(|left, right| right.cmp(left));
-
-        assert_eq!(scanned, names);
-        assert_eq!(scan[0].request.id, last_active.id);
-        assert_eq!(scan[1].request.id, first_active.id);
-        assert_eq!(scan[2].request.id, terminal.id);
-    }
-
-    #[test]
-    fn derived_result_uses_the_finished_monotonic_offset() {
-        let mut summary = SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", None);
-        summary.terminal = true;
-        summary.timing.finished_at_ns = Some("1500000000".to_string());
-        summary.outcome = Some(Outcome::Completed);
-        refresh_assessment(&mut summary);
-
-        let result = summary_to_result(&summary);
-        assert!(result.ended_at.starts_with("2026-08-06T04:00:01"));
-    }
-
-    #[test]
-    fn assessment_preserves_evidence_and_prioritizes_recording_provider_transport_http_then_warning()
-     {
-        let mut summary = SummaryMetadata::test(
-            "018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12",
-            Some(ProtocolSummary::for_url(Some(
-                "https://api.example.test/v1/responses",
-            ))),
-        );
-        summary.terminal = true;
-        summary.outcome = Some(Outcome::UpstreamError);
-        summary.timing.finished_at_ns = Some("90".to_string());
-        summary.response = Some(SummaryResponseMetadata {
-            status: 401,
-            http_version: "HTTP/2".to_string(),
-        });
-        summary.errors.extend([
-            DiagnosticMetadata {
-                phase: "response".to_string(),
-                kind: "response_recording_failed".to_string(),
-                message: "response bytes could not be recorded".to_string(),
-                at_ns: "90".to_string(),
-            },
-            DiagnosticMetadata {
-                phase: "response".to_string(),
-                kind: "response_recording_failed".to_string(),
-                message: "response bytes could not be recorded".to_string(),
-                at_ns: "70".to_string(),
-            },
-        ]);
-        summary
-            .protocol
-            .as_mut()
-            .unwrap()
-            .errors
-            .push(ProtocolDiagnostic {
-                kind: "service_unavailable_error".to_string(),
-                message: "provider overloaded".to_string(),
-                at_ns: Some("10".to_string()),
-            });
-        summary.warnings.push(DiagnosticMetadata {
-            phase: "recording".to_string(),
-            kind: "event_index_failed".to_string(),
-            message: "timing index unavailable".to_string(),
-            at_ns: "20".to_string(),
-        });
-
-        refresh_assessment(&mut summary);
-        assert_eq!(summary.assessment.level, AssessmentLevel::Error);
-        assert_eq!(summary.assessment.issue_count, 4);
-        let primary = summary.assessment.primary.as_ref().unwrap();
-        assert_eq!(primary.source, AssessmentSource::Traffic);
-        assert_eq!(primary.kind, "response_recording_failed");
-        assert_eq!(
-            diagnostic_findings(&summary, false)
-                .iter()
-                .find(|finding| finding.kind == "response_recording_failed")
-                .unwrap()
-                .at_ns
-                .as_deref(),
-            Some("70")
-        );
-
-        summary
-            .errors
-            .retain(|error| error.kind != "response_recording_failed");
-        refresh_assessment(&mut summary);
-        assert_eq!(
-            summary.assessment.primary.as_ref().unwrap().source,
-            AssessmentSource::Provider
-        );
-
-        summary.protocol.as_mut().unwrap().errors.clear();
-        summary.errors.push(DiagnosticMetadata {
-            phase: "response".to_string(),
-            kind: "upstream_response_failed".to_string(),
-            message: "connection reset".to_string(),
-            at_ns: "30".to_string(),
-        });
-        refresh_assessment(&mut summary);
-        assert_eq!(
-            summary.assessment.primary.as_ref().unwrap().source,
-            AssessmentSource::Traffic
-        );
-
-        summary.errors.clear();
-        summary.outcome = Some(Outcome::Completed);
-        refresh_assessment(&mut summary);
-        assert_eq!(
-            summary.assessment.primary.as_ref().unwrap().source,
-            AssessmentSource::Http
-        );
-
-        summary.response = None;
-        refresh_assessment(&mut summary);
-        assert_eq!(
-            summary.assessment.primary.as_ref().unwrap().source,
-            AssessmentSource::Diagnostic
-        );
-        assert_eq!(summary.assessment.level, AssessmentLevel::Warning);
-    }
-
-    #[test]
-    fn client_disconnect_and_request_abort_are_warnings_but_recording_failure_is_error() {
-        for (kind, outcome, level) in [
-            (
-                "client_disconnected",
-                Outcome::ClientDisconnected,
-                AssessmentLevel::Warning,
-            ),
-            (
-                "request_body_failed",
-                Outcome::ClientDisconnected,
-                AssessmentLevel::Warning,
-            ),
-            (
-                "request_recording_failed",
-                Outcome::RecordingFailed,
-                AssessmentLevel::Error,
-            ),
-        ] {
-            let mut summary = SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", None);
-            summary.terminal = true;
-            summary.outcome = Some(outcome);
-            summary.timing.finished_at_ns = Some("10".to_string());
-            summary.errors.push(DiagnosticMetadata {
-                phase: "request".to_string(),
-                kind: kind.to_string(),
-                message: "request stream ended".to_string(),
-                at_ns: "10".to_string(),
-            });
-            refresh_assessment(&mut summary);
-            assert_eq!(summary.assessment.level, level, "{kind}");
-        }
-    }
-
-    #[test]
-    fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let outside = temp.path().join("outside");
-        fs::write(&outside, b"outside").unwrap();
-        let mut corrupted_records = Vec::new();
-        for corruption in ["request_metadata", "response_metadata", "request_body"] {
-            let (mut record, _) = store
-                .begin("GET", "/corrupt", None, "HTTP/1.1", Vec::new(), None)
-                .unwrap();
-            record.request_body.write_all(b"raw request").unwrap();
-            record.response_body.write_all(b"raw response").unwrap();
-            store
-                .write_response(
-                    &record.locator,
-                    &record.summary,
-                    &ResponseMetadata {
-                        format_version: FORMAT_VERSION,
-                        source: ResponseSource::Upstream,
-                        headers_at: utc_now(),
-                        status: 200,
-                        http_version: "HTTP/1.1".to_string(),
-                        headers: Vec::new(),
-                    },
-                )
-                .unwrap();
-            store
-                .finish(
-                    &record,
-                    Instant::now(),
-                    &RuntimeMeasurements::default(),
-                    Outcome::Completed,
-                    None,
-                )
-                .unwrap();
-            let directory = record.locator.path();
-            match corruption {
-                "request_metadata" => {
-                    fs::write(directory.join(REQUEST_JSON), b"not json").unwrap();
-                }
-                "response_metadata" => {
-                    fs::remove_file(directory.join(RESPONSE_JSON)).unwrap();
-                    std::os::unix::fs::symlink(&outside, directory.join(RESPONSE_JSON)).unwrap();
-                }
-                "request_body" => {
-                    fs::remove_file(directory.join(REQUEST_BODY)).unwrap();
-                    std::os::unix::fs::symlink(&outside, directory.join(REQUEST_BODY)).unwrap();
-                }
-                _ => unreachable!(),
-            }
-            corrupted_records.push((corruption, record.id));
-        }
-
-        assert_eq!(
-            store.scan_summaries().unwrap().len(),
-            corrupted_records.len()
-        );
-        for (corruption, id) in corrupted_records {
-            let error = format!("{:#}", store.find(&id).unwrap_err());
-            let expected = match corruption {
-                "request_metadata" => "parse Traffic request metadata",
-                "response_metadata" => "Traffic response metadata is not a regular file",
-                "request_body" => "Traffic request body is not a regular file",
-                _ => unreachable!(),
-            };
-            assert!(
-                error.contains(expected),
-                "{corruption} should fail detail reads for its own reason: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn recorded_headers_drop_connection_named_fields() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert("connection", "x-hop, keep-alive".parse().unwrap());
-        headers.insert("x-hop", "secret".parse().unwrap());
-        headers.insert("x-app", "kept".parse().unwrap());
-
-        let recorded = RecordedHeader::from_headers(&headers);
-
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].name, "x-app");
-    }
-
-    #[test]
-    fn persisted_metadata_uses_the_stable_schema_names() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin(
-                "POST",
-                "/https://example.com/v1/responses",
-                Some("https://example.com/v1/responses"),
-                "HTTP/2",
-                vec![RecordedHeader {
-                    name: "Session-Id".to_string(),
-                    value_base64: base64::engine::general_purpose::STANDARD
-                        .encode("opaque-session"),
-                }],
-                Some("example.com"),
-            )
-            .unwrap();
-        store
-            .write_response(
-                &record.locator,
-                &record.summary,
-                &ResponseMetadata {
-                    format_version: FORMAT_VERSION,
-                    source: ResponseSource::Upstream,
-                    headers_at: utc_now(),
-                    status: 200,
-                    http_version: "HTTP/2".to_string(),
-                    headers: vec![],
-                },
-            )
-            .unwrap();
-        let request: serde_json::Value =
-            serde_json::from_reader(fs::File::open(record.directory.join(REQUEST_JSON)).unwrap())
-                .unwrap();
-        let response: serde_json::Value =
-            serde_json::from_reader(fs::File::open(record.directory.join(RESPONSE_JSON)).unwrap())
-                .unwrap();
-        let summary: serde_json::Value =
-            serde_json::from_reader(fs::File::open(record.directory.join(SUMMARY_JSON)).unwrap())
-                .unwrap();
-        assert_eq!(request["schema_version"], FORMAT_VERSION);
-        assert_eq!(request["record_id"], record.id);
-        assert_eq!(request["kind"], "request");
-        assert!(request.get("format_version").is_none());
-        assert_eq!(response["kind"], "response");
-        assert!(response.get("source").is_none());
-        assert_eq!(summary["kind"], "summary");
-        assert_eq!(summary["request"]["method"], "POST");
-        assert_eq!(
-            summary["request"]["incoming_uri"],
-            "/https://example.com/v1/responses"
-        );
-        assert_eq!(summary["request"]["http_version"], "HTTP/2");
-        assert_eq!(summary["response"]["status"], 200);
-        assert_eq!(summary["assessment"]["level"], "active");
-        assert_eq!(summary["coding_agent_session_id"], "opaque-session");
-        assert_eq!(summary["protocol"]["family"], "openai_responses");
-        assert_eq!(summary["protocol"]["response_terminal"], false);
-        assert!(summary["protocol"]["model"]["requested"].is_null());
-        assert!(record.directory.join(RESPONSE_BODY).is_file());
-        assert!(!record.directory.join(RESULT_JSON).exists());
-    }
-
-    #[test]
-    fn version_one_summaries_are_unsupported() {
-        let error = validate_schema(1, "summary", "summary").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported Traffic schema version 1")
-        );
-    }
-
-    #[test]
-    fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin(
-                "POST",
-                "/https://example.com/v1/responses",
-                Some("https://example.com/v1/responses"),
-                "HTTP/2",
-                vec![],
-                Some("example.com"),
-            )
-            .unwrap();
-        store
-            .update_summary(&record.locator, &record.summary, |summary| {
-                summary.protocol.as_mut().unwrap().model.requested =
-                    Some("gpt-requested".to_string());
-                true
-            })
-            .unwrap();
-
-        let restarted = TrafficStore::open(temp.path()).unwrap();
-        let found = restarted.find(&record.id).unwrap();
-        assert_eq!(
-            found
-                .summary
-                .protocol
-                .as_ref()
-                .unwrap()
-                .model
-                .requested
-                .as_deref(),
-            Some("gpt-requested")
-        );
-
-        let summary_path = record.directory.join(SUMMARY_JSON);
-        let mut legacy: serde_json::Value =
-            serde_json::from_reader(fs::File::open(&summary_path).unwrap()).unwrap();
-        legacy.as_object_mut().unwrap().remove("protocol");
-        fs::write(&summary_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
-        let before_read = fs::read(&summary_path).unwrap();
-
-        let legacy_store = TrafficStore::open(temp.path()).unwrap();
-        assert!(
-            legacy_store
-                .find(&record.id)
-                .unwrap()
-                .summary
-                .protocol
-                .is_none()
-        );
-        assert_eq!(fs::read(summary_path).unwrap(), before_read);
-    }
-
-    #[test]
-    fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin(
-                "POST",
-                "/https://example.com/v1/responses",
-                Some("https://example.com/v1/responses"),
-                "HTTP/2",
-                vec![],
-                Some("example.com"),
-            )
-            .unwrap();
-        let barrier = Arc::new(std::sync::Barrier::new(3));
-        let locator = record.locator.clone();
-        let summary = record.summary.clone();
-        let first_store = store.clone();
-        let first_barrier = barrier.clone();
-        let first = std::thread::spawn(move || {
-            first_barrier.wait();
-            first_store
-                .update_summary(&locator, &summary, |value| {
-                    value.timing.upstream_request_body_completed_at_ns = Some("10".to_string());
-                    true
-                })
-                .unwrap();
-        });
-        let locator = record.locator.clone();
-        let summary = record.summary.clone();
-        let second_store = store.clone();
-        let second_barrier = barrier.clone();
-        let second = std::thread::spawn(move || {
-            second_barrier.wait();
-            second_store
-                .update_summary(&locator, &summary, |value| {
-                    value.protocol.as_mut().unwrap().model.effective =
-                        Some("gpt-effective".to_string());
-                    true
-                })
-                .unwrap();
-        });
-        barrier.wait();
-        first.join().unwrap();
-        second.join().unwrap();
-
-        let persisted = TrafficStore::open(temp.path())
-            .unwrap()
-            .find(&record.id)
-            .unwrap()
-            .summary;
-        assert_eq!(
-            persisted
-                .timing
-                .upstream_request_body_completed_at_ns
-                .as_deref(),
-            Some("10")
-        );
-        assert_eq!(
-            persisted.protocol.unwrap().model.effective.as_deref(),
-            Some("gpt-effective")
-        );
-    }
-
-    #[test]
-    fn missing_terminal_metadata_is_interrupted_unless_currently_active() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = first
-            .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        assert!(first.find(&record.id).unwrap().active);
-        let restarted = TrafficStore::open(temp.path()).unwrap();
-        assert!(!restarted.find(&record.id).unwrap().active);
-        assert!(restarted.find(&record.id).unwrap().result.is_none());
-    }
-
-    #[test]
-    fn collection_ignores_unknown_and_misnamed_direct_children() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        fs::write(store.root().join("unknown-file"), b"leave me alone").unwrap();
-        fs::create_dir(store.root().join("unknown-directory")).unwrap();
-        let (record, _) = store
-            .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let id = record.id.clone();
-        let renamed = store.root().join(format!("wrong-name-{id}"));
-        fs::rename(&record.directory, &renamed).unwrap();
-        assert!(store.scan().unwrap().is_empty());
-        let find_error = format!("{:#}", store.find(&id).unwrap_err());
-        assert!(
-            find_error.contains("Traffic Record directory name is not structurally valid"),
-            "{find_error}"
-        );
-        store.abandon_active(&id);
-        let delete_error = format!("{:#}", store.delete_ids(&[id]).unwrap_err());
-        assert!(
-            delete_error.contains("Traffic Record directory name is not structurally valid"),
-            "{delete_error}"
-        );
-        assert!(renamed.exists());
-    }
-
-    #[test]
-    fn explicit_lookup_rejects_duplicate_record_directories() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin("GET", "/duplicate", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let original_name = record.directory.file_name().unwrap().to_str().unwrap();
-        let duplicate = store.root().join(original_name.replace(
-            &format!("-invalid-{}", record.id),
-            &format!("-duplicate-{}", record.id),
-        ));
-        fs::create_dir(&duplicate).unwrap();
-        for entry in fs::read_dir(&record.directory).unwrap() {
-            let entry = entry.unwrap();
-            fs::copy(entry.path(), duplicate.join(entry.file_name())).unwrap();
-        }
-
-        let error = store.find(&record.id).unwrap_err().to_string();
-        assert!(
-            error.contains("multiple Traffic Record directories"),
-            "{error}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn opening_and_scanning_never_follow_symlinked_traffic_paths() {
-        use std::os::unix::fs::symlink;
-
-        let linked_root = tempfile::tempdir().unwrap();
-        let outside_collection = tempfile::tempdir().unwrap();
-        fs::write(outside_collection.path().join("keep"), b"outside").unwrap();
-        symlink(
-            outside_collection.path(),
-            linked_root.path().join("traffic"),
-        )
-        .unwrap();
-        let error = TrafficStore::open(linked_root.path())
-            .err()
-            .expect("a symlinked collection must be rejected")
-            .to_string();
-        assert!(error.contains("not a real directory"), "{error}");
-        assert_eq!(
-            fs::read(outside_collection.path().join("keep")).unwrap(),
-            b"outside"
-        );
-
-        let root = tempfile::tempdir().unwrap();
-        let outside_body = tempfile::tempdir().unwrap();
-        let target = outside_body.path().join("request.body");
-        fs::write(&target, b"secret").unwrap();
-        let store = TrafficStore::open(root.path()).unwrap();
-        let (record, _) = store
-            .begin("POST", "/unsafe", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let body = record.directory.join(REQUEST_BODY);
-        fs::remove_file(&body).unwrap();
-        symlink(&target, &body).unwrap();
-
-        assert!(store.scan().unwrap().is_empty());
-        assert_eq!(fs::read(target).unwrap(), b"secret");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn deletion_rejects_symlinked_record_entries_without_touching_targets() {
-        use std::os::unix::fs::symlink;
-
-        let temp = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let target = outside.path().join("secret");
-        fs::write(&target, b"keep").unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let (record, _) = store
-            .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        store
-            .finish(
-                &record,
-                Instant::now(),
-                &RuntimeMeasurements::default(),
-                Outcome::Rejected,
-                None,
-            )
-            .unwrap();
-        let terminal_directory = record.locator.path();
-        symlink(&target, terminal_directory.join("unsafe-link")).unwrap();
-        let error = store
-            .delete_ids(std::slice::from_ref(&record.id))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unsafe entry"), "{error}");
-        assert_eq!(fs::read(target).unwrap(), b"keep");
-        assert!(terminal_directory.exists());
-    }
-
-    #[test]
-    fn delete_all_rechecks_the_non_active_count_and_preserves_active_records() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        for _ in 0..2 {
-            let (record, _) = store
-                .begin("GET", "/bad", None, "HTTP/1.1", Vec::new(), None)
-                .unwrap();
-            store
-                .finish(
-                    &record,
-                    Instant::now(),
-                    &RuntimeMeasurements::default(),
-                    Outcome::Rejected,
-                    None,
-                )
-                .unwrap();
-        }
-        let (active, _) = store
-            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let error = store.delete_all(1).unwrap_err().to_string();
-        assert_eq!(
-            error,
-            "deletable Traffic Record count changed (expected 1, now 2)"
-        );
-        assert_eq!(store.scan().unwrap().len(), 3);
-        assert_eq!(store.delete_all(2).unwrap(), 2);
-        let remaining = store.scan().unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].request.id, active.id);
-        assert!(remaining[0].active);
-    }
-
-    #[test]
-    fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anything() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = TrafficStore::open(temp.path()).unwrap();
-        let make_finished = |uri| {
-            let (record, _) = store
-                .begin("GET", uri, None, "HTTP/1.1", Vec::new(), None)
-                .unwrap();
-            let id = record.id.clone();
-            store
-                .finish(
-                    &record,
-                    Instant::now(),
-                    &RuntimeMeasurements::default(),
-                    Outcome::Rejected,
-                    None,
-                )
-                .unwrap();
-            id
-        };
-        let first = make_finished("/first");
-        let second = make_finished("/second");
-        let (active, _) = store
-            .begin("GET", "/active", None, "HTTP/1.1", Vec::new(), None)
-            .unwrap();
-        let missing = Uuid::now_v7().to_string();
-
-        for (ids, expected) in [
-            (Vec::new(), "at least one"),
-            (vec![first.clone(), first.clone()], "must not be repeated"),
-            (
-                vec![
-                    first.clone(),
-                    "550e8400-e29b-41d4-a716-446655440000".to_string(),
-                ],
-                "not UUID v7",
-            ),
-            (vec![first.clone(), missing], "not found"),
-            (vec![first.clone(), active.id.clone()], "active Traffic"),
-        ] {
-            let error = store.delete_ids(&ids).unwrap_err().to_string();
-            assert!(error.contains(expected), "{ids:?}: {error}");
-            assert!(
-                store.find(&first).is_ok(),
-                "{ids:?} removed the first record"
-            );
-            assert!(
-                store.find(&second).is_ok(),
-                "{ids:?} removed the second record"
-            );
-        }
-
-        assert_eq!(store.delete_ids(&[first, second]).unwrap(), 2);
-        let remaining = store.scan().unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].request.id, active.id);
-        assert!(remaining[0].active);
-    }
-}
+#[path = "traffic_store_tests.rs"]
+mod tests;

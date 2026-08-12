@@ -16,7 +16,7 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
-const UUID_TEXT_LEN: usize = 36;
+pub(crate) const UUID_TEXT_LEN: usize = 36;
 const UUID_SUFFIX_LEN: usize = 12;
 const LIST_ID_MIN_WIDTH: usize = UUID_SUFFIX_LEN;
 
@@ -128,9 +128,9 @@ pub(crate) fn walk_jsonl_tolerant(
     for entry in walkdir::WalkDir::new(base) {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(e) => {
+            Err(error) => {
                 out.errors.push(terminal_safe(&format!(
-                    "walk session directory {}: {e}",
+                    "walk session directory {}: {error}",
                     safe_path(base)
                 )));
                 continue;
@@ -177,7 +177,8 @@ fn try_for_each_json_line(
 }
 
 /// Stream parsed JSONL records to `visit`, returning the number of malformed
-/// records skipped. Open, size-limit, and read failures remain errors.
+/// records skipped. A line that is not valid UTF-8 JSON counts as a malformed
+/// record; open, size-limit, and I/O read failures remain errors.
 ///
 /// A Tenant's Transcripts can be hundreds of megabytes and `session list`
 /// visits every one, so neither a complete file nor all parsed records are held
@@ -190,7 +191,7 @@ fn try_for_each_json_line_with_limit(
 ) -> Result<usize> {
     let file = open_session_transcript(home, path)?;
     let mut reader = io::BufReader::new(file);
-    let mut line = String::new();
+    let mut line = Vec::new();
     let mut line_number = 0_u64;
     let mut malformed_lines = 0;
     loop {
@@ -201,7 +202,7 @@ fn try_for_each_json_line_with_limit(
             // record itself rather than rejecting an exact-size record just
             // because it has a conventional trailing newline.
             .take(max_line_bytes.saturating_add(2))
-            .read_line(&mut line);
+            .read_until(b'\n', &mut line);
         match read {
             Ok(0) => return Ok(malformed_lines),
             Err(error) => {
@@ -209,8 +210,8 @@ fn try_for_each_json_line_with_limit(
                     .with_context(|| format!("read session transcript {}", safe_path(path)));
             }
             Ok(_) => {
-                let record = line.strip_suffix('\n').unwrap_or(&line);
-                let record = record.strip_suffix('\r').unwrap_or(record);
+                let record = line.strip_suffix(b"\n").unwrap_or(&line);
+                let record = record.strip_suffix(b"\r").unwrap_or(record);
                 if record.len() as u64 > max_line_bytes {
                     bail!(
                         "session transcript line {} exceeds the {} byte limit: {}",
@@ -222,7 +223,7 @@ fn try_for_each_json_line_with_limit(
                 line_number += 1;
             }
         }
-        match serde_json::from_str::<Value>(&line) {
+        match serde_json::from_slice::<Value>(&line) {
             Ok(value) if !visit(&value)? => return Ok(malformed_lines),
             Ok(_) => {}
             Err(_) => malformed_lines += 1,
@@ -550,8 +551,8 @@ pub(crate) struct Prompt {
 /// a real prompt. The discovery walks and the summary/get loops that consume
 /// those answers ([`files`](Self::files) / [`list_files`](Self::list_files) /
 /// [`summarize_in`](Self::summarize_in) /
-/// [`prompts_in`](Self::prompts_in)) are written once here as provided methods,
-/// so the two backends can't drift out of sync.
+/// [`for_each_prompt_in`](Self::for_each_prompt_in)) are written once here as
+/// provided methods, so the two backends can't drift out of sync.
 pub(crate) trait SessionBackend {
     /// Path components of the transcript tree beneath the tenant home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
@@ -591,16 +592,16 @@ pub(crate) trait SessionBackend {
     /// user-like records. This is the heart of the divergence: Claude keys off
     /// `promptSource:typed`, Codex off a wrapper-filtered `response_item` user
     /// message.
-    fn prompt_record(&self, v: &Value) -> PromptRecord;
+    fn prompt_record(&self, value: &Value) -> PromptRecord;
 
     /// The session start timestamp from one parsed line; the first `Some` is
     /// retained. Claude answers for any line bearing a non-empty top-level
     /// `timestamp`; Codex answers for a `session_meta` timestamp.
-    fn start_ts_of(&self, v: &Value) -> Option<String>;
+    fn start_ts_of(&self, value: &Value) -> Option<String>;
 
     /// Lower-confidence timestamp candidate used only when
     /// [`start_ts_of`](Self::start_ts_of) never finds one.
-    fn fallback_start_ts_of(&self, _v: &Value) -> Option<String> {
+    fn fallback_start_ts_of(&self, _value: &Value) -> Option<String> {
         None
     }
 
@@ -608,7 +609,7 @@ pub(crate) trait SessionBackend {
     /// candidate wins; a session with none falls back to its first typed
     /// prompt. Default: no candidates (Codex has no ai-title); Claude overrides
     /// to surface `ai-title` lines.
-    fn title_of(&self, _v: &Value) -> Option<String> {
+    fn title_of(&self, _value: &Value) -> Option<String> {
         None
     }
 
@@ -651,8 +652,8 @@ pub(crate) trait SessionBackend {
         })
     }
 
-    #[cfg(test)]
     /// Test helper that derives the fixture home from the backend's tree.
+    #[cfg(test)]
     fn summarize(&self, path: &Path) -> Result<SessionSummary>
     where
         Self: Sized,
@@ -699,8 +700,8 @@ pub(crate) trait SessionBackend {
         Ok((count, diagnostics))
     }
 
-    #[cfg(test)]
     /// Test helper that derives the fixture home from the backend's tree.
+    #[cfg(test)]
     fn prompts(&self, path: &Path) -> Result<Vec<Prompt>>
     where
         Self: Sized,
@@ -792,7 +793,7 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
 
 const LIST_TITLE_MAX_CHARS: usize = 64;
 
-fn is_canonical_uuid(id: &str) -> bool {
+pub(crate) fn is_canonical_uuid(id: &str) -> bool {
     let bytes = id.as_bytes();
     bytes.len() == UUID_TEXT_LEN
         && bytes.iter().enumerate().all(|(index, byte)| {
@@ -976,7 +977,7 @@ fn delete_targets(
         // Match `list`: bulk deletion includes tool/injected-only transcripts
         // that have no typed prompt.
         let mut targets = backend.files(home)?;
-        targets.sort_by_key(|p| backend.id_of(p));
+        targets.sort_by_key(|path| backend.id_of(path));
         return Ok(targets);
     }
 
@@ -1040,10 +1041,10 @@ fn fmt_ts(ts: &str) -> String {
 /// Collapse runs of control characters and non-plain-space whitespace to a
 /// single space (titles are one-liners in the listing). Keep ordinary spaces as
 /// authored so readable prompt snippets do not get over-normalized.
-fn collapse_ws(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+fn collapse_ws(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
     let mut in_run = false;
-    for character in s.chars() {
+    for character in text.chars() {
         if character.is_control() || (character.is_whitespace() && character != ' ') {
             if !in_run {
                 out.push(' ');
@@ -1057,8 +1058,11 @@ fn collapse_ws(s: &str) -> String {
     out
 }
 
-fn list_title(s: &str) -> String {
-    collapse_ws(s).chars().take(LIST_TITLE_MAX_CHARS).collect()
+fn list_title(text: &str) -> String {
+    collapse_ws(text)
+        .chars()
+        .take(LIST_TITLE_MAX_CHARS)
+        .collect()
 }
 
 #[cfg(test)]

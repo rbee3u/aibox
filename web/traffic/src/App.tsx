@@ -1,7 +1,7 @@
 import { BookOpen, Box, GitFork, LoaderCircle, Radio, SunMoon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { createTrafficApi } from "./api";
+import { createTrafficApi, requestErrorMessage, requestWasCancelled } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
@@ -61,7 +61,7 @@ export function App({ api: providedApi }: AppProps) {
   const deletionBusy = deletion !== null;
 
   const reportError = useCallback((source: ErrorSource, cause: unknown) => {
-    const message = typeof cause === "string" ? cause : errorMessage(cause);
+    const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
     setErrors((current) => ({ ...current, [source]: message }));
   }, []);
   const clearError = useCallback((source: ErrorSource) => {
@@ -476,17 +476,6 @@ export function App({ api: providedApi }: AppProps) {
         />
       )}
     </div>
-  );
-}
-
-function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : "Traffic management request failed";
-}
-
-function requestWasCancelled(cause: unknown, signal: AbortSignal): boolean {
-  return (
-    signal.aborted ||
-    (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "AbortError")
   );
 }
 

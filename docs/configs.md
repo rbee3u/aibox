@@ -70,12 +70,13 @@ Run.
 `config create NAME` initializes a missing Managed Tenant and writes the
 built-in template. A complete same-name Named Config is an error. If a safe
 same-name directory is missing one expected Codex file, `create` validates the
-prospective complete Named Config and adds only the missing template file. Unknown
-entries, symlinks, unsafe modes, or invalid existing content are rejected.
+prospective complete Named Config and adds only the missing template file.
+Unknown entries, symlinks, unsafe modes, or invalid existing content are
+rejected.
 
 `config list` returns only complete, structurally safe Named Configs. It does
-not parse their contents, so an invalid but complete Named Config remains visible for
-inspection or repair.
+not parse their contents, so an invalid but complete Named Config remains
+visible for inspection or repair.
 
 `config get NAME` and `config get --current` print every expected native file
 in the table order, with headings such as:
@@ -102,8 +103,8 @@ failure does not roll back an earlier file.
 After every fully successful `config edit NAME`, including an edit that leaves
 the bytes unchanged, aibox asks once whether to apply that Named Config to the
 selected Coding Agent and Tenant Current Config when stdin is a terminal. The
-prompt names the complete target and defaults to No. Only the exact answers
-`y`, `Y`, `yes`, or `YES` trigger Application. Other input, an empty line, or
+prompt names the complete target and defaults to No. Only a case-insensitive
+`y` or `yes` triggers Application. Other input, an empty line, or
 EOF leaves Current Config unchanged and exits successfully. Non-interactive
 edits silently skip the prompt. `config edit --current` and failed or partially
 committed Named Config edits never prompt.

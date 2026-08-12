@@ -101,8 +101,6 @@ fn strip_through<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
 }
 
 fn first_line_is_instructions_preamble(text: &str) -> bool {
-    // `^#[^\n]* instructions for `: a `#` at string start, then " instructions
-    // for " somewhere on that same first line.
     text.lines()
         .next()
         .is_some_and(|first| first.starts_with('#') && first.contains(" instructions for "))
@@ -163,20 +161,8 @@ impl SessionBackend for Codex {
 }
 
 fn trailing_uuid(stem: &str) -> Option<&str> {
-    let suffix = stem.get(stem.len().checked_sub(36)?..)?;
-    is_uuid(suffix).then_some(suffix)
-}
-
-fn is_uuid(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && bytes.iter().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                *byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
+    let suffix = stem.get(stem.len().checked_sub(session::UUID_TEXT_LEN)?..)?;
+    session::is_canonical_uuid(suffix).then_some(suffix)
 }
 
 /// Classify a `response_item` user message after joining its text items and

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError } from "./api";
+import { ApiError, requestErrorMessage, requestWasCancelled } from "./api";
 import { bodyComplete, bodyHeaders, contentCoding, isSseResponse } from "./bodyPresentation";
 import type {
   BodyKind,
@@ -55,7 +55,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
   const bodyController = useRef<AbortController | null>(null);
 
   const reportError = useCallback((source: InspectionErrorSource, cause: unknown) => {
-    const message = typeof cause === "string" ? cause : errorMessage(cause);
+    const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
     setErrors((current) => ({ ...current, [source]: message }));
   }, []);
   const clearError = useCallback((source: InspectionErrorSource) => {
@@ -249,7 +249,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
               ...current,
               [kind]: {
                 bytes: null,
-                error: `Decoded Source unavailable: ${errorMessage(cause)}`,
+                error: `Decoded Source unavailable: ${requestErrorMessage(cause)}`,
               },
             }));
           }
@@ -272,7 +272,7 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
               state: "unavailable",
               events: current?.events ?? [],
               next_sequence: timingNextSequence.current,
-              warning: `SSE Event timing unavailable: ${errorMessage(cause)}`,
+              warning: `SSE Event timing unavailable: ${requestErrorMessage(cause)}`,
             }));
           }
         }
@@ -380,17 +380,6 @@ export function useRecordInspection({ api, records }: UseRecordInspectionOptions
     syncCurrentState,
     tab,
   };
-}
-
-function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : "Traffic management request failed";
-}
-
-function requestWasCancelled(cause: unknown, signal: AbortSignal): boolean {
-  return (
-    signal.aborted ||
-    (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "AbortError")
-  );
 }
 
 function isNotFound(cause: unknown): cause is ApiError {

@@ -297,7 +297,7 @@ impl TenantAgent {
     }
 }
 
-/// Execute one parsed Tenant management command.
+/// Execute one parsed Tenant command and return its process exit code.
 pub fn dispatch(root: &Path, command: &TenantCommand) -> Result<i32> {
     match command {
         TenantCommand::List => {
@@ -355,7 +355,18 @@ pub fn delete_tenants(root: &Path, tenants: &[String], all: bool, yes: bool) -> 
         bail!("provide at least one Tenant name or use --all");
     }
     let targets = if all {
-        list_tenants(root)?
+        let mut targets = list_tenants(root)?;
+        // An interrupted create/delete leaves `$creating-`/`$deleting-`
+        // staging data that `list_tenants` hides; `--all` must converge it
+        // too, or an interrupted deletion keeps a Tenant Home (and its
+        // credentials) invisible forever.
+        for name in interrupted_tenant_names(root)? {
+            if !targets.contains(&name) {
+                targets.push(name);
+            }
+        }
+        targets.sort();
+        targets
     } else {
         let mut unique = Vec::new();
         for tenant in tenants {
@@ -381,6 +392,39 @@ pub fn delete_tenants(root: &Path, tenants: &[String], all: bool, yes: bool) -> 
         delete_one(root, &tenant)?;
     }
     Ok(())
+}
+
+/// Managed Tenant names whose create/delete staging directories remain in the
+/// Tenant collection after an interruption.
+fn interrupted_tenant_names(root: &Path) -> Result<Vec<String>> {
+    let collection = root.join(TENANTS_DIR);
+    if !real_dir_exists(&collection, "Tenant collection")? {
+        return Ok(Vec::new());
+    }
+    let entries =
+        fs::read_dir(&collection).with_context(|| format!("read {}", collection.display()))?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let staged = name
+            .strip_prefix(CREATING_PREFIX)
+            .or_else(|| name.strip_prefix(DELETING_PREFIX));
+        if let Some(staged) = staged
+            && is_safe_name(staged)
+        {
+            names.push(staged.to_string());
+        }
+    }
+    Ok(names)
 }
 
 fn delete_one(root: &Path, name: &str) -> Result<()> {
@@ -734,11 +778,11 @@ fn confirm_delete(tenant: &str) -> Result<bool> {
     io::stderr().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
-#[cfg(unix)]
 /// Restrict an existing regular file to owner read/write permissions.
+#[cfg(unix)]
 #[cfg(test)]
 pub fn set_600(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -941,6 +985,22 @@ mod tests {
         assert!(!creating.exists());
         assert!(!deleting.exists());
         assert_eq!(list_tenants(root.path()).unwrap(), ["work"]);
+    }
+
+    #[test]
+    fn delete_all_converges_interrupted_tenant_transitions() {
+        let root = tempfile::tempdir().unwrap();
+        let tenants = root.path().join(TENANTS_DIR);
+        fs::create_dir(&tenants).unwrap();
+        fs::create_dir(tenants.join("$deleting-gone")).unwrap();
+        fs::write(tenants.join("$deleting-gone/auth.json"), b"secret").unwrap();
+        fs::create_dir(tenants.join("$creating-half")).unwrap();
+
+        assert!(list_tenants(root.path()).unwrap().is_empty());
+        delete_tenants(root.path(), &[], true, true).unwrap();
+
+        assert!(!tenants.join("$deleting-gone").exists());
+        assert!(!tenants.join("$creating-half").exists());
     }
 
     #[cfg(unix)]

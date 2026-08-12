@@ -59,8 +59,8 @@ Each Run creates a disposable container with these possible bind mounts:
 
 The Filesystem Sandbox is not a complete authority boundary. Networking is
 enabled; credentials can authorize remote actions; writable mounts can be
-changed or deleted; and aibox adds no CPU or memory limits. The built-in Agent
-Named Config templates created by `config create` disable Coding Agent approval
+changed or deleted; and aibox adds no CPU or memory limits. The built-in Named
+Config templates created by `config create` disable Coding Agent approval
 prompts because Docker is the Filesystem Sandbox. Named Configs are never
 created or applied automatically. Review the template before applying it when
 a more restrictive policy is required.
@@ -70,9 +70,10 @@ cleanup behavior.
 
 ## Tenants
 
-The Managed Tenant `default` is initialized by the first validated Run attempt,
-even if Docker later fails or the Coding Agent exits nonzero. Use a different
-Tenant when work should not share credentials, settings, or Sessions:
+The Managed Tenant `default` is initialized by the first Run attempt that passes
+mount validation and finds the image, even if Docker later fails or the Coding
+Agent exits nonzero. Use a different Tenant when work should not share
+credentials, settings, or Sessions:
 
 ```sh
 aibox tenant create work
@@ -81,10 +82,14 @@ aibox tenant list
 aibox tenant delete work
 ```
 
+Tenant Homes, Named Configs, and Traffic Records persist under `$HOME/.aibox`.
+`AIBOX_ROOT` selects another location, which must be a directory dedicated to
+aibox because Tenant deletion removes subtrees from it.
+
 A Managed Tenant named `host` is ordinary and runnable. The real host Home is
-the separate Host Tenant, selected only by `--host` on `config` and `session`
-commands. Read [Tenants](docs/tenants.md) before deleting data or sharing
-toolchains.
+the separate Host Tenant, selected only by `--host` on `config`, `session`, and
+`component` commands. Read [Tenants](docs/tenants.md) before deleting data or
+sharing toolchains.
 
 ## Components
 

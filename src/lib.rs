@@ -19,6 +19,7 @@ mod runspec;
 mod session;
 mod session_claude;
 mod session_codex;
+mod sync;
 mod tenant;
 #[cfg(test)]
 mod testutil;
@@ -232,8 +233,8 @@ fn write_line(out: &mut impl std::io::Write, line: &str) -> Result<bool> {
     }
     match out.write_all(b"\n") {
         Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
-        Err(e) => Err(e).context("write to stdout"),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(error).context("write to stdout"),
     }
 }
 
@@ -244,8 +245,8 @@ fn write_text(out: &mut impl std::io::Write, text: &str) -> Result<bool> {
 fn write_bytes(out: &mut impl std::io::Write, bytes: &[u8]) -> Result<bool> {
     match out.write_all(bytes) {
         Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
-        Err(e) => Err(e).context("write to stdout"),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(error).context("write to stdout"),
     }
 }
 
@@ -270,13 +271,13 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
                 passthrough,
                 &root,
                 image_override.as_deref(),
-                context.docker(),
+                &context.docker(),
             )
         }
         Command::Build(args) => {
             reject_passthrough("build takes no pass-through args", passthrough)?;
             let image_override = context.image_override()?;
-            run_build_with(&args, image_override.as_deref(), context.docker())
+            run_build_with(&args, image_override.as_deref(), &context.docker())
         }
         Command::Completion(args) => {
             reject_passthrough("completion takes no pass-through args", passthrough)?;
@@ -292,28 +293,7 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
         }
         Command::Config(args) => {
             reject_passthrough("config takes no pass-through args", passthrough)?;
-            let root = context.root()?;
-            if matches!(
-                &args.command,
-                crate::cli::ConfigCommand::PropagateAuth { .. }
-            ) {
-                if args.tenant.tenant.is_some() {
-                    anyhow::bail!("config propagate-auth does not accept --tenant");
-                }
-                if args.agent == Some(AgentKind::Claude) {
-                    anyhow::bail!("config propagate-auth supports only --agent codex");
-                }
-                context.propagate_auth(&root)
-            } else {
-                let agent = args.agent.unwrap_or(AgentKind::Codex);
-                let selected = context.resolve_tenant_agent(
-                    agent,
-                    &root,
-                    args.tenant.host,
-                    args.tenant.tenant_name(),
-                )?;
-                config::dispatch(&selected, &args.command)
-            }
+            run_config_command(&args, context)
         }
         Command::Session(args) => {
             let agent = args.agent.unwrap_or(AgentKind::Codex);
@@ -324,6 +304,25 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
             traffic::dispatch(&args)
         }
     }
+}
+
+/// Credential Propagation is global, so it rejects the Tenant and Coding Agent
+/// selectors that every other `config` subcommand resolves first.
+fn run_config_command(args: &cli::ConfigArgs, context: &CommandContext) -> Result<i32> {
+    let root = context.root()?;
+    if matches!(&args.command, cli::ConfigCommand::PropagateAuth { .. }) {
+        if args.tenant.tenant.is_some() {
+            anyhow::bail!("config propagate-auth does not accept --tenant");
+        }
+        if args.agent == Some(AgentKind::Claude) {
+            anyhow::bail!("config propagate-auth supports only --agent codex");
+        }
+        return context.propagate_auth(&root);
+    }
+    let agent = args.agent.unwrap_or(AgentKind::Codex);
+    let selected =
+        context.resolve_tenant_agent(agent, &root, args.tenant.host, args.tenant.tenant_name())?;
+    config::dispatch(&selected, &args.command)
 }
 
 fn run_session_command(
@@ -350,7 +349,7 @@ fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()>
 fn run_build_with(
     args: &BuildArgs,
     image_override: Option<&str>,
-    docker: DockerSource,
+    docker: &DockerSource,
 ) -> Result<i32> {
     let image = image_for(image_override)?;
     let cache = if args.force {
@@ -376,7 +375,7 @@ fn run_agent_with(
     passthrough: &[OsString],
     root: &Path,
     image_override: Option<&str>,
-    docker: DockerSource,
+    docker: &DockerSource,
 ) -> Result<i32> {
     let image = image_for(image_override)?;
     if image_override.is_some() {

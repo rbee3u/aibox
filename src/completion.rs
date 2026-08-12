@@ -386,7 +386,7 @@ fn completion_command(context: CompletionContext, current_dir: Option<PathBuf>) 
     let command = add_run_completers(Cli::command(), current_dir);
     let command = add_tenant_completers(command, context.clone());
     let command = add_component_completers(command, context.clone());
-    let command = add_config_completers(command, context.clone());
+    let command = add_config_completers(command, &context);
     add_session_completers(command, context)
 }
 
@@ -460,7 +460,7 @@ fn add_component_completers(command: clap::Command, context: CompletionContext) 
     })
 }
 
-fn add_config_completers(command: clap::Command, context: CompletionContext) -> clap::Command {
+fn add_config_completers(command: clap::Command, context: &CompletionContext) -> clap::Command {
     let get = context.clone();
     let edit = context.clone();
     let apply = context.clone();

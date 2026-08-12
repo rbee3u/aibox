@@ -1,6 +1,6 @@
 # Define First Token by relay-compatible SSE data arrival
 
-Status: accepted
+Status: accepted; Record coexistence superseded by ADR-0011
 
 Traffic diagnostics need a First Token value comparable to the values exposed
 by common model API relays. aibox therefore records First Token for recognized
@@ -33,6 +33,7 @@ longer promises a tokenizer token or semantic model output. It can be present
 for a failed stream, a ping, or unparseable data. Protocol parsing, diagnostics,
 Usage, and terminal detection still wait for complete SSE Events and remain
 independent of this checkpoint. Unknown protocols and non-streaming responses
-retain no First Token. The Traffic schema is not upgraded and existing Records
-are neither migrated nor backfilled, so old and new semantics can coexist until
-operators clear older Traffic Records.
+retain no First Token. This decision upgraded no schema and backfilled no
+existing Record. [ADR 0011](0011-materialize-traffic-summary-assessment.md)
+later broke the format to v2 without a version-1 reader, so Records written
+under the earlier First Token semantics are unsupported rather than coexisting.

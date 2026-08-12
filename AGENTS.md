@@ -1,23 +1,23 @@
 # AGENTS.md
 
 `aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
-container. The container is the Filesystem Sandbox boundary.
-`CONTEXT.md` defines the canonical domain language; keep code, clap help, and
-user documentation aligned with it. Architectural decisions live in
-`docs/adr/`.
+container. The container is the Filesystem Sandbox boundary. `CONTEXT.md`
+defines the canonical domain language; keep code, clap help, and user
+documentation aligned with it. Architectural decisions live in `docs/adr/`.
 
 `README.md` is the concise entry point for evaluation, installation, first use,
 and the core safety model. Advanced behavior has one canonical home in
-`docs/tenants.md`, `docs/configs.md`, or `docs/sandbox.md`; keep examples and
-clap help aligned without copying full references between them.
+`docs/tenants.md`, `docs/configs.md`, `docs/sandbox.md`, or
+`docs/traffic-ui.md`; keep examples and clap help aligned without copying full
+references between them.
 
 ## Constraints
 
 **Centralize Coding Agent contracts.** Put agent-specific paths, Config
 files/templates, empty Current Config content, and invocation behavior in
-`AgentKind` in `agent.rs`. Keep
-transcript parsing in `session_claude.rs` and `session_codex.rs`. The Docker
-image, container Home, and orchestration remain shared.
+`AgentKind` in `agent.rs`. Keep transcript parsing in `session_claude.rs` and
+`session_codex.rs`. The Docker image, container Home, and orchestration remain
+shared.
 
 **Preserve the CLI boundary.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. `run`, `config`, and
@@ -74,12 +74,12 @@ fails before writing on an unsafe structural view.
 **Keep Current Config direct and explicit.** `config get` and `config edit`
 require either a Named Config name or `--current`; other Config commands operate
 only on Named Configs except for global Credential Propagation. `get` prints
-every native file in Agent-defined order
-with file headings and without credential redaction. `edit` opens and commits
-each file separately in that order. Named Config edits validate the selected
-file before committing; Current Config edits preserve arbitrary bytes without
-syntax validation and may initialize a missing Managed Tenant. A later editor
-failure does not roll back an earlier committed file.
+every native file in Agent-defined order with file headings and without
+credential redaction. `edit` opens and commits each file separately in that
+order. Named Config edits validate the selected file before committing; Current
+Config edits preserve arbitrary bytes without syntax validation and may
+initialize a missing Managed Tenant. A later editor failure does not roll back
+an earlier committed file.
 
 **Keep Agent permissions native.** Both built-in Named Config templates use
 native Current Config for non-interactive, unrestricted operation. Do not add
@@ -146,11 +146,13 @@ Unix sockets: exercise Axum routers as in-memory Tower services and drive body
 streams with deterministic synchronization. Keep real-socket Reqwest transport
 checks explicit and ignored, and run them only in a network-permitted host or
 CI environment. Test the embedded UI in layers: Rust route/API/security tests,
-`node --check assets/traffic.js` plus Node tests for extracted pure JavaScript,
-then optional headless Chromium/Playwright interaction and screenshots in a
-development image or CI. Desktop Browser access is never required for routine
-changes. A headless browser must use the same container's loopback listener;
-do not publish or weaken the loopback-only management interface for testing.
+then Vitest module and component tests for the React and TypeScript source in
+`web/traffic/`, then optional headless Chromium/Playwright interaction and
+screenshots in a development image or CI. Edit that source rather than the
+generated `assets/traffic.*` bundle, as `docs/traffic-ui.md` describes. Desktop
+Browser access is never required for routine changes. A headless browser must
+use the same container's loopback listener; do not publish or weaken the
+loopback-only management interface for testing.
 
 **Keep Run transient and the crate CLI-only.** Do not add Run History or a
 Run-to-Session mapping. A validated Run attempt may initialize its Tenant before
@@ -168,7 +170,7 @@ operation per process. Register the cidfile before spawning Docker, register
 the child immediately afterward, and keep cleanup armed until `finish_child`
 checks for a container that outlived the Docker client.
 
-**Keep the embedded Dockerfile context-free.** `docker.rs` passes it to
+**Keep the embedded Dockerfile context-free.** `docker_image.rs` passes it to
 `docker build -f -` with an empty context, so dependencies must be fetched
 during the build.
 

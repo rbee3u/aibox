@@ -15,17 +15,17 @@ impl SessionBackend for TestBackend {
 
     fn id_of(&self, path: &Path) -> String {
         path.file_stem()
-            .and_then(|s| s.to_str())
+            .and_then(|stem| stem.to_str())
             .unwrap_or("")
             .to_string()
     }
 
-    fn prompt_record(&self, v: &Value) -> PromptRecord {
-        if v.get("unsupported").and_then(Value::as_bool) == Some(true) {
+    fn prompt_record(&self, value: &Value) -> PromptRecord {
+        if value.get("unsupported").and_then(Value::as_bool) == Some(true) {
             return PromptRecord::UnsupportedUserLike;
         }
-        match v.get("typed").and_then(Value::as_str) {
-            Some(text) if v.get("partial").and_then(Value::as_bool) == Some(true) => {
+        match value.get("typed").and_then(Value::as_str) {
+            Some(text) if value.get("partial").and_then(Value::as_bool) == Some(true) => {
                 PromptRecord::TypedWithUnsupported(text.to_string())
             }
             Some(text) => PromptRecord::Typed(text.to_string()),
@@ -33,8 +33,8 @@ impl SessionBackend for TestBackend {
         }
     }
 
-    fn start_ts_of(&self, v: &Value) -> Option<String> {
-        v.get("ts").and_then(Value::as_str).map(str::to_string)
+    fn start_ts_of(&self, value: &Value) -> Option<String> {
+        value.get("ts").and_then(Value::as_str).map(str::to_string)
     }
 }
 
@@ -43,6 +43,85 @@ fn write_session(home: &Path, id: &str) -> PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{}\n").unwrap();
     path
+}
+
+struct ExplicitFilesBackend {
+    files: Vec<PathBuf>,
+    list_errors: Vec<String>,
+    files_error: Option<String>,
+}
+
+impl ExplicitFilesBackend {
+    fn new(files: Vec<PathBuf>) -> Self {
+        ExplicitFilesBackend {
+            files,
+            list_errors: Vec::new(),
+            files_error: None,
+        }
+    }
+
+    fn with_list_errors(files: Vec<PathBuf>, list_errors: Vec<String>) -> Self {
+        ExplicitFilesBackend {
+            files,
+            list_errors,
+            files_error: None,
+        }
+    }
+
+    fn with_files_error(message: &str) -> Self {
+        ExplicitFilesBackend {
+            files: Vec::new(),
+            list_errors: Vec::new(),
+            files_error: Some(message.to_string()),
+        }
+    }
+}
+
+impl SessionBackend for ExplicitFilesBackend {
+    // Never reached: this backend overrides both discovery walks with its
+    // explicit lists, which is the point — the shared list/get/delete
+    // logic under test takes whatever discovery hands it.
+    fn session_dir_components(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn keep_transcript_name(&self, _name: &str) -> bool {
+        true
+    }
+
+    fn files(&self, _home: &Path) -> Result<Vec<PathBuf>> {
+        if let Some(message) = &self.files_error {
+            bail!("{message}");
+        }
+        Ok(self.files.clone())
+    }
+
+    fn list_files(&self, _home: &Path) -> Result<SessionDiscovery> {
+        Ok(SessionDiscovery {
+            files: self.files.clone(),
+            errors: self.list_errors.clone(),
+        })
+    }
+
+    fn id_of(&self, path: &Path) -> String {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn prompt_record(&self, value: &Value) -> PromptRecord {
+        value
+            .get("typed")
+            .and_then(Value::as_str)
+            .map_or(PromptRecord::NotTyped, |text| {
+                PromptRecord::Typed(text.to_string())
+            })
+    }
+
+    fn start_ts_of(&self, value: &Value) -> Option<String> {
+        value.get("ts").and_then(Value::as_str).map(str::to_string)
+    }
 }
 
 #[test]
@@ -134,6 +213,47 @@ fn diagnostic_records_keep_readable_output_and_report_their_exact_kind() {
 }
 
 #[test]
+fn invalid_utf8_lines_are_malformed_records_that_keep_the_transcript_readable() {
+    // A crash can truncate the transcript inside a multi-byte character; the
+    // remaining readable prompts must stay visible with a warning instead of
+    // turning the whole Transcript into a read failure.
+    let home = tempfile::tempdir().unwrap();
+    let path = write_session(home.path(), "diagnostic");
+    std::fs::write(
+        &path,
+        b"\xff\xfenot-utf-8\n{\"typed\":\"visible\",\"ts\":\"2026-01-01T00:00:00Z\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let summary = TestBackend.summarize(&path).unwrap();
+    assert_eq!(
+        summary.diagnostics,
+        TranscriptDiagnostics {
+            malformed_lines: 1,
+            unsupported_user_records: 0,
+        }
+    );
+
+    let mut rows = Vec::new();
+    let list_code = list_with_printer(&TestBackend, home.path(), |line| {
+        rows.push(line.to_string());
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(list_code, 1);
+    assert_eq!(rows, ["diagnostic    2026-01-01 00:00  visible"]);
+
+    let mut prompts = Vec::new();
+    let get_code = get_with_printer(&TestBackend, home.path(), "diagnostic", |line| {
+        prompts.push(line.to_string());
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(get_code, 1);
+    assert_eq!(prompts, ["\n[1] 2026-01-01 00:00\nvisible"]);
+}
+
+#[test]
 fn recognized_non_prompt_records_are_a_clean_empty_prompt_view() {
     let home = tempfile::tempdir().unwrap();
     write_session(home.path(), "empty");
@@ -181,84 +301,6 @@ fn session_display_escapes_terminal_controls_from_container_owned_data() {
     assert_eq!(lines.len(), 1);
     assert!(!lines[0].contains('\x1b'), "{:?}", lines[0]);
     assert!(lines[0].contains("\\u{1b}"), "{:?}", lines[0]);
-}
-
-struct ExplicitFilesBackend {
-    files: Vec<PathBuf>,
-    list_errors: Vec<String>,
-    files_error: Option<String>,
-}
-
-impl ExplicitFilesBackend {
-    fn new(files: Vec<PathBuf>) -> Self {
-        ExplicitFilesBackend {
-            files,
-            list_errors: Vec::new(),
-            files_error: None,
-        }
-    }
-
-    fn with_list_errors(files: Vec<PathBuf>, list_errors: Vec<String>) -> Self {
-        ExplicitFilesBackend {
-            files,
-            list_errors,
-            files_error: None,
-        }
-    }
-
-    fn with_files_error(message: &str) -> Self {
-        ExplicitFilesBackend {
-            files: Vec::new(),
-            list_errors: Vec::new(),
-            files_error: Some(message.to_string()),
-        }
-    }
-}
-
-impl SessionBackend for ExplicitFilesBackend {
-    // Never reached: this backend overrides both discovery walks with its
-    // explicit lists, which is the point — the shared list/get/delete
-    // logic under test takes whatever discovery hands it.
-    fn session_dir_components(&self) -> &'static [&'static str] {
-        &[]
-    }
-
-    fn keep_transcript_name(&self, _name: &str) -> bool {
-        true
-    }
-
-    fn files(&self, _home: &Path) -> Result<Vec<PathBuf>> {
-        if let Some(message) = &self.files_error {
-            bail!("{message}");
-        }
-        Ok(self.files.clone())
-    }
-
-    fn list_files(&self, _home: &Path) -> Result<SessionDiscovery> {
-        Ok(SessionDiscovery {
-            files: self.files.clone(),
-            errors: self.list_errors.clone(),
-        })
-    }
-
-    fn id_of(&self, path: &Path) -> String {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string()
-    }
-
-    fn prompt_record(&self, v: &Value) -> PromptRecord {
-        v.get("typed")
-            .and_then(Value::as_str)
-            .map_or(PromptRecord::NotTyped, |text| {
-                PromptRecord::Typed(text.to_string())
-            })
-    }
-
-    fn start_ts_of(&self, v: &Value) -> Option<String> {
-        v.get("ts").and_then(Value::as_str).map(str::to_string)
-    }
 }
 
 #[test]
@@ -363,28 +405,27 @@ fn list_keeps_duplicate_uuid_suffixes_fixed_at_twelve_characters() {
 }
 
 #[test]
-fn non_utf8_transcript_is_reported_by_list_and_fails_the_read_paths() {
+fn non_utf8_transcript_warns_as_malformed_and_makes_reads_nonzero() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("33333333.jsonl");
-    // Valid line, then a lone continuation byte: read_line errors on it.
+    // Valid line, then a lone continuation byte from a truncated write. The
+    // bad bytes are one malformed JSONL record, so the typed prompt stays
+    // visible while list/get warn and exit non-zero.
     std::fs::write(&path, b"{\"typed\":\"ok\"}\n\xff\xfe").unwrap();
     let backend = ExplicitFilesBackend::new(vec![path.clone()]);
 
-    let err = backend
-        .prompts(&path)
-        .err()
-        .expect("invalid UTF-8 must not read as an empty prompt list")
-        .to_string();
-    assert!(err.contains("read session transcript"), "{err}");
-    assert!(err.contains("33333333.jsonl"), "{err}");
+    let prompts = backend.prompts(&path).unwrap();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].text, "ok");
 
-    let err = get_with_printer(&backend, dir.path(), "3333", |_| Ok(true))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        err.contains("read session transcript"),
-        "get must surface the read failure: {err}"
-    );
+    let mut output = Vec::new();
+    let code = get_with_printer(&backend, dir.path(), "3333", |line| {
+        output.push(line.to_string());
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(code, 1, "malformed bytes must make get non-zero");
+    assert_eq!(output.len(), 1, "the readable prompt must stay visible");
 
     let mut lines = Vec::new();
     let code = list_with_printer(&backend, dir.path(), |line| {
@@ -392,11 +433,8 @@ fn non_utf8_transcript_is_reported_by_list_and_fails_the_read_paths() {
         Ok(true)
     })
     .unwrap();
-    assert_eq!(code, 1, "an unreadable transcript makes list non-zero");
-    assert!(
-        lines.is_empty(),
-        "no row for a transcript that failed to read"
-    );
+    assert_eq!(code, 1, "malformed bytes must make list non-zero");
+    assert_eq!(lines.len(), 1, "the transcript row must stay visible");
 }
 
 #[test]
