@@ -184,8 +184,15 @@ Traffic viewer development commands and the embedded asset workflow are
 documented in [Traffic UI Development](docs/traffic-ui.md).
 
 Point a model provider at the proxy by placing its complete upstream base URL
-after the local address. For Codex's built-in OpenAI provider inside an aibox
-container, remove any custom `model_provider` selection and set:
+after the local address. For Codex, edit the Current Config for the Tenant that
+will send traffic (add `--tenant <name>` when needed):
+
+```sh
+aibox config edit --current
+```
+
+For Codex's built-in OpenAI provider inside an aibox container, remove any
+custom `model_provider` selection and set:
 
 ```toml
 openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
@@ -194,13 +201,25 @@ openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
 For a custom Codex provider:
 
 ```toml
+model_provider = "hezubus"
+
 [model_providers.hezubus]
 name = "hezubus"
 base_url = "http://host.docker.internal:9923/https://hezubus.ai/v1"
 wire_api = "responses"
 ```
 
-For Claude, set the native configuration for the selected Tenant:
+That provider block is native Current Config, not the fixed Named Config
+schema: arbitrary provider names and `wire_api` cannot be stored verbatim in a
+Named Config.
+
+For Claude, edit its Current Config for the selected Tenant:
+
+```sh
+aibox config --agent claude edit --current
+```
+
+Then set the native base URL:
 
 ```json
 {

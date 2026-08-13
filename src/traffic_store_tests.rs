@@ -652,7 +652,10 @@ fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
 #[test]
 fn recorded_headers_drop_connection_named_fields() {
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert("connection", "x-hop, keep-alive".parse().unwrap());
+    headers.insert(
+        "connection",
+        axum::http::HeaderValue::from_bytes(b"x-hop, keep-alive, \xff").unwrap(),
+    );
     headers.insert("x-hop", "secret".parse().unwrap());
     headers.insert("x-app", "kept".parse().unwrap());
 

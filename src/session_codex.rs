@@ -9,7 +9,7 @@
 //!
 //! Codex has no ai-title, so a session's preview is its first *real* prompt. It
 //! also records injected wrapper turns (environment/instructions context blocks,
-//! `!`-shell commands, skill payloads, the per-project AGENTS.md preamble) as
+//! `!`-shell commands, skill payloads, the per-Workspace AGENTS.md preamble) as
 //! text-like content items; [`real_text_fragment`] removes those prefixes. A
 //! turn left with no text after filtering is skipped for previews and `get`.
 //!

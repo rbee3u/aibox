@@ -138,8 +138,8 @@ pub fn validate_extra_mount_targets(mounts: &[String]) -> Result<()> {
 /// Sources unrelated to `aibox_root` are allowed. Its ancestors are rejected
 /// because mounting one would expose the root indirectly. Sources inside the
 /// root must resolve beneath a validly named Managed Tenant Home subtree.
-/// Agent/Tenant metadata, internal staging directories, and Host Tenant
-/// metadata are rejected.
+/// Named Config catalogs, Traffic Records, Host Tenant catalogs, and internal
+/// staging directories are rejected.
 /// Sources are resolved before comparison, so a symlink cannot disguise an
 /// aibox-internal target as an unrelated path.
 ///

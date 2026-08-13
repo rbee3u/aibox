@@ -129,7 +129,7 @@ const DEFAULT_CLAUDE_CONFIG: &str = r#"{
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5"
   },
   "permissions": {
     "defaultMode": "bypassPermissions"
@@ -390,6 +390,15 @@ mod tests {
 
         let command = AgentKind::Codex.build_command(&[]);
         assert_eq!(command, ["codex"]);
+    }
+
+    #[test]
+    fn claude_template_uses_fables_native_one_megacontext_model_id() {
+        let template: Value = serde_json::from_str(AgentKind::Claude.config_template()).unwrap();
+        assert_eq!(
+            template["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
+            "claude-fable-5"
+        );
     }
 
     #[cfg(unix)]

@@ -1,10 +1,9 @@
 //! Lock helpers that recover a poisoned guard instead of propagating it.
 //!
-//! Every lock in aibox guards a short critical section over plain data, so a
-//! panic while a guard is held cannot leave behind a torn invariant worth
-//! propagating. Recovering the guard keeps one unrelated panic from cascading
-//! into every later Traffic Proxy task and Docker cleanup path that shares the
-//! same lock.
+//! These helpers deliberately favor continued availability after a Traffic
+//! task panics. Use them only for state that remains safe to inspect or replace
+//! after an interrupted mutation. They do not define the poisoning policy for
+//! every lock in aibox.
 
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 

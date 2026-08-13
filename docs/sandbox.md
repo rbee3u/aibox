@@ -47,8 +47,8 @@ Workspace as well as Extra Mounts:
   would expose host-only aibox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
-a bind source. Named Config catalogs and internal lifecycle staging
-directories stay host-only.
+a bind source. Named Config catalogs, Traffic Records, and internal lifecycle
+staging directories stay host-only.
 
 Mounting another Tenant Home is allowed, but doing so exposes its Coding
 Agent credentials and persistent state. Treat every Extra Mount as an explicit
@@ -126,12 +126,13 @@ aibox traffic --listen 0.0.0.0:9923 --allow-remote
 
 The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
 `IP:PORT` with a nonzero port, and every non-loopback address requires
-`--allow-remote`. When a specific external or IPv6 address is selected, aibox
-also binds `127.0.0.1` on the same port for management; wildcard IPv4 already
-covers it. The viewer is advertised at `http://127.0.0.1:<port>/`, also answers
-the loopback Host values `localhost:<port>` and `[::1]:<port>`, and rejects
-non-loopback peers, non-loopback Host values, cross-origin and cross-site
-requests, and invalid per-start CSRF tokens. It sends no CORS permission.
+`--allow-remote`. Unless the requested address is `127.0.0.1` or the IPv4
+wildcard `0.0.0.0`, aibox also binds `127.0.0.1` on the same port for
+management. The viewer is advertised at `http://127.0.0.1:<port>/`, also
+answers the loopback Host values `localhost:<port>` and `[::1]:<port>`, and
+rejects non-loopback peers, non-loopback Host values, cross-origin and
+cross-site requests, and invalid per-start CSRF tokens. It sends no CORS
+permission.
 
 The proxy and management viewer do not authenticate clients. The per-start
 token is a browser CSRF defense, not a local-user boundary: a process that can
@@ -173,8 +174,9 @@ decompression are disabled. Host and hop-by-hop headers are rebuilt or
 removed. CONNECT receives 405, and Upgrade/WebSocket receives 426. HTTP
 trailers are not recorded or forwarded. Invalid targets return 400,
 non-public targets 403, connection timeouts 504, other upstream failures 502,
-and recording failures 507. Upstream 3xx/4xx/5xx statuses are returned without
-being reclassified as proxy failures.
+and recording failures 507 while downstream response headers can still be
+replaced. Upstream 3xx/4xx/5xx statuses are returned without being reclassified
+as proxy failures.
 
 Before connecting, aibox resolves the target and requires every candidate to
 be a public address, except that `198.18.0.0/15` is accepted for host-side
@@ -188,11 +190,14 @@ timeout.
 Request and response chunks are written to disk before they are forwarded.
 This preserves ordinary HTTP bodies, binary data, and SSE event bytes without
 parsing, truncation, redaction, or whole-message buffering. Disk latency
-therefore applies backpressure. A recording error aborts forwarding and returns
-507. A client disconnect, upstream stream failure, SIGINT, or SIGTERM cancels
-the remaining attempt and retains bytes already written. For SSE, a recognized
-terminal event from Claude Messages or OpenAI Responses completes the Traffic
-Outcome even when the client closes immediately after consuming that event.
+therefore applies backpressure. A recording error aborts forwarding. Before
+downstream response headers are committed, the proxy can replace the response
+with 507; afterward it reports an error on the downstream body and truncates
+the exchange. A client disconnect, upstream stream failure, SIGINT, or SIGTERM
+cancels the remaining attempt and retains bytes already written. For SSE, a
+recognized terminal event from Claude Messages or OpenAI Responses completes
+the Traffic Outcome even when the client closes immediately after consuming
+that event.
 
 Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 
@@ -204,7 +209,7 @@ active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
   request.body
   response.json          # present only after upstream response headers arrive
   response.body
-  response.events.jsonl  # present only for text/event-stream responses
+  response.events.jsonl  # optional index for recognized identity-coded SSE
   summary.json
 ```
 
@@ -231,9 +236,13 @@ Usage, and provider diagnostics. Body files contain the exact
 application-visible bytes;
 their current lengths are derived rather than persisted. `summary.json` exists
 from Record creation and remains non-terminal if the process is interrupted. A
-matching event-stream response also has a best-effort JSONL index whose byte
-ranges point back into `response.body`; indexing never changes forwarding or
-the Traffic Outcome. Unknown, incompatible, or structurally incomplete
+recognized identity-coded event-stream response also has a best-effort JSONL
+index whose byte ranges point back into `response.body`. Recognition normally
+uses `Content-Type: text/event-stream`; a successful recognized model request
+that asked for streaming but has no Content-Type is sniffed from its body
+prefix. Content-encoded streams remain unindexed because decoded boundaries
+cannot be mapped to raw byte offsets. Indexing never changes forwarding or the
+Traffic Outcome. Unknown, incompatible, or structurally incomplete
 collection entries are ignored with warnings; selected reads and deletion
 revalidate real paths and reject symlinks or unexpected types.
 
@@ -266,6 +275,13 @@ lines use their terminator's arrival time, while an unterminated EOF line uses
 the final body arrival time. First Token is never inferred from response
 headers or the first response body byte, and remains absent for unknown
 protocols and non-streaming responses.
+
+Raw Bodies remain unlimited, but the best-effort SSE observer stops further
+indexing and protocol interpretation for a response after 16 MiB of an
+unterminated line or accumulated Event fields. It records a warning and
+releases its buffered Event while raw forwarding and recording continue
+unchanged. This keeps a malformed or extreme event from making the host-side
+diagnostic parser retain an unbounded copy of the stream.
 
 Record Assessment classifies active Records as Active and clean terminal
 Records as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,

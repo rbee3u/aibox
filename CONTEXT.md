@@ -197,10 +197,10 @@ initialize an Agent state directory inside an existing one.
 _Avoid_: Tenant Home, aibox Root
 
 **Tenant Component**:
-An optional capability installed into one Tenant's Tenant Home, such as a
-Coding Agent status line or a Managed Tenant-local toolchain. Status-line
-Components directly modify native Current Config; Host Tenant Components are
-limited to status lines.
+An optional capability installed into a Managed Tenant's Tenant Home or the
+Host Tenant's Host Home, such as a Coding Agent status line or a Managed
+Tenant-local toolchain. Host Tenant Components are limited to status lines.
+Status-line Components directly modify native Current Config.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration and history

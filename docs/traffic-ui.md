@@ -54,16 +54,26 @@ The browser smoke projects require the matching optional Playwright browsers:
 npm --prefix web/traffic exec playwright install firefox webkit
 ```
 
-There is intentionally no required Vite development server. Run `make
-traffic-build`, then start `aibox traffic` and open the embedded viewer to
-check the complete page and real Traffic API.
+There is intentionally no required Vite development server. Generate the
+assets, then rebuild and launch the Rust binary so its `include_str!` inputs
+are current:
+
+```sh
+make traffic-build
+cargo run -- traffic
+```
+
+Open the embedded viewer to check the complete page and real Traffic API. To
+test the installed `aibox` command instead, run `make install` after rebuilding
+the assets.
 
 Do not edit the generated files in `assets/traffic.*` directly. Change the
-source in `web/traffic/src/` and rebuild them before committing. The
-generated HTML keeps the Rust-injected `__AIBOX_CSRF__` placeholder and the
-existing management routes. The publish step also rewrites the asset
-references, so `assets/traffic.css` and `assets/traffic.js` are served as
-`/_aibox/traffic/app.css` and `/_aibox/traffic/app.js`.
+source under `web/traffic/`—application code in `src/` or the HTML shell in
+`index.html`—and rebuild before committing. The generated HTML keeps the
+Rust-injected `__AIBOX_CSRF__` placeholder and the existing management routes.
+The publish step also rewrites the asset references, so `assets/traffic.css`
+and `assets/traffic.js` are served as `/_aibox/traffic/app.css` and
+`/_aibox/traffic/app.js`.
 
 ## Code Boundaries
 
@@ -170,9 +180,9 @@ For recognized model requests, the Traffic Proxy also records an optional
 top-level `summary.coding_agent_session_id`. OpenAI Responses prefers the first
 nonempty UTF-8 `session-id` request-header value and falls back to
 `x-claude-code-session-id`; Claude Messages uses the reverse precedence.
-Header names are matched exactly and case-insensitively. Unknown protocols do
-not derive this value, bodies are never searched for it, and missing values are
-not backfilled.
+Only those header names are considered, matched case-insensitively. Unknown
+protocols do not derive this value, bodies are never searched for it, and
+missing values are not backfilled.
 
 The Traffic Proxy derives model, reasoning effort, response mode, First Token,
 final Token Usage, and Provider Errors from native OpenAI Responses or Claude

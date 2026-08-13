@@ -2,8 +2,9 @@
 //!
 //! [`TrafficStore`] owns the flat `$AIBOX_ROOT/traffic/<record>/` collection.
 //! Each Record directory holds raw evidence — `request.json`, `request.body`,
-//! `response.json`, `response.body`, and the optional `response.events.jsonl`
-//! index — plus `summary.json`, the complete list projection.
+//! `response.body`, `response.json` after response headers arrive, and the
+//! optional `response.events.jsonl` index — plus `summary.json`, the complete
+//! list projection.
 //!
 //! ## Summary is the lifecycle authority
 //!
@@ -58,18 +59,7 @@ pub(crate) struct RecordedHeader {
 
 impl RecordedHeader {
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Vec<Self> {
-        let connection_named: HashSet<String> = headers
-            .get_all(axum::http::header::CONNECTION)
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_ascii_lowercase)
-            })
-            .collect();
+        let connection_named = connection_named_headers(headers);
         headers
             .iter()
             .filter(|(name, _)| {
@@ -81,6 +71,35 @@ impl RecordedHeader {
             })
             .collect()
     }
+}
+
+pub(crate) fn connection_named_headers(headers: &axum::http::HeaderMap) -> HashSet<String> {
+    headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|token| {
+            axum::http::HeaderName::from_bytes(trim_http_ows(token))
+                .ok()
+                .map(|name| name.as_str().to_string())
+        })
+        .collect()
+}
+
+fn trim_http_ows(mut value: &[u8]) -> &[u8] {
+    while value
+        .first()
+        .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+    {
+        value = &value[1..];
+    }
+    while value
+        .last()
+        .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+    {
+        value = &value[..value.len() - 1];
+    }
+    value
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
@@ -313,6 +332,7 @@ impl SummaryHandle {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn update<R>(&self, update: impl FnOnce(&mut SummaryMetadata) -> R) -> R {
         let mut summary = lock_unpoisoned(&self.inner);
         update(&mut summary)
@@ -343,6 +363,11 @@ pub(crate) struct RuntimeMeasurements {
     pub request_body_duration: Option<Duration>,
 }
 
+/// Process-local handle for the flat Traffic Record collection.
+///
+/// Clones share the active-attempt registry and namespace lock. The registry is
+/// deliberately not reconstructed from `active-` directory names: after a
+/// process restart, a nonterminal Record is interrupted rather than active.
 #[derive(Clone)]
 pub(crate) struct TrafficStore {
     root: PathBuf,
@@ -350,6 +375,10 @@ pub(crate) struct TrafficStore {
     namespace: Arc<RwLock<()>>,
 }
 
+/// Shared lookup for a Record directory whose name changes at terminalization.
+///
+/// Long-lived writers must resolve the path through this handle instead of
+/// retaining the creation path from [`NewRecord::directory`].
 #[derive(Clone, Debug)]
 pub(crate) struct RecordLocator {
     inner: Arc<Mutex<PathBuf>>,
@@ -406,10 +435,13 @@ impl<'a> ObservedRequest<'a> {
     }
 }
 
+/// Writable state returned after a Traffic Record has been durably opened.
 pub(crate) struct NewRecord {
     pub id: String,
-    // The creation path is retained for tests and diagnostics. Runtime path-based
-    // operations must use `locator`, because terminalization renames the directory.
+    /// Initial `active-` path, retained for tests and diagnostics only.
+    ///
+    /// Runtime path operations must use [`Self::locator`] because
+    /// terminalization may rename the directory.
     #[allow(dead_code)]
     pub directory: PathBuf,
     pub locator: RecordLocator,
@@ -474,6 +506,11 @@ pub(crate) struct StoredEventTimings {
     pub warning: Option<String>,
 }
 
+/// Distinguishes a strict Record lookup failure from optional index degradation.
+///
+/// The management API reports lookup failures as a missing detail, while an
+/// unsafe event-index structure is a server error rather than silently omitting
+/// its diagnostics.
 pub(crate) enum RecordDetailReadError {
     Lookup(anyhow::Error),
     EventIndex(anyhow::Error),
@@ -595,6 +632,11 @@ impl TrafficStore {
         ))
     }
 
+    /// Atomically checkpoint a nonterminal Summary when `update` changes it.
+    ///
+    /// The callback is not run after terminalization; callers may therefore
+    /// race optional observations with [`Self::finish`] without reopening a
+    /// terminal Summary.
     pub fn update_summary(
         &self,
         locator: &RecordLocator,
@@ -654,6 +696,10 @@ impl TrafficStore {
         create_private_file(&directory.join(RESPONSE_EVENTS_JSONL))
     }
 
+    /// Run a path-based operation while terminal directory renames are blocked.
+    ///
+    /// The supplied path is valid only for the duration of `operation`; callers
+    /// must not retain it after this method returns.
     pub fn with_record_path<R>(
         &self,
         locator: &RecordLocator,
@@ -665,6 +711,11 @@ impl TrafficStore {
         Ok(operation(&directory))
     }
 
+    /// Commit the terminal Summary and remove the Record from the active set.
+    ///
+    /// Repeated calls preserve the first terminal outcome. Renaming the Record
+    /// directory to its end-time ordering key is best-effort and cannot undo a
+    /// successfully committed terminal Summary.
     pub fn finish(
         &self,
         record: &NewRecord,

@@ -15,6 +15,7 @@ references between them.
 
 - `src/cli.rs` defines the Clap surface and pass-through boundary;
   `src/lib.rs` resolves command scope and orchestrates commands.
+  `src/completion.rs` owns dynamic, read-only host-side completion.
 - `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
   Tenant resolution, lifecycle, layout, permissions, and shared path safety.
 - `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
@@ -25,9 +26,10 @@ references between them.
 - `src/session.rs` owns shared Session discovery and dispatch;
   `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
 - `src/traffic.rs` wires listeners and routing. `src/traffic_proxy.rs`,
-  `src/traffic_store.rs`, `src/traffic_interpretation.rs`, and
-  `src/traffic_assessment.rs` own forwarding, persistence, protocol facts, and
-  assessment. `src/traffic_web.rs` owns the management API.
+  `src/traffic_store.rs`, `src/traffic_sse.rs`,
+  `src/traffic_interpretation.rs`, and `src/traffic_assessment.rs` own
+  forwarding, persistence, SSE indexing, protocol facts, and assessment.
+  `src/traffic_web.rs` owns the management API.
 - `web/traffic/` is the editable Traffic viewer. `assets/traffic.*` is generated
   output; use the workflow in `docs/traffic-ui.md`.
 

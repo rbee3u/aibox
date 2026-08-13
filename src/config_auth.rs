@@ -1,4 +1,14 @@
 //! One-shot Codex Credential Propagation across existing Configs.
+//!
+//! Planning validates and snapshots the Host source plus the complete
+//! structural view of existing candidate Configs before any write. Unsafe
+//! filesystem structure aborts the plan, while malformed credential content is
+//! retained as a reportable target outcome.
+//!
+//! Execution consumes those snapshots in stable target order. Each selected
+//! `auth.json` is replaced independently and atomically; a failed replacement
+//! does not roll back earlier writes or prevent later attempts. Propagation
+//! creates no Configs and retains no synchronization state.
 
 use super::{
     MAX_CONFIG_BYTES, capture_optional_agent_file, inspect_named_config_directory,

@@ -1,11 +1,12 @@
 import { BookOpen, Box, GitFork, LoaderCircle, Radio, SunMoon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { createTrafficApi, requestErrorMessage, requestWasCancelled } from "./api";
+import { createTrafficApi, requestWasCancelled } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { NotificationCenter, type NotificationItemData } from "./components/NotificationCenter";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
+import { useFailureNotifications } from "./useFailureNotifications";
 import { useRecordInspection, type InspectionFailure } from "./useRecordInspection";
 import { MAX_LIST_WIDTH, MIN_LIST_WIDTH, useResizableListWidth } from "./useResizableListWidth";
 import { usePersistentTheme, type ThemePreference } from "./usePersistentTheme";
@@ -17,7 +18,6 @@ interface AppProps {
 }
 type Dialog = { kind: "selected"; ids: string[] } | { kind: "all" } | null;
 type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
-type NotificationSource = NotificationItemData["source"];
 
 const LIST_POLL_INTERVAL_MS = 5000;
 const RECORDS_PER_PAGE = 50;
@@ -25,6 +25,8 @@ const RECORDS_PER_PAGE = 50;
 export function App({ api: providedApi }: AppProps) {
   const api = useMemo(() => providedApi ?? createTrafficApi(), [providedApi]);
   const [theme, setTheme] = usePersistentTheme();
+  const { dismissNotification, notifications, reportFailure, resolveFailure } =
+    useFailureNotifications();
   const {
     listWidth,
     resizing,
@@ -49,10 +51,7 @@ export function App({ api: providedApi }: AppProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [deletion, setDeletion] = useState<Deletion>(null);
-  const [notifications, setNotifications] = useState<NotificationItemData[]>([]);
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
-  const failureSignatures = useRef<Map<NotificationSource, string>>(new Map());
-  const notificationSequence = useRef(0);
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
@@ -61,42 +60,6 @@ export function App({ api: providedApi }: AppProps) {
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
 
-  const reportFailure = useCallback(
-    (source: NotificationSource, title: string, cause: unknown, retry = false) => {
-      const message = typeof cause === "string" ? cause : requestErrorMessage(cause);
-      const signature = `${title}\n${message}`;
-      if (failureSignatures.current.get(source) === signature) return;
-      failureSignatures.current.set(source, signature);
-      notificationSequence.current += 1;
-      const notification: NotificationItemData = {
-        id: notificationSequence.current,
-        source,
-        tone: "error",
-        title,
-        message,
-        actionLabel: retry ? "Retry" : undefined,
-      };
-      setNotifications((current) =>
-        [...current.filter((item) => item.source !== source), notification].slice(-3),
-      );
-    },
-    [],
-  );
-  const resolveFailure = useCallback((source: NotificationSource) => {
-    failureSignatures.current.delete(source);
-    setNotifications((current) =>
-      current.some((item) => item.source === source)
-        ? current.filter((item) => item.source !== source)
-        : current,
-    );
-  }, []);
-  const dismissNotification = useCallback((source: NotificationSource) => {
-    setNotifications((current) =>
-      current.some((item) => item.source === source)
-        ? current.filter((item) => item.source !== source)
-        : current,
-    );
-  }, []);
   const handleInspectionFailure = useCallback(
     (failure: InspectionFailure) => {
       const title =

@@ -1,4 +1,11 @@
 //! Fixed Named Config schema validation and one-time application.
+//!
+//! A Named Config may contain only the Config Fields declared by [`AgentKind`]
+//! (plus Codex's complete native `auth.json` object). Application iterates that
+//! entire fixed field set: present values are set, absent values are removed,
+//! and unrelated Current Config values are preserved. This module computes the
+//! desired native files without performing filesystem writes or retaining an
+//! association with the Named Config.
 
 use crate::agent::{AgentKind, ConfigField, ConfigValueKind};
 use anyhow::{Context, Result, bail};
@@ -85,7 +92,7 @@ impl NamedConfigDefinition {
         for field in self.agent.config_fields() {
             match value_at_path(&self.main, field.path) {
                 Some(value) => {
-                    changed |= set_json_path(&mut configuration, field.path, value.clone())
+                    changed |= set_json_path(&mut configuration, field.path, value.clone());
                 }
                 None => changed |= remove_json_path(&mut configuration, field.path),
             }

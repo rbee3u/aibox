@@ -268,7 +268,10 @@ impl TenantAgent {
         Ok(())
     }
 
-    /// File path within the selected native Agent state directory.
+    /// Join a file name to the selected native Agent state directory.
+    ///
+    /// This does not validate `file_name`; callers must supply an Agent-owned
+    /// single-component basename.
     pub fn state_file(&self, file_name: &str) -> PathBuf {
         self.agent_state_dir.join(file_name)
     }
@@ -278,12 +281,19 @@ impl TenantAgent {
         &self.named_config_catalog_dir
     }
 
-    /// One Tenant- and Coding Agent-local Named Config directory.
+    /// Join a Named Config name to the selected catalog.
+    ///
+    /// This does not validate `config`; callers must first pass it through
+    /// [`validate_name`].
     pub fn named_config_dir(&self, config: &str) -> PathBuf {
         self.named_config_catalog_dir.join(config)
     }
 
-    /// One file in a Named Config definition.
+    /// Join a Named Config name and one native file name to the catalog.
+    ///
+    /// Neither argument is validated here. `config` must pass
+    /// [`validate_name`], and `file_name` must come from
+    /// [`AgentKind::config_files`].
     pub fn named_config_file(&self, config: &str, file_name: &str) -> PathBuf {
         self.named_config_dir(config).join(file_name)
     }

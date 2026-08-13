@@ -1,4 +1,8 @@
 //! Dynamic shell completion registration and read-only host-side discovery.
+//!
+//! Shells invoke completion while the user is still composing a command, so
+//! candidates may inspect existing state but must never initialize a Tenant,
+//! write Current Config, or repair malformed filesystem entries.
 
 use crate::agent::AgentKind;
 use crate::cli::{Cli, CompletionArgs, CompletionShell, SelectionOption};
@@ -164,16 +168,42 @@ enum TopCommand {
     Other,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CompletionTenant {
+    ImplicitDefault,
+    ExplicitManaged(String),
+    Host,
+}
+
+impl CompletionTenant {
+    fn name(&self) -> &str {
+        match self {
+            Self::ExplicitManaged(name) => name,
+            Self::ImplicitDefault | Self::Host => "default",
+        }
+    }
+
+    fn has_explicit_managed_selector(&self) -> bool {
+        matches!(self, Self::ExplicitManaged(_))
+    }
+
+    fn is_host(&self) -> bool {
+        matches!(self, Self::Host)
+    }
+}
+
+/// Best-effort command scope recovered from the shell completion protocol.
+///
+/// Parsing mirrors only the selectors needed to discover dynamic candidates.
+/// Invalid or ambiguous input sets `selection_valid` so completion can stay
+/// quiet and leave authoritative validation to clap.
 #[derive(Clone, Debug)]
 struct CompletionContext {
     top: TopCommand,
     agent: AgentKind,
-    tenant: String,
-    tenant_explicit: bool,
-    host: bool,
+    tenant: CompletionTenant,
     selection_valid: bool,
     all: bool,
-    current: bool,
     current_position: Option<usize>,
     leaf: Option<String>,
     leaf_position: Option<usize>,
@@ -185,12 +215,9 @@ impl Default for CompletionContext {
         Self {
             top: TopCommand::Root,
             agent: AgentKind::Codex,
-            tenant: "default".to_string(),
-            tenant_explicit: false,
-            host: false,
+            tenant: CompletionTenant::ImplicitDefault,
             selection_valid: true,
             all: false,
-            current: false,
             current_position: None,
             leaf: None,
             leaf_position: None,
@@ -253,7 +280,6 @@ impl CompletionContext {
             let token = values[index];
             if token == "--current" {
                 option_parts.insert(index);
-                self.current = true;
                 self.current_position = Some(index);
                 index += 1;
                 continue;
@@ -264,7 +290,7 @@ impl CompletionContext {
                     self.selection_valid = false;
                 }
                 seen_host = true;
-                self.host = true;
+                self.tenant = CompletionTenant::Host;
                 index += 1;
                 continue;
             }
@@ -305,11 +331,10 @@ impl CompletionContext {
                         self.selection_valid = false;
                     }
                     seen_tenant = true;
-                    self.tenant_explicit = true;
                     if tenant::validate_name("tenant", value).is_err() {
                         self.selection_valid = false;
-                    } else {
-                        self.tenant = value.to_string();
+                    } else if !seen_host {
+                        self.tenant = CompletionTenant::ExplicitManaged(value.to_string());
                     }
                 }
             }
@@ -355,7 +380,7 @@ impl CompletionContext {
     fn propagate_auth_available(&self) -> bool {
         self.top == TopCommand::Config
             && self.selection_valid
-            && !self.tenant_explicit
+            && !self.tenant.has_explicit_managed_selector()
             && self.agent == AgentKind::Codex
     }
 
@@ -534,7 +559,7 @@ fn add_tenant_value_completer(arg: clap::Arg) -> clap::Arg {
 }
 
 fn complete_components(context: &CompletionContext, current: &OsStr) -> Vec<CompletionCandidate> {
-    let kinds: &[crate::component::ComponentKind] = if context.host {
+    let kinds: &[crate::component::ComponentKind] = if context.tenant.is_host() {
         &crate::component::ComponentKind::STATUSLINES
     } else {
         &crate::component::ComponentKind::ALL
@@ -555,7 +580,7 @@ fn add_config_completer(
     command.mut_arg(id, move |arg| {
         arg.value_hint(ValueHint::Other)
             .add(ArgValueCompleter::new(move |current: &OsStr| {
-                if context.current || (repeatable && context.all) {
+                if context.current_position.is_some() || (repeatable && context.all) {
                     Vec::new()
                 } else {
                     let excluded = if repeatable {
@@ -614,7 +639,12 @@ fn tenant_values_at(root: &Path, mode: TenantCandidates) -> Result<Vec<String>> 
 }
 
 fn selected_at(root: &Path, context: &CompletionContext) -> Result<TenantAgent> {
-    TenantAgent::resolve(context.agent, root, context.host, &context.tenant)
+    TenantAgent::resolve(
+        context.agent,
+        root,
+        context.tenant.is_host(),
+        context.tenant.name(),
+    )
 }
 
 fn complete_named_configs(
@@ -757,7 +787,7 @@ mod tests {
         let context = CompletionContext::from_words(&words(&[
             "aibox", "run", "--tenant", "work", "--", "--tenant", "ignored",
         ]));
-        assert_eq!(context.tenant, "work");
+        assert_eq!(context.tenant.name(), "work");
 
         let protocol = CompletionContext::from_protocol_argv(&words(&[
             "aibox",
@@ -773,14 +803,14 @@ mod tests {
         ]));
         assert_eq!(protocol.top, TopCommand::Run);
         assert_eq!(protocol.agent, AgentKind::Claude);
-        assert_eq!(protocol.tenant, "work");
+        assert_eq!(protocol.tenant.name(), "work");
         assert!(protocol.selection_valid);
     }
 
     #[test]
     fn host_and_tenant_are_distinct_and_conflicting() {
         let host = CompletionContext::from_words(&words(&["aibox", "config", "--host", "list"]));
-        assert!(host.host);
+        assert!(host.tenant.is_host());
         assert!(host.selection_valid);
         let bad = CompletionContext::from_words(&words(&[
             "aibox", "config", "--host", "--tenant", "host", "list",
@@ -824,7 +854,7 @@ mod tests {
         ]));
         assert!(inline.selection_valid);
         assert_eq!(inline.agent, AgentKind::Claude);
-        assert_eq!(inline.tenant, "work");
+        assert_eq!(inline.tenant.name(), "work");
     }
 
     #[test]
@@ -891,9 +921,9 @@ mod tests {
             "",
         ]));
         assert_eq!(context.top, TopCommand::Component);
-        assert_eq!(context.tenant, "work");
+        assert_eq!(context.tenant.name(), "work");
         assert!(context.selection_valid);
-        assert!(!context.host);
+        assert!(!context.tenant.is_host());
         let values = complete_components(&context, OsStr::new(""));
         assert_eq!(
             candidate_values(&values),
@@ -902,7 +932,7 @@ mod tests {
 
         let host = CompletionContext::from_words(&words(&["aibox", "component", "--host", "list"]));
         assert!(host.selection_valid);
-        assert!(host.host);
+        assert!(host.tenant.is_host());
         let values = complete_components(&host, OsStr::new(""));
         assert_eq!(
             candidate_values(&values),
@@ -1032,7 +1062,7 @@ mod tests {
 
         let current =
             CompletionContext::from_words(&words(&["aibox", "config", "get", "--current", ""]));
-        assert!(current.current);
+        assert!(current.current_position.is_some());
         assert!(
             complete_named_configs_at(root.path(), &current, OsStr::new(""), &BTreeSet::new(),)
                 .is_empty()

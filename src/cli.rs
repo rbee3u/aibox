@@ -258,6 +258,8 @@ pub enum Command {
     /// Manage aibox-managed Tenants.
     Tenant(TenantArgs),
     /// Manage optional Tenant Components.
+    ///
+    /// The Host Tenant supports only status-line Components.
     Component(ComponentArgs),
     /// Manage Named Configs, Current Config, and credential propagation.
     Config(ConfigArgs),
@@ -410,13 +412,14 @@ pub enum ComponentCommand {
     List,
     /// Install or replace one Component in the selected Tenant.
     Install {
-        /// Component name, optionally followed by a stable toolchain version.
+        /// Component: claude-statusline, codex-statusline, rust[@X.Y.Z],
+        /// or go[@X.Y.Z].
         #[arg(value_name = "COMPONENT[@X.Y.Z]")]
         component: ComponentSpec,
     },
     /// Remove one Component from the selected Tenant.
     Remove {
-        /// Component to remove.
+        /// Component: claude-statusline, codex-statusline, rust, or go.
         #[arg(value_name = "COMPONENT")]
         component: crate::component::ComponentKind,
         /// Skip the removal confirmation.

@@ -71,7 +71,7 @@ $AIBOX_ROOT/
       request.body
       response.json
       response.body
-      response.events.jsonl          # only for text/event-stream responses
+      response.events.jsonl          # optional best-effort unencoded SSE index
       summary.json
   tenants/
     <tenant>/                      # complete Managed Tenant Home
@@ -223,11 +223,11 @@ toolchain installation.
 
 ## Tenant Components
 
-A Tenant Component is optional native state installed into one Tenant Home.
-Statusline Components support Managed and Host Tenants; Rust and Go toolchains
-support Managed Tenants only. Components are not tracked in a separate
-registry. List the fixed catalog and its state without starting Docker or
-creating a missing Tenant:
+A Tenant Component is optional native state installed into a Managed Tenant's
+Tenant Home or the Host Tenant's real Host Home. Statusline Components support
+both, while Rust and Go toolchains support Managed Tenants only. Components are
+not tracked in a separate registry. List the fixed catalog and its state
+without starting Docker or creating a missing Tenant:
 
 ```sh
 aibox component list
@@ -248,6 +248,7 @@ Install each Coding Agent integration explicitly:
 ```sh
 aibox component install claude-statusline
 aibox component install codex-statusline --tenant work
+aibox component --host install claude-statusline
 ```
 
 `claude-statusline` writes `.claude/statusline.sh` and sets

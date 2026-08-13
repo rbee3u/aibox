@@ -1,8 +1,9 @@
-//! Optional capabilities derived from native state in a Tenant Home.
+//! Optional capabilities derived from native state in a Tenant.
 //!
-//! Status-line Components directly edit native Current Config while
-//! toolchains own Managed Tenant-local SDK directories. There is no Component
-//! registry, so inspection derives state directly from native files.
+//! Status-line Components can edit native Current Config in a Managed Tenant
+//! Home or the Host Home, while toolchains own Managed Tenant-local SDK
+//! directories. There is no Component registry, so inspection derives state
+//! directly from native files.
 
 use crate::agent::AgentKind;
 use crate::cli::{ComponentArgs, ComponentCommand};
@@ -31,7 +32,7 @@ const GO_INSTALLER: &str = include_str!("../assets/install-go.sh");
 // container- or host-written input before parsing it.
 const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 
-/// One optional capability that aibox can install into a Tenant Home.
+/// One optional capability that aibox can install into a Tenant's native state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComponentKind {
     /// Claude Code status-line integration.
@@ -72,7 +73,7 @@ impl ComponentKind {
     }
 }
 
-/// State derived from a Component's native files in one Tenant Home.
+/// State derived from a Component's native files in one Tenant's Home.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComponentStatus {
     /// The Component exactly matches the current aibox definition.
