@@ -776,9 +776,13 @@ fn edit_file(
 }
 
 fn capture_optional_agent_file(selected: &TenantAgent, file: &str) -> Result<FileSnapshot> {
-    if !tenant::real_dir_exists(selected.home_dir(), "Tenant Home")? {
+    let home_label = match &selected.tenant {
+        Tenant::Managed(_) => "Tenant Home",
+        Tenant::Host { .. } => "Host Home",
+    };
+    if !tenant::real_dir_exists(selected.home_dir(), home_label)? {
         bail!(
-            "Tenant Home does not exist: {}",
+            "{home_label} does not exist: {}",
             selected.home_dir().display()
         );
     }

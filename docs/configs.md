@@ -178,8 +178,9 @@ and has no effect while `model_provider` selects `custom`. When it is unset,
 Codex uses `https://chatgpt.com/backend-api/codex` for ChatGPT authentication
 and `https://api.openai.com/v1` for API key authentication. The provider table
 name for the separate custom Config Field group is fixed as `custom`. Codex
-Named Config `auth.json` may be any JSON object and replaces the complete native
-Current Config `auth.json` object during application.
+Named Config `auth.json` is one complete Config Field: it may be any JSON object
+and replaces the complete native Current Config `auth.json` object during
+application.
 
 ## Built-in Templates
 

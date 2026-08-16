@@ -1,14 +1,8 @@
-//! The management surface: embedded viewer assets and the JSON API.
-//!
-//! [`security_middleware`] fronts every route in this module and is the single
-//! place enforcing the loopback-only, same-origin, CSRF-checked boundary. Proxy
-//! traffic may be allowed on a non-loopback listener; management traffic never
-//! is. The token defends browsers from cross-site requests; it does not
-//! authenticate other processes that can connect to the loopback listener.
+//! The Traffic Viewer surface: embedded assets and the JSON API.
 //!
 //! List handlers read only the materialized Traffic Record Summary while detail
 //! reads stay strict over raw metadata, following
-//! `docs/adr/0011-materialize-traffic-summary-assessment.md`. Bodies stream from
+//! `docs/adr/0009-traffic-record-evidence-and-projections.md`. Bodies stream from
 //! disk as recorded; the decoded variants only undo a recorded content coding.
 //! Nothing here redacts, truncates, or expires a Traffic Record.
 
@@ -26,14 +20,12 @@ use crate::traffic_store::{
 use anyhow::Context as _;
 use axum::Json;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
-use axum::http::{HeaderValue, Method, Response, StatusCode, header};
-use axum::middleware::Next;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, Response, StatusCode, header};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::Read as _;
-use std::net::SocketAddr;
 use tokio::io::AsyncReadExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
@@ -43,121 +35,8 @@ const HTML: &str = include_str!("../assets/traffic.html");
 const CSS: &str = include_str!("../assets/traffic.css");
 const JS: &str = include_str!("../assets/traffic.js");
 
-pub(crate) async fn security_middleware(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: Request,
-    next: Next,
-) -> Response<Body> {
-    if let Err(message) = validate_management_request(&state, peer, &request) {
-        return secure_response(traffic_proxy::bare_error(StatusCode::FORBIDDEN, &message));
-    }
-    secure_response(next.run(request).await)
-}
-
-fn validate_management_request(
-    state: &AppState,
-    peer: SocketAddr,
-    request: &Request,
-) -> Result<(), String> {
-    if !peer.ip().is_loopback() {
-        return Err("the Traffic management interface is loopback-only".to_string());
-    }
-    let allowed_host = request
-        .headers()
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|host| allowed_loopback_host(host, state.port));
-    if !allowed_host {
-        return Err("invalid Host for the Traffic management interface".to_string());
-    }
-    if let Some(site) = request
-        .headers()
-        .get("sec-fetch-site")
-        .and_then(|value| value.to_str().ok())
-        && !matches!(site, "none" | "same-origin")
-    {
-        return Err("cross-site management requests are not accepted".to_string());
-    }
-    let origin = request
-        .headers()
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok());
-    let origin_allowed = origin.is_some_and(|origin| allowed_loopback_origin(origin, state.port));
-    if origin.is_some() && !origin_allowed {
-        return Err("invalid Origin for the Traffic management interface".to_string());
-    }
-    if !matches!(*request.method(), Method::GET | Method::HEAD) {
-        if !origin_allowed {
-            return Err("mutating management requests require the loopback Origin".to_string());
-        }
-        let token = request
-            .headers()
-            .get("x-aibox-traffic-csrf")
-            .and_then(|value| value.to_str().ok());
-        if token != Some(state.csrf.as_str()) {
-            return Err("invalid Traffic management CSRF token".to_string());
-        }
-    }
-    Ok(())
-}
-
-fn allowed_loopback_origin(origin: &str, port: u16) -> bool {
-    let mut allowed = vec![
-        format!("http://127.0.0.1:{port}"),
-        format!("http://localhost:{port}"),
-        format!("http://[::1]:{port}"),
-    ];
-    if port == 80 {
-        allowed.extend([
-            "http://127.0.0.1".to_string(),
-            "http://localhost".to_string(),
-            "http://[::1]".to_string(),
-        ]);
-    }
-    allowed
-        .iter()
-        .any(|allowed| origin.eq_ignore_ascii_case(allowed))
-}
-
-fn allowed_loopback_host(host: &str, port: u16) -> bool {
-    let mut allowed = vec![
-        format!("127.0.0.1:{port}"),
-        format!("localhost:{port}"),
-        format!("[::1]:{port}"),
-    ];
-    if port == 80 {
-        allowed.extend([
-            "127.0.0.1".to_string(),
-            "localhost".to_string(),
-            "[::1]".to_string(),
-        ]);
-    }
-    allowed
-        .iter()
-        .any(|allowed| host.eq_ignore_ascii_case(allowed))
-}
-
-fn secure_response(mut response: Response<Body>) -> Response<Body> {
-    let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert("pragma", HeaderValue::from_static("no-cache"));
-    headers.insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
-    headers.insert(
-        "content-security-policy",
-        HeaderValue::from_static(
-            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        ),
-    );
-    response
-}
-
-pub(crate) async fn index(State(state): State<AppState>) -> Response<Body> {
-    let html = HTML.replace("__AIBOX_CSRF__", &state.csrf);
-    content(StatusCode::OK, "text/html; charset=utf-8", html)
+pub(crate) async fn index() -> Response<Body> {
+    content(StatusCode::OK, "text/html; charset=utf-8", HTML)
 }
 
 pub(crate) async fn css() -> Response<Body> {
@@ -169,7 +48,7 @@ pub(crate) async fn js() -> Response<Body> {
 }
 
 pub(crate) async fn not_found() -> Response<Body> {
-    traffic_proxy::bare_error(StatusCode::NOT_FOUND, "Traffic management route not found")
+    traffic_proxy::bare_error(StatusCode::NOT_FOUND, "Traffic Viewer route not found")
 }
 
 fn content(
@@ -758,14 +637,14 @@ fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Response<Body> 
         Ok(bytes) => content(status, "application/json; charset=utf-8", bytes),
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("serialize management response: {error}"),
+            &format!("serialize Traffic Viewer response: {error}"),
         ),
     }
 }
 
 fn json_error(status: StatusCode, message: &str) -> Response<Body> {
     let body = serde_json::to_vec(&json!({"error": message}))
-        .unwrap_or_else(|_| b"{\"error\":\"management error\"}".to_vec());
+        .unwrap_or_else(|_| b"{\"error\":\"Traffic Viewer error\"}".to_vec());
     content(status, "application/json; charset=utf-8", body)
 }
 
@@ -774,34 +653,10 @@ mod tests {
     use super::*;
     use crate::traffic_interpretation::ProtocolDiagnostic;
     use crate::traffic_store::{ObservedRequest, Outcome, RuntimeMeasurements};
-    use axum::http::Request;
     use base64::Engine as _;
     use http_body_util::BodyExt as _;
     use std::io::Write as _;
     use uuid::Uuid;
-
-    fn management_request(
-        method: Method,
-        host: Option<&str>,
-        origin: Option<&str>,
-        fetch_site: Option<&str>,
-        csrf: Option<&str>,
-    ) -> Request<Body> {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri("/_aibox/traffic/api/records");
-        for (name, value) in [
-            (header::HOST.as_str(), host),
-            (header::ORIGIN.as_str(), origin),
-            ("sec-fetch-site", fetch_site),
-            ("x-aibox-traffic-csrf", csrf),
-        ] {
-            if let Some(value) = value {
-                builder = builder.header(name, value);
-            }
-        }
-        builder.body(Body::empty()).unwrap()
-    }
 
     fn finished_record(
         store: &TrafficStore,
@@ -839,166 +694,6 @@ mod tests {
     async fn response_json(response: Response<Body>) -> serde_json::Value {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
-    }
-
-    #[test]
-    fn management_security_enforces_each_loopback_origin_and_csrf_boundary() {
-        let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
-        for (label, peer, method, host, origin, site, token, expected) in [
-            (
-                "canonical GET",
-                "127.0.0.1:40000",
-                Method::GET,
-                Some("127.0.0.1:9923"),
-                None,
-                None,
-                None,
-                None,
-            ),
-            (
-                "localhost HEAD",
-                "127.0.0.1:40000",
-                Method::HEAD,
-                Some("localhost:9923"),
-                None,
-                Some("none"),
-                None,
-                None,
-            ),
-            (
-                "IPv6 loopback GET",
-                "[::1]:40000",
-                Method::GET,
-                Some("[::1]:9923"),
-                Some("http://127.0.0.1:9923"),
-                Some("same-origin"),
-                None,
-                None,
-            ),
-            (
-                "authenticated POST",
-                "127.0.0.1:40000",
-                Method::POST,
-                Some("127.0.0.1:9923"),
-                Some("http://127.0.0.1:9923"),
-                Some("same-origin"),
-                Some(true),
-                None,
-            ),
-            (
-                "localhost authenticated POST",
-                "127.0.0.1:40000",
-                Method::POST,
-                Some("localhost:9923"),
-                Some("http://localhost:9923"),
-                Some("same-origin"),
-                Some(true),
-                None,
-            ),
-            (
-                "IPv6 authenticated POST",
-                "[::1]:40000",
-                Method::POST,
-                Some("[::1]:9923"),
-                Some("http://[::1]:9923"),
-                Some("same-origin"),
-                Some(true),
-                None,
-            ),
-            (
-                "remote peer",
-                "192.0.2.1:40000",
-                Method::GET,
-                Some("127.0.0.1:9923"),
-                None,
-                None,
-                None,
-                Some("the Traffic management interface is loopback-only"),
-            ),
-            (
-                "untrusted Host",
-                "127.0.0.1:40000",
-                Method::GET,
-                Some("evil.example"),
-                None,
-                None,
-                None,
-                Some("invalid Host for the Traffic management interface"),
-            ),
-            (
-                "cross-site fetch",
-                "127.0.0.1:40000",
-                Method::GET,
-                Some("127.0.0.1:9923"),
-                None,
-                Some("cross-site"),
-                None,
-                Some("cross-site management requests are not accepted"),
-            ),
-            (
-                "foreign Origin",
-                "127.0.0.1:40000",
-                Method::GET,
-                Some("127.0.0.1:9923"),
-                Some("http://evil.example"),
-                None,
-                None,
-                Some("invalid Origin for the Traffic management interface"),
-            ),
-            (
-                "POST without Origin",
-                "127.0.0.1:40000",
-                Method::POST,
-                Some("127.0.0.1:9923"),
-                None,
-                None,
-                Some(true),
-                Some("mutating management requests require the loopback Origin"),
-            ),
-            (
-                "POST with bad CSRF",
-                "127.0.0.1:40000",
-                Method::POST,
-                Some("127.0.0.1:9923"),
-                Some("http://127.0.0.1:9923"),
-                None,
-                Some(false),
-                Some("invalid Traffic management CSRF token"),
-            ),
-        ] {
-            let csrf = token.map(|valid| {
-                if valid {
-                    state.csrf.as_str()
-                } else {
-                    "wrong-token"
-                }
-            });
-            let request = management_request(method, host, origin, site, csrf);
-            let actual = validate_management_request(&state, peer.parse().unwrap(), &request).err();
-            assert_eq!(actual.as_deref(), expected, "{label}");
-        }
-    }
-
-    #[test]
-    fn management_security_accepts_the_omitted_default_http_port_only_for_port_80() {
-        let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 80).unwrap();
-        let request = management_request(
-            Method::POST,
-            Some("localhost"),
-            Some("http://localhost"),
-            Some("same-origin"),
-            Some(&state.csrf),
-        );
-        validate_management_request(&state, "127.0.0.1:40000".parse().unwrap(), &request).unwrap();
-
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
-        let request = management_request(Method::GET, Some("localhost"), None, None, None);
-        assert!(
-            validate_management_request(&state, "127.0.0.1:40000".parse().unwrap(), &request)
-                .is_err()
-        );
     }
 
     #[test]
@@ -1117,7 +812,7 @@ mod tests {
     #[tokio::test]
     async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let mut ids = Vec::new();
         for (status, provider_error) in [(401, false), (200, true)] {
             let (record, _) = state
@@ -1264,7 +959,7 @@ mod tests {
     #[tokio::test]
     async fn active_durations_do_not_depend_on_the_wall_clock_anchor() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (record, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/active"))
@@ -1296,7 +991,7 @@ mod tests {
     #[tokio::test]
     async fn record_detail_adds_event_timing_index_diagnostics_on_demand() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (record, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
@@ -1320,7 +1015,7 @@ mod tests {
     #[tokio::test]
     async fn record_detail_ignores_only_an_active_unterminated_event_index_tail() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (record, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
@@ -1360,7 +1055,7 @@ mod tests {
     #[tokio::test]
     async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (mut record, _) = state
             .store
             .begin(ObservedRequest {
@@ -1582,7 +1277,7 @@ mod tests {
     #[tokio::test]
     async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (record, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
@@ -1654,7 +1349,7 @@ mod tests {
     #[tokio::test]
     async fn event_timing_api_reports_a_missing_index_as_unavailable() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let id = finished_record(&state.store, "/without-events", b"", b"");
 
         let response = response_event_timings(
@@ -1674,7 +1369,7 @@ mod tests {
     #[tokio::test]
     async fn deletion_api_maps_selection_conflicts_and_successes() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(temp.path(), 9923).unwrap();
+        let state = AppState::for_test(temp.path()).unwrap();
         let (active, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/active"))

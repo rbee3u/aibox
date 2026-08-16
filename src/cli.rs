@@ -280,10 +280,6 @@ pub struct TrafficArgs {
         value_parser = parse_traffic_listen
     )]
     pub listen: SocketAddr,
-
-    /// Allow the proxy listener to accept non-loopback connections.
-    #[arg(long)]
-    pub allow_remote: bool,
 }
 
 fn parse_traffic_listen(value: &str) -> Result<SocketAddr, String> {
@@ -966,21 +962,12 @@ mod tests {
             panic!("expected traffic command");
         };
         assert_eq!(args.listen, "127.0.0.1:9923".parse().unwrap());
-        assert!(!args.allow_remote);
 
-        let cli = Cli::try_parse_from([
-            "aibox",
-            "traffic",
-            "--listen",
-            "[::1]:8080",
-            "--allow-remote",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aibox", "traffic", "--listen", "0.0.0.0:8080"]).unwrap();
         let Command::Traffic(args) = cli.command else {
             panic!("expected traffic command");
         };
-        assert_eq!(args.listen, "[::1]:8080".parse().unwrap());
-        assert!(args.allow_remote);
+        assert_eq!(args.listen, "0.0.0.0:8080".parse().unwrap());
 
         for args in [
             &["aibox", "traffic", "--listen", "127.0.0.1:0"][..],
@@ -988,6 +975,10 @@ mod tests {
         ] {
             assert_parse_error(args, ErrorKind::ValueValidation);
         }
+        assert_parse_error(
+            &["aibox", "traffic", "--allow-remote"],
+            ErrorKind::UnknownArgument,
+        );
         for args in [
             &["aibox", "traffic", "--agent", "codex"][..],
             &["aibox", "traffic", "--tenant", "work"][..],

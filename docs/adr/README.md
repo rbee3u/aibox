@@ -1,21 +1,25 @@
 # Architectural Decision Records
 
-ADRs preserve the reason for an architectural choice, including choices that
-were later replaced. Use the status below before treating an older decision as
-current guidance. [AGENTS.md](../../AGENTS.md) defines the active repository
-constraints, and the user-facing behavior has one canonical home in the
-documents linked from the main [README](../../README.md#learn-more).
+These ADRs record the architectural decisions that currently shape aibox and
+the reasons those choices remain deliberate. Detailed behavior belongs in the
+reference documents linked from the main [README](../../README.md#learn-more),
+while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
 
-| ADR | Status | Decision |
-| --- | --- | --- |
-| [0001](0001-unified-tenants.md) | Accepted | Model managed and host state as Tenants |
-| [0002](0002-tenant-local-agent-profile-reconciliation.md) | Superseded by 0005 | Materialize Tenant-local Agent Profiles with reconciliation |
-| [0003](0003-native-tenant-components.md) | Accepted | Derive optional Tenant Components from native state |
-| [0004](0004-agent-profile-and-component-ownership.md) | Superseded by 0005 | Separate Agent Profile and Component ownership |
-| [0005](0005-one-time-fixed-field-config-application.md) | Accepted | Manage Named and Current Config without retained state |
-| [0006](0006-global-traffic-records.md) | Accepted | Keep Traffic Records global and independent of Tenants |
-| [0007](0007-upstream-semantic-traffic-records.md) | Accepted; v1 compatibility superseded by 0011 | Record HTTP semantics with raw evidence and a protocol summary |
-| [0008](0008-explicit-cross-tenant-credential-propagation.md) | Accepted | Propagate ChatGPT credentials explicitly across Tenants |
-| [0009](0009-relay-compatible-first-token.md) | Accepted; Record coexistence superseded by 0011 | Define First Token by relay-compatible SSE data arrival |
-| [0010](0010-materialize-traffic-record-end-order.md) | Accepted | Materialize Traffic Record end order in directory names |
-| [0011](0011-materialize-traffic-summary-assessment.md) | Accepted | Materialize the Traffic list projection and Record Assessment |
+- [0001: Tenant identity and direct storage](0001-tenant-identity-and-direct-storage.md)
+  models persistent identity without management metadata or Run History.
+- [0002: Native Tenant Components](0002-native-tenant-components.md) derives
+  optional capabilities from native state rather than a registry.
+- [0003: One-shot Config Application](0003-one-shot-config-application.md) keeps
+  Named and Current Config separate without retained activation state.
+- [0004: Explicit Credential Propagation](0004-explicit-credential-propagation.md)
+  distributes refreshed ChatGPT credentials without synchronization.
+- [0005: Filesystem Sandbox and host trust](0005-filesystem-sandbox-and-host-trust.md)
+  makes Docker the filesystem boundary and treats writable state as untrusted.
+- [0006: CLI-only command boundary](0006-cli-only-command-boundary.md) preserves
+  native Coding Agent arguments without exposing orchestration APIs.
+- [0007: Supervised Docker lifecycle](0007-supervised-docker-lifecycle.md) keeps
+  container cleanup under wrapper control.
+- [0008: Global trusted Traffic service](0008-global-trusted-traffic-service.md)
+  separates Traffic from Tenants on one explicitly trusted listener.
+- [0009: Traffic Record evidence and projections](0009-traffic-record-evidence-and-projections.md)
+  keeps raw diagnostic evidence beside stable materialized views.

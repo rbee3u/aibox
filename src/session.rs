@@ -1,5 +1,5 @@
-//! Browse saved Sessions directly from a Tenant Home without starting a
-//! container. Discovery, id resolution, listing, and deletion are shared;
+//! Browse saved Sessions directly from a Tenant Home or Host Home without
+//! starting a container. Discovery, id resolution, listing, and deletion are shared;
 //! [`SessionBackend`] isolates the two Coding Agents' Transcript formats.
 //! Strict discovery protects `get` and `delete` from partial views, while
 //! `list` can report traversal errors alongside readable Sessions.
@@ -47,9 +47,9 @@ fn safe_path(path: &Path) -> String {
 }
 
 /// Resolve a Transcript directory only through real directory entries beneath
-/// the Tenant Home. The Home is writable by the container, so following a
-/// `.claude`/`.codex` ancestor symlink planted by a Coding Agent could make
-/// host-side `session delete` remove Transcripts outside the Tenant.
+/// the selected Home. The Home is writable by a Coding Agent, so following a
+/// `.claude`/`.codex` ancestor symlink it planted could make host-side
+/// `session delete` remove Transcripts outside the Tenant.
 pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {
     let mut path = home.to_path_buf();
     if !crate::tenant::real_dir_exists(&path, "tenant home")? {
@@ -76,7 +76,7 @@ pub(crate) struct SessionDiscovery {
 
 /// Whether a walked entry is a Transcript we want: a regular `.jsonl` file
 /// whose name passes `keep`. Do not follow a Transcript-shaped symlink created
-/// inside the mounted Tenant Home: host-side Session access must stay beneath
+/// inside the selected Home: host-side Session access must stay beneath
 /// the selected Home. Shared by the strict and tolerant walks so they cannot
 /// drift on which files count.
 fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {

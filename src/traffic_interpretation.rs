@@ -9,7 +9,7 @@
 //! Interpretation is observational, never authoritative: a failure becomes a
 //! deduplicated warning on the Summary and leaves the raw bodies, forwarding, and
 //! Traffic Outcome untouched. See
-//! `docs/adr/0007-upstream-semantic-traffic-records.md`.
+//! `docs/adr/0009-traffic-record-evidence-and-projections.md`.
 
 use crate::traffic_store::{RecordedHeader, StoredRecord};
 use anyhow::{Context, Result, bail};

@@ -120,7 +120,7 @@ ENV PATH=$GOPATH/bin:$PATH
 # Both CLIs live in the same immutable image. Upgrade by changing the pinned
 # versions and rebuilding, not by self-updating inside a Tenant Home.
 ARG CODEX_VERSION=0.147.0
-ARG CLAUDE_CODE_VERSION=2.1.224
+ARG CLAUDE_CODE_VERSION=2.1.233
 RUN set -eux; \
     export HOME=/tmp/aibox-build-home; \
     export npm_config_cache=/tmp/npm-cache; \

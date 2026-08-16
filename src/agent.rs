@@ -8,95 +8,95 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 
-/// Primitive value accepted by one fixed Config Field.
+/// Primitive value accepted by one fixed main-configuration Config Field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConfigValueKind {
+pub(crate) enum MainConfigValueKind {
     String,
     Bool,
 }
 
 /// One fixed main-configuration field that every Config Application updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ConfigField {
+pub(crate) struct MainConfigField {
     pub(crate) path: &'static [&'static str],
-    pub(crate) value_kind: ConfigValueKind,
+    pub(crate) value_kind: MainConfigValueKind,
 }
 
-const CLAUDE_CONFIG_FIELDS: &[ConfigField] = &[
-    ConfigField {
+const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
+    MainConfigField {
         path: &["env", "ANTHROPIC_BASE_URL"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["env", "ANTHROPIC_AUTH_TOKEN"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["permissions", "defaultMode"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["skipDangerousModePermissionPrompt"],
-        value_kind: ConfigValueKind::Bool,
+        value_kind: MainConfigValueKind::Bool,
     },
 ];
 
-const CODEX_CONFIG_FIELDS: &[ConfigField] = &[
-    ConfigField {
+const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
+    MainConfigField {
         path: &["approval_policy"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["sandbox_mode"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model_reasoning_effort"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["plan_mode_reasoning_effort"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["openai_base_url"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model_provider"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model_providers", "custom", "name"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model_providers", "custom", "base_url"],
-        value_kind: ConfigValueKind::String,
+        value_kind: MainConfigValueKind::String,
     },
-    ConfigField {
+    MainConfigField {
         path: &["model_providers", "custom", "requires_openai_auth"],
-        value_kind: ConfigValueKind::Bool,
+        value_kind: MainConfigValueKind::Bool,
     },
 ];
 
@@ -169,7 +169,7 @@ impl AgentKind {
         }
     }
 
-    /// Agent state directory relative to the shared Tenant Home.
+    /// Agent state directory relative to the selected Tenant Home or Host Home.
     pub const fn state_dir_name(self) -> &'static str {
         match self {
             Self::Claude => ".claude",
@@ -211,10 +211,10 @@ impl AgentKind {
     }
 
     /// Fixed main-configuration fields accepted by a Named Config.
-    pub(crate) const fn config_fields(self) -> &'static [ConfigField] {
+    pub(crate) const fn main_config_fields(self) -> &'static [MainConfigField] {
         match self {
-            Self::Claude => CLAUDE_CONFIG_FIELDS,
-            Self::Codex => CODEX_CONFIG_FIELDS,
+            Self::Claude => CLAUDE_MAIN_CONFIG_FIELDS,
+            Self::Codex => CODEX_MAIN_CONFIG_FIELDS,
         }
     }
 
@@ -286,7 +286,7 @@ mod tests {
             native_auth,
             config_files,
             empty_files,
-            config_fields,
+            main_config_fields,
             auth,
         ) in [
             (
@@ -298,31 +298,37 @@ mod tests {
                 &["settings.json"][..],
                 &[("settings.json", "{}\n")][..],
                 &[
-                    (&["env", "ANTHROPIC_BASE_URL"][..], ConfigValueKind::String),
+                    (
+                        &["env", "ANTHROPIC_BASE_URL"][..],
+                        MainConfigValueKind::String,
+                    ),
                     (
                         &["env", "ANTHROPIC_AUTH_TOKEN"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
-                    (&["permissions", "defaultMode"][..], ConfigValueKind::String),
+                    (
+                        &["permissions", "defaultMode"][..],
+                        MainConfigValueKind::String,
+                    ),
                     (
                         &["skipDangerousModePermissionPrompt"][..],
-                        ConfigValueKind::Bool,
+                        MainConfigValueKind::Bool,
                     ),
                 ][..],
                 None,
@@ -336,24 +342,27 @@ mod tests {
                 &["config.toml", "auth.json"][..],
                 &[("config.toml", ""), ("auth.json", "{}\n")][..],
                 &[
-                    (&["approval_policy"][..], ConfigValueKind::String),
-                    (&["sandbox_mode"][..], ConfigValueKind::String),
-                    (&["model_reasoning_effort"][..], ConfigValueKind::String),
-                    (&["plan_mode_reasoning_effort"][..], ConfigValueKind::String),
-                    (&["model"][..], ConfigValueKind::String),
-                    (&["openai_base_url"][..], ConfigValueKind::String),
-                    (&["model_provider"][..], ConfigValueKind::String),
+                    (&["approval_policy"][..], MainConfigValueKind::String),
+                    (&["sandbox_mode"][..], MainConfigValueKind::String),
+                    (&["model_reasoning_effort"][..], MainConfigValueKind::String),
+                    (
+                        &["plan_mode_reasoning_effort"][..],
+                        MainConfigValueKind::String,
+                    ),
+                    (&["model"][..], MainConfigValueKind::String),
+                    (&["openai_base_url"][..], MainConfigValueKind::String),
+                    (&["model_provider"][..], MainConfigValueKind::String),
                     (
                         &["model_providers", "custom", "name"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["model_providers", "custom", "base_url"][..],
-                        ConfigValueKind::String,
+                        MainConfigValueKind::String,
                     ),
                     (
                         &["model_providers", "custom", "requires_openai_auth"][..],
-                        ConfigValueKind::Bool,
+                        MainConfigValueKind::Bool,
                     ),
                 ][..],
                 Some("{\n  \"OPENAI_API_KEY\": \"sk-example\"\n}\n"),
@@ -374,11 +383,11 @@ mod tests {
             }
             assert_eq!(agent.empty_config_file("unknown"), None, "{agent:?}");
             let actual_fields: Vec<_> = agent
-                .config_fields()
+                .main_config_fields()
                 .iter()
                 .map(|field| (field.path, field.value_kind))
                 .collect();
-            assert_eq!(actual_fields, config_fields, "{agent:?}");
+            assert_eq!(actual_fields, main_config_fields, "{agent:?}");
         }
     }
 

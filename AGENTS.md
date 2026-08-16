@@ -29,8 +29,8 @@ references between them.
   `src/traffic_store.rs`, `src/traffic_sse.rs`,
   `src/traffic_interpretation.rs`, and `src/traffic_assessment.rs` own
   forwarding, persistence, SSE indexing, protocol facts, and assessment.
-  `src/traffic_web.rs` owns the management API.
-- `web/traffic/` is the editable Traffic viewer. `assets/traffic.*` is generated
+  `src/traffic_web.rs` owns the Traffic Viewer API.
+- `web/traffic/` is the editable Traffic Viewer. `assets/traffic.*` is generated
   output; use the workflow in `docs/traffic-ui.md`.
 
 ## Constraints
@@ -46,8 +46,8 @@ it, and pass the right side verbatim only to `run`. `run`, `config`, and
 `session` own separately scoped `--agent`/`--tenant` options; `component` owns
 `--tenant` and `--host` (Host supports statusline Components only); only
 `config`, `session`, and `component` accept `--host`. `build`,
-`completion`, and `tenant` accept none of them. `traffic` owns only `--listen`
-and `--allow-remote`; it does not accept selectors or pass-through arguments.
+`completion`, and `tenant` accept none of them. `traffic` owns only `--listen`;
+it does not accept selectors or pass-through arguments.
 `config propagate-auth` defaults to Host/Codex/Current and accepts only the
 redundant compatible selectors `--host`, `--agent codex`, and `--current`.
 Completion mirrors these scopes, stays read-only, runs on the host, and hides
@@ -158,23 +158,24 @@ operation: a Run or toolchain installation.
 **Keep Traffic host-side and raw.** The Traffic Proxy is global rather than
 Tenant-owned, never starts Docker, and records raw application-visible header
 values and body bytes under the flat `$AIBOX_ROOT/traffic/<record>/` layout.
-Management routes remain loopback-only even when proxy traffic is allowed on a
-non-loopback listener. Apart from the `198.18.0.0/15` host-side Fake-IP DNS
-exception, do not add private-upstream access, redaction, body limits,
-retention, WebSocket, CONNECT, or multi-process coordination.
+One explicit `--listen` socket serves both the Traffic Proxy and Traffic Viewer;
+the surrounding network is trusted, so do not add authentication, TLS, request
+admission checks, or network-exposure confirmations. Apart from the
+`198.18.0.0/15` host-side Fake-IP DNS exception, do not add private-upstream
+access, redaction, body limits, retention, WebSocket, CONNECT, or multi-process
+coordination.
 
 **Keep routine Traffic tests socket-free.** Default tests must not bind TCP or
 Unix sockets: exercise Axum routers as in-memory Tower services and drive body
 streams with deterministic synchronization. Keep real-socket Reqwest transport
 checks explicit and ignored, and run them only in a network-permitted host or
-CI environment. Test the embedded UI in layers: Rust route/API/security tests,
+CI environment. Test the embedded UI in layers: Rust route/API tests,
 then Vitest module and component tests for the React and TypeScript source in
 `web/traffic/`, then optional headless Chromium/Playwright interaction and
 screenshots in a development image or CI. Edit that source rather than the
 generated `assets/traffic.*` bundle, as `docs/traffic-ui.md` describes. Desktop
-Browser access is never required for routine changes. A headless browser must
-use the same container's loopback listener; do not publish or weaken the
-loopback-only management interface for testing.
+Browser access is never required for routine changes. A headless browser uses
+the same container's loopback listener.
 
 **Keep Run transient and the crate CLI-only.** Do not add Run History or a
 Run-to-Session mapping. A validated Run attempt may initialize its Tenant before

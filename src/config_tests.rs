@@ -450,6 +450,22 @@ fn get_current_rejects_a_missing_managed_tenant_without_creating_it() {
     assert!(!tenant.home_dir.exists());
 }
 
+#[test]
+fn get_current_names_a_missing_host_home_correctly() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("missing-home");
+    let selected = Tenant::Host {
+        home_dir: home.clone(),
+        root_dir: root.path().to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
+
+    let error = get_current_config(&selected).unwrap_err().to_string();
+
+    assert!(error.contains("Host Home does not exist"), "{error}");
+    assert!(!home.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn create_repairs_only_safe_valid_incomplete_configs() {

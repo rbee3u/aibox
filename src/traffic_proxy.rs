@@ -1,6 +1,6 @@
 //! The forwarding path: proxy one request upstream and record it as it streams.
 //!
-//! [`handle`] is the router fallback for every non-management request. It
+//! [`handle`] is the router fallback for every non-Traffic Viewer request. It
 //! resolves and validates the upstream target, opens a Traffic Record, streams
 //! the request body upstream and the response back, and classifies the terminal
 //! Traffic Outcome. Required raw-body, metadata, and Summary writes are in the
@@ -215,13 +215,14 @@ fn begin_record(
     incoming_uri: &str,
     upstream: Option<&Url>,
 ) -> anyhow::Result<ActiveRecord> {
+    let host_hint = upstream.map(upstream_host);
     let (record, request_metadata) = state.store.begin(ObservedRequest {
         method: parts.method.as_str(),
         incoming_uri,
         upstream_url: upstream.map(Url::as_str),
         http_version: version_name(parts.version),
         headers: RecordedHeader::from_headers(&parts.headers),
-        host_hint: upstream.and_then(Url::host_str),
+        host_hint: host_hint.as_deref(),
     })?;
     let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
     let protocol = Arc::new(Mutex::new(ProtocolObserver::new(
@@ -239,6 +240,16 @@ fn begin_record(
         protocol,
         request_metadata,
     })
+}
+
+fn upstream_host(url: &Url) -> String {
+    match (url.host(), url.port()) {
+        (Some(Host::Ipv6(address)), Some(port)) => format!("[{address}]:{port}"),
+        (Some(Host::Ipv6(address)), None) => format!("[{address}]"),
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_string(),
+        (None, _) => "invalid".to_string(),
+    }
 }
 
 struct RequestRejection {
@@ -550,8 +561,11 @@ impl RecordGuard {
                     });
                     true
                 });
-        if let Err(error) = result {
-            eprintln!("warning: cannot checkpoint Traffic summary: {error:#}");
+        if result.is_err() {
+            self.store.warning(
+                "traffic record summary checkpoint failed",
+                Some(&self.record.id),
+            );
         }
     }
 
@@ -1336,14 +1350,19 @@ async fn record_response_stream_with_index(
             Err(io::Error::new(error.kind(), message.clone())),
         )
         .await;
-        if let Err(finish_error) = guard.finish(
-            Outcome::RecordingFailed,
-            Some(ErrorMetadata {
-                kind: ErrorKind::ResponseRecordingFailed,
-                message,
-            }),
-        ) {
-            eprintln!("warning: cannot finalize failed Traffic Record: {finish_error:#}");
+        if guard
+            .finish(
+                Outcome::RecordingFailed,
+                Some(ErrorMetadata {
+                    kind: ErrorKind::ResponseRecordingFailed,
+                    message,
+                }),
+            )
+            .is_err()
+        {
+            guard
+                .store
+                .warning("traffic record finalization failed", Some(&guard.record.id));
         }
     } else {
         let semantic_result = if stream_end.completed_at_ns.is_some() && !tracker.is_event_stream()
@@ -1374,7 +1393,9 @@ async fn record_response_stream_with_index(
             let message = format!("finalize Traffic Record: {error:#}");
             let _ =
                 send_downstream(&sender, &shutdown, Err(io::Error::other(message.clone()))).await;
-            eprintln!("warning: {message}");
+            guard
+                .store
+                .warning("traffic record finalization failed", Some(&guard.record.id));
         }
     }
 }
@@ -1403,9 +1424,9 @@ fn declared_content_length(headers: &HeaderMap) -> Option<u64> {
 }
 
 /// An Agent's normal close immediately after a complete SSE response must not
-/// be recorded as a failed client disconnect (ADR-0007). A content-coded
-/// stream has no incremental indexer, so decode the recorded body prefix and
-/// look for a terminal event there.
+/// be recorded as a failed client disconnect. A content-coded stream has no
+/// incremental indexer, so decode the recorded body prefix and look for a
+/// terminal event there.
 fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> bool {
     if !matches!(tracker, ResponseBodyTracker::OpaqueEventStream) {
         return false;
@@ -1787,10 +1808,26 @@ mod tests {
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_util::sync::CancellationToken;
 
+    #[test]
+    fn console_upstream_host_keeps_explicit_ports_and_ipv6_brackets() {
+        assert_eq!(
+            upstream_host(&Url::parse("https://example.com:8443/path").unwrap()),
+            "example.com:8443"
+        );
+        assert_eq!(
+            upstream_host(&Url::parse("https://[2001:db8::1]:8443/path").unwrap()),
+            "[2001:db8::1]:8443"
+        );
+        assert_eq!(
+            upstream_host(&Url::parse("https://example.com:443/path").unwrap()),
+            "example.com"
+        );
+    }
+
     #[tokio::test]
     async fn rejected_request_preserves_url_query_headers_and_body_without_a_socket() {
         let temp = tempfile::tempdir().unwrap();
-        let state = AppState::new(temp.path(), 9923, CancellationToken::new()).unwrap();
+        let state = AppState::new(temp.path(), CancellationToken::new()).unwrap();
         let target = "http://192.0.2.1/v1/echo?tag=one&tag=&tag=two";
         let mut request = Request::builder()
             .method(Method::POST)

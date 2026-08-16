@@ -3,6 +3,23 @@ use crate::traffic_interpretation::{ProtocolDiagnostic, ResponseModeValue};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
+fn console_host_is_safe_and_keeps_ports_and_ipv6_brackets() {
+    assert_eq!(
+        safe_display_host("Api.Example.COM:8443"),
+        "api.example.com:8443"
+    );
+    assert_eq!(
+        safe_display_host("[2001:DB8::1]:8443"),
+        "[2001:db8::1]:8443"
+    );
+    assert_eq!(
+        safe_display_host("bad\nname?token=secret"),
+        "bad-name-token-secret"
+    );
+    assert_eq!(safe_display_host("\n\t"), "invalid");
+}
+
+#[test]
 fn host_slug_and_flat_record_layout_are_safe() {
     let temp = tempfile::tempdir().unwrap();
     let store = TrafficStore::open(temp.path()).unwrap();

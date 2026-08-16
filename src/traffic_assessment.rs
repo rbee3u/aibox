@@ -9,7 +9,7 @@
 //! [`refresh_assessment`] materializes the value into the Summary on the write
 //! path so lists never recompute it, while [`effective_assessment`] re-derives
 //! the interrupted case at read time. See
-//! `docs/adr/0011-materialize-traffic-summary-assessment.md`.
+//! `docs/adr/0009-traffic-record-evidence-and-projections.md`.
 
 use crate::traffic_interpretation::{ProtocolFamily, ResponseModeValue};
 use crate::traffic_store::{

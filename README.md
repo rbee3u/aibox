@@ -174,13 +174,17 @@ another Tenant Home.
 ## Traffic Debugging
 
 Start the temporary host-side HTTP/SSE recorder in the foreground, then open
-the viewer at `http://127.0.0.1:9923/`:
+the Traffic Viewer at `http://127.0.0.1:9923/`:
 
 ```sh
 aibox traffic
 ```
 
-Traffic viewer development commands and the embedded asset workflow are
+The command prints its Listen and Viewer addresses followed by concise,
+safety-filtered runtime diagnostics. Traffic Records persist under
+`$AIBOX_ROOT/traffic/` (`$HOME/.aibox/traffic/` by default).
+
+Traffic Viewer development commands and the embedded asset workflow are
 documented in [Traffic UI Development](docs/traffic-ui.md).
 
 Point a model provider at the proxy by placing its complete upstream base URL
@@ -230,12 +234,9 @@ Then set the native base URL:
 ```
 
 Docker Desktop supplies `host.docker.internal`. Native Linux Docker usually
-needs `aibox traffic --listen 0.0.0.0:9923 --allow-remote`; the management page
-remains loopback-only. The non-loopback proxy has no client authentication, so
-prefer a specific trusted address and restrict access with a firewall. Traffic
-Records contain unredacted authorization headers, prompts, and responses. See
-[Traffic Proxy](docs/sandbox.md#traffic-proxy) before use and delete Records
-from its viewer afterward.
+needs `aibox traffic --listen 0.0.0.0:9923`. The selected address serves both
+the Traffic Proxy and Traffic Viewer. See
+[Traffic Proxy](docs/sandbox.md#traffic-proxy) for the complete behavior.
 
 ## Shell Completion
 

@@ -121,36 +121,32 @@ alongside a Run:
 ```sh
 aibox traffic
 aibox traffic --listen 127.0.0.1:8080
-aibox traffic --listen 0.0.0.0:9923 --allow-remote
+aibox traffic --listen 0.0.0.0:9923
 ```
 
+The foreground command prints one plain-text startup line with its Listen and
+Viewer addresses. Interactive and redirected startup output are identical;
+runtime events include RFC 3339 UTC timestamps. Runtime output is intentionally
+concise: safe internal warnings and Error-assessed abnormal Traffic Outcomes
+include only a 12-character Record ID, method, upstream host, fixed reason, UTC
+time, and duration. It never prints request paths, headers, bodies, prompts,
+credentials, or raw upstream errors.
+Completed Records are not printed merely because an upstream returned HTTP
+4xx/5xx or a Provider diagnostic was recorded; inspect those details in the
+Traffic Viewer. Ctrl-C exits successfully after active Records are finalized;
+SIGTERM exits 143. A second signal forces exit using its conventional signal
+exit code.
+
 The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
-`IP:PORT` with a nonzero port, and every non-loopback address requires
-`--allow-remote`. Unless the requested address is `127.0.0.1` or the IPv4
-wildcard `0.0.0.0`, aibox also binds `127.0.0.1` on the same port for
-management. The viewer is advertised at `http://127.0.0.1:<port>/`, also
-answers the loopback Host values `localhost:<port>` and `[::1]:<port>`, and
-rejects non-loopback peers, non-loopback Host values, cross-origin and
-cross-site requests, and invalid per-start CSRF tokens. It sends no CORS
-permission.
-
-The proxy and management viewer do not authenticate clients. The per-start
-token is a browser CSRF defense, not a local-user boundary: a process that can
-connect to the loopback listener can fetch the viewer and its token. Do not
-publish the management routes through port forwarding or a reverse proxy, and
-treat other processes and users on the host as trusted while Traffic is
-running.
-
-`--allow-remote` exposes the unauthenticated proxy surface to every peer that
-can reach the selected address. Those peers can make requests to permitted
-public upstreams and create unbounded Traffic Records. Prefer a specific
-trusted interface over a wildcard listener, restrict it with a firewall, and
-stop the proxy when debugging ends. The management routes remain loopback-only
-even on that listener.
+`IP:PORT` with a nonzero port. aibox binds exactly that socket; it does not
+resolve hostnames, add a loopback listener, or add another IP protocol family.
+The same socket serves the Traffic Proxy and complete Traffic Viewer. For a
+wildcard listener, the startup line presents a clickable loopback Traffic
+Viewer URL; other clients use an address of the host that reaches that listener.
 
 Docker Desktop provides `host.docker.internal`. aibox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
-`0.0.0.0` plus `--allow-remote`. Codex's built-in OpenAI provider can use:
+`0.0.0.0`. Codex's built-in OpenAI provider can use:
 
 ```toml
 openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
@@ -256,10 +252,10 @@ backfill, or read-time reconstruction of a v2 Summary.
 Every terminal Traffic Outcome, including rejection, upstream failure, client
 disconnect, recording failure, and server shutdown, has a Traffic End Time
 derived from the Summary start anchor and terminal monotonic offset. Active and
-interrupted Records do not. The viewer orders canonical directory basenames by
-descending ASCII order: active and interrupted Records first by start time,
-then terminal Records by End Time, with host and UUID breaking millisecond
-ties. A terminal Summary stranded under an `active-` name is ordered by the
+interrupted Records do not. The Traffic Viewer orders canonical directory
+basenames by descending ASCII order: active and interrupted Records first by
+start time, then terminal Records by End Time, with host and UUID breaking
+millisecond ties. A terminal Summary stranded under an `active-` name is ordered by the
 terminal name it should have received.
 
 The Traffic Proxy best-effort materializes the protocol overview for OpenAI
@@ -313,8 +309,8 @@ error response is returned to the client but is not written as upstream data.
 
 There is no size limit, retention policy, redaction, database, or cross-process
 lock. Authorization values, API keys, prompts, tool data, and model output are
-stored in full and remain after the proxy exits. Use the viewer's selected
-delete or separately confirmed **Delete all** action when debugging ends. An
+stored in full and remain after the proxy exits. Use the Traffic Viewer's
+selected delete or separately confirmed **Delete all** action when debugging ends. An
 active Record cannot be deleted; delete-all removes every completed or
 interrupted Record in a single server-side snapshot and preserves Records that
 are still active when that snapshot is taken. It strictly validates every

@@ -25,6 +25,7 @@ mod tenant;
 mod testutil;
 mod traffic;
 mod traffic_assessment;
+mod traffic_console;
 mod traffic_interpretation;
 mod traffic_proxy;
 mod traffic_sse;

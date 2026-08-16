@@ -14,7 +14,7 @@
 //! hint: a Record starts under an `active-` name and [`TrafficStore::finish`]
 //! renames it after the terminal Summary is committed. Readers accept both sides
 //! of that non-transactional boundary and never infer state from the name. See
-//! `docs/adr/0010-materialize-traffic-record-end-order.md`.
+//! `docs/sandbox.md` for the complete layout contract.
 //!
 //! ## Reads do not trust the filesystem
 //!
@@ -29,6 +29,7 @@ use crate::tenant;
 #[cfg(test)]
 use crate::traffic_assessment::diagnostic_findings;
 use crate::traffic_assessment::{calculate_assessment, refresh_assessment};
+use crate::traffic_console::{AbnormalRecordEvent, TrafficConsole};
 use crate::traffic_interpretation::{ProtocolSummary, coding_agent_session_id};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -373,6 +374,7 @@ pub(crate) struct TrafficStore {
     root: PathBuf,
     active: Arc<Mutex<HashMap<String, Instant>>>,
     namespace: Arc<RwLock<()>>,
+    console: Option<TrafficConsole>,
 }
 
 /// Shared lookup for a Record directory whose name changes at terminalization.
@@ -383,13 +385,15 @@ pub(crate) struct TrafficStore {
 pub(crate) struct RecordLocator {
     inner: Arc<Mutex<PathBuf>>,
     host: Arc<str>,
+    display_host: Arc<str>,
 }
 
 impl RecordLocator {
-    fn new(path: PathBuf, host: String) -> Self {
+    fn new(path: PathBuf, host: String, display_host: String) -> Self {
         Self {
             inner: Arc::new(Mutex::new(path)),
             host: host.into(),
+            display_host: display_host.into(),
         }
     }
 
@@ -415,7 +419,8 @@ pub(crate) struct ObservedRequest<'a> {
     pub upstream_url: Option<&'a str>,
     pub http_version: &'a str,
     pub headers: Vec<RecordedHeader>,
-    /// Names the Record directory; a missing hint records `invalid`.
+    /// Supplies the safe Console host and Record directory slug; a missing hint
+    /// records `invalid`.
     pub host_hint: Option<&'a str>,
 }
 
@@ -508,7 +513,7 @@ pub(crate) struct StoredEventTimings {
 
 /// Distinguishes a strict Record lookup failure from optional index degradation.
 ///
-/// The management API reports lookup failures as a missing detail, while an
+/// The Traffic Viewer API reports lookup failures as a missing detail, while an
 /// unsafe event-index structure is a server error rather than silently omitting
 /// its diagnostics.
 pub(crate) enum RecordDetailReadError {
@@ -517,7 +522,12 @@ pub(crate) enum RecordDetailReadError {
 }
 
 impl TrafficStore {
+    #[cfg(test)]
     pub fn open(aibox_root: &Path) -> Result<Self> {
+        Self::open_with_console(aibox_root, None)
+    }
+
+    pub fn open_with_console(aibox_root: &Path, console: Option<TrafficConsole>) -> Result<Self> {
         tenant::ensure_real_dir(aibox_root, "aibox root")?;
         let root = aibox_root.join("traffic");
         tenant::ensure_real_dir(&root, "Traffic Record collection")?;
@@ -526,11 +536,23 @@ impl TrafficStore {
             root,
             active: Arc::new(Mutex::new(HashMap::new())),
             namespace: Arc::new(RwLock::new(())),
+            console,
         })
     }
 
+    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn active_count(&self) -> usize {
+        lock_unpoisoned(&self.active).len()
+    }
+
+    pub(crate) fn warning(&self, category: &str, id: Option<&str>) {
+        if let Some(console) = &self.console {
+            console.warning(category, id);
+        }
     }
 
     pub fn begin(&self, observed: ObservedRequest<'_>) -> Result<(NewRecord, RequestMetadata)> {
@@ -548,10 +570,11 @@ impl TrafficStore {
         let observed_at = utc_now();
         let origin = Instant::now();
         let coding_agent_session_id = coding_agent_session_id(upstream_url, &headers);
-        let host = sanitize_host(host_hint.unwrap_or("invalid"));
+        let display_host = safe_display_host(host_hint.unwrap_or("invalid"));
+        let host = sanitize_host(&display_host);
         let directory_name = format!("active-{}-{host}-{id}", utc_basic_at(&observed_at)?);
         let directory = self.root.join(directory_name);
-        let locator = RecordLocator::new(directory.clone(), host);
+        let locator = RecordLocator::new(directory.clone(), host, display_host);
         fs::create_dir(&directory)
             .with_context(|| format!("create Traffic Record {}", directory.display()))?;
         restrict_dir(&directory)?;
@@ -759,10 +782,7 @@ impl TrafficStore {
         refresh_assessment(&mut summary);
         if let Err(error) = atomic_write_json(&directory, SUMMARY_JSON, &*summary) {
             if terminal_summary_matches(&directory, &record.id, outcome, &at_ns) {
-                eprintln!(
-                    "warning: finalized Traffic Record {} but cannot sync terminal summary: {error:#}",
-                    record.id
-                );
+                self.warning("traffic record summary sync failed", Some(&record.id));
             } else {
                 *summary = previous;
                 return Err(error);
@@ -780,7 +800,7 @@ impl TrafficStore {
             .and_then(|value| value.parse::<u128>().ok())
             .map(|ns| (ns / 1_000_000) as u64)
             .unwrap_or_else(|| duration_ms(started.elapsed()));
-        Ok(ResultMetadata {
+        let result = ResultMetadata {
             format_version: FORMAT_VERSION,
             ended_at,
             request_bytes: measurements.request_bytes,
@@ -789,7 +809,20 @@ impl TrafficStore {
             total_ms,
             outcome,
             error,
-        })
+        };
+        if let Some(console) = &self.console {
+            console.record_finished(AbnormalRecordEvent {
+                id: &record.id,
+                method: &snapshot.request.method,
+                host: &record.locator.display_host,
+                outcome,
+                assessment_level: snapshot.assessment.level,
+                ended_at: &result.ended_at,
+                total_ms: result.total_ms,
+                error_kind: result.error.as_ref().map(|error| error.kind),
+            });
+        }
+        Ok(result)
     }
 
     fn finalize_directory_unlocked(&self, record: &NewRecord, ended_at: &str) {
@@ -798,10 +831,10 @@ impl TrafficStore {
             Ok(timestamp) => self
                 .root
                 .join(format!("{timestamp}-{}-{}", record.locator.host, record.id)),
-            Err(error) => {
-                eprintln!(
-                    "warning: finalized Traffic Record {} but cannot format its terminal directory: {error:#}",
-                    record.id
+            Err(_) => {
+                self.warning(
+                    "traffic record directory could not be finalized",
+                    Some(&record.id),
                 );
                 return;
             }
@@ -812,20 +845,11 @@ impl TrafficStore {
         match rename_noreplace(&directory, &target) {
             Ok(()) => {
                 record.locator.set_path(target.clone());
-                if let Err(error) = tenant::sync_dir(&self.root) {
-                    eprintln!(
-                        "warning: finalized Traffic Record {} but cannot sync renamed directory {}: {error:#}",
-                        record.id,
-                        target.display()
-                    );
+                if tenant::sync_dir(&self.root).is_err() {
+                    self.warning("traffic record directory sync failed", Some(&record.id));
                 }
             }
-            Err(error) => eprintln!(
-                "warning: finalized Traffic Record {} but cannot rename {} to {}: {error:#}",
-                record.id,
-                directory.display(),
-                target.display()
-            ),
+            Err(_) => self.warning("traffic record directory rename failed", Some(&record.id)),
         }
     }
 
@@ -854,27 +878,24 @@ impl TrafficStore {
         {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(error) => {
-                    eprintln!("warning: cannot inspect Traffic Record entry: {error}");
+                Err(_) => {
+                    self.warning(
+                        "traffic record collection entry could not be inspected",
+                        None,
+                    );
                     continue;
                 }
             };
             let path = entry.path();
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
-                Err(error) => {
-                    eprintln!(
-                        "warning: cannot inspect Traffic Record {}: {error}",
-                        path.display()
-                    );
+                Err(_) => {
+                    self.warning("traffic record entry could not be inspected", None);
                     continue;
                 }
             };
             if !metadata.file_type().is_dir() {
-                eprintln!(
-                    "warning: ignoring unexpected Traffic entry {}",
-                    path.display()
-                );
+                self.warning("unexpected traffic record entry ignored", None);
                 continue;
             }
             directories.push(path);
@@ -889,10 +910,7 @@ impl TrafficStore {
         for path in directories {
             match read_record_summary(&path, &active) {
                 Ok(record) => records.push(record),
-                Err(error) => eprintln!(
-                    "warning: ignoring incomplete or invalid Traffic Record {}: {error:#}",
-                    path.display()
-                ),
+                Err(_) => self.warning("incomplete or invalid traffic record ignored", None),
             }
         }
         records.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
@@ -906,10 +924,7 @@ impl TrafficStore {
         for path in directories {
             match read_record(&path, &active) {
                 Ok(record) => records.push(record),
-                Err(error) => eprintln!(
-                    "warning: ignoring incomplete or invalid Traffic Record {}: {error:#}",
-                    path.display()
-                ),
+                Err(_) => self.warning("incomplete or invalid traffic record ignored", None),
             }
         }
         records.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
@@ -1811,6 +1826,23 @@ fn sanitize_host(host: &str) -> String {
         "invalid".to_string()
     } else {
         slug.to_string()
+    }
+}
+
+fn safe_display_host(host: &str) -> String {
+    let mut value = String::with_capacity(host.len().min(256));
+    for character in host.chars().take(256) {
+        if character.is_ascii_alphanumeric() || matches!(character, '.' | ':' | '-' | '[' | ']') {
+            value.push(character.to_ascii_lowercase());
+        } else if !value.ends_with('-') {
+            value.push('-');
+        }
+    }
+    let value = value.trim_matches(['.', '-']);
+    if value.is_empty() {
+        "invalid".to_string()
+    } else {
+        value.to_string()
     }
 }
 

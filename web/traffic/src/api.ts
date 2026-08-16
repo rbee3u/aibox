@@ -11,7 +11,7 @@ export class ApiError extends Error {
 }
 
 export function requestErrorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : "Traffic management request failed";
+  return cause instanceof Error ? cause.message : "Traffic Viewer request failed";
 }
 
 export function requestWasCancelled(cause: unknown, signal: AbortSignal): boolean {
@@ -34,16 +34,10 @@ async function readError(response: Response): Promise<string> {
 }
 
 export function createTrafficApi(fetchImpl: typeof fetch = fetch): TrafficApi {
-  const csrf = document.querySelector<HTMLMetaElement>('meta[name="aibox-csrf"]')?.content ?? "";
   const recordPath = (id: string) => `/_aibox/traffic/api/records/${encodeURIComponent(id)}`;
 
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    const method = (init.method ?? "GET").toUpperCase();
-    if (method !== "GET" && method !== "HEAD") {
-      headers.set("X-Aibox-Traffic-CSRF", csrf);
-    }
-    const response = await fetchImpl(path, { ...init, headers, cache: "no-store" });
+    const response = await fetchImpl(path, { ...init, cache: "no-store" });
     if (!response.ok) {
       throw new ApiError(await readError(response), response.status);
     }

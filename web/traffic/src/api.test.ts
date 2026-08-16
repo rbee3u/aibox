@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError, createTrafficApi } from "./api";
 
 describe("Traffic API client", () => {
-  beforeEach(() => {
-    document.head.innerHTML = '<meta name="aibox-csrf" content="test-token">';
-  });
-
   it("uses one-based page queries", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -34,7 +30,7 @@ describe("Traffic API client", () => {
     const [path, init] = fetchMock.mock.calls[0];
     expect(path).toBe("/_aibox/traffic/api/records/record%2Fid");
     expect(init).toMatchObject({ cache: "no-store" });
-    expect(new Headers(init?.headers).has("X-Aibox-Traffic-CSRF")).toBe(false);
+    expect(init?.headers).toBeUndefined();
   });
 
   it("forwards cancellation to every API operation", async () => {
@@ -70,7 +66,7 @@ describe("Traffic API client", () => {
     }
   });
 
-  it("sends selected records as CSRF-protected JSON", async () => {
+  it("sends selected records as JSON", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
     const api = createTrafficApi(fetchMock);
 
@@ -85,11 +81,10 @@ describe("Traffic API client", () => {
     );
     const [, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
-    expect(headers.get("X-Aibox-Traffic-CSRF")).toBe("test-token");
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
-  it("sends delete-all as a CSRF-protected request without a body", async () => {
+  it("sends delete-all without a body", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
     const api = createTrafficApi(fetchMock);
 
@@ -101,7 +96,6 @@ describe("Traffic API client", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.body).toBeUndefined();
     const headers = new Headers(init?.headers);
-    expect(headers.get("X-Aibox-Traffic-CSRF")).toBe("test-token");
     expect(headers.has("Content-Type")).toBe(false);
   });
 

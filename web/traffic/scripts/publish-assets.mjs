@@ -3,7 +3,6 @@ import { URL } from "node:url";
 
 const generatedIndex = new URL("../../../assets/index.html", import.meta.url);
 const embeddedHtml = new URL("../../../assets/traffic.html", import.meta.url);
-const csrfPlaceholder = "__AIBOX_CSRF__";
 
 function assertExactlyOnce(content, value) {
   const first = content.indexOf(value);
@@ -18,7 +17,6 @@ function replaceExactlyOnce(content, from, to) {
 }
 
 let html = await readFile(generatedIndex, "utf8");
-assertExactlyOnce(html, csrfPlaceholder);
 html = replaceExactlyOnce(html, "/_aibox/traffic/traffic.js", "/_aibox/traffic/app.js");
 html = replaceExactlyOnce(html, "/_aibox/traffic/traffic.css", "/_aibox/traffic/app.css");
 

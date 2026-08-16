@@ -1,34 +1,30 @@
 //! The `aibox traffic` command: listeners, routing, and graceful shutdown.
 //!
 //! One Axum router serves two unrelated surfaces on the same port: the
-//! management viewer at `/` with its assets and JSON API under
+//! Traffic Viewer at `/` with its assets and JSON API under
 //! `/_aibox/traffic/`, and a catch-all fallback that proxies everything else.
-//! `traffic_web::security_middleware` guards only the management routes, which
-//! is what keeps them loopback-only even when `--allow-remote` exposes proxy
-//! traffic on a non-loopback address.
-//!
-//! That split is also why [`bind_listeners`] adds a `127.0.0.1` listener unless
-//! the requested address already answers there: a specific or IPv6 bind would
-//! otherwise leave the owner without an IPv4 loopback path to the viewer.
+//! Both surfaces are available through the single socket selected by
+//! `--listen`.
 //!
 //! The proxy is global rather than Tenant-owned and never starts Docker; see
-//! `docs/adr/0006-global-traffic-records.md`.
+//! `docs/adr/0008-global-trusted-traffic-service.md`.
 
 use crate::cli::TrafficArgs;
 use crate::tenant;
+use crate::traffic_console::{ShutdownReason, TrafficConsole};
 use crate::traffic_proxy;
 use crate::traffic_store::TrafficStore;
 use crate::traffic_web;
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::extract::State;
-use axum::middleware;
 use axum::routing::{get, post};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::future::IntoFuture as _;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -36,19 +32,24 @@ use tokio_util::task::TaskTracker;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) store: TrafficStore,
-    pub(crate) csrf: String,
-    pub(crate) port: u16,
     pub(crate) shutdown: CancellationToken,
     pub(crate) response_tasks: TaskTracker,
     pub(crate) allow_private_upstream: bool,
 }
 
 impl AppState {
-    pub(crate) fn new(root: &Path, port: u16, shutdown: CancellationToken) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn new(root: &Path, shutdown: CancellationToken) -> Result<Self> {
+        Self::new_with_console(root, shutdown, None)
+    }
+
+    pub(crate) fn new_with_console(
+        root: &Path,
+        shutdown: CancellationToken,
+        console: Option<TrafficConsole>,
+    ) -> Result<Self> {
         Ok(Self {
-            store: TrafficStore::open(root)?,
-            csrf: uuid::Uuid::new_v4().to_string(),
-            port,
+            store: TrafficStore::open_with_console(root, console)?,
             shutdown,
             response_tasks: TaskTracker::new(),
             allow_private_upstream: false,
@@ -56,105 +57,137 @@ impl AppState {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(root: &Path, port: u16) -> Result<Self> {
-        let mut state = Self::new(root, port, CancellationToken::new())?;
+    pub(crate) fn for_test(root: &Path) -> Result<Self> {
+        let mut state = Self::new(root, CancellationToken::new())?;
         state.allow_private_upstream = true;
         Ok(state)
     }
 }
 
-/// Run the foreground host-side Traffic Proxy and management viewer.
+/// Run the foreground host-side Traffic Proxy and Traffic Viewer.
 pub(crate) fn dispatch(args: &TrafficArgs) -> Result<i32> {
-    validate_listener_scope(args)?;
+    validate_listener(args)?;
     let root = tenant::aibox_root()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("aibox-traffic")
         .build()
         .context("create Traffic Proxy async runtime")?;
-    runtime.block_on(serve(args.listen, &root))?;
-    Ok(0)
+    runtime.block_on(serve(args.listen, &root))
 }
 
-fn validate_listener_scope(args: &TrafficArgs) -> Result<()> {
+fn validate_listener(args: &TrafficArgs) -> Result<()> {
     if args.listen.port() == 0 {
         bail!("Traffic listener port must not be 0");
     }
-    if !args.listen.ip().is_loopback() && !args.allow_remote {
-        bail!(
-            "non-loopback Traffic listener {} requires --allow-remote",
-            args.listen
-        );
-    }
     Ok(())
 }
 
-async fn serve(listen: SocketAddr, root: &Path) -> Result<()> {
+async fn serve(listen: SocketAddr, root: &Path) -> Result<i32> {
     let shutdown = CancellationToken::new();
-    let state = AppState::new(root, listen.port(), shutdown.clone())?;
-    let listeners = bind_listeners(listen)?;
+    let console = TrafficConsole::new();
+    let state = AppState::new_with_console(root, shutdown.clone(), Some(console.clone()))?;
+    let listener =
+        bind_listener(listen).with_context(|| format!("bind Traffic listener {listen}"))?;
     let router = router(state.clone());
 
-    let home = tenant::host_home().ok();
-    let summary = startup_summary(listen.port(), state.store.root(), home.as_deref());
-    eprintln!("{summary}");
+    console.startup(&listen.to_string(), &traffic_viewer_url(listen));
 
-    let signal_shutdown = shutdown.clone();
+    let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
     let signal_task = tokio::spawn(async move {
-        wait_for_shutdown_signal().await;
-        signal_shutdown.cancel();
+        signal_loop(signal_tx).await;
     });
 
     let mut servers = JoinSet::new();
-    for listener in listeners {
-        let service = router
-            .clone()
-            .into_make_service_with_connect_info::<SocketAddr>();
-        let listener_shutdown = shutdown.clone();
-        servers.spawn(
-            axum::serve(listener, service)
-                .with_graceful_shutdown(listener_shutdown.cancelled_owned())
-                .into_future(),
-        );
-    }
+    let listener_shutdown = shutdown.clone();
+    servers.spawn(
+        axum::serve(listener, router)
+            .with_graceful_shutdown(listener_shutdown.cancelled_owned())
+            .into_future(),
+    );
     let mut first_error = None;
-    while let Some(result) = servers.join_next().await {
-        let error = match result {
-            Ok(Ok(())) => continue,
-            Ok(Err(error)) => anyhow::Error::new(error),
-            Err(error) => anyhow::Error::new(error),
-        };
-        first_error.get_or_insert(error);
-        shutdown.cancel();
+    let mut reason = None;
+    while !servers.is_empty() {
+        tokio::select! {
+            result = servers.join_next() => {
+                let Some(result) = result else { break };
+                if let Some(error) = server_error(result) {
+                    first_error.get_or_insert(error);
+                    shutdown.cancel();
+                    break;
+                }
+            }
+            received = signal_rx.recv() => {
+                let Some(received) = received else { break };
+                reason = Some(received);
+                console.begin_shutdown(received, state.store.active_count());
+                shutdown.cancel();
+                break;
+            }
+        }
     }
-    signal_task.abort();
-    await_response_tasks(&state).await;
+    while !servers.is_empty() {
+        tokio::select! {
+            result = servers.join_next() => {
+                let Some(result) = result else { break };
+                if let Some(error) = server_error(result) {
+                    first_error.get_or_insert(error);
+                }
+            }
+            received = signal_rx.recv(), if reason.is_some() => {
+                if let Some(received) = received {
+                    console.forced_shutdown(received);
+                    signal_task.abort();
+                    return Ok(received.forced_exit_code());
+                }
+            }
+        }
+    }
     if let Some(error) = first_error {
+        signal_task.abort();
+        await_response_tasks(&state).await;
         return Err(error).context("serve Traffic Proxy");
     }
-    Ok(())
-}
-
-fn startup_summary(port: u16, raw_records: &Path, home: Option<&Path>) -> String {
-    let raw_records = display_path(raw_records, home);
-    format!(
-        ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:{port}/\n   Raw records {raw_records}"
-    )
-}
-
-fn display_path(path: &Path, home: Option<&Path>) -> String {
-    let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) else {
-        return path.display().to_string();
-    };
-    if relative.as_os_str().is_empty() {
-        "~".to_string()
-    } else {
-        format!("~/{}", relative.display())
+    state.response_tasks.close();
+    tokio::select! {
+        _ = state.response_tasks.wait() => {
+            signal_task.abort();
+            let code = reason.map_or(0, ShutdownReason::completion_exit_code);
+            if reason.is_some() {
+                console.stopped(code);
+            }
+            Ok(code)
+        }
+        received = signal_rx.recv(), if reason.is_some() => {
+            let received = received.unwrap_or_else(|| reason.expect("shutdown reason exists"));
+            console.forced_shutdown(received);
+            signal_task.abort();
+            Ok(received.forced_exit_code())
+        }
     }
+}
+
+fn server_error(
+    result: Result<Result<(), std::io::Error>, tokio::task::JoinError>,
+) -> Option<anyhow::Error> {
+    match result {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(anyhow::Error::new(error)),
+        Err(error) => Some(anyhow::Error::new(error)),
+    }
+}
+
+fn traffic_viewer_url(listen: SocketAddr) -> String {
+    let ip = match listen.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ip => ip,
+    };
+    format!("http://{}/", SocketAddr::new(ip, listen.port()))
 }
 
 fn router(state: AppState) -> Router {
-    let management = Router::new()
+    let traffic_viewer = Router::new()
         .route("/", get(traffic_web::index))
         .route("/_aibox/traffic/app.css", get(traffic_web::css))
         .route("/_aibox/traffic/app.js", get(traffic_web::js))
@@ -194,13 +227,9 @@ fn router(state: AppState) -> Router {
             "/_aibox/traffic/api/records/{id}/response-event-timings",
             get(traffic_web::response_event_timings),
         )
-        .route("/_aibox/traffic/{*path}", get(traffic_web::not_found))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            traffic_web::security_middleware,
-        ));
+        .route("/_aibox/traffic/{*path}", get(traffic_web::not_found));
     Router::new()
-        .merge(management)
+        .merge(traffic_viewer)
         .fallback(proxy_fallback)
         .with_state(state)
 }
@@ -210,23 +239,6 @@ async fn proxy_fallback(
     request: axum::extract::Request,
 ) -> axum::response::Response {
     traffic_proxy::handle(state, request).await
-}
-
-fn bind_listeners(requested: SocketAddr) -> Result<Vec<TcpListener>> {
-    let mut listeners = vec![
-        bind_listener(requested).with_context(|| format!("bind Traffic listener {requested}"))?,
-    ];
-    if needs_canonical_loopback(requested.ip()) {
-        let canonical = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), requested.port());
-        listeners.push(bind_listener(canonical).with_context(|| {
-            format!("bind loopback Traffic management listener {canonical} alongside {requested}")
-        })?);
-    }
-    Ok(listeners)
-}
-
-fn needs_canonical_loopback(address: IpAddr) -> bool {
-    address != IpAddr::V4(Ipv4Addr::LOCALHOST) && address != IpAddr::V4(Ipv4Addr::UNSPECIFIED)
 }
 
 fn bind_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
@@ -250,19 +262,38 @@ async fn await_response_tasks(state: &AppState) {
     state.response_tasks.wait().await;
 }
 
-async fn wait_for_shutdown_signal() {
+async fn signal_loop(sender: mpsc::UnboundedSender<ShutdownReason>) {
     #[cfg(unix)]
     {
-        let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-        if let Ok(mut terminate) = terminate {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = terminate.recv() => {}
+        if let Ok(mut terminate) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            loop {
+                let reason = tokio::select! {
+                    _ = tokio::signal::ctrl_c() => Some(ShutdownReason::Interrupt),
+                    signal = terminate.recv() => signal.map(|_| ShutdownReason::Terminate),
+                };
+                let Some(reason) = reason else { break };
+                if sender.send(reason).is_err() {
+                    return;
+                }
             }
+        }
+        loop {
+            if tokio::signal::ctrl_c().await.is_err()
+                || sender.send(ShutdownReason::Interrupt).is_err()
+            {
+                return;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    loop {
+        if tokio::signal::ctrl_c().await.is_err() || sender.send(ShutdownReason::Interrupt).is_err()
+        {
             return;
         }
     }
-    let _ = tokio::signal::ctrl_c().await;
 }
 
 #[cfg(test)]
@@ -270,7 +301,6 @@ mod tests {
     use super::*;
     use crate::traffic_store::{Outcome, StoredRecord};
     use axum::body::Body;
-    use axum::extract::ConnectInfo;
     use axum::http::{HeaderValue, Request, Response, StatusCode, header};
     use axum::routing::{get, post};
     use bytes::Bytes;
@@ -279,95 +309,33 @@ mod tests {
     use tower::ServiceExt as _;
 
     #[test]
-    fn canonical_loopback_binding_is_added_only_when_needed() {
-        assert!(!needs_canonical_loopback("127.0.0.1".parse().unwrap()));
-        assert!(!needs_canonical_loopback("0.0.0.0".parse().unwrap()));
-        assert!(needs_canonical_loopback("192.0.2.10".parse().unwrap()));
-        assert!(needs_canonical_loopback("::".parse().unwrap()));
-        assert!(needs_canonical_loopback("::1".parse().unwrap()));
-    }
-
-    #[test]
-    fn non_loopback_listener_requires_explicit_remote_permission() {
-        for listen in ["127.0.0.1:9923", "[::1]:9923"] {
-            validate_listener_scope(&TrafficArgs {
-                listen: listen.parse().unwrap(),
-                allow_remote: false,
-            })
-            .unwrap();
+    fn traffic_viewer_url_maps_wildcards_to_clickable_loopback_addresses() {
+        for (listen, expected) in [
+            ("127.0.0.1:9923", "http://127.0.0.1:9923/"),
+            ("0.0.0.0:8080", "http://127.0.0.1:8080/"),
+            ("[::]:9923", "http://[::1]:9923/"),
+            ("192.0.2.10:9923", "http://192.0.2.10:9923/"),
+        ] {
+            assert_eq!(traffic_viewer_url(listen.parse().unwrap()), expected);
         }
-        let denied = TrafficArgs {
-            listen: "0.0.0.0:9923".parse().unwrap(),
-            allow_remote: false,
-        };
-        assert_eq!(
-            validate_listener_scope(&denied).unwrap_err().to_string(),
-            "non-loopback Traffic listener 0.0.0.0:9923 requires --allow-remote"
-        );
-        let allowed = TrafficArgs {
-            allow_remote: true,
-            ..denied
-        };
-        validate_listener_scope(&allowed).unwrap();
     }
 
     #[test]
     fn listener_rejects_an_ephemeral_port_the_viewer_cannot_advertise() {
         let args = TrafficArgs {
             listen: "127.0.0.1:0".parse().unwrap(),
-            allow_remote: false,
         };
         assert_eq!(
-            validate_listener_scope(&args).unwrap_err().to_string(),
+            validate_listener(&args).unwrap_err().to_string(),
             "Traffic listener port must not be 0"
         );
     }
 
-    #[test]
-    fn startup_summary_formats_the_viewer_and_records_location() {
-        for (port, records, home, expected_records) in [
-            (
-                9923,
-                "/Users/example/.aibox/traffic",
-                Some("/Users/example"),
-                "~/.aibox/traffic",
-            ),
-            (
-                8080,
-                "/Users/example/.aibox/traffic",
-                Some("/Users/example"),
-                "~/.aibox/traffic",
-            ),
-            (
-                9923,
-                "/var/lib/aibox/traffic",
-                Some("/Users/example"),
-                "/var/lib/aibox/traffic",
-            ),
-            (
-                9923,
-                "/var/lib/aibox/traffic",
-                None,
-                "/var/lib/aibox/traffic",
-            ),
-        ] {
-            let home = home.map(Path::new);
-            assert_eq!(
-                startup_summary(port, Path::new(records), home),
-                format!(
-                    ">> Traffic Proxy ready\n   Viewer      http://127.0.0.1:{port}/\n   Raw records {expected_records}"
-                ),
-                "port={port}, records={records}, home={home:?}"
-            );
-        }
-    }
-
     #[tokio::test]
-    async fn embedded_ui_and_api_are_served_in_memory_with_management_guards() {
+    async fn embedded_ui_and_api_are_served_in_memory_without_request_guards() {
         let root = tempfile::tempdir().unwrap();
-        let state = AppState::for_test(root.path(), 9923).unwrap();
+        let state = AppState::for_test(root.path()).unwrap();
         let service = router(state.clone());
-        let peer = ConnectInfo("127.0.0.1:40000".parse::<SocketAddr>().unwrap());
 
         for (path, content_type) in [
             ("/", "text/html; charset=utf-8"),
@@ -381,12 +349,7 @@ mod tests {
                 "application/json; charset=utf-8",
             ),
         ] {
-            let mut request = Request::builder()
-                .uri(path)
-                .header(header::HOST, "127.0.0.1:9923")
-                .body(Body::empty())
-                .unwrap();
-            request.extensions_mut().insert(peer);
+            let request = Request::builder().uri(path).body(Body::empty()).unwrap();
             let response = service.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{path}");
             assert_eq!(
@@ -394,37 +357,22 @@ mod tests {
                 content_type,
                 "{path}"
             );
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL).unwrap(),
-                "no-store",
-                "{path}"
-            );
-            assert!(response.headers().contains_key("content-security-policy"));
-            assert_eq!(
-                response.headers().get("x-content-type-options").unwrap(),
-                "nosniff"
-            );
             let body = response.into_body().collect().await.unwrap().to_bytes();
             if path == "/" {
                 let html = String::from_utf8(body.to_vec()).unwrap();
-                assert!(html.contains(&state.csrf));
+                assert!(!html.contains("__AIBOX_CSRF__"));
+                assert!(!html.contains("aibox-csrf"));
                 assert!(html.contains("/_aibox/traffic/app.css"));
                 assert!(html.contains("/_aibox/traffic/app.js"));
             }
         }
 
-        let mut legacy_delete_all = Request::builder()
+        let delete_all = Request::builder()
             .method("POST")
             .uri("/_aibox/traffic/api/records/delete-all")
-            .header(header::HOST, "127.0.0.1:9923")
-            .header(header::ORIGIN, "http://127.0.0.1:9923")
-            .header("sec-fetch-site", "same-origin")
-            .header("x-aibox-traffic-csrf", &state.csrf)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"expected_deletable_count":99}"#))
+            .body(Body::empty())
             .unwrap();
-        legacy_delete_all.extensions_mut().insert(peer);
-        let response = service.clone().oneshot(legacy_delete_all).await.unwrap();
+        let response = service.clone().oneshot(delete_all).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(
@@ -432,16 +380,15 @@ mod tests {
             serde_json::json!({"deleted": 0})
         );
 
-        let mut remote_request = Request::builder()
+        let unconstrained_request = Request::builder()
             .uri("/")
-            .header(header::HOST, "127.0.0.1:9923")
+            .header(header::HOST, "arbitrary.example")
+            .header(header::ORIGIN, "http://arbitrary.example")
+            .header("sec-fetch-site", "cross-site")
             .body(Body::empty())
             .unwrap();
-        remote_request.extensions_mut().insert(ConnectInfo(
-            "192.0.2.1:40000".parse::<SocketAddr>().unwrap(),
-        ));
-        let response = service.oneshot(remote_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = service.oneshot(unconstrained_request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     async fn echo(request: Request<Body>) -> Response<Body> {
@@ -487,7 +434,7 @@ mod tests {
 
         let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_address = proxy_listener.local_addr().unwrap();
-        let state = AppState::for_test(root, proxy_address.port()).unwrap();
+        let state = AppState::for_test(root).unwrap();
         let proxy_router = router(state.clone());
         let proxy_task = tokio::spawn(async move {
             axum::serve(

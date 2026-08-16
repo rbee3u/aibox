@@ -1,6 +1,6 @@
 # Traffic UI Development
 
-The Traffic viewer is a React and TypeScript application under
+The Traffic Viewer is a React and TypeScript application under
 `web/traffic/`. Node and npm are development tools only. The Rust binary
 continues to embed the generated files in `assets/traffic.html`,
 `assets/traffic.css`, and `assets/traffic.js`.
@@ -63,16 +63,15 @@ make traffic-build
 cargo run -- traffic
 ```
 
-Open the embedded viewer to check the complete page and real Traffic API. To
-test the installed `aibox` command instead, run `make install` after rebuilding
-the assets.
+Open the embedded Traffic Viewer to check the complete page and real Traffic
+API. To test the installed `aibox` command instead, run `make install` after
+rebuilding the assets.
 
 Do not edit the generated files in `assets/traffic.*` directly. Change the
 source under `web/traffic/`—application code in `src/` or the HTML shell in
-`index.html`—and rebuild before committing. The generated HTML keeps the
-Rust-injected `__AIBOX_CSRF__` placeholder and the existing management routes.
-The publish step also rewrites the asset references, so `assets/traffic.css`
-and `assets/traffic.js` are served as `/_aibox/traffic/app.css` and
+`index.html`—and rebuild before committing. The publish step rewrites the asset
+references, so `assets/traffic.css` and `assets/traffic.js` are served as
+`/_aibox/traffic/app.css` and
 `/_aibox/traffic/app.js`.
 
 ## Code Boundaries
@@ -80,9 +79,9 @@ and `assets/traffic.js` are served as `/_aibox/traffic/app.css` and
 `src/api.ts` is the only browser-facing Traffic API client. Its TypeScript
 interfaces mirror the Rust JSON responses, including raw Summary timing,
 Traffic Outcome, the top-level Coding Agent Session ID, the persisted Model
-Protocol Summary and Record Assessment, and normalized Diagnostics groups; the
-Rust routes, CSRF rules, CSP, and loopback checks remain unchanged. Components
-receive an API interface so tests can use deterministic fakes without sockets.
+Protocol Summary and Record Assessment, and normalized Diagnostics groups.
+Components receive an API interface so tests can use deterministic fakes
+without sockets.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-record polling. The Summary is
@@ -124,7 +123,8 @@ Diagnostics renders the normalized `Proxy / transport`, `HTTP response`,
 ## Body Views
 
 The Request and Response tabs open in `Pretty` when the complete decoded Body
-has a renderer. The viewer keeps three deliberately separate representations.
+has a renderer. The Traffic Viewer keeps three deliberately separate
+representations.
 The Body routes named below are suffixes of `/_aibox/traffic/api/records/{id}/`:
 
 - The Traffic Record and the existing `request-body` / `response-body` routes
@@ -136,7 +136,7 @@ The Body routes named below are suffixes of `/_aibox/traffic/api/records/{id}/`:
 - `Pretty` is derived in the browser from Source. It never changes or persists
   a Traffic Record.
 
-The read-only `request-body-decoded` and `response-body-decoded` management
+The read-only `request-body-decoded` and `response-body-decoded` Traffic Viewer
 routes accept no coding, an empty coding, `identity`, or one case-insensitive
 `zstd` coding. Rust streams zstd decoding from a blocking worker; unsupported
 or combined codings do not alter the raw Body. An active encoded Body must be
@@ -167,7 +167,7 @@ parsed SSE Events by sequence. A missing, truncated, or partly malformed index
 shows `Time unavailable` plus one warning and never suppresses Event data.
 Active views request later sequences during their normal poll. Event time is
 shown relative to Record start at millisecond precision, with the absolute
-timestamp in a tooltip using the viewer's existing timezone convention.
+timestamp in a tooltip using the Traffic Viewer's existing timezone convention.
 Content-encoded event streams retain their exact encoded bytes but do not get
 an event index, because decoded Event boundaries cannot be mapped to exact raw
 byte offsets; the decoded Pretty view remains available after a supported zstd
@@ -250,10 +250,10 @@ Each poll opens only each Record's `summary.json`, which contains the complete
 list projection and persisted Assessment. Detail reads remain strict over raw
 request/response metadata, Body entries, and relevant ancestors, so an unsafe
 or malformed raw entry can fail detail without hiding a valid list row.
-Polling refreshes the page the viewer is already on, even when terminalization
-moves Records between pages. An empty page falls back through earlier pages to
-the closest non-empty page or page 1. Multi-page selection pauses polling;
-after deletion the viewer returns to the lowest page containing a selected
+Polling refreshes the page the Traffic Viewer is already on, even when
+terminalization moves Records between pages. An empty page falls back through
+earlier pages to the closest non-empty page or page 1. Multi-page selection pauses polling;
+after deletion the Traffic Viewer returns to the lowest page containing a selected
 Record and applies the same empty-page fallback. Single-record and delete-all
 operations return to their originating page. A confirmation dialog pauses and
 cancels list, detail, and Body polling, then refreshes the applicable views when

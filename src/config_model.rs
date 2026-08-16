@@ -1,13 +1,13 @@
 //! Fixed Named Config schema validation and one-time application.
 //!
-//! A Named Config may contain only the Config Fields declared by [`AgentKind`]
-//! (plus Codex's complete native `auth.json` object). Application iterates that
-//! entire fixed field set: present values are set, absent values are removed,
-//! and unrelated Current Config values are preserved. This module computes the
-//! desired native files without performing filesystem writes or retaining an
-//! association with the Named Config.
+//! A Named Config may contain only the main-configuration Config Fields declared
+//! by [`AgentKind`] plus Codex's complete native `auth.json` Config Field.
+//! Application iterates that entire fixed field set: present values are set,
+//! absent values are removed, and unrelated Current Config values are preserved.
+//! This module computes the desired native files without performing filesystem
+//! writes or retaining an association with the Named Config.
 
-use crate::agent::{AgentKind, ConfigField, ConfigValueKind};
+use crate::agent::{AgentKind, MainConfigField, MainConfigValueKind};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use std::str::FromStr;
@@ -89,7 +89,7 @@ impl NamedConfigDefinition {
             .context("parse Current Config settings.json")?;
         let mut changed = false;
 
-        for field in self.agent.config_fields() {
+        for field in self.agent.main_config_fields() {
             match value_at_path(&self.main, field.path) {
                 Some(value) => {
                     changed |= set_json_path(&mut configuration, field.path, value.clone());
@@ -123,7 +123,7 @@ impl NamedConfigDefinition {
             DocumentMut::from_str(original_main).context("parse Current Config config.toml")?
         };
         let mut changed = false;
-        for field in self.agent.config_fields() {
+        for field in self.agent.main_config_fields() {
             match value_at_path(&self.main, field.path) {
                 Some(value) => changed |= set_codex_path(&mut document, field.path, value)?,
                 None => changed |= remove_codex_path(&mut document, field.path),
@@ -160,12 +160,12 @@ impl NamedConfigDefinition {
 
 fn validate_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
     let mut path = Vec::new();
-    validate_config_object(main, agent.config_fields(), &mut path)
+    validate_config_object(main, agent.main_config_fields(), &mut path)
 }
 
 fn validate_config_object(
     object: &Map<String, Value>,
-    fields: &[ConfigField],
+    fields: &[MainConfigField],
     path: &mut Vec<String>,
 ) -> Result<()> {
     for (key, value) in object {
@@ -173,16 +173,16 @@ fn validate_config_object(
         let exact = fields.iter().find(|field| path_matches(field.path, path));
         if let Some(field) = exact {
             let valid = match field.value_kind {
-                ConfigValueKind::String => value.is_string(),
-                ConfigValueKind::Bool => value.is_boolean(),
+                MainConfigValueKind::String => value.is_string(),
+                MainConfigValueKind::Bool => value.is_boolean(),
             };
             if !valid {
                 bail!(
                     "Config Field {} must be {}",
                     display_path("config", path),
                     match field.value_kind {
-                        ConfigValueKind::String => "a string",
-                        ConfigValueKind::Bool => "a boolean",
+                        MainConfigValueKind::String => "a string",
+                        MainConfigValueKind::Bool => "a boolean",
                     }
                 );
             }
