@@ -1080,11 +1080,12 @@ impl ResponseBodyTracker {
                     Ok(false) => {}
                     Err(error) => guard.add_warning("event_index_failed", error.to_string()),
                 }
+                let events = indexer.take_protocol_events();
+                guard.observe_sse_events(&events)?;
                 if let Some(at_ns) = indexer.take_first_token_at_ns() {
                     guard.observe_first_token(at_ns)?;
                 }
-                let events = indexer.take_protocol_events();
-                guard.observe_sse_events(&events)
+                Ok(())
             }
         }
     }
@@ -1093,9 +1094,9 @@ impl ResponseBodyTracker {
         matches!(self, Self::EventStream(_) | Self::OpaqueEventStream)
     }
 
-    fn terminal_at_ns(&self) -> Option<&str> {
+    fn terminal_at_ns(&self, family: ProtocolFamily) -> Option<&str> {
         match self {
-            Self::EventStream(indexer) => indexer.terminal_at_ns(),
+            Self::EventStream(indexer) => indexer.terminal_at_ns(family),
             _ => None,
         }
     }
@@ -1123,10 +1124,11 @@ fn feed_sse_chunk(
         guard.add_warning("event_index_failed", error.to_string());
         indexer.disable_indexing();
     }
+    guard.observe_sse_events(&indexer.take_protocol_events())?;
     if let Some(at_ns) = indexer.take_first_token_at_ns() {
         guard.observe_first_token(at_ns)?;
     }
-    guard.observe_sse_events(&indexer.take_protocol_events())
+    Ok(())
 }
 
 fn response_error(
@@ -1401,7 +1403,8 @@ async fn record_response_stream_with_index(
 }
 
 fn client_closed_terminal(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> ResponseStreamEnd {
-    if let Some(at_ns) = tracker.terminal_at_ns() {
+    let family = guard.protocol_summary().family;
+    if let Some(at_ns) = tracker.terminal_at_ns(family) {
         return ResponseStreamEnd::completed(at_ns.to_string());
     }
     if encoded_terminal_seen_on_close(tracker, guard) {
@@ -1431,7 +1434,8 @@ fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RecordG
     if !matches!(tracker, ResponseBodyTracker::OpaqueEventStream) {
         return false;
     }
-    let terminal_seen = guard
+    let family = guard.protocol_summary().family;
+    let observation = guard
         .store
         .with_record_path(&guard.record.locator, |directory| {
             let file = crate::tenant::open_real_file(
@@ -1451,15 +1455,24 @@ fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RecordG
                 if indexer
                     .feed(&buffer[..read], indexer.body_offset(), "0")
                     .is_err()
-                    || indexer.terminal_seen()
+                    || indexer.terminal_seen(family)
                 {
                     break;
                 }
             }
             let _ = indexer.finish();
-            Ok::<_, anyhow::Error>(indexer.terminal_seen())
+            Ok::<_, anyhow::Error>((
+                indexer.terminal_seen(family),
+                indexer.take_protocol_events(),
+            ))
         });
-    matches!(terminal_seen, Ok(Ok(true)))
+    let Ok(Ok((terminal_seen, events))) = observation else {
+        return false;
+    };
+    if terminal_seen {
+        let _ = guard.observe_sse_events(&events);
+    }
+    terminal_seen
 }
 
 async fn reject_with_body(
@@ -2326,6 +2339,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_close_after_chat_done_is_completed_with_final_usage() {
+        let (outcome, protocol, timing) = run_client_close_after_response(
+            "https://example.com/v1/chat/completions",
+            &[
+                b"data: {\"object\":\"chat.completion.chunk\",\"model\":\"gpt-chat\",\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n",
+                b"data: [DONE]\n\n",
+            ],
+            ResponseStreamMode::EventStream,
+        )
+        .await;
+
+        assert_eq!(outcome, Outcome::Completed);
+        assert_eq!(protocol.family, ProtocolFamily::OpenaiChatCompletions);
+        assert!(protocol.response_terminal);
+        assert_eq!(protocol.model.effective.as_deref(), Some("gpt-chat"));
+        assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
+        assert!(timing.upstream_response_body_completed_at_ns.is_some());
+    }
+
+    #[tokio::test]
+    async fn unknown_done_stream_still_records_a_client_disconnect() {
+        let (outcome, protocol, timing) = run_client_close_after_response(
+            "https://example.com/events",
+            &[b"data: [DONE]\n\n"],
+            ResponseStreamMode::EventStream,
+        )
+        .await;
+
+        assert_eq!(outcome, Outcome::ClientDisconnected);
+        assert_eq!(protocol.family, ProtocolFamily::Unknown);
+        assert!(!protocol.response_terminal);
+        assert!(timing.upstream_response_body_completed_at_ns.is_none());
+    }
+
+    #[tokio::test]
     async fn initial_protocol_events_publish_first_token_and_still_parse_metadata() {
         for (url, event, model) in [
             (
@@ -2339,6 +2387,12 @@ mod tests {
                 b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\"}}\n\n"
                     .as_slice(),
                 "claude-test",
+            ),
+            (
+                "https://example.com/gateway",
+                b"data: {\"object\":\"chat.completion.chunk\",\"model\":\"gpt-chat\",\"choices\":[]}\n\n"
+                    .as_slice(),
+                "gpt-chat",
             ),
         ] {
             let (outcome, protocol, _) =
@@ -2422,6 +2476,7 @@ mod tests {
 
         let record = store.find(&id).unwrap();
         assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
+        assert!(record.summary.protocol.unwrap().response_terminal);
         assert!(
             record
                 .summary
@@ -2758,8 +2813,11 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             .feed(b"pleted\"}\n\n", first.len() as u64, "2")
             .unwrap();
 
-        assert!(indexer.terminal_seen());
-        assert_eq!(indexer.terminal_at_ns(), Some("2"));
+        assert!(indexer.terminal_seen(ProtocolFamily::OpenaiResponses));
+        assert_eq!(
+            indexer.terminal_at_ns(ProtocolFamily::OpenaiResponses),
+            Some("2")
+        );
         let tracker = ResponseBodyTracker::EventStream(Box::new(indexer));
         let temp = tempfile::tempdir().unwrap();
         let store = TrafficStore::open(temp.path()).unwrap();

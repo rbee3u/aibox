@@ -745,6 +745,30 @@ fn persisted_metadata_uses_the_stable_schema_names() {
 }
 
 #[test]
+fn chat_completions_uses_the_existing_v2_protocol_projection() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = TrafficStore::open(temp.path()).unwrap();
+    let (record, _) = store
+        .begin(ObservedRequest {
+            upstream_url: Some("https://example.com/v1/chat/completions"),
+            headers: vec![RecordedHeader {
+                name: "session-id".to_string(),
+                value_base64: base64::engine::general_purpose::STANDARD.encode("chat-session"),
+            }],
+            host_hint: Some("example.com"),
+            ..ObservedRequest::test("POST", "/https://example.com/v1/chat/completions")
+        })
+        .unwrap();
+
+    let summary: serde_json::Value =
+        serde_json::from_reader(fs::File::open(record.directory.join(SUMMARY_JSON)).unwrap())
+            .unwrap();
+    assert_eq!(summary["schema_version"], FORMAT_VERSION);
+    assert_eq!(summary["coding_agent_session_id"], "chat-session");
+    assert_eq!(summary["protocol"]["family"], "openai_chat_completions");
+}
+
+#[test]
 fn version_one_summaries_are_unsupported() {
     let error = validate_schema(1, "summary", "summary").unwrap_err();
     assert!(

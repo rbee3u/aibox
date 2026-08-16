@@ -141,6 +141,15 @@ describe("Body presentation", () => {
     expect(parsed.hasPartialTail).toBe(true);
   });
 
+  it("uses the payload object as the SSE Event type fallback", () => {
+    const [event] = parseSse('data: {"object":"chat.completion.chunk","choices":[]}\n\n').events;
+
+    expect(sseEventTypes(event)).toEqual({
+      primary: "chat.completion.chunk",
+      secondary: null,
+    });
+  });
+
   it("ignores blocks without data and does not dispatch a newline-only partial event", () => {
     expect(parseSse(": ping\n\nevent: nope\n\n").events).toEqual([]);
     expect(parseSse("data: value\n")).toEqual({ events: [], hasPartialTail: true });

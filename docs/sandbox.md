@@ -191,9 +191,9 @@ downstream response headers are committed, the proxy can replace the response
 with 507; afterward it reports an error on the downstream body and truncates
 the exchange. A client disconnect, upstream stream failure, SIGINT, or SIGTERM
 cancels the remaining attempt and retains bytes already written. For SSE, a
-recognized terminal event from Claude Messages or OpenAI Responses completes
-the Traffic Outcome even when the client closes immediately after consuming
-that event.
+recognized terminal signal from Claude Messages, OpenAI Responses, or OpenAI
+Chat Completions completes the Traffic Outcome even when the client closes
+immediately after consuming that signal.
 
 Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
 
@@ -259,18 +259,34 @@ millisecond ties. A terminal Summary stranded under an `active-` name is ordered
 terminal name it should have received.
 
 The Traffic Proxy best-effort materializes the protocol overview for OpenAI
-Responses and Claude Messages as stable facts become available. Partial Token
-Usage stays in memory until the model protocol reports a terminal response.
-Protocol parsing failures add warnings without changing forwarding or the
-Traffic Outcome. For recognized streaming responses, First Token is recorded
-when the first trim-nonempty SSE `data:` line not beginning with `[DONE]` is
-completely received. The line need not form valid JSON or contain output, so
-ping, error, empty-delta, `message_start`, and `response.created` data qualify.
-Comments, other SSE fields, blank data, and `[DONE]` prefixes do not. Split
-lines use their terminator's arrival time, while an unterminated EOF line uses
-the final body arrival time. First Token is never inferred from response
-headers or the first response body byte, and remains absent for unknown
-protocols and non-streaming responses.
+Responses, OpenAI Chat Completions, and Claude Messages as stable facts become
+available. It recognizes normalized upstream paths ending in `/responses`,
+`/chat/completions`, or `/messages`; exact native response object types can also
+identify a protocol on another path. Partial Token Usage stays in memory until
+the model protocol reports a terminal response. Chat Completions maps prompt,
+cached, cache-write, completion, and reasoning counters into the existing Token
+Usage categories, and warns when reported totals are inconsistent. A stream
+that requested `stream_options.include_usage` also warns when its normal
+`[DONE]` signal arrives without usage. Protocol parsing failures add warnings
+without changing forwarding or the Traffic Outcome.
+
+For recognized streaming responses, First Token is recorded when the first
+trim-nonempty SSE `data:` line not beginning with `[DONE]` is completely
+received. The line need not form valid JSON or contain output, so ping, error,
+empty-delta, `message_start`, `response.created`, and role-only Chat Completions
+chunks qualify. Comments, other SSE fields, blank data, and `[DONE]` prefixes do
+not. Split lines use their terminator's arrival time, while an unterminated EOF
+line uses the final body arrival time. First Token is never inferred from
+response headers or the first response body byte, and remains absent for
+unknown protocols and non-streaming responses.
+
+For Chat Completions, only an SSE data value that trims exactly to `[DONE]` is a
+normal protocol terminal signal; a choice `finish_reason` does not end the
+stream because a final usage chunk may follow. `stop`, `tool_calls`, and the
+legacy `function_call` are normal finish reasons. `length` and `content_filter`
+become Provider Errors, while an unknown nonempty finish reason is a diagnostic
+warning. A structured Chat Completions stream error is an error terminal signal
+and does not require a later `[DONE]`.
 
 Raw Bodies remain unlimited, but the best-effort SSE observer stops further
 indexing and protocol interpretation for a response after 16 MiB of an
@@ -281,7 +297,8 @@ diagnostic parser retain an unbounded copy of the stream.
 
 Record Assessment classifies active Records as Active and clean terminal
 Records as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,
-`response.failed`, and `response.incomplete` evidence is Error. Client
+`response.failed`, `response.incomplete`, and incomplete or filtered Chat
+Completions evidence is Error. Client
 disconnect or request upload abort, process interruption, a missing recognized
 model terminal event, diagnostic degradation, and an unaccompanied
 `response.cancelled` are Warning. Traffic Outcome, HTTP status, and Provider
@@ -316,13 +333,14 @@ interrupted Record in a single server-side snapshot and preserves Records that
 are still active when that snapshot is taken. It strictly validates every
 target before deleting any of them.
 
-Claude Messages and OpenAI Responses streaming are HTTP SSE and work through
-this path. WebSocket transport is outside the Traffic Proxy's supported
-surface; if native Codex configuration manually sets
+Claude Messages, OpenAI Responses, and OpenAI Chat Completions streaming are
+HTTP SSE and work through this path. WebSocket transport is outside the Traffic
+Proxy's supported surface; if native Codex configuration manually sets
 `supports_websockets = true` for the selected custom provider, set it to
 `false` while using Traffic. Config Fields are unchanged.
-See [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
+See [Claude Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
 [OpenAI Responses streaming](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl),
+[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/),
 and [Docker host networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/).
 
 ## Building the Shared Image

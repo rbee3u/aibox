@@ -118,7 +118,8 @@ interface SummaryMetadata {
   assessment: RecordAssessment;
 }
 
-type ProtocolFamily = "openai_responses" | "claude_messages" | "unknown";
+type ProtocolFamily =
+  "openai_responses" | "openai_chat_completions" | "claude_messages" | "unknown";
 export type ResponseModeValue = "stream" | "normal";
 
 export interface RequestedEffective<T> {

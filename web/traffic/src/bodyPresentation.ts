@@ -210,11 +210,18 @@ export function sseEventTypes(
   primary: string;
   secondary: string | null;
 } {
-  const payloadType =
+  const payload =
     parsed.ok && isJsonContainer(parsed.value) && !Array.isArray(parsed.value)
-      ? parsed.value.type
+      ? parsed.value
       : undefined;
-  const primary = typeof payloadType === "string" && payloadType ? payloadType : event.eventType;
+  const payloadType = payload?.type;
+  const payloadObject = payload?.object;
+  const primary =
+    typeof payloadType === "string" && payloadType
+      ? payloadType
+      : typeof payloadObject === "string" && payloadObject
+        ? payloadObject
+        : event.eventType;
   const secondary =
     event.explicitEventType &&
     event.explicitEventType !== "message" &&

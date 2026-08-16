@@ -57,6 +57,23 @@ export const completedProtocol = {
   warnings: [],
 } satisfies ProtocolSummary;
 
+export const completedChatProtocol = {
+  ...completedProtocol,
+  family: "openai_chat_completions",
+  model: { requested: "gpt-chat", effective: "gpt-chat-2026-08-01" },
+  reasoning_effort: { requested: "medium", effective: null },
+  token_usage: {
+    total_input_tokens: 150,
+    base_input_tokens: 100,
+    cached_input_tokens: 40,
+    cache_write_tokens: 10,
+    cache_write_5m_tokens: null,
+    cache_write_1h_tokens: null,
+    output_tokens: 20,
+    reasoning_output_tokens: 5,
+  },
+} satisfies ProtocolSummary;
+
 export const activeProtocol = {
   ...completedProtocol,
   response_terminal: false,

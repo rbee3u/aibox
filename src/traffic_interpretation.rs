@@ -1,10 +1,10 @@
 //! Deriving the Model Protocol Summary from recorded bodies.
 //!
 //! [`ProtocolObserver`] accumulates one [`ProtocolSummary`] for the OpenAI
-//! Responses and Claude Messages families, keeping requested and effective
-//! values separate and holding Token Usage in memory until the protocol response
-//! is terminal. Anything else stays [`ProtocolFamily::Unknown`], which
-//! short-circuits interpretation entirely.
+//! Responses, OpenAI Chat Completions, and Claude Messages families, keeping
+//! requested and effective values separate and holding Token Usage in memory
+//! until the protocol response is terminal. Anything else stays
+//! [`ProtocolFamily::Unknown`], which short-circuits interpretation entirely.
 //!
 //! Interpretation is observational, never authoritative: a failure becomes a
 //! deduplicated warning on the Summary and leaves the raw bodies, forwarding, and
@@ -25,6 +25,7 @@ use std::fs;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProtocolFamily {
     OpenaiResponses,
+    OpenaiChatCompletions,
     ClaudeMessages,
     #[default]
     Unknown,
@@ -267,6 +268,7 @@ pub(crate) struct ProtocolObserver {
     summary: ProtocolSummary,
     usage: UsageAccumulator,
     has_usage: bool,
+    expects_stream_usage: bool,
 }
 
 impl ProtocolObserver {
@@ -306,14 +308,22 @@ impl ProtocolObserver {
             .set_requested_model(nonempty(envelope.model), Some(at_ns.clone()));
         let effort = match self.summary.family {
             ProtocolFamily::OpenaiResponses => envelope.reasoning.and_then(|value| value.effort),
+            ProtocolFamily::OpenaiChatCompletions => envelope.reasoning_effort,
             ProtocolFamily::ClaudeMessages => envelope.output_config.and_then(|value| value.effort),
             ProtocolFamily::Unknown => None,
         };
         changed |= self
             .summary
             .set_requested_effort(nonempty(effort), Some(at_ns.clone()));
+        let streaming = envelope.stream.unwrap_or(false);
+        if self.summary.family == ProtocolFamily::OpenaiChatCompletions {
+            self.expects_stream_usage = streaming
+                && envelope
+                    .stream_options
+                    .is_some_and(|options| options.include_usage == Some(true));
+        }
         changed |= self.summary.set_requested_mode(
-            Some(if envelope.stream.unwrap_or(false) {
+            Some(if streaming {
                 ResponseModeValue::Stream
             } else {
                 ResponseModeValue::Normal
@@ -402,6 +412,8 @@ impl ProtocolObserver {
             Ok(envelope) => {
                 let family = if envelope.object.as_deref() == Some("response") {
                     ProtocolFamily::OpenaiResponses
+                } else if envelope.object.as_deref() == Some("chat.completion") {
+                    ProtocolFamily::OpenaiChatCompletions
                 } else if envelope.kind.as_deref() == Some("message") {
                     ProtocolFamily::ClaudeMessages
                 } else {
@@ -416,6 +428,9 @@ impl ProtocolObserver {
                     .set_effective_effort(nonempty(envelope.reasoning_effort), Some(at_ns.clone()));
                 if let Some(usage) = envelope.usage {
                     changed |= self.apply_usage(&usage, Some(at_ns.clone()));
+                }
+                if self.summary.family == ProtocolFamily::OpenaiChatCompletions {
+                    changed |= self.apply_chat_choices(&envelope.choices, &at_ns);
                 }
                 if self.summary.family != ProtocolFamily::Unknown {
                     if let Some(error) = envelope.error {
@@ -455,8 +470,12 @@ impl ProtocolObserver {
         data: &[u8],
         at_ns: String,
     ) -> bool {
-        if data.is_empty() || data == b"[DONE]" {
+        let data = trim_ascii(data);
+        if data.is_empty() {
             return false;
+        }
+        if data == b"[DONE]" {
+            return self.apply_chat_done(at_ns);
         }
         let event: StreamEvent = match serde_json::from_slice(data).context("parse SSE data JSON") {
             Ok(event) => event,
@@ -479,16 +498,33 @@ impl ProtocolObserver {
     ) -> bool {
         let StreamEvent {
             kind,
+            object,
+            model,
+            reasoning_effort,
             response,
             message,
             usage,
+            choices,
             error,
             code,
         } = event;
         let kind = kind.as_deref().unwrap_or_default();
         let event_name = event_name.and_then(|value| std::str::from_utf8(value).ok());
-        let family = event_family(kind, event_name);
+        let family = event_family(kind, event_name, object.as_deref());
         let mut changed = self.summary.set_family(family, Some(at_ns.clone()));
+
+        if self.summary.family == ProtocolFamily::OpenaiChatCompletions {
+            changed |= self
+                .summary
+                .set_effective_model(nonempty(model), Some(at_ns.clone()));
+            changed |= self
+                .summary
+                .set_effective_effort(nonempty(reasoning_effort), Some(at_ns.clone()));
+            if let Some(usage) = usage.as_ref() {
+                changed |= self.apply_usage(usage, Some(at_ns.clone()));
+            }
+            changed |= self.apply_chat_choices(&choices, &at_ns);
+        }
 
         if self.summary.family != ProtocolFamily::Unknown
             && let Some(response) = response
@@ -502,13 +538,17 @@ impl ProtocolObserver {
             changed |= self.apply_message_event(message, &at_ns);
         }
         if self.summary.family != ProtocolFamily::Unknown
+            && self.summary.family != ProtocolFamily::OpenaiChatCompletions
             && let Some(usage) = usage
         {
             changed |= self.apply_usage(&usage, Some(at_ns.clone()));
         }
 
+        let error_terminal = self.summary.family == ProtocolFamily::OpenaiChatCompletions
+            && (error.is_some() || kind == "error" || event_name == Some("error"));
         changed |= self.apply_error_event(
             kind,
+            event_name,
             error.as_ref(),
             message.as_ref(),
             code.as_deref(),
@@ -519,6 +559,54 @@ impl ProtocolObserver {
             .filter(|value| is_terminal_event_kind(value))
             .unwrap_or(kind);
         changed |= self.apply_terminal_event(terminal_kind, at_ns);
+        if error_terminal {
+            changed |= self.mark_terminal_and_commit_usage();
+        }
+        changed
+    }
+
+    fn apply_chat_done(&mut self, at_ns: String) -> bool {
+        if self.summary.family != ProtocolFamily::OpenaiChatCompletions
+            || self.summary.response_terminal
+        {
+            return false;
+        }
+        let mut changed = false;
+        if self.expects_stream_usage && !self.has_usage {
+            changed |= self.summary.add_warning(
+                "token_usage_missing",
+                "OpenAI Chat Completions was asked to include stream usage but reported none",
+                Some(at_ns.clone()),
+            );
+        }
+        changed | self.mark_terminal_and_commit_usage()
+    }
+
+    fn apply_chat_choices(&mut self, choices: &[ChoiceEnvelope], at_ns: &str) -> bool {
+        let mut changed = false;
+        for finish_reason in choices
+            .iter()
+            .filter_map(|choice| choice.finish_reason.as_deref())
+        {
+            changed |= match finish_reason {
+                "stop" | "tool_calls" | "function_call" => false,
+                "length" => self.summary.add_error(
+                    "response_incomplete",
+                    "OpenAI Chat Completions stopped after reaching a length limit",
+                    Some(at_ns.to_string()),
+                ),
+                "content_filter" => self.summary.add_error(
+                    "content_filtered",
+                    "OpenAI Chat Completions output was omitted by a content filter",
+                    Some(at_ns.to_string()),
+                ),
+                value => self.summary.add_warning(
+                    "finish_reason_unknown",
+                    format!("OpenAI Chat Completions reported unknown finish reason {value:?}"),
+                    Some(at_ns.to_string()),
+                ),
+            };
+        }
         changed
     }
 
@@ -578,12 +666,17 @@ impl ProtocolObserver {
     fn apply_error_event(
         &mut self,
         kind: &str,
+        event_name: Option<&str>,
         error: Option<&Value>,
         message: Option<&Value>,
         code: Option<&str>,
         at_ns: &str,
     ) -> bool {
-        if kind != "error" || self.summary.family == ProtocolFamily::Unknown {
+        let chat_error =
+            self.summary.family == ProtocolFamily::OpenaiChatCompletions && error.is_some();
+        if (kind != "error" && event_name != Some("error") && !chat_error)
+            || self.summary.family == ProtocolFamily::Unknown
+        {
             return false;
         }
         if let Some(error) = error {
@@ -604,14 +697,7 @@ impl ProtocolObserver {
     fn apply_terminal_event(&mut self, terminal_kind: &str, at_ns: String) -> bool {
         let terminal = is_terminal_event_kind(terminal_kind)
             || (terminal_kind == "error" && self.summary.family != ProtocolFamily::Unknown);
-        let mut changed = false;
-        if terminal && !self.summary.response_terminal {
-            self.summary.response_terminal = true;
-            changed = true;
-        }
-        if terminal {
-            changed |= self.commit_final_usage();
-        }
+        let mut changed = terminal && self.mark_terminal_and_commit_usage();
         let has_error_at = self
             .summary
             .errors
@@ -639,30 +725,56 @@ impl ProtocolObserver {
         changed
     }
 
+    fn mark_terminal_and_commit_usage(&mut self) -> bool {
+        let mut changed = false;
+        if !self.summary.response_terminal {
+            self.summary.response_terminal = true;
+            changed = true;
+        }
+        changed | self.commit_final_usage()
+    }
+
     fn apply_usage(&mut self, usage: &UsageEnvelope, at_ns: Option<String>) -> bool {
-        merge_option(&mut self.usage.input_tokens, usage.input_tokens);
+        let chat = self.summary.family == ProtocolFamily::OpenaiChatCompletions;
+        merge_option(
+            &mut self.usage.input_tokens,
+            if chat {
+                usage.prompt_tokens
+            } else {
+                usage.input_tokens
+            },
+        );
+        let input_details = if chat {
+            usage.prompt_tokens_details.as_ref()
+        } else {
+            usage.input_tokens_details.as_ref()
+        };
         merge_option(
             &mut self.usage.cached_tokens,
-            usage
-                .input_tokens_details
-                .as_ref()
-                .and_then(|value| value.cached_tokens),
+            input_details.and_then(|value| value.cached_tokens),
         );
         merge_option(
             &mut self.usage.cache_write_tokens,
-            usage
-                .input_tokens_details
-                .as_ref()
-                .and_then(|value| value.cache_write_tokens),
+            input_details.and_then(|value| value.cache_write_tokens),
         );
+        let output_details = if chat {
+            usage.completion_tokens_details.as_ref()
+        } else {
+            usage.output_tokens_details.as_ref()
+        };
         merge_option(
             &mut self.usage.reasoning_tokens,
-            usage
-                .output_tokens_details
-                .as_ref()
-                .and_then(|value| value.reasoning_tokens),
+            output_details.and_then(|value| value.reasoning_tokens),
         );
-        merge_option(&mut self.usage.output_tokens, usage.output_tokens);
+        merge_option(
+            &mut self.usage.output_tokens,
+            if chat {
+                usage.completion_tokens
+            } else {
+                usage.output_tokens
+            },
+        );
+        merge_option(&mut self.usage.total_tokens, usage.total_tokens);
         merge_option(
             &mut self.usage.cache_read_tokens,
             usage.cache_read_input_tokens,
@@ -690,7 +802,8 @@ impl ProtocolObserver {
 
     fn validate_usage(&mut self, at_ns: Option<String>) -> bool {
         match self.summary.family {
-            ProtocolFamily::OpenaiResponses => {
+            ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
+                let mut changed = false;
                 if let Some(total) = self.usage.input_tokens {
                     let cached = self.usage.cached_tokens.unwrap_or(0);
                     let writes = self.usage.cache_write_tokens.unwrap_or(0);
@@ -699,13 +812,30 @@ impl ProtocolObserver {
                         .and_then(|value| value.checked_sub(writes))
                         .is_none()
                     {
-                        return self.summary.add_warning(
+                        changed |= self.summary.add_warning(
                             "token_usage_inconsistent",
                             "OpenAI input token details exceed the reported total input tokens",
-                            at_ns,
+                            at_ns.clone(),
                         );
                     }
                 }
+                if self.summary.family == ProtocolFamily::OpenaiChatCompletions
+                    && let (Some(input), Some(output), Some(total)) = (
+                        self.usage.input_tokens,
+                        self.usage.output_tokens,
+                        self.usage.total_tokens,
+                    )
+                    && input.checked_add(output) != Some(total)
+                {
+                    changed |= self.summary.add_warning(
+                        "token_usage_inconsistent",
+                        format!(
+                            "OpenAI Chat Completions total tokens ({total}) do not equal prompt plus completion tokens ({input} + {output})"
+                        ),
+                        at_ns,
+                    );
+                }
+                return changed;
             }
             ProtocolFamily::ClaudeMessages => {
                 let split = self
@@ -748,7 +878,7 @@ impl ProtocolObserver {
             return None;
         }
         match self.summary.family {
-            ProtocolFamily::OpenaiResponses => {
+            ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
                 let total = self.usage.input_tokens;
                 let cached = self.usage.cached_tokens;
                 let writes = self.usage.cache_write_tokens;
@@ -804,11 +934,13 @@ impl ProtocolObserver {
     }
 }
 
-fn event_family(kind: &str, event_name: Option<&str>) -> ProtocolFamily {
+fn event_family(kind: &str, event_name: Option<&str>, object: Option<&str>) -> ProtocolFamily {
     if kind.starts_with("response.")
         || event_name.is_some_and(|value| value.starts_with("response."))
     {
         ProtocolFamily::OpenaiResponses
+    } else if matches!(object, Some("chat.completion" | "chat.completion.chunk")) {
+        ProtocolFamily::OpenaiChatCompletions
     } else if is_claude_event_kind(kind) || event_name.is_some_and(is_claude_event_kind) {
         ProtocolFamily::ClaudeMessages
     } else {
@@ -850,6 +982,7 @@ struct UsageAccumulator {
     cache_write_1h_tokens: Option<u64>,
     output_tokens: Option<u64>,
     reasoning_tokens: Option<u64>,
+    total_tokens: Option<u64>,
 }
 
 fn merge_option(target: &mut Option<u64>, value: Option<u64>) {
@@ -908,6 +1041,8 @@ fn family_from_url(value: Option<&str>) -> ProtocolFamily {
     };
     if path.ends_with("/responses") {
         ProtocolFamily::OpenaiResponses
+    } else if path.ends_with("/chat/completions") {
+        ProtocolFamily::OpenaiChatCompletions
     } else if path.ends_with("/messages") {
         ProtocolFamily::ClaudeMessages
     } else {
@@ -920,7 +1055,9 @@ pub(crate) fn coding_agent_session_id(
     headers: &[RecordedHeader],
 ) -> Option<String> {
     let names = match family_from_url(upstream_url) {
-        ProtocolFamily::OpenaiResponses => ["session-id", "x-claude-code-session-id"],
+        ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
+            ["session-id", "x-claude-code-session-id"]
+        }
         ProtocolFamily::ClaudeMessages => ["x-claude-code-session-id", "session-id"],
         ProtocolFamily::Unknown => return None,
     };
@@ -958,12 +1095,29 @@ fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
+fn trim_ascii(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    while value.last().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
+
 #[derive(Debug, Deserialize)]
 struct RequestEnvelope {
     model: Option<String>,
     stream: Option<bool>,
+    reasoning_effort: Option<String>,
     reasoning: Option<EffortEnvelope>,
     output_config: Option<EffortEnvelope>,
+    stream_options: Option<StreamOptionsEnvelope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamOptionsEnvelope {
+    include_usage: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -992,6 +1146,8 @@ struct CacheCreationDetails {
 struct UsageEnvelope {
     input_tokens: Option<u64>,
     input_tokens_details: Option<TokenDetails>,
+    prompt_tokens: Option<u64>,
+    prompt_tokens_details: Option<TokenDetails>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
     cache_creation: Option<CacheCreationDetails>,
@@ -999,6 +1155,14 @@ struct UsageEnvelope {
     cache_creation_1h_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     output_tokens_details: Option<OutputTokenDetails>,
+    completion_tokens: Option<u64>,
+    completion_tokens_details: Option<OutputTokenDetails>,
+    total_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChoiceEnvelope {
+    finish_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1019,9 +1183,14 @@ struct ResponseEnvelope {
 struct StreamEvent {
     #[serde(rename = "type")]
     kind: Option<String>,
+    object: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
     response: Option<ResponseEnvelope>,
     message: Option<Value>,
     usage: Option<UsageEnvelope>,
+    #[serde(default)]
+    choices: Vec<ChoiceEnvelope>,
     error: Option<Value>,
     code: Option<String>,
 }
@@ -1034,6 +1203,8 @@ struct JsonResponseEnvelope {
     model: Option<String>,
     reasoning_effort: Option<String>,
     usage: Option<UsageEnvelope>,
+    #[serde(default)]
+    choices: Vec<ChoiceEnvelope>,
     error: Option<Value>,
     incomplete_details: Option<IncompleteDetails>,
 }
@@ -1183,6 +1354,14 @@ mod tests {
             Some("claude-session")
         );
         assert_eq!(
+            coding_agent_session_id(
+                Some("https://example.test/openai/deployments/gpt/chat/completions/?api-version=1"),
+                &headers,
+            )
+            .as_deref(),
+            Some("codex-session")
+        );
+        assert_eq!(
             coding_agent_session_id(Some("https://example.test/health"), &headers),
             None
         );
@@ -1235,6 +1414,29 @@ mod tests {
             summary.response_mode.requested,
             Some(ResponseModeValue::Normal)
         );
+
+        let chat_path = temp.path().join("chat-request.json");
+        fs::write(
+            &chat_path,
+            br#"{"model":"gpt-chat","reasoning_effort":"medium","stream":true,"stream_options":{"include_usage":true}}"#,
+        )
+        .unwrap();
+        let mut chat = ProtocolObserver::new(Some(
+            "https://example.test/openai/deployments/gpt/chat/completions?api-version=1",
+        ));
+        assert!(chat.observe_request(&chat_path, &[], "30".to_string()));
+        let summary = chat.snapshot();
+        assert_eq!(summary.family, ProtocolFamily::OpenaiChatCompletions);
+        assert_eq!(summary.model.requested.as_deref(), Some("gpt-chat"));
+        assert_eq!(
+            summary.reasoning_effort.requested.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            summary.response_mode.requested,
+            Some(ResponseModeValue::Stream)
+        );
+        assert!(chat.expects_stream_usage);
     }
 
     #[test]
@@ -1345,6 +1547,32 @@ mod tests {
     }
 
     #[test]
+    fn chat_nonstream_body_infers_family_and_normalizes_usage() {
+        let temp = tempfile::tempdir().unwrap();
+        let response_path = temp.path().join("chat-response.json");
+        fs::write(
+            &response_path,
+            br#"{"object":"chat.completion","model":"gpt-effective","choices":[{"finish_reason":"length"}],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":10},"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":5},"total_tokens":120}}"#,
+        )
+        .unwrap();
+        let mut observer = ProtocolObserver::new(Some("https://example.test/gateway"));
+
+        assert!(observer.observe_json_response(&response_path, 200, &[], "20".to_string()));
+        let summary = observer.snapshot();
+        assert_eq!(summary.family, ProtocolFamily::OpenaiChatCompletions);
+        assert_eq!(summary.model.effective.as_deref(), Some("gpt-effective"));
+        assert!(summary.response_terminal);
+        let usage = summary.token_usage.unwrap();
+        assert_eq!(usage.total_input_tokens, Some(100));
+        assert_eq!(usage.base_input_tokens, Some(50));
+        assert_eq!(usage.cached_input_tokens, Some(40));
+        assert_eq!(usage.cache_write_tokens, Some(10));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(usage.reasoning_output_tokens, Some(5));
+        assert_eq!(summary.errors[0].kind, "response_incomplete");
+    }
+
+    #[test]
     fn openai_usage_is_not_published_before_terminal_event() {
         let mut observer = ProtocolObserver::new(Some("https://example.test/v1/responses"));
         assert!(observer.observe_sse_data(
@@ -1360,6 +1588,68 @@ mod tests {
         assert_eq!(usage.total_input_tokens, Some(100));
         assert_eq!(usage.base_input_tokens, Some(50));
         assert_eq!(usage.reasoning_output_tokens, Some(5));
+    }
+
+    #[test]
+    fn chat_stream_holds_usage_until_done_and_reports_finish_reasons() {
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/chat/completions"));
+        assert!(observer.observe_sse_data(
+            br#"{"object":"chat.completion.chunk","model":"gpt-stream","choices":[{"finish_reason":null}]}"#,
+            "10".to_string(),
+        ));
+        assert!(observer.observe_sse_data(
+            br#"{"object":"chat.completion.chunk","choices":[{"finish_reason":"content_filter"},{"finish_reason":"vendor_stop"}],"usage":{"prompt_tokens":50,"prompt_tokens_details":{"cached_tokens":20},"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":2},"total_tokens":57}}"#,
+            "20".to_string(),
+        ));
+        let partial = observer.snapshot();
+        assert_eq!(partial.model.effective.as_deref(), Some("gpt-stream"));
+        assert!(!partial.response_terminal);
+        assert!(partial.token_usage.is_none());
+        assert_eq!(partial.errors[0].kind, "content_filtered");
+        assert_eq!(partial.warnings[0].kind, "finish_reason_unknown");
+
+        assert!(observer.observe_sse_data(b" \t[DONE]\r\n", "30".to_string()));
+        let summary = observer.snapshot();
+        assert!(summary.response_terminal);
+        let usage = summary.token_usage.unwrap();
+        assert_eq!(usage.total_input_tokens, Some(50));
+        assert_eq!(usage.base_input_tokens, Some(30));
+        assert_eq!(usage.output_tokens, Some(7));
+        assert_eq!(usage.reasoning_output_tokens, Some(2));
+    }
+
+    #[test]
+    fn chat_done_warns_when_requested_stream_usage_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let request_path = temp.path().join("chat-request.json");
+        fs::write(
+            &request_path,
+            br#"{"model":"gpt-chat","stream":true,"stream_options":{"include_usage":true}}"#,
+        )
+        .unwrap();
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/chat/completions"));
+        observer.observe_request(&request_path, &[], "10".to_string());
+
+        assert!(observer.observe_sse_data(b"[DONE]", "20".to_string()));
+        let summary = observer.snapshot();
+        assert!(summary.response_terminal);
+        assert!(summary.token_usage.is_none());
+        assert_eq!(summary.warnings[0].kind, "token_usage_missing");
+    }
+
+    #[test]
+    fn chat_stream_error_is_terminal_and_usage_inconsistency_warns() {
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/chat/completions"));
+        observer.observe_sse_data(
+            br#"{"object":"chat.completion.chunk","usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":99},"error":{"type":"server_error","message":"failed"}}"#,
+            "10".to_string(),
+        );
+
+        let summary = observer.snapshot();
+        assert!(summary.response_terminal);
+        assert_eq!(summary.errors[0].kind, "server_error");
+        assert_eq!(summary.warnings[0].kind, "token_usage_inconsistent");
+        assert_eq!(summary.token_usage.unwrap().output_tokens, Some(2));
     }
 
     #[test]

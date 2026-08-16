@@ -123,6 +123,11 @@ The diagnostic evidence from one request attempt received by the Traffic Proxy.
 It may exist without an upstream request or response.
 _Avoid_: Session, Transcript, Run History
 
+**Model Protocol Summary**:
+A materialized provider-specific diagnostic projection associated with a
+recognized model request in a Traffic Record.
+_Avoid_: Parsed Body, Traffic Outcome, Record Assessment
+
 **Traffic Outcome**:
 The terminal lifecycle result of one Traffic Record, independent of any HTTP
 response status.

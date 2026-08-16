@@ -18,6 +18,7 @@
 //! This releases buffered data and bounds diagnostic memory without truncating
 //! forwarding or the raw Record.
 
+use crate::traffic_interpretation::ProtocolFamily;
 use crate::traffic_store::FORMAT_VERSION;
 use serde::Serialize;
 use std::io::Write as _;
@@ -106,8 +107,9 @@ pub(crate) struct SseIndexer {
     protocol_events: Vec<ObservedSseEvent>,
     first_token_seen: bool,
     first_token_at_ns: Option<String>,
-    terminal_seen: bool,
     terminal_at_ns: Option<String>,
+    chat_done_at_ns: Option<String>,
+    error_at_ns: Option<String>,
     sequence: u64,
     indexing_disabled: bool,
     observation_disabled: bool,
@@ -140,8 +142,9 @@ impl SseIndexer {
             protocol_events: Vec::new(),
             first_token_seen: false,
             first_token_at_ns: None,
-            terminal_seen: false,
             terminal_at_ns: None,
+            chat_done_at_ns: None,
+            error_at_ns: None,
             sequence: 0,
             indexing_disabled: false,
             observation_disabled: false,
@@ -154,12 +157,23 @@ impl SseIndexer {
         self.indexing_disabled = true;
     }
 
-    pub(crate) fn terminal_seen(&self) -> bool {
-        self.terminal_seen
+    pub(crate) fn terminal_seen(&self, family: ProtocolFamily) -> bool {
+        self.terminal_at_ns(family).is_some()
     }
 
-    pub(crate) fn terminal_at_ns(&self) -> Option<&str> {
-        self.terminal_at_ns.as_deref()
+    pub(crate) fn terminal_at_ns(&self, family: ProtocolFamily) -> Option<&str> {
+        self.terminal_at_ns
+            .as_deref()
+            .or_else(|| {
+                (family == ProtocolFamily::OpenaiChatCompletions)
+                    .then_some(self.chat_done_at_ns.as_deref())
+                    .flatten()
+            })
+            .or_else(|| {
+                (family != ProtocolFamily::Unknown)
+                    .then_some(self.error_at_ns.as_deref())
+                    .flatten()
+            })
     }
 
     pub(crate) fn body_offset(&self) -> u64 {
@@ -289,11 +303,18 @@ impl SseIndexer {
                 self.first_arrival_at_ns = Some(at_ns.to_string());
             }
             if line.is_empty() {
-                if is_terminal_sse_event(self.event_name.as_deref(), &self.data) {
-                    self.terminal_seen = true;
-                    if self.terminal_at_ns.is_none() {
-                        self.terminal_at_ns = Some(at_ns.to_string());
+                match terminal_sse_event(self.event_name.as_deref(), &self.data) {
+                    Some(TerminalSseEvent::Protocol) => {
+                        self.terminal_at_ns.get_or_insert_with(|| at_ns.to_string());
                     }
+                    Some(TerminalSseEvent::ChatDone) => {
+                        self.chat_done_at_ns
+                            .get_or_insert_with(|| at_ns.to_string());
+                    }
+                    Some(TerminalSseEvent::Error) => {
+                        self.error_at_ns.get_or_insert_with(|| at_ns.to_string());
+                    }
+                    None => {}
                 }
                 if self.data_seen {
                     self.protocol_events.push((
@@ -429,7 +450,14 @@ fn sse_field_value<'a>(line: &'a [u8], field: &[u8]) -> Option<&'a [u8]> {
     Some(value.strip_prefix(b" ").unwrap_or(value))
 }
 
-fn is_terminal_sse_event(event_name: Option<&[u8]>, data: &[u8]) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalSseEvent {
+    Protocol,
+    ChatDone,
+    Error,
+}
+
+fn terminal_sse_event(event_name: Option<&[u8]>, data: &[u8]) -> Option<TerminalSseEvent> {
     if matches!(
         event_name,
         Some(
@@ -440,30 +468,40 @@ fn is_terminal_sse_event(event_name: Option<&[u8]>, data: &[u8]) -> bool {
                 | b"response.cancelled"
         )
     ) {
-        return true;
+        return Some(TerminalSseEvent::Protocol);
+    }
+    if event_name == Some(b"error") {
+        return Some(TerminalSseEvent::Error);
+    }
+    if std::str::from_utf8(data).is_ok_and(|value| value.trim() == "[DONE]") {
+        return Some(TerminalSseEvent::ChatDone);
     }
 
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(data) else {
-        return false;
+        return None;
     };
-    let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
+    let kind = value.get("type").and_then(serde_json::Value::as_str);
     if matches!(
         kind,
-        "message_stop"
-            | "response.completed"
-            | "response.failed"
-            | "response.incomplete"
-            | "response.cancelled"
+        Some(
+            "message_stop"
+                | "response.completed"
+                | "response.failed"
+                | "response.incomplete"
+                | "response.cancelled"
+        )
     ) {
-        return true;
+        return Some(TerminalSseEvent::Protocol);
     }
-    kind == "message_delta"
+    if kind == Some("error") || value.get("error").is_some_and(serde_json::Value::is_object) {
+        return Some(TerminalSseEvent::Error);
+    }
+    (kind == Some("message_delta")
         && value
             .get("delta")
             .and_then(|delta| delta.get("stop_reason"))
-            .is_some_and(|stop_reason| !stop_reason.is_null())
+            .is_some_and(|stop_reason| !stop_reason.is_null()))
+    .then_some(TerminalSseEvent::Protocol)
 }
 
 fn find_sse_line_end(bytes: &[u8], final_input: bool) -> Option<(usize, usize)> {
@@ -570,6 +608,35 @@ mod tests {
         assert_eq!(events[0].1, b"1234\n5678\n90");
         assert_eq!(events[1].1, b"next");
         assert!(!indexer.observation_disabled);
+    }
+
+    #[test]
+    fn done_is_terminal_only_for_chat_completions() {
+        let mut indexer = SseIndexer::new(None, "record".to_string());
+        let body = b"data:  \t[DONE] \r\n\r\n";
+
+        indexer.feed(body, 0, "7").unwrap();
+
+        assert!(indexer.terminal_seen(ProtocolFamily::OpenaiChatCompletions));
+        assert_eq!(
+            indexer.terminal_at_ns(ProtocolFamily::OpenaiChatCompletions),
+            Some("7")
+        );
+        assert!(!indexer.terminal_seen(ProtocolFamily::OpenaiResponses));
+        assert!(!indexer.terminal_seen(ProtocolFamily::ClaudeMessages));
+        assert!(!indexer.terminal_seen(ProtocolFamily::Unknown));
+        assert_eq!(indexer.take_protocol_events()[0].1, b" \t[DONE] ");
+    }
+
+    #[test]
+    fn error_event_is_terminal_for_a_recognized_family_only() {
+        let mut indexer = SseIndexer::new(None, "record".to_string());
+        let body = b"data: {\"error\":{\"type\":\"server_error\"}}\n\n";
+
+        indexer.feed(body, 0, "9").unwrap();
+
+        assert!(indexer.terminal_seen(ProtocolFamily::OpenaiChatCompletions));
+        assert!(!indexer.terminal_seen(ProtocolFamily::Unknown));
     }
 
     #[test]

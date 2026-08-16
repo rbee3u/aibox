@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LARGE_PRETTY_BYTES } from "../bodyPresentation";
 import {
   activeDetail,
+  completedChatProtocol,
   completedDetail,
   withIncompleteRequestBody,
   withRequestEncoding,
@@ -423,6 +424,25 @@ describe("RecordDetail", () => {
     expect(screen.getByRole("button", { name: "Copy Session ID" })).toBeInTheDocument();
   });
 
+  it("renders Chat Completions with the existing OpenAI token hierarchy", () => {
+    renderDetail({
+      ...completedDetail,
+      summary: {
+        ...completedDetail.summary,
+        protocol: completedChatProtocol,
+      },
+    });
+
+    const modelSummary = screen.getByRole("region", { name: "Model" });
+    expect(within(modelSummary).getByTitle("Model gpt-chat-2026-08-01")).toBeInTheDocument();
+    const tokenUsage = screen.getByRole("region", { name: "Token usage" });
+    const inputTokens = within(tokenUsage).getByRole("group", { name: "Input tokens" });
+    expect(terms(inputTokens)).toEqual(["Input", "Cached input", "Cache writes"]);
+    expect(definitionValue(inputTokens, "Input")).toHaveTextContent("100");
+    expect(definitionValue(inputTokens, "Cached input")).toHaveTextContent("40");
+    expect(definitionValue(inputTokens, "Cache writes")).toHaveTextContent("10");
+  });
+
   it("preserves the token billing skeleton, missing markers, and explicit zero", () => {
     const detail = withTokenUsage(completedDetail, {
       total_input_tokens: null,
@@ -664,5 +684,42 @@ describe("RecordDetail", () => {
     );
     await user.click(screen.getByRole("button", { name: "Source" }));
     expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
+  });
+
+  it("keeps Chat content and tool-call deltas as inspectable raw Events", async () => {
+    const user = userEvent.setup();
+    const payload = JSON.stringify({
+      object: "chat.completion.chunk",
+      choices: [
+        {
+          delta: {
+            content: "Hello",
+            tool_calls: [{ function: { arguments: '{"city":"San' } }],
+          },
+          finish_reason: null,
+        },
+      ],
+    });
+    const source = `data: ${payload}\n\ndata: [DONE]\n\n`;
+    renderDetail(
+      { ...completedDetail, response_body_bytes: source.length },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        tab: "response",
+      },
+    );
+
+    const chunk = screen.getByRole("button", { name: /chat\.completion\.chunk/ });
+    await user.click(chunk);
+    await user.click(screen.getByRole("button", { name: "Expand choices" }));
+    await user.click(screen.getByRole("button", { name: "Expand 0" }));
+    await user.click(screen.getByRole("button", { name: "Expand delta" }));
+    expect(screen.getByText(/Hello/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand tool_calls" }));
+    await user.click(screen.getByRole("button", { name: "Expand 0" }));
+    await user.click(screen.getByRole("button", { name: "Expand function" }));
+    expect(screen.getByText(/city.*San/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /message/ })).toBeInTheDocument();
   });
 });

@@ -158,7 +158,9 @@ decoded Source. It handles the UTF-8 BOM, CR/LF/CRLF delimiters, multiline
 `data`, comments, and the default `message` event type. Only an empty-line
 terminated block with at least one `data` field is an SSE Event. A partial tail
 is identified separately, and text such as `[DONE]` remains visible rather
-than being treated as JSON.
+than being treated as JSON. Event cards prefer a JSON payload's top-level
+`type`, then its top-level `object`, before falling back to the SSE event type;
+standard Chat Completions chunks therefore appear as `chat.completion.chunk`.
 
 The `response-event-timings` route reads the existing best-effort
 `response.events.jsonl` index on demand and returns only each sequence and its
@@ -177,18 +179,19 @@ and does not synthesize First Token or per-Event timing.
 ## Protocol Summary
 
 For recognized model requests, the Traffic Proxy also records an optional
-top-level `summary.coding_agent_session_id`. OpenAI Responses prefers the first
-nonempty UTF-8 `session-id` request-header value and falls back to
-`x-claude-code-session-id`; Claude Messages uses the reverse precedence.
+top-level `summary.coding_agent_session_id`. OpenAI Responses and OpenAI Chat
+Completions prefer the first nonempty UTF-8 `session-id` request-header value
+and fall back to `x-claude-code-session-id`; Claude Messages uses the reverse
+precedence.
 Only those header names are considered, matched case-insensitively. Unknown
 protocols do not derive this value, bodies are never searched for it, and
 missing values are not backfilled.
 
 The Traffic Proxy derives model, reasoning effort, response mode, First Token,
-final Token Usage, and Provider Errors from native OpenAI Responses or Claude
-Messages data while it records the exchange. Stable facts are atomically
-checkpointed in the optional `summary.protocol` object. List and detail APIs
-return that same object without parsing request/response bodies. Traffic Record
+final Token Usage, and Provider Errors from native OpenAI Responses, OpenAI Chat
+Completions, or Claude Messages data while it records the exchange. Stable facts
+are atomically checkpointed in the optional `summary.protocol` object. List and
+detail APIs return that same object without parsing request/response bodies. Traffic Record
 format v2 has no v1 compatibility reader, migration, lazy backfill, or
 read-time repair. Raw bodies and the best-effort SSE index remain available for
 diagnosis.
@@ -197,11 +200,19 @@ For a recognized streaming response, First Token is the offset at which the
 first trim-nonempty SSE `data:` line not beginning with `[DONE]` is completely
 received. It is deliberately compatible with common relay accounting rather
 than a claim that tokenizer or semantic output has arrived: ping, error,
-malformed JSON, empty-delta JSON, Claude `message_start`, and OpenAI
-`response.created` data all qualify. Comments, other SSE fields, blank data,
-and `[DONE]` prefixes do not. A line split across body chunks uses the arrival
-time of its terminator; an unterminated final line uses the last body arrival
-time at EOF. Unknown protocols and non-streaming responses have no First Token.
+malformed JSON, empty-delta JSON, Claude `message_start`, OpenAI
+`response.created`, and role-only Chat Completions data all qualify. Comments,
+other SSE fields, blank data, and `[DONE]` prefixes do not. A line split across
+body chunks uses the arrival time of its terminator; an unterminated final line
+uses the last body arrival time at EOF. Unknown protocols and non-streaming
+responses have no First Token.
+
+Chat Completions holds streamed usage in memory until an exact trim-equal
+`[DONE]` data value or a structured stream error makes the protocol terminal.
+It maps prompt and completion usage into the existing OpenAI billing categories
+and warns about inconsistent totals or requested final usage that never arrives.
+The browser displays each raw chunk independently; it does not concatenate
+choice content or tool-call arguments into a reconstructed conversation.
 
 The browser never parses model bodies for Summary. It receives decimal
 nanosecond offsets, uses `BigInt` to build Timing Stages on a shared axis, and
