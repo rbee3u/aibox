@@ -141,7 +141,10 @@ const DEFAULT_CLAUDE_CONFIG: &str = r#"{
 /// Which Coding Agent a command targets.
 ///
 /// Selected by `--agent` on Coding Agent-scoped commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     /// Anthropic Claude Code.
     Claude,

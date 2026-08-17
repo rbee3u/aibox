@@ -64,11 +64,11 @@ impl ComponentKind {
         }
     }
 
-    fn supports_version(self) -> bool {
+    pub(crate) fn supports_version(self) -> bool {
         matches!(self, Self::Rust | Self::Go)
     }
 
-    fn is_statusline(self) -> bool {
+    pub(crate) fn is_statusline(self) -> bool {
         matches!(self, Self::ClaudeStatusline | Self::CodexStatusline)
     }
 }
@@ -90,6 +90,13 @@ pub enum ComponentStatus {
     Unmanaged,
     /// No Component-owned state exists.
     NotInstalled,
+}
+
+#[derive(Debug)]
+pub(crate) struct ComponentInspection {
+    pub(crate) kind: ComponentKind,
+    pub(crate) status: Option<ComponentStatus>,
+    pub(crate) error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,6 +229,67 @@ fn list(selected: &Tenant) -> Result<i32> {
         }
     }
     Ok(i32::from(failed))
+}
+
+pub(crate) fn inspect_catalog(selected: &Tenant) -> Result<Vec<ComponentInspection>> {
+    let exists = tenant_home_exists(selected)?;
+    Ok(component_catalog(selected)
+        .iter()
+        .copied()
+        .map(|kind| {
+            if !exists {
+                return ComponentInspection {
+                    kind,
+                    status: Some(ComponentStatus::NotInstalled),
+                    error: None,
+                };
+            }
+            match inspect(kind, selected.home_dir()) {
+                Ok(status) => ComponentInspection {
+                    kind,
+                    status: Some(status),
+                    error: None,
+                },
+                Err(error) => ComponentInspection {
+                    kind,
+                    status: None,
+                    error: Some(format!("{error:#}")),
+                },
+            }
+        })
+        .collect())
+}
+
+pub(crate) fn install_component(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
+    install(selected, component)
+}
+
+pub(crate) fn install_component_for_service(
+    selected: &Tenant,
+    component: &ComponentSpec,
+) -> Result<i32> {
+    reject_host_toolchain(selected, component.kind)?;
+    match component.kind {
+        ComponentKind::ClaudeStatusline => install_claude_statusline(selected),
+        ComponentKind::CodexStatusline => install_codex_statusline(selected),
+        ComponentKind::Rust | ComponentKind::Go => {
+            let Tenant::Managed(tenant) = selected else {
+                unreachable!("Host toolchains are rejected above")
+            };
+            let image_override = crate::env_override("AIBOX_IMAGE")?;
+            install_toolchain_with_mode(
+                tenant,
+                component,
+                image_override.as_deref(),
+                &crate::docker::DockerCli::system(),
+                true,
+            )
+        }
+    }
+}
+
+pub(crate) fn remove_component(selected: &Tenant, kind: ComponentKind) -> Result<i32> {
+    remove(selected, kind, true)
 }
 
 fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
@@ -654,6 +722,16 @@ fn install_toolchain_with(
     image_override: Option<&str>,
     docker: &crate::docker::DockerCli,
 ) -> Result<i32> {
+    install_toolchain_with_mode(tenant, component, image_override, docker, false)
+}
+
+fn install_toolchain_with_mode(
+    tenant: &ManagedTenant,
+    component: &ComponentSpec,
+    image_override: Option<&str>,
+    docker: &crate::docker::DockerCli,
+    service_mode: bool,
+) -> Result<i32> {
     let existing = if tenant.exists()? {
         inspect(component.kind, &tenant.home_dir)?
     } else {
@@ -683,7 +761,7 @@ fn install_toolchain_with(
         eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
     }
     if !crate::docker::image_exists_with(docker, &image)? {
-        bail!("{image} is not present locally; build it first with `aibox build`");
+        bail!("{image} is not present locally; build it first from Console Overview");
     }
 
     tenant.ensure_initialized()?;
@@ -703,7 +781,11 @@ fn install_toolchain_with(
         OsString::from(format!("aibox-{}-installer", component.kind.name())),
         OsString::from(component.version.as_deref().unwrap_or("")),
     ];
-    crate::docker::run_with(docker, &run_args, &image, &command, || {})
+    if service_mode {
+        crate::docker::run_for_service(docker, &run_args, &image, &command, || {})
+    } else {
+        crate::docker::run_with(docker, &run_args, &image, &command, || {})
+    }
 }
 
 fn remove_claude_statusline(tenant: &Tenant) -> Result<()> {

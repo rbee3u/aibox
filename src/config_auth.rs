@@ -17,6 +17,7 @@ use super::{
 use crate::agent::AgentKind;
 use crate::tenant::{self, FileSnapshot, ManagedTenant, TENANTS_DIR, Tenant, TenantAgent};
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::fs;
@@ -47,8 +48,9 @@ struct AuthCandidate {
     mode: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum PropagationOutcome {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub(crate) enum PropagationOutcome {
     Updated,
     Unchanged,
     Conflict {
@@ -79,30 +81,43 @@ struct PlannedTarget {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct AuthPropagationPlan {
+pub(crate) struct AuthPropagationPlan {
     source_content: Vec<u8>,
     targets: Vec<PlannedTarget>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct PropagationEntry {
-    pub(super) label: String,
-    pub(super) outcome: PropagationOutcome,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct PropagationEntry {
+    pub(crate) label: String,
+    pub(crate) outcome: PropagationOutcome,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct PropagationCounts {
-    pub(super) updated: usize,
-    pub(super) unchanged: usize,
-    pub(super) conflicts: usize,
-    pub(super) newer: usize,
-    pub(super) invalid: usize,
-    pub(super) failed: usize,
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub(crate) struct PropagationCounts {
+    pub(crate) updated: usize,
+    pub(crate) unchanged: usize,
+    pub(crate) conflicts: usize,
+    pub(crate) newer: usize,
+    pub(crate) invalid: usize,
+    pub(crate) failed: usize,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct AuthPropagationReport {
-    pub(super) entries: Vec<PropagationEntry>,
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub(crate) struct AuthPropagationReport {
+    pub(crate) entries: Vec<PropagationEntry>,
+    pub(crate) counts: PropagationCounts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct PropagationPreviewEntry {
+    pub(crate) label: String,
+    pub(crate) outcome: PropagationOutcome,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub(crate) struct AuthPropagationPreview {
+    pub(crate) entries: Vec<PropagationPreviewEntry>,
+    pub(crate) updates: usize,
 }
 
 pub(super) fn propagate_auth_from(root: &Path, host_home: &Path) -> Result<i32> {
@@ -112,7 +127,7 @@ pub(super) fn propagate_auth_from(root: &Path, host_home: &Path) -> Result<i32> 
     Ok(i32::from(report.counts().failed > 0))
 }
 
-pub(super) fn plan_auth_propagation_from(
+pub(crate) fn plan_auth_propagation_from(
     root: &Path,
     host_home: &Path,
 ) -> Result<AuthPropagationPlan> {
@@ -206,7 +221,7 @@ pub(super) fn plan_auth_propagation_from(
     })
 }
 
-pub(super) fn execute_auth_propagation(plan: AuthPropagationPlan) -> AuthPropagationReport {
+pub(crate) fn execute_auth_propagation(plan: AuthPropagationPlan) -> AuthPropagationReport {
     let mut entries = Vec::with_capacity(plan.targets.len());
     for target in plan.targets {
         let outcome = match target.action {
@@ -225,7 +240,27 @@ pub(super) fn execute_auth_propagation(plan: AuthPropagationPlan) -> AuthPropaga
             outcome,
         });
     }
-    AuthPropagationReport { entries }
+    let counts = counts_for(&entries);
+    AuthPropagationReport { entries, counts }
+}
+
+pub(crate) fn preview_auth_propagation(plan: &AuthPropagationPlan) -> AuthPropagationPreview {
+    let entries = plan
+        .targets
+        .iter()
+        .map(|target| PropagationPreviewEntry {
+            label: target.label.clone(),
+            outcome: match &target.action {
+                PlannedAction::Write { .. } => PropagationOutcome::Updated,
+                PlannedAction::Report(outcome) => outcome.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let updates = entries
+        .iter()
+        .filter(|entry| entry.outcome == PropagationOutcome::Updated)
+        .count();
+    AuthPropagationPreview { entries, updates }
 }
 
 fn discover_managed_tenant_names(root: &Path) -> Result<Vec<String>> {
@@ -370,18 +405,7 @@ fn classify_auth(content: &[u8], expected_account_id: Option<&str>) -> AuthConte
 
 impl AuthPropagationReport {
     pub(super) fn counts(&self) -> PropagationCounts {
-        let mut counts = PropagationCounts::default();
-        for entry in &self.entries {
-            match entry.outcome {
-                PropagationOutcome::Updated => counts.updated += 1,
-                PropagationOutcome::Unchanged => counts.unchanged += 1,
-                PropagationOutcome::Conflict { .. } => counts.conflicts += 1,
-                PropagationOutcome::Newer { .. } => counts.newer += 1,
-                PropagationOutcome::Invalid { .. } => counts.invalid += 1,
-                PropagationOutcome::Failed { .. } => counts.failed += 1,
-            }
-        }
-        counts
+        self.counts.clone()
     }
 
     fn print(&self) -> Result<()> {
@@ -439,4 +463,19 @@ impl AuthPropagationReport {
         }
         Ok(())
     }
+}
+
+fn counts_for(entries: &[PropagationEntry]) -> PropagationCounts {
+    let mut counts = PropagationCounts::default();
+    for entry in entries {
+        match entry.outcome {
+            PropagationOutcome::Updated => counts.updated += 1,
+            PropagationOutcome::Unchanged => counts.unchanged += 1,
+            PropagationOutcome::Conflict { .. } => counts.conflicts += 1,
+            PropagationOutcome::Newer { .. } => counts.newer += 1,
+            PropagationOutcome::Invalid { .. } => counts.invalid += 1,
+            PropagationOutcome::Failed { .. } => counts.failed += 1,
+        }
+    }
+    counts
 }

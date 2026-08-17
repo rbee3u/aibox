@@ -13,7 +13,10 @@ persistent in named Tenants.
 - **Explicit host access.** A Run sees its Workspace, Tenant Home, and only the
   Extra Mounts supplied on that command.
 - **Native configuration.** Runs use the Coding Agent's real configuration
-  files. Named Configs are applied explicitly and never reapplied by a Run.
+  files. Named Configs are applied explicitly, observed for drift, and never
+  reapplied by a Run.
+- **Local Console.** Manage images, Tenants, Components, Configs, Sessions, and
+  Requests from one foreground Service.
 
 ## Quick Start
 
@@ -25,11 +28,14 @@ supports Linux `amd64` and `arm64`.
 git clone https://github.com/rbee3u/aibox.git
 cd aibox
 cargo install --locked --path .
-aibox build
+aibox serve
 ```
 
-From a Workspace directory, start Codex or Claude and follow the Coding
-Agent's sign-in flow:
+Open `http://127.0.0.1:9923/`. Build the runtime image from Overview, then keep
+the Service running while using the Console or Request Proxy.
+
+From another terminal in a Workspace directory, start Codex or Claude and
+follow the Coding Agent's sign-in flow:
 
 ```sh
 aibox run
@@ -44,8 +50,10 @@ aibox run -- exec "fix the failing tests"
 aibox run --agent claude -- "review the current changes"
 ```
 
-aibox parses only the left side and forwards the right side unchanged. Use
-`aibox --help` and `aibox <command> --help` for the complete CLI reference.
+aibox parses only the left side and forwards the right side unchanged. The
+primary CLI is `aibox serve [--listen IP:PORT]` plus the complete `aibox run`
+surface. Previous management commands remain for one deprecation release and
+print a migration warning.
 
 ## Filesystem Boundary
 
@@ -76,40 +84,28 @@ Agent exits nonzero. Use a different Tenant when work should not share
 credentials, settings, or Sessions:
 
 ```sh
-aibox tenant create work
 aibox run --tenant work
-aibox tenant list
-aibox tenant delete work
 ```
 
-Tenant Homes, Named Configs, and Traffic Records persist under `$HOME/.aibox`.
+Create `work` first from the Console's Tenants module.
+
+Tenant Homes, Named Configs, and Request Records persist under `$HOME/.aibox`.
 `AIBOX_ROOT` selects another location, which must be a directory dedicated to
 aibox because Tenant deletion removes subtrees from it.
 
-A Managed Tenant named `host` is ordinary and runnable. The real host Home is
-the separate Host Tenant, selected only by `--host` on `config`, `session`, and
-`component` commands. Read [Tenants](docs/tenants.md) before deleting data or
-sharing toolchains.
+A Managed Tenant named `host` is ordinary and runnable. Create, inspect, and
+delete Managed Tenants from the Console's Tenants module. The real host Home is
+the separate Host Tenant. Read [Tenants](docs/tenants.md) before deleting data
+or sharing toolchains.
 
 ## Components
 
-Install optional status lines or Tenant-local toolchains without changing the
-Tenant baseline:
-
-```sh
-aibox component list
-aibox component install claude-statusline
-aibox component install codex-statusline
-aibox component --host list
-aibox component --host install claude-statusline
-aibox component install rust
-aibox component install go@1.25.6 --tenant work
-aibox component remove rust --tenant work --yes
-```
+Install optional status lines or Tenant-local toolchains from a Tenant's
+Components view without changing the Tenant baseline.
 
 Omitting a Rust or Go version installs the current stable release. Toolchain
-installation uses the shared Docker image and requires `aibox build`; status
-lines directly edit their native Current Config values; Host statusline
+installation uses the shared Docker image and requires a built runtime image;
+status lines directly edit their native Current Config values; Host statusline
 Components are available through `--host`, while Rust and Go remain Managed
 Tenant-only. See
 [Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
@@ -117,26 +113,16 @@ replacement semantics.
 
 ## Configs
 
-A Named Config belongs to exactly one Tenant and one Coding Agent. It accepts
-a fixed set of native settings and credentials and applies them once:
-
-```sh
-aibox config create custom
-aibox config get custom
-aibox config edit custom
-aibox config apply custom
-aibox config get --current
-aibox config edit --current
-aibox config propagate-auth
-```
+A Named Config belongs to exactly one Tenant and one Coding Agent. The Configs
+module can create, reveal, edit, delete, and explicitly apply it, as well as
+edit Current Config and preview Credential Propagation.
 
 Application overwrites or removes every fixed Config Field and preserves
-unrelated native settings such as status-line configuration. It records no
-association, backup, or rollback state. `get` displays every native file,
-including credentials without redaction; `edit` opens and commits them one at a
-time. After a successful interactive Named Config edit, aibox offers to apply
-it to the selected Current Config; the default is No, and the standalone
-`config apply` command remains available. When Host Codex refreshes a ChatGPT
+unrelated native settings such as status-line configuration. A successful
+application records Last Application so the Console can derive Config Drift;
+this is not activation and never triggers reapplication. No backup or rollback
+state is retained. Reveal displays every native file, including credentials
+without redaction. When Host Codex refreshes a ChatGPT
 login, `propagate-auth` explicitly copies that newer credential snapshot to
 older same-account existing Configs without creating a persistent relationship.
 Read [Configs](docs/configs.md) for the exact schema, Current Config behavior,
@@ -144,13 +130,8 @@ Host Tenant risks, file modes, and partial-write behavior.
 
 ## Sessions
 
-Session browsing is host-side and does not start Docker:
-
-```sh
-aibox session
-aibox session get 458cbf92d123
-aibox session --host --agent claude list
-```
+Session browsing in the Console is host-side, streams typed prompts, and does
+not start Docker.
 
 Canonical UUIDs are listed by their final 12 characters; `get` and `delete`
 accept a full Session id or unique suffix. Session deletion requires explicit
@@ -171,29 +152,24 @@ Every Extra Mount is an explicit authority grant. Read the
 [mount rules](docs/sandbox.md#mount-rules) before exposing credentials or
 another Tenant Home.
 
-## Traffic Debugging
+## Request Debugging
 
-Start the temporary host-side HTTP/SSE recorder in the foreground, then open
-the Traffic Viewer at `http://127.0.0.1:9923/`:
+Start the foreground Service, then open the Requests module at
+`http://127.0.0.1:9923/_aibox/ui/requests`:
 
 ```sh
-aibox traffic
+aibox serve
 ```
 
-The command prints its Listen and Viewer addresses followed by concise,
-safety-filtered runtime diagnostics. Traffic Records persist under
-`$AIBOX_ROOT/traffic/` (`$HOME/.aibox/traffic/` by default).
+The Service prints its listener and Console address. Request Records persist
+under `$AIBOX_ROOT/requests/` (`$HOME/.aibox/requests/` by default).
 
-Traffic Viewer development commands and the embedded asset workflow are
-documented in [Traffic UI Development](docs/traffic-ui.md).
+Console development commands and the embedded asset workflow are documented in
+[Console UI Development](docs/console-ui.md).
 
 Point a model provider at the proxy by placing its complete upstream base URL
-after the local address. For Codex, edit the Current Config for the Tenant that
-will send traffic (add `--tenant <name>` when needed):
-
-```sh
-aibox config edit --current
-```
+after the local address. In Configs, select the Tenant and Codex Current Config,
+then edit `config.toml`.
 
 For Codex's built-in OpenAI provider inside an aibox container, remove any
 custom `model_provider` selection and set:
@@ -217,13 +193,7 @@ That provider block is native Current Config, not the fixed Named Config
 schema: arbitrary provider names and `wire_api` cannot be stored verbatim in a
 Named Config.
 
-For Claude, edit its Current Config for the selected Tenant:
-
-```sh
-aibox config --agent claude edit --current
-```
-
-Then set the native base URL:
+For Claude, select its Current Config and set the native base URL:
 
 ```json
 {
@@ -234,11 +204,12 @@ Then set the native base URL:
 ```
 
 Docker Desktop supplies `host.docker.internal`. Native Linux Docker usually
-needs `aibox traffic --listen 0.0.0.0:9923`. The selected address serves both
-the Traffic Proxy and Traffic Viewer. See
-[Traffic Proxy](docs/sandbox.md#traffic-proxy) for the complete behavior.
+needs `aibox serve --listen 0.0.0.0:9923`. Reachable clients may use the
+Request Proxy, while Console and Control API routes still require a loopback
+TCP peer. See
+[Request Proxy](docs/sandbox.md#request-proxy) for the complete behavior.
 
-## Shell Completion
+## Deprecated Management CLI
 
 ```sh
 # Bash
@@ -249,12 +220,10 @@ source <(aibox completion zsh)
 aibox completion fish | source
 ```
 
-Add the matching command to your shell startup file.
-
-Completion evaluates command-aware candidates on demand, including existing
-Managed Tenants, Named Configs, Sessions, and the fixed Component catalog.
-Discovery is host-side and read-only: it does not create a missing Managed
-Tenant or modify Current Config.
+Completion and the former `build`, `tenant`, `component`, `config`, and
+`session` commands are retained for one compatibility release. New
+management workflows should use the Console; `run` keeps its full selector,
+Workspace, Extra Mount, and pass-through behavior.
 
 ## Learn More
 
@@ -265,7 +234,7 @@ Tenant or modify Current Config.
 - [Configs](docs/configs.md): Named and Current Configs, fixed fields,
   credentials, one-time application, and filesystem behavior.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
-  cleanup, Traffic Proxy behavior, and custom images.
+  cleanup, Request Proxy behavior, and custom images.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
   Coding Agent versions.
 
@@ -280,9 +249,9 @@ maps behavior to its owning modules. Run the complete Rust checks with:
 make check
 ```
 
-Changes under `web/traffic/` also require `make traffic-check`; install its
-locked dependencies first with `make traffic-ci`. See
-[Traffic UI Development](docs/traffic-ui.md) for the generated-asset and
+Changes under `web/console/` also require `make console-check`; install its
+locked dependencies first with `make console-ci`. See
+[Console UI Development](docs/console-ui.md) for the generated-asset and
 optional browser-test workflow.
 
 ## License

@@ -3,7 +3,11 @@
 use super::DockerCli;
 use anyhow::{Context, Result, bail};
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Cache policy for a Docker build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +73,71 @@ pub(crate) fn build_image_with(
     }
     write_result.context("write Dockerfile to docker build stdin")?;
     Ok(())
+}
+
+pub(crate) fn build_image_for_service(
+    docker: &DockerCli,
+    dockerfile: &str,
+    image: &str,
+    cache: BuildCache,
+    cancelled: Arc<AtomicBool>,
+    log: Arc<dyn Fn(String) + Send + Sync>,
+) -> Result<()> {
+    let ctx = tempfile::tempdir().context("create empty build context")?;
+    let mut cmd = docker.command();
+    cmd.arg("build");
+    cmd.args(cache.docker_args());
+    cmd.args(["-f", "-", "-t", image]);
+    cmd.arg(ctx.path());
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .context("spawn docker build (is docker installed?)")?;
+    let stdout = child.stdout.take().context("capture docker build stdout")?;
+    let stderr = child.stderr.take().context("capture docker build stderr")?;
+    let stdout_log = log.clone();
+    let stdout_thread = std::thread::spawn(move || forward_lines(stdout, stdout_log));
+    let stderr_log = log.clone();
+    let stderr_thread = std::thread::spawn(move || forward_lines(stderr, stderr_log));
+
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let write_result = stdin.write_all(dockerfile.as_bytes());
+    drop(stdin);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().context("poll docker build")? {
+            break status;
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            break child.wait().context("wait for cancelled docker build")?;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+    if cancelled.load(Ordering::SeqCst) {
+        anyhow::bail!("Docker image build cancelled");
+    }
+    if !status.success() {
+        bail!("docker build failed ({status})");
+    }
+    write_result.context("write Dockerfile to docker build stdin")?;
+    Ok(())
+}
+
+fn forward_lines(reader: impl std::io::Read, log: Arc<dyn Fn(String) + Send + Sync>) {
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => log(String::from_utf8_lossy(&bytes).trim_end().to_string()),
+        }
+    }
 }
 
 /// Whether an image reference exists locally.

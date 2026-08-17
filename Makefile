@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help install format build test lint check \
-	traffic-ci traffic-format traffic-build traffic-test traffic-lint traffic-check
+	console-ci console-format console-build console-test console-lint console-check
 
 help:
 	@printf '%s\n' \
@@ -12,13 +12,13 @@ help:
 		"  make test               Run Rust tests" \
 		"  make lint               Lint Rust sources" \
 		"  make check              Run all Rust checks" \
-		"Traffic UI:" \
-		"  make traffic-ci         Install frontend dependencies with npm ci" \
-		"  make traffic-format     Format frontend sources" \
-		"  make traffic-build      Build embedded frontend assets" \
-		"  make traffic-test       Run frontend tests" \
-		"  make traffic-lint       Lint frontend sources" \
-		"  make traffic-check      Run all frontend checks and build assets"
+		"Console UI:" \
+		"  make console-ci         Install frontend dependencies with npm ci" \
+		"  make console-format     Format frontend sources" \
+		"  make console-build      Build embedded frontend assets" \
+		"  make console-test       Run frontend tests" \
+		"  make console-lint       Lint frontend sources" \
+		"  make console-check      Run all frontend checks and build assets"
 
 install:
 	cargo install --locked --path .
@@ -40,20 +40,20 @@ check:
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 
-traffic-ci:
-	npm --prefix web/traffic ci
+console-ci:
+	npm --prefix web/console ci
 
-traffic-format:
-	npm --prefix web/traffic run format
+console-format:
+	npm --prefix web/console run format
 
-traffic-build:
-	npm --prefix web/traffic run build
+console-build:
+	npm --prefix web/console run build
 
-traffic-test:
-	npm --prefix web/traffic run test
+console-test:
+	npm --prefix web/console run test
 
-traffic-lint:
-	npm --prefix web/traffic run lint
+console-lint:
+	npm --prefix web/console run lint
 
-traffic-check:
-	npm --prefix web/traffic run check
+console-check:
+	npm --prefix web/console run check

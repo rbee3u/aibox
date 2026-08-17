@@ -547,10 +547,6 @@ fn non_run_commands_reject_passthrough_before_docker() {
         (&["aibox", "component", "list"][..], "applies only to a run"),
         (&["aibox", "config", "list"][..], "applies only to a run"),
         (&["aibox", "session", "list"][..], "applies only to a run"),
-        (
-            &["aibox", "traffic"][..],
-            "traffic takes no pass-through args",
-        ),
         (&["aibox", "build"][..], "build takes no pass-through args"),
         (
             &["aibox", "tenant", "list"][..],

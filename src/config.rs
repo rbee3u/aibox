@@ -3,26 +3,74 @@
 
 use crate::cli::ConfigCommand;
 use crate::config_model::NamedConfigDefinition;
+use crate::metadata::{self, PreparedMetadataWrite};
 use crate::tenant::{self, FileSnapshot, Tenant, TenantAgent};
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::Command;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 #[path = "config_auth.rs"]
 mod auth;
 
-#[cfg(test)]
-use auth::{
-    AuthPropagationReport, PropagationCounts, PropagationOutcome, execute_auth_propagation,
-    plan_auth_propagation_from,
+pub(crate) use auth::{
+    AuthPropagationPlan, AuthPropagationPreview, execute_auth_propagation,
+    plan_auth_propagation_from, preview_auth_propagation,
 };
+#[cfg(test)]
+use auth::{AuthPropagationReport, PropagationCounts, PropagationOutcome};
 
 // Config commands buffer one native file at a time. Bound both untrusted
 // Current Config input and an editor's replacement before allocating it all.
 const MAX_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
+const LAST_APPLICATION_SECTION: &str = "last_application";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LastApplication {
+    pub(crate) applied: String,
+    pub(crate) applied_at: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ConfigDrift {
+    Untracked,
+    Clean,
+    Dirty,
+    SourceMissing,
+    ComparisonError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ApplicationStatus {
+    pub(crate) last_application: Option<LastApplication>,
+    pub(crate) drift: ConfigDrift,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConfigFileSnapshot {
+    pub(crate) file: String,
+    pub(crate) exists: bool,
+    pub(crate) content: Vec<u8>,
+    pub(crate) revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ConfigCatalogEntry {
+    pub(crate) name: String,
+    pub(crate) state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct NamedConfigLayout {
@@ -225,6 +273,53 @@ pub fn list_named_configs(selected: &TenantAgent) -> Result<Vec<String>> {
     Ok(configs)
 }
 
+pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<ConfigCatalogEntry>> {
+    if !selected.named_config_catalog_exists()? {
+        return Ok(Vec::new());
+    }
+    let root = selected.named_config_catalog_dir();
+    let mut configs = Vec::new();
+    for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
+        let Ok(entry) = entry else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if tenant::validate_name("config", &name).is_err() {
+            continue;
+        }
+        let (state, detail) = match inspect_named_config_directory(selected, &name) {
+            Ok(Some(layout)) if !layout.complete(selected) => ("incomplete", None),
+            Ok(Some(_))
+                if private_directory(&selected.named_config_dir(&name))
+                    && selected.agent.config_files().iter().all(|file| {
+                        private_regular_file(&selected.named_config_file(&name, file))
+                    }) =>
+            {
+                ("ready", None)
+            }
+            Ok(Some(_)) => (
+                "invalid",
+                Some("Named Config permissions must be 0700/0600".to_string()),
+            ),
+            Ok(None) => continue,
+            Err(error) => ("invalid", Some(format!("{error:#}"))),
+        };
+        configs.push(ConfigCatalogEntry {
+            name,
+            state,
+            detail,
+        });
+    }
+    configs.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(configs)
+}
+
 /// Return every raw file in a Named Config, including invalid content for repair.
 pub fn get_named_config(selected: &TenantAgent, config: &str) -> Result<Vec<u8>> {
     ensure_complete_named_config(selected, config)?;
@@ -254,6 +349,106 @@ pub fn get_current_config(selected: &TenantAgent) -> Result<Vec<u8>> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(render_config_files(&files))
+}
+
+pub(crate) fn read_config_file(
+    selected: &TenantAgent,
+    config: Option<&str>,
+    current: bool,
+    file: &str,
+) -> Result<ConfigFileSnapshot> {
+    validate_config_selection(selected, config, current, file)?;
+    let snapshot = if current {
+        capture_optional_agent_file(selected, file)?
+    } else {
+        let config = config.context("Named Config name is missing")?;
+        ensure_complete_named_config(selected, config)?;
+        FileSnapshot::capture_with_limit(
+            &selected.named_config_file(config, file),
+            MAX_CONFIG_BYTES,
+        )?
+    };
+    let content = if snapshot.present {
+        snapshot.content.clone()
+    } else {
+        selected
+            .agent
+            .empty_config_file(file)
+            .context("Agent Config file contract is incomplete")?
+            .as_bytes()
+            .to_vec()
+    };
+    Ok(ConfigFileSnapshot {
+        file: file.to_string(),
+        exists: snapshot.present,
+        revision: file_revision(snapshot.present, &snapshot.content),
+        content,
+    })
+}
+
+pub(crate) fn save_config_file(
+    selected: &TenantAgent,
+    config: Option<&str>,
+    current: bool,
+    file: &str,
+    expected_revision: &str,
+    content: &[u8],
+) -> Result<ConfigFileSnapshot> {
+    if content.len() as u64 > MAX_CONFIG_BYTES {
+        bail!("configuration file exceeds {MAX_CONFIG_BYTES} bytes");
+    }
+    let before = read_config_file(selected, config, current, file)?;
+    if before.revision != expected_revision {
+        bail!("configuration file changed since it was revealed");
+    }
+    let (path, mode) = if current {
+        selected.ensure_agent_state_dir()?;
+        let snapshot = capture_optional_agent_file(selected, file)?;
+        (selected.state_file(file), snapshot.mode.unwrap_or(0o600))
+    } else {
+        let config = config.context("Named Config name is missing")?;
+        let content_text = std::str::from_utf8(content)
+            .with_context(|| format!("Named Config {file} is not valid UTF-8"))?;
+        NamedConfigDefinition::validate_file(selected.agent, file, content_text)
+            .with_context(|| format!("validate Named Config '{config}' {file}"))?;
+        (selected.named_config_file(config, file), 0o600)
+    };
+    write_atomic(&path, content, mode)?;
+    read_config_file(selected, config, current, file)
+}
+
+fn validate_config_selection(
+    selected: &TenantAgent,
+    config: Option<&str>,
+    current: bool,
+    file: &str,
+) -> Result<()> {
+    if current == config.is_some() {
+        bail!("select exactly one of Current Config or a Named Config");
+    }
+    if !selected.agent.config_files().contains(&file) {
+        bail!(
+            "unsupported Config file for {}: {file}",
+            selected.agent.tag()
+        );
+    }
+    if let Some(config) = config {
+        tenant::validate_name("config", config)?;
+    }
+    Ok(())
+}
+
+fn file_revision(present: bool, content: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update([u8::from(present)]);
+    digest.update(content);
+    let digest = digest.finalize();
+    let mut revision = String::with_capacity(digest.len() * 2);
+    use std::fmt::Write as _;
+    for byte in digest {
+        write!(&mut revision, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    revision
 }
 
 fn edit_named_config_with_editor(
@@ -446,6 +641,7 @@ pub fn apply_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
         .transpose()?
         .flatten();
     let desired = definition.apply(main_text.as_deref(), auth_text.as_deref())?;
+    let metadata = prepare_last_application(selected, config)?;
 
     let mut writes = Vec::new();
     collect_agent_write(
@@ -465,30 +661,145 @@ pub fn apply_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
         let current = current_auth.as_ref().unwrap_or(&absent);
         collect_agent_write(file, current, desired.auth, &mut writes);
     }
-    if writes.is_empty() {
-        return Ok(());
+    if !writes.is_empty() {
+        tenant::ensure_agent_state(selected.agent, selected.home_dir())?;
+        let mut prepared = Vec::with_capacity(writes.len());
+        for write in writes {
+            let target = selected.state_file(write.file);
+            let parent = target
+                .parent()
+                .context("Current Config path has no parent")?;
+            let prefix = temporary_file_prefix(&target, "apply")?;
+            let temp = write_temporary_file(parent, &prefix, &write.content, write.mode)?;
+            prepared.push((target, temp));
+        }
+        for (target, temp) in prepared {
+            let parent = target
+                .parent()
+                .context("Current Config path has no parent")?;
+            temp.persist(&target)
+                .map_err(|error| error.error)
+                .with_context(|| format!("replace {}", target.display()))?;
+            tenant::sync_dir(parent)?;
+        }
     }
+    metadata.commit().context("write Last Application metadata")
+}
 
-    tenant::ensure_agent_state(selected.agent, selected.home_dir())?;
-    let mut prepared = Vec::with_capacity(writes.len());
-    for write in writes {
-        let target = selected.state_file(write.file);
-        let parent = target
-            .parent()
-            .context("Current Config path has no parent")?;
-        let prefix = temporary_file_prefix(&target, "apply")?;
-        let temp = write_temporary_file(parent, &prefix, &write.content, write.mode)?;
-        prepared.push((target, temp));
+pub(crate) fn application_status(selected: &TenantAgent) -> ApplicationStatus {
+    match application_status_inner(selected) {
+        Ok(status) => status,
+        Err(error) => ApplicationStatus {
+            last_application: None,
+            drift: ConfigDrift::ComparisonError,
+            detail: Some(format!("{error:#}")),
+        },
     }
-    for (target, temp) in prepared {
-        let parent = target
-            .parent()
-            .context("Current Config path has no parent")?;
-        temp.persist(&target)
-            .map_err(|error| error.error)
-            .with_context(|| format!("replace {}", target.display()))?;
-        tenant::sync_dir(parent)?;
+}
+
+fn application_status_inner(selected: &TenantAgent) -> Result<ApplicationStatus> {
+    let Some(last_application) = read_last_application(selected)? else {
+        return Ok(ApplicationStatus {
+            last_application: None,
+            drift: ConfigDrift::Untracked,
+            detail: None,
+        });
+    };
+    let layout = match inspect_named_config_directory(selected, &last_application.applied) {
+        Ok(Some(layout)) if layout.complete(selected) => layout,
+        Ok(_) => {
+            return Ok(ApplicationStatus {
+                last_application: Some(last_application),
+                drift: ConfigDrift::SourceMissing,
+                detail: None,
+            });
+        }
+        Err(error) => {
+            return Ok(ApplicationStatus {
+                last_application: Some(last_application),
+                drift: ConfigDrift::ComparisonError,
+                detail: Some(format!("{error:#}")),
+            });
+        }
+    };
+    let _ = layout;
+    let comparison = compare_application_source(selected, &last_application.applied);
+    Ok(match comparison {
+        Ok(clean) => ApplicationStatus {
+            last_application: Some(last_application),
+            drift: if clean {
+                ConfigDrift::Clean
+            } else {
+                ConfigDrift::Dirty
+            },
+            detail: None,
+        },
+        Err(error) => ApplicationStatus {
+            last_application: Some(last_application),
+            drift: ConfigDrift::ComparisonError,
+            detail: Some(format!("{error:#}")),
+        },
+    })
+}
+
+fn compare_application_source(selected: &TenantAgent, config: &str) -> Result<bool> {
+    let definition = read_named_config_definition(selected, config)?;
+    let current_main = capture_optional_agent_file(selected, selected.agent.main_config_file())?;
+    let current_auth = selected
+        .agent
+        .native_auth_file()
+        .map(|file| capture_optional_agent_file(selected, file))
+        .transpose()?;
+    let main_text = snapshot_text(&current_main, selected.agent.main_config_file())?;
+    let auth_text = current_auth
+        .as_ref()
+        .map(|snapshot| snapshot_text(snapshot, "auth.json"))
+        .transpose()?
+        .flatten();
+    let desired = definition.apply(main_text.as_deref(), auth_text.as_deref())?;
+    let main_matches = desired_file_matches(&current_main, desired.main.as_deref());
+    let auth_matches = match (selected.agent.native_auth_file(), current_auth.as_ref()) {
+        (Some(_), Some(current)) => desired_file_matches(current, desired.auth.as_deref()),
+        (None, None) => true,
+        _ => false,
+    };
+    Ok(main_matches && auth_matches)
+}
+
+fn desired_file_matches(current: &FileSnapshot, desired: Option<&str>) -> bool {
+    match desired {
+        Some(desired) => current.present && current.content == desired.as_bytes(),
+        None => !current.present,
     }
+}
+
+fn prepare_last_application(selected: &TenantAgent, config: &str) -> Result<PreparedMetadataWrite> {
+    let mut document = metadata::read(selected)?;
+    if let Some(existing) = document.section::<LastApplication>(LAST_APPLICATION_SECTION)? {
+        validate_last_application(&existing)?;
+    }
+    let record = LastApplication {
+        applied: config.to_string(),
+        applied_at: OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .context("format Last Application time")?,
+    };
+    document.set_section(LAST_APPLICATION_SECTION, &record)?;
+    document.prepare(selected)
+}
+
+fn read_last_application(selected: &TenantAgent) -> Result<Option<LastApplication>> {
+    let document = metadata::read(selected)?;
+    let Some(record): Option<LastApplication> = document.section(LAST_APPLICATION_SECTION)? else {
+        return Ok(None);
+    };
+    validate_last_application(&record)?;
+    Ok(Some(record))
+}
+
+fn validate_last_application(record: &LastApplication) -> Result<()> {
+    tenant::validate_name("config", &record.applied)?;
+    OffsetDateTime::parse(&record.applied_at, &Rfc3339).context("parse Last Application time")?;
     Ok(())
 }
 

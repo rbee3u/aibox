@@ -838,8 +838,7 @@ fn reads_do_not_follow_an_ancestor_replaced_after_discovery() {
 
     let err = TestBackend
         .prompts_in(home.path(), &snapshot[0])
-        .err()
-        .expect("a replaced ancestor must be rejected")
+        .expect_err("a replaced ancestor must be rejected")
         .to_string();
 
     assert!(err.contains("open session path"), "{err}");

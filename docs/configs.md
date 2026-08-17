@@ -8,13 +8,17 @@ Coding Agent scope:
   Coding Agent during a Run.
 
 Config Application copies fixed fields from a Named Config into Current Config
-once. It records no ongoing relationship between them.
+once. A successful Application records Last Application for live Config Drift
+inspection, but never creates an active relationship or automatic
+reapplication.
 
 Credential Propagation is the explicit global exception: it can copy one newer
 Host ChatGPT Credentials snapshot to older same-account Codex Configs without
 creating or retaining any association.
 
-Codex is the default Coding Agent:
+The Console's Configs module is the primary interface. The following commands
+remain available for one deprecation release; Codex is their default Coding
+Agent:
 
 ```sh
 aibox config list
@@ -63,9 +67,33 @@ files:
 | Claude | `settings.json` |
 | Codex | `config.toml`, then `auth.json` |
 
-There is no Config metadata, association state, layout version, or migration
-reader. Named Config catalogs are host-only and are never bind-mounted into a
-Run.
+Named Config directories contain no metadata, association state, layout
+version, or migration reader. The enclosing Tenant-and-Agent catalog may also
+contain one aibox-owned mode `0600` file:
+
+```text
+$AIBOX_ROOT/<agent>/<tenant-or-__host>/metadata.json
+```
+
+It is a 16 KiB-limited extensible observation document. Last Application owns
+one strict section:
+
+```json
+{
+  "last_application": {
+    "applied": "custom",
+    "applied_at": "2026-08-17T00:00:00Z"
+  }
+}
+```
+
+Other top-level sections are reserved for typed metadata in future aibox
+versions and are preserved when Last Application changes. The document has no
+layout version and is not a user or plugin extension surface. Named Config
+catalogs and `metadata.json` are host-only and never bind-mounted into a Run.
+An absent document or `last_application` section is Untracked; malformed or
+unsafe metadata produces Comparison error and blocks Application before it
+changes Current Config.
 
 `config create NAME` initializes a missing Managed Tenant and writes the
 built-in template. A complete same-name Named Config is an error. If a safe
@@ -74,9 +102,11 @@ prospective complete Named Config and adds only the missing template file.
 Unknown entries, symlinks, unsafe modes, or invalid existing content are
 rejected.
 
-`config list` returns only complete, structurally safe Named Configs. It does
-not parse their contents, so an invalid but complete Named Config remains
-visible for inspection or repair.
+The deprecated `config list` returns only complete, structurally safe Named
+Configs. It does not parse their contents, so an invalid but complete Named
+Config remains visible for inspection or repair. The Console also identifies
+safe incomplete and invalid catalog entries so they can be repaired or deleted
+explicitly.
 
 `config get NAME` and `config get --current` print every expected native file
 in the table order, with headings such as:
@@ -250,11 +280,27 @@ before replacing any target file. It then processes every Config Field:
 
 Codex application uses structure-preserving TOML edits so unrelated comments,
 ordering, and formatting survive. Claude JSON is pretty-printed when changed.
-The standalone `config apply NAME` command is unconditional and has no prompt;
-the confirmation after a successful interactive Named Config edit is only a
-shortcut to that same operation. Application has no drift check, `--force`,
-backup, deactivation, or restore operation. Runs consume Current Config without
-consulting or reapplying Named Configs.
+The deprecated `config apply NAME` command is unconditional and has no prompt;
+the Console Apply action runs the same operation. Application has no
+precondition based on drift, `--force`, backup, deactivation, or restore
+operation. Runs consume Current Config without consulting or reapplying Named
+Configs.
+
+After every native file replacement succeeds, aibox atomically replaces the
+`last_application` metadata section with the Named Config name and timestamp.
+If that final metadata write fails, Application reports the error without
+rolling back Current Config files that were already replaced. The Console
+derives:
+
+- `Untracked` when no successful Application is recorded.
+- `Clean` when applying the recorded Named Config now would leave fixed fields
+  unchanged.
+- `Dirty` when those fixed fields differ.
+- `Source missing` when the recorded Named Config is no longer complete.
+- `Comparison error` when a safe comparison cannot be made.
+
+These states are observational. Editing a Named Config or Current Config never
+applies, repairs, or reconciles another file automatically.
 
 Missing native files are treated as semantically empty. An absent file whose
 desired result is still empty remains absent. If an existing file becomes

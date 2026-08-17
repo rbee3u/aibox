@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 #[path = "docker_image.rs"]
 mod image_ops;
 
+pub(crate) use image_ops::build_image_for_service;
 #[cfg(test)]
 pub(crate) use image_ops::build_image_with;
 pub(crate) use image_ops::image_exists_with;
@@ -87,7 +88,7 @@ impl DockerCli {
 /// Run `docker run <args> <image> <cmd...>` as a child process and return its
 /// exit code. A child (not `exec`) so the caller's container cleanup still runs
 /// after it returns. The child's pid and `--cidfile` are registered in the
-/// process-wide run registry (`set_cidfile`, `set_child`, `finish_child`) for
+/// process-wide run registry (`set_cidfile_mode`, `set_child`, `finish_child`) for
 /// the run's duration, so a SIGINT/SIGTERM aimed at the wrapper alone stops
 /// the container instead of leaving it running unsupervised — killing just the
 /// docker CLI is not enough when a TTY is attached (the CLI only proxies
@@ -124,6 +125,27 @@ pub(crate) fn run_with(
     cmd: &[OsString],
     after_container_created: impl FnOnce(),
 ) -> Result<i32> {
+    run_with_mode(docker, run_args, image, cmd, after_container_created, true)
+}
+
+pub(crate) fn run_for_service(
+    docker: &DockerCli,
+    run_args: &[String],
+    image: &str,
+    cmd: &[OsString],
+    after_container_created: impl FnOnce(),
+) -> Result<i32> {
+    run_with_mode(docker, run_args, image, cmd, after_container_created, false)
+}
+
+fn run_with_mode(
+    docker: &DockerCli,
+    run_args: &[String],
+    image: &str,
+    cmd: &[OsString],
+    after_container_created: impl FnOnce(),
+    install_signals: bool,
+) -> Result<i32> {
     let mut after_container_created = Some(after_container_created);
     // Docker refuses to reuse an existing cidfile, so ask for a fresh path
     // inside a temp dir. The id it holds is not a secret; if a signal kills us
@@ -134,7 +156,7 @@ pub(crate) fn run_with(
     // Register the cidfile *before* spawning: a signal landing between spawn
     // and registration could otherwise find neither a pid nor a container id,
     // leaving the container running unsupervised.
-    set_cidfile(&cid_path, docker)?;
+    set_cidfile_mode(&cid_path, docker, install_signals)?;
     let spawned = docker
         .command()
         .arg("run")
@@ -368,6 +390,11 @@ fn current_docker() -> Option<DockerCli> {
     active_docker().lock().ok()?.clone()
 }
 
+#[cfg(test)]
+fn set_cidfile(cidfile_path: &Path, docker: &DockerCli) -> Result<()> {
+    set_cidfile_mode(cidfile_path, docker, true)
+}
+
 /// Register the `--cidfile` of an upcoming `docker run` for signal handling.
 /// Call *before* spawning the child: the path is known upfront, and registering
 /// it first closes the window where a signal lands after spawn but before any
@@ -375,8 +402,10 @@ fn current_docker() -> Option<DockerCli> {
 /// with no child pid recorded yet. If spawning fails, call [`clear_child`];
 /// otherwise register the child with [`set_child`] and finish it with
 /// [`finish_child`]. A second registration is rejected while a run is active.
-fn set_cidfile(cidfile_path: &Path, docker: &DockerCli) -> Result<()> {
-    install_signal_handler()?;
+fn set_cidfile_mode(cidfile_path: &Path, docker: &DockerCli, install_signals: bool) -> Result<()> {
+    if install_signals {
+        install_signal_handler()?;
+    }
     let mut registered_cidfile = cidfile().lock().unwrap();
     let mut registered_docker = active_docker().lock().unwrap();
     if RUN_STATE.load(Ordering::SeqCst) != RUN_IDLE {
@@ -391,15 +420,19 @@ fn set_cidfile(cidfile_path: &Path, docker: &DockerCli) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cancel_active_container_operation() {
+    stop_active_run(signal_hook::consts::SIGTERM);
+}
+
 /// Register the spawned `docker run` child's pid for signal forwarding. Call
-/// right after spawn (after [`set_cidfile`]). Once the child has been reaped,
+/// right after spawn (after [`set_cidfile_mode`]). Once the child has been reaped,
 /// call [`finish_child`] so a container that outlived the Docker client is
 /// detected before the registration is cleared.
 fn set_child(pid: u32) {
     CHILD_PID.store(pid as i32, Ordering::SeqCst);
 }
 
-/// Abandon a run registration when spawning failed after [`set_cidfile`].
+/// Abandon a run registration when spawning failed after [`set_cidfile_mode`].
 ///
 /// After a successful spawn, reap the child and call [`finish_child`] instead;
 /// clearing directly would skip the lingering-container check.

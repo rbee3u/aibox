@@ -5,7 +5,8 @@
 //! Application iterates that entire fixed field set: present values are set,
 //! absent values are removed, and unrelated Current Config values are preserved.
 //! This module computes the desired native files without performing filesystem
-//! writes or retaining an association with the Named Config.
+//! writes. The Config module separately records the last successful
+//! application and derives drift without changing this projection model.
 
 use crate::agent::{AgentKind, MainConfigField, MainConfigValueKind};
 use anyhow::{Context, Result, bail};

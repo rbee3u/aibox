@@ -32,11 +32,41 @@ An explicit grant that exposes an additional host path inside the Filesystem
 Sandbox for a Run.
 _Avoid_: Shared path, implicit mount
 
+### Local management
+
+**aibox Service**:
+The foreground process started by `aibox serve`. One Service exclusively
+manages one aibox Root for browser management while also running the global
+Request Proxy.
+_Avoid_: Daemon, Request server, backend
+
+**Console**:
+The browser interface embedded in the aibox Service. Its modules are Overview,
+Tenants, Configs, Sessions, and Requests.
+_Avoid_: Requests Viewer, admin site, dashboard
+
+**Control API**:
+The Console-internal HTTP interface under `/_aibox/api/`. It is available only
+to loopback TCP peers and is not a public embedding API.
+_Avoid_: Public API, SDK, remote API
+
+**Service Lock**:
+The advisory `$AIBOX_ROOT/.service.lock` held for the lifetime of one aibox
+Service. It prevents a second Service for the same Root but does not coordinate
+`aibox run` or deprecated CLI management commands.
+_Avoid_: Global lock, Run lock, filesystem transaction
+
+**Management Operation**:
+The single cancellable long-running build or toolchain action retained in
+Service memory. Only the latest Operation and its bounded log are observable;
+it is not persistent history.
+_Avoid_: Job, Run, Operation History
+
 ### Tenant identity
 
 **aibox Root**:
 The dedicated host storage boundary for aibox-managed identities,
-configuration, and Traffic Records.
+configuration, and Request Records.
 _Avoid_: Install prefix, Tenant Home
 
 **Tenant**:
@@ -84,9 +114,20 @@ value, or the complete Codex credential object.
 _Avoid_: Owned path, managed slot
 
 **Config Application**:
-An explicit one-time projection of a Named Config into Current Config without a
-retained relationship between them.
+An explicit one-time projection of a Named Config into Current Config. A
+successful Application updates Last Application for observation only; it never
+causes automatic reapplication.
 _Avoid_: Activation, materialization, reconciliation
+
+**Last Application**:
+The most recent successfully applied Named Config name and timestamp for one
+Tenant and Coding Agent. It is diagnostic provenance, not an active binding.
+_Avoid_: Active Config, desired state, synchronization state
+
+**Config Drift**:
+A live Console comparison between Last Application's Named Config and Current
+Config: Untracked, Clean, Dirty, Source missing, or Comparison error.
+_Avoid_: Reconciliation status, sync status, automatic repair
 
 **Credential Propagation**:
 An explicit one-time distribution of a newer Host Tenant Codex ChatGPT
@@ -105,35 +146,34 @@ _Avoid_: Run, Transcript
 The Coding Agent's native persistent record of one Session.
 _Avoid_: Session, prompt history
 
-### Traffic diagnostics
+### Request diagnostics
 
-**Traffic Proxy**:
-A temporary host-side HTTP intermediary that forwards requests and records
-application-visible evidence. It is global to aibox rather than owned by a
-Tenant or Coding Agent.
+**Request Proxy**:
+The always-on host-side HTTP intermediary inside a running aibox Service that
+forwards requests and records application-visible evidence. It is global to
+aibox rather than owned by a Tenant or Coding Agent.
 _Avoid_: Router, packet capture
 
-**Traffic Viewer**:
-The browser interface provided by a running Traffic Proxy for inspecting and
-deleting Traffic Records.
-_Avoid_: Management page, Traffic Console
+**Requests module**:
+The Console module for inspecting and deleting Request Records.
+_Avoid_: Standalone Requests Viewer, packet capture
 
-**Traffic Record**:
-The diagnostic evidence from one request attempt received by the Traffic Proxy.
+**Request Record**:
+The diagnostic evidence from one request attempt received by the Request Proxy.
 It may exist without an upstream request or response.
 _Avoid_: Session, Transcript, Run History
 
 **Model Protocol Summary**:
 A materialized provider-specific diagnostic projection associated with a
-recognized model request in a Traffic Record.
-_Avoid_: Parsed Body, Traffic Outcome, Record Assessment
+recognized model request in a Request Record.
+_Avoid_: Parsed Body, Request Outcome, Record Assessment
 
-**Traffic Outcome**:
-The terminal lifecycle result of one Traffic Record, independent of any HTTP
+**Request Outcome**:
+The terminal lifecycle result of one Request Record, independent of any HTTP
 response status.
 _Avoid_: HTTP status, response code
 
 **Record Assessment**:
-The diagnostic classification of one Traffic Record, derived from its
+The diagnostic classification of one Request Record, derived from its
 independent lifecycle, HTTP, provider, and integrity evidence.
-_Avoid_: Traffic Outcome, HTTP status, Provider Error
+_Avoid_: Request Outcome, HTTP status, Provider Error

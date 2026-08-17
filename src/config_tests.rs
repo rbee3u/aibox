@@ -25,6 +25,26 @@ fn replace_config_files(selected: &TenantAgent, config: &str, main: &str, auth: 
     }
 }
 
+fn metadata_path(selected: &TenantAgent) -> std::path::PathBuf {
+    crate::metadata::metadata_path(selected)
+}
+
+fn write_metadata(selected: &TenantAgent, value: &Value) {
+    let path = metadata_path(selected);
+    let mut content = serde_json::to_vec_pretty(value).unwrap();
+    content.push(b'\n');
+    fs::write(&path, content).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn read_metadata(selected: &TenantAgent) -> Value {
+    serde_json::from_slice(&fs::read(metadata_path(selected)).unwrap()).unwrap()
+}
+
 fn chatgpt_auth(account_id: &str, last_refresh: &str, marker: &str) -> Vec<u8> {
     let mut content = serde_json::to_vec_pretty(&serde_json::json!({
         "auth_mode": "chatgpt",
@@ -1378,4 +1398,240 @@ fn config_deletion_requires_explicit_selection() {
             .to_string();
         assert!(error.contains("without --yes"), "{error}");
     }
+}
+
+#[test]
+fn application_status_tracks_clean_dirty_and_missing_source_without_reapplying() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    assert_eq!(application_status(&selected).drift, ConfigDrift::Untracked);
+    assert!(!metadata_path(&selected).exists());
+
+    apply_named_config(&selected, "custom").unwrap();
+    let clean = application_status(&selected);
+    assert_eq!(clean.drift, ConfigDrift::Clean);
+    assert_eq!(clean.last_application.unwrap().applied, "custom");
+    let metadata = read_metadata(&selected);
+    assert_eq!(metadata["last_application"]["applied"], "custom");
+    assert!(metadata["last_application"]["applied_at"].is_string());
+    assert_eq!(metadata["last_application"].as_object().unwrap().len(), 2);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(metadata_path(&selected))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    assert!(!root.path().join("config-applications").exists());
+    let serialized = serde_json::to_value(application_status(&selected)).unwrap();
+    assert_eq!(serialized["last_application"]["applied"], "custom");
+    assert!(serialized["last_application"].get("config").is_none());
+
+    fs::write(selected.state_file("config.toml"), "model = \"changed\"\n").unwrap();
+    assert_eq!(application_status(&selected).drift, ConfigDrift::Dirty);
+
+    delete_named_configs(&selected, &["custom".to_string()], false, true).unwrap();
+    assert_eq!(
+        application_status(&selected).drift,
+        ConfigDrift::SourceMissing
+    );
+    assert!(metadata_path(&selected).is_file());
+}
+
+#[test]
+fn metadata_paths_are_scoped_by_tenant_and_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let managed = ManagedTenant::resolve(root.path(), "default").unwrap();
+    let host = Tenant::Host {
+        home_dir: home.path().to_path_buf(),
+        root_dir: root.path().to_path_buf(),
+    };
+
+    assert_eq!(
+        metadata_path(&managed.for_agent(AgentKind::Codex)),
+        root.path().join("codex/default/metadata.json")
+    );
+    assert_eq!(
+        metadata_path(&managed.for_agent(AgentKind::Claude)),
+        root.path().join("claude/default/metadata.json")
+    );
+    assert_eq!(
+        metadata_path(&host.for_agent(AgentKind::Codex)),
+        root.path().join("codex/__host/metadata.json")
+    );
+}
+
+#[test]
+fn application_preserves_unknown_top_level_metadata_sections() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    write_metadata(
+        &selected,
+        &serde_json::json!({"future_observation": {"count": 3, "labels": ["a", "b"]}}),
+    );
+
+    assert_eq!(list_named_configs(&selected).unwrap(), ["custom"]);
+    assert_eq!(application_status(&selected).drift, ConfigDrift::Untracked);
+    apply_named_config(&selected, "custom").unwrap();
+
+    let metadata = read_metadata(&selected);
+    assert_eq!(
+        metadata["future_observation"],
+        serde_json::json!({"count": 3, "labels": ["a", "b"]})
+    );
+    assert_eq!(metadata["last_application"]["applied"], "custom");
+}
+
+#[test]
+fn invalid_last_application_blocks_current_config_changes() {
+    for invalid in [
+        serde_json::json!({
+            "last_application": {
+                "applied": "custom",
+                "applied_at": "2026-08-17T00:00:00Z",
+                "unexpected": true
+            }
+        }),
+        serde_json::json!({
+            "last_application": {"applied": "custom", "applied_at": "not-a-time"}
+        }),
+        serde_json::json!({
+            "last_application": {"applied": 3, "applied_at": "2026-08-17T00:00:00Z"}
+        }),
+        serde_json::json!([]),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let selected = selected(root.path(), AgentKind::Codex);
+        create_named_config(&selected, "custom").unwrap();
+        apply_named_config(&selected, "custom").unwrap();
+        let before = fs::read(selected.state_file("config.toml")).unwrap();
+        replace_config_files(&selected, "custom", "model = \"changed\"\n", "{}\n");
+        write_metadata(&selected, &invalid);
+
+        let error = apply_named_config(&selected, "custom")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("metadata") || error.contains("Last Application"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(selected.state_file("config.toml")).unwrap(),
+            before
+        );
+        assert_eq!(
+            application_status(&selected).drift,
+            ConfigDrift::ComparisonError
+        );
+    }
+}
+
+#[test]
+fn oversized_metadata_blocks_current_config_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    apply_named_config(&selected, "custom").unwrap();
+    let before = fs::read(selected.state_file("config.toml")).unwrap();
+    replace_config_files(&selected, "custom", "model = \"changed\"\n", "{}\n");
+    write_metadata(
+        &selected,
+        &serde_json::json!({"future_observation": "x".repeat(16 * 1024)}),
+    );
+
+    let error = apply_named_config(&selected, "custom")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("exceeds 16384 bytes"), "{error}");
+    assert_eq!(
+        fs::read(selected.state_file("config.toml")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn legacy_application_records_are_ignored_and_left_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    let legacy_dir = root.path().join("config-applications/codex");
+    tenant::ensure_real_dir(&legacy_dir, "legacy Application directory").unwrap();
+    let legacy = legacy_dir.join("work.json");
+    fs::write(
+        &legacy,
+        br#"{"config":"custom","applied_at":"2026-08-17T00:00:00Z"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(application_status(&selected).drift, ConfigDrift::Untracked);
+    apply_named_config(&selected, "custom").unwrap();
+    assert!(legacy.is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_metadata_entries_block_application() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    create_named_config(&selected, "custom").unwrap();
+    write_metadata(&selected, &serde_json::json!({}));
+    let path = metadata_path(&selected);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let mode_error = apply_named_config(&selected, "custom")
+        .unwrap_err()
+        .to_string();
+    assert!(mode_error.contains("mode 0600"), "{mode_error}");
+
+    fs::remove_file(&path).unwrap();
+    let outside = root.path().join("outside.json");
+    fs::write(&outside, b"{}\n").unwrap();
+    symlink(&outside, &path).unwrap();
+    let symlink_error = apply_named_config(&selected, "custom")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        symlink_error.contains("not a regular file"),
+        "{symlink_error}"
+    );
+}
+
+#[test]
+fn service_file_save_rejects_stale_revisions_and_preserves_current_raw_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Claude);
+    let initial = read_config_file(&selected, None, true, "settings.json").unwrap();
+    let raw = b"\0not utf8: \xff";
+    let saved = save_config_file(
+        &selected,
+        None,
+        true,
+        "settings.json",
+        &initial.revision,
+        raw,
+    )
+    .unwrap();
+    assert_eq!(saved.content, raw);
+
+    let error = save_config_file(
+        &selected,
+        None,
+        true,
+        "settings.json",
+        &initial.revision,
+        b"stale",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("changed since"), "{error}");
+    assert_eq!(fs::read(selected.state_file("settings.json")).unwrap(), raw);
 }

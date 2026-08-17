@@ -47,7 +47,7 @@ Workspace as well as Extra Mounts:
   would expose host-only aibox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
-a bind source. Named Config catalogs, Traffic Records, and internal lifecycle
+a bind source. Named Config catalogs, Request Records, and internal lifecycle
 staging directories stay host-only.
 
 Mounting another Tenant Home is allowed, but doing so exposes its Coding
@@ -112,37 +112,37 @@ failure; an existing failure status is preserved.
 One aibox process supports one active container operation at a time: either a
 Run or a Rust/Go Component installation.
 
-## Traffic Proxy
+## Request Proxy
 
-`aibox traffic` is an independent foreground HTTP intermediary for temporary
-model API debugging. It does not start Docker and may run in a separate process
-alongside a Run:
+The Request Proxy is an always-on part of the foreground aibox Service. It does
+not start Docker and may run alongside a separate `aibox run` process:
 
 ```sh
-aibox traffic
-aibox traffic --listen 127.0.0.1:8080
-aibox traffic --listen 0.0.0.0:9923
+aibox serve
+aibox serve --listen 127.0.0.1:8080
+aibox serve --listen 0.0.0.0:9923
 ```
 
-The foreground command prints one plain-text startup line with its Listen and
-Viewer addresses. Interactive and redirected startup output are identical;
+The foreground command prints its Listen and Console addresses;
 runtime events include RFC 3339 UTC timestamps. Runtime output is intentionally
-concise: safe internal warnings and Error-assessed abnormal Traffic Outcomes
+concise: safe internal warnings and Error-assessed abnormal Request Outcomes
 include only a 12-character Record ID, method, upstream host, fixed reason, UTC
 time, and duration. It never prints request paths, headers, bodies, prompts,
 credentials, or raw upstream errors.
 Completed Records are not printed merely because an upstream returned HTTP
 4xx/5xx or a Provider diagnostic was recorded; inspect those details in the
-Traffic Viewer. Ctrl-C exits successfully after active Records are finalized;
+Requests module. Ctrl-C exits successfully after active Records are finalized;
 SIGTERM exits 143. A second signal forces exit using its conventional signal
 exit code.
 
 The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
 `IP:PORT` with a nonzero port. aibox binds exactly that socket; it does not
 resolve hostnames, add a loopback listener, or add another IP protocol family.
-The same socket serves the Traffic Proxy and complete Traffic Viewer. For a
-wildcard listener, the startup line presents a clickable loopback Traffic
-Viewer URL; other clients use an address of the host that reaches that listener.
+The same socket serves the Request Proxy and Console. Console paths (`/` and
+`/_aibox/*`) require an actual loopback TCP peer and loopback Host. Other paths
+remain Request Proxy input, so wildcard listeners can be reached by containers
+without exposing management. Browser mutations also require JSON, same-origin
+Origin, and the startup CSRF token.
 
 Docker Desktop provides `host.docker.internal`. aibox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
@@ -192,10 +192,10 @@ with 507; afterward it reports an error on the downstream body and truncates
 the exchange. A client disconnect, upstream stream failure, SIGINT, or SIGTERM
 cancels the remaining attempt and retains bytes already written. For SSE, a
 recognized terminal signal from Claude Messages, OpenAI Responses, or OpenAI
-Chat Completions completes the Traffic Outcome even when the client closes
+Chat Completions completes the Request Outcome even when the client closes
 immediately after consuming that signal.
 
-Each direct child of `$AIBOX_ROOT/traffic/` is one Traffic Record:
+Each direct child of `$AIBOX_ROOT/requests/` is one Request Record:
 
 ```text
 active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
@@ -222,7 +222,7 @@ end time.
 The collection and Record directories are mode `0700`; files are `0600`.
 Metadata stores the upstream URL, base64 lossless header values, upstream
 status and HTTP version, nanosecond timing checkpoints, outcome, and
-diagnostics. Traffic Record format v2 makes `summary.json` the complete Traffic
+diagnostics. Request Record format v3 makes `summary.json` the complete Request
 Record Summary used by list reads: request and response list fields, lifecycle,
 Record Assessment, the optional Coding Agent Session ID reported by a
 recognized model request, and the optional Model Protocol Summary. The latter
@@ -238,7 +238,7 @@ uses `Content-Type: text/event-stream`; a successful recognized model request
 that asked for streaming but has no Content-Type is sniffed from its body
 prefix. Content-encoded streams remain unindexed because decoded boundaries
 cannot be mapped to raw byte offsets. Indexing never changes forwarding or the
-Traffic Outcome. Unknown, incompatible, or structurally incomplete
+Request Outcome. Unknown, incompatible, or structurally incomplete
 collection entries are ignored with warnings; selected reads and deletion
 revalidate real paths and reject symlinks or unexpected types.
 
@@ -246,19 +246,19 @@ List scanning opens only each real `summary.json`; it does not inspect raw
 request/response metadata, Bodies, or the SSE index. A valid Summary therefore
 keeps its list row visible when separate raw evidence is malformed or unsafe.
 Detail reads remain strict over that evidence and fail rather than following or
-repairing it. Version-1 Traffic Records are unsupported; there is no migration,
-backfill, or read-time reconstruction of a v2 Summary.
+repairing it. Version-2 Request Records are unsupported; there is no migration,
+backfill, or read-time reconstruction of a v3 Summary.
 
-Every terminal Traffic Outcome, including rejection, upstream failure, client
-disconnect, recording failure, and server shutdown, has a Traffic End Time
+Every terminal Request Outcome, including rejection, upstream failure, client
+disconnect, recording failure, and server shutdown, has a Request End Time
 derived from the Summary start anchor and terminal monotonic offset. Active and
-interrupted Records do not. The Traffic Viewer orders canonical directory
+interrupted Records do not. The Requests module orders canonical directory
 basenames by descending ASCII order: active and interrupted Records first by
 start time, then terminal Records by End Time, with host and UUID breaking
 millisecond ties. A terminal Summary stranded under an `active-` name is ordered by the
 terminal name it should have received.
 
-The Traffic Proxy best-effort materializes the protocol overview for OpenAI
+The Request Proxy best-effort materializes the protocol overview for OpenAI
 Responses, OpenAI Chat Completions, and Claude Messages as stable facts become
 available. It recognizes normalized upstream paths ending in `/responses`,
 `/chat/completions`, or `/messages`; exact native response object types can also
@@ -268,7 +268,7 @@ cached, cache-write, completion, and reasoning counters into the existing Token
 Usage categories, and warns when reported totals are inconsistent. A stream
 that requested `stream_options.include_usage` also warns when its normal
 `[DONE]` signal arrives without usage. Protocol parsing failures add warnings
-without changing forwarding or the Traffic Outcome.
+without changing forwarding or the Request Outcome.
 
 For recognized streaming responses, First Token is recorded when the first
 trim-nonempty SSE `data:` line not beginning with `[DONE]` is completely
@@ -301,7 +301,7 @@ Records as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,
 Completions evidence is Error. Client
 disconnect or request upload abort, process interruption, a missing recognized
 model terminal event, diagnostic degradation, and an unaccompanied
-`response.cancelled` are Warning. Traffic Outcome, HTTP status, and Provider
+`response.cancelled` are Warning. Request Outcome, HTTP status, and Provider
 Error remain separately recorded; for example HTTP 200 can have a Provider
 Error or an upstream stream failure, while HTTP 401 can coexist with structured
 Provider Error details.
@@ -315,7 +315,7 @@ list API reads the persisted Summary only; the detail API opens raw metadata
 and Body entries strictly. Unknown HTTP remains readable without being treated
 as a model API response.
 
-Traffic records HTTP semantics rather than transport frames. Downstream and
+The Request Proxy records HTTP semantics rather than transport frames. Downstream and
 upstream protocol negotiation are independent. Header values and repeated
 same-name values are retained, but `HeaderMap` cannot preserve cross-name wire
 order and may normalize field-name casing; HTTP/2 names are lowercase. Hop-by-
@@ -326,18 +326,16 @@ error response is returned to the client but is not written as upstream data.
 
 There is no size limit, retention policy, redaction, database, or cross-process
 lock. Authorization values, API keys, prompts, tool data, and model output are
-stored in full and remain after the proxy exits. Use the Traffic Viewer's
-selected delete or separately confirmed **Delete all** action when debugging ends. An
-active Record cannot be deleted; delete-all removes every completed or
-interrupted Record in a single server-side snapshot and preserves Records that
-are still active when that snapshot is taken. It strictly validates every
-target before deleting any of them.
+stored in full and remain after the Service exits. Use the Requests module's
+single-record or selected delete action when debugging ends. An active Record
+cannot be deleted. Selected deletion strictly validates every target before
+deleting any of them.
 
 Claude Messages, OpenAI Responses, and OpenAI Chat Completions streaming are
-HTTP SSE and work through this path. WebSocket transport is outside the Traffic
+HTTP SSE and work through this path. WebSocket transport is outside the Request
 Proxy's supported surface; if native Codex configuration manually sets
 `supports_websockets = true` for the selected custom provider, set it to
-`false` while using Traffic. Config Fields are unchanged.
+`false` while using the Request Proxy. Config Fields are unchanged.
 See [Claude Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
 [OpenAI Responses streaming](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl),
 [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/),

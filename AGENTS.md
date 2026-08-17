@@ -1,14 +1,15 @@
 # AGENTS.md
 
-`aibox` is a Rust CLI that runs Claude Code or OpenAI Codex inside a Docker
-container. The container is the Filesystem Sandbox boundary. `CONTEXT.md`
+`aibox` is a Rust CLI and foreground local Service that runs Claude Code or
+OpenAI Codex inside a Docker container. The container is the Filesystem Sandbox
+boundary. `CONTEXT.md`
 defines the canonical domain language; keep code, clap help, and user
 documentation aligned with it. Architectural decisions live in `docs/adr/`.
 
 `README.md` is the concise entry point for evaluation, installation, first use,
 and the core safety model. Advanced behavior has one canonical home in
 `docs/tenants.md`, `docs/configs.md`, `docs/sandbox.md`, or
-`docs/traffic-ui.md`; keep examples and clap help aligned without copying full
+`docs/console-ui.md`; keep examples and clap help aligned without copying full
 references between them.
 
 ## Implementation Map
@@ -20,18 +21,21 @@ references between them.
   Tenant resolution, lifecycle, layout, permissions, and shared path safety.
 - `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
   catalog operations, Config Application, and Credential Propagation.
+  `src/metadata.rs` owns the shared Tenant-and-Agent metadata document.
 - `src/runspec.rs`, `src/docker.rs`, and `src/docker_image.rs` own mount
   validation, cleanup-aware container execution, and image construction.
   `src/component.rs` owns status-line and toolchain Components.
 - `src/session.rs` owns shared Session discovery and dispatch;
   `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
-- `src/traffic.rs` wires listeners and routing. `src/traffic_proxy.rs`,
-  `src/traffic_store.rs`, `src/traffic_sse.rs`,
-  `src/traffic_interpretation.rs`, and `src/traffic_assessment.rs` own
+- `src/request.rs` owns shared Request state. `src/request_proxy.rs`,
+  `src/request_store.rs`, `src/request_sse.rs`,
+  `src/request_interpretation.rs`, and `src/request_assessment.rs` own
   forwarding, persistence, SSE indexing, protocol facts, and assessment.
-  `src/traffic_web.rs` owns the Traffic Viewer API.
-- `web/traffic/` is the editable Traffic Viewer. `assets/traffic.*` is generated
-  output; use the workflow in `docs/traffic-ui.md`.
+  `src/request_web.rs` owns the Request API and embedded Console assets.
+- `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
+  Root-local Service, Console Control API, and ephemeral Management Operations.
+- `web/console/` is the editable Console, including the Requests module.
+  `assets/console.*` is generated output; use `docs/console-ui.md`.
 
 ## Constraints
 
@@ -41,17 +45,19 @@ files/templates, empty Current Config content, and invocation behavior in
 `session_codex.rs`. The Docker image, container Home, and orchestration remain
 shared.
 
-**Preserve the CLI boundary.** Split argv at the first `--` before clap parses
+**Preserve the Run boundary during CLI migration.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. `run`, `config`, and
 `session` own separately scoped `--agent`/`--tenant` options; `component` owns
 `--tenant` and `--host` (Host supports statusline Components only); only
 `config`, `session`, and `component` accept `--host`. `build`,
-`completion`, and `tenant` accept none of them. `traffic` owns only `--listen`;
-it does not accept selectors or pass-through arguments.
+`completion`, and `tenant` accept none of them.
 `config propagate-auth` defaults to Host/Codex/Current and accepts only the
 redundant compatible selectors `--host`, `--agent codex`, and `--current`.
 Completion mirrors these scopes, stays read-only, runs on the host, and hides
 `propagate-auth` after an incompatible source selector.
+`serve` owns only `--listen`. `serve` and `run` are the primary commands;
+existing management commands remain hidden only by deprecation warnings for
+one compatibility release and must continue to preserve their old scopes.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only with
@@ -65,25 +71,30 @@ Tenant cannot Run and never appears in `tenant list` or deletion. Only
 `<agent>/<name>/`; the Host Tenant catalog uses `<agent>/__host/`. A Claude
 Named Config contains only native `settings.json`; a Codex Named Config
 contains only native `config.toml` and `auth.json`. Do not add scope/Config
-metadata, layout versions, migration readers, management wrappers, or lock
-directories. Ignore unknown collection entries during listing, but reject
-explicitly selected unsafe paths.
+metadata inside Named Config directories. One aibox-owned `metadata.json` at
+the Tenant-and-Agent catalog root may contain typed observational sections;
+preserve unknown top-level sections when updating a known section. Do not add
+metadata elsewhere, layout versions, migration readers, management wrappers,
+or lock directories. Ignore unknown collection entries during listing, but
+reject explicitly selected unsafe paths.
 
 **Keep names and local permissions narrow.** Managed Tenant and Named Config
 names are lowercase DNS labels of 1–63 characters. Newly created aibox root,
 collection, Named Config catalog, Named Config, and Tenant Home boundary
 directories are `0700`. Named Config files and newly created Current Config
-files are `0600`; applying or directly editing Current Config preserves
-existing file modes, including for the Host Tenant. Existing Host Home
-directory modes are never changed.
+files are `0600`; `metadata.json` is `0600` and limited to 16 KiB. Applying or
+directly editing Current Config preserves existing file modes, including for
+the Host Tenant. Existing Host Home directory modes are never changed.
 
 **Keep Config Application explicit and one-shot.** A Run consumes Current
 Config and never reads or reapplies Named Config data. Each Named Config
 belongs to one Tenant and Coding Agent and defines only the fixed
 Config Fields centralized in `AgentKind`. `config apply` sets present fields,
-deletes missing fields, preserves unrelated native configuration, and retains
-no association with the Named Config afterward. Do not add activation, drift,
-reconciliation, rollback, or transaction state.
+deletes missing fields and preserves unrelated native configuration. After all
+files succeed, record Last Application and derive Config Drift for the Console.
+Store it as the strict `last_application` section of the catalog-root
+`metadata.json`; this observational record never activates or reapplies a
+Named Config. Do not add reconciliation, rollback, or transaction state.
 
 **Keep Credential Propagation explicit and one-shot.** `config propagate-auth`
 copies one Host Codex Current Config `auth.json` snapshot only to older existing
@@ -155,30 +166,31 @@ independently, continues after individual write failures, and never rolls back
 successful targets. One aibox process supports only one active container
 operation: a Run or toolchain installation.
 
-**Keep Traffic host-side and raw.** The Traffic Proxy is global rather than
-Tenant-owned, never starts Docker, and records raw application-visible header
-values and body bytes under the flat `$AIBOX_ROOT/traffic/<record>/` layout.
-One explicit `--listen` socket serves both the Traffic Proxy and Traffic Viewer;
+**Keep the Request Proxy host-side and raw.** The Request Proxy is an always-on part of
+the aibox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
+values and body bytes under the flat `$AIBOX_ROOT/requests/<record>/` layout.
+One explicit `--listen` socket serves both the Request Proxy and Console;
 the surrounding network is trusted, so do not add authentication, TLS, request
 admission checks, or network-exposure confirmations. Apart from the
 `198.18.0.0/15` host-side Fake-IP DNS exception, do not add private-upstream
 access, redaction, body limits, retention, WebSocket, CONNECT, or multi-process
 coordination.
 
-**Keep routine Traffic tests socket-free.** Default tests must not bind TCP or
+**Keep routine Request Proxy tests socket-free.** Default tests must not bind TCP or
 Unix sockets: exercise Axum routers as in-memory Tower services and drive body
 streams with deterministic synchronization. Keep real-socket Reqwest transport
 checks explicit and ignored, and run them only in a network-permitted host or
 CI environment. Test the embedded UI in layers: Rust route/API tests,
 then Vitest module and component tests for the React and TypeScript source in
-`web/traffic/`, then optional headless Chromium/Playwright interaction and
+`web/console/`, then optional headless Chromium/Playwright interaction and
 screenshots in a development image or CI. Edit that source rather than the
-generated `assets/traffic.*` bundle, as `docs/traffic-ui.md` describes. Desktop
+generated `assets/console.*` bundle, as `docs/console-ui.md` describes. Desktop
 Browser access is never required for routine changes. A headless browser uses
 the same container's loopback listener.
 
-**Keep Run transient and the crate CLI-only.** Do not add Run History or a
-Run-to-Session mapping. A validated Run attempt may initialize its Tenant before
+**Keep Run transient and the crate application-only.** Do not add Run History or a
+Run-to-Session mapping. The Control API is Console-internal, not a public Rust
+or HTTP embedding surface. A validated Run attempt may initialize its Tenant before
 Docker startup fails or the Coding Agent returns nonzero. Expose only the
 application entry point from the library target, not embedding-oriented module
 or dispatch APIs.
@@ -205,10 +217,10 @@ For Rust changes, run all of these:
 - `cargo test`
 - `cargo clippy --all-targets -- -D warnings`
 
-For embedded Traffic UI changes, also run the complete socket-free frontend
+For embedded Requests UI changes, also run the complete socket-free frontend
 check:
 
-- `make traffic-check`
+- `make console-check`
 
 Keep the real-browser Playwright checks explicit and optional because they bind
 a loopback listener.

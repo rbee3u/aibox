@@ -202,7 +202,7 @@ impl Tenant {
         }
     }
 
-    fn storage_key(&self) -> &str {
+    pub(crate) fn storage_key(&self) -> &str {
         match self {
             Self::Managed(tenant) => &tenant.name,
             Self::Host { .. } => HOST_STORAGE_KEY,
@@ -1090,7 +1090,7 @@ mod tests {
         for agent in AgentKind::ALL {
             let catalog = root.path().join(agent.tag()).join("work");
             fs::create_dir_all(&catalog).unwrap();
-            fs::write(catalog.join("owned"), b"config data").unwrap();
+            fs::write(catalog.join("metadata.json"), b"config metadata").unwrap();
         }
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
         delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();

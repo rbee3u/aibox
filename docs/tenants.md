@@ -20,7 +20,8 @@ aibox run --tenant work
 aibox run --agent claude --tenant work
 ```
 
-Managed Tenant lifecycle commands are explicit and idempotent:
+The Console Tenants module is the primary lifecycle interface. These explicit,
+idempotent commands remain for one deprecation release:
 
 ```sh
 aibox tenant create work
@@ -31,11 +32,11 @@ aibox tenant delete --all
 ```
 
 Deletion removes the Tenant Home and both Coding Agents' Named Config catalogs,
-including credentials, settings, Sessions, caches, Named Configs, and local
-toolchains. It does not delete the shared Docker image or any Workspace. aibox
-asks before deleting a Tenant that has stored data; non-interactive callers must
-use `--yes`. A selected name with nothing stored is a silent no-op. There is no
-deletion backup.
+including credentials, settings, Sessions, caches, Named Configs, local
+toolchains, and Last Application records. It does not delete the shared Docker
+image or any Workspace. aibox asks before deleting a Tenant that has stored
+data; non-interactive callers must use `--yes`. A selected name with nothing
+stored is a silent no-op. There is no deletion backup.
 
 An empty deletion selection is an error. `--all` cannot be combined with
 explicit names.
@@ -52,20 +53,25 @@ relative value is resolved from the launch directory.
 
 ```text
 $AIBOX_ROOT/
+  .service.lock                   # Held while this Root's Service runs
   claude/
     <tenant>/
+      metadata.json               # optional Tenant-and-Agent observations
       <config>/
         settings.json
     __host/                        # Host Tenant uses the key __host
+      metadata.json
       ...
   codex/
     <tenant>/
+      metadata.json               # optional Tenant-and-Agent observations
       <config>/
         config.toml
         auth.json
     __host/
+      metadata.json
       ...
-  traffic/
+  requests/
     <UTC-time>-<upstream-host>-<uuid-v7>/   # `active-` prefix until terminal
       request.json
       request.body
@@ -95,16 +101,16 @@ and the directory mounted at `/home/aibox`. Nothing beneath `claude/` or
 `codex/` is mounted into a Run. Newly created aibox root, collection, Agent
 Named Config catalog, Named Config directory, Tenant Home, and native
 `.codex`/`.claude` state directories are mode `0700`. Every Named Config file
-is mode `0600`; the baseline `.gitconfig` is mode `0644`. Native configuration,
-credential, and Component entries in the tree above appear on demand.
-Transcript entries appear only after the corresponding Coding Agent creates
-Sessions.
+and `metadata.json` is mode `0600`; the baseline `.gitconfig` is mode `0644`.
+Native configuration, credential, Component, and observation entries in the
+tree above appear on demand. Transcript entries appear only after the
+corresponding Coding Agent creates Sessions.
 
-`traffic/` is a flat, global collection rather than Tenant data. Every Traffic
+`requests/` is a flat, global collection rather than Tenant data. Every Request
 Record is a direct child so total-count and deletion scans use one directory
 level; there is deliberately no `YYYY/MM/DD` partition. Tenant creation and
-deletion never create or remove Traffic Records. See
-[Traffic Proxy](sandbox.md#traffic-proxy) for the data and cleanup contract.
+deletion never create or remove Request Records. See
+[Request Proxy](sandbox.md#request-proxy) for the data and cleanup contract.
 
 Managed Tenant and Named Config names are 1–63 character lowercase DNS labels:
 only `[a-z0-9-]` is accepted, and the first and last character must be a letter

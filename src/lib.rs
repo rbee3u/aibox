@@ -13,9 +13,21 @@ mod completion;
 mod component;
 mod config;
 mod config_model;
+mod control_web;
 mod docker;
+mod metadata;
+mod operation;
 mod platform;
+mod request;
+mod request_assessment;
+mod request_console;
+mod request_interpretation;
+mod request_proxy;
+mod request_sse;
+mod request_store;
+mod request_web;
 mod runspec;
+mod service;
 mod session;
 mod session_claude;
 mod session_codex;
@@ -23,14 +35,6 @@ mod sync;
 mod tenant;
 #[cfg(test)]
 mod testutil;
-mod traffic;
-mod traffic_assessment;
-mod traffic_console;
-mod traffic_interpretation;
-mod traffic_proxy;
-mod traffic_sse;
-mod traffic_store;
-mod traffic_web;
 
 use agent::AgentKind;
 use anyhow::{Context, Result};
@@ -275,36 +279,48 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
                 &context.docker(),
             )
         }
+        Command::Serve(args) => {
+            reject_passthrough("serve takes no pass-through args", passthrough)?;
+            service::dispatch(&args)
+        }
         Command::Build(args) => {
+            deprecated_command("build");
             reject_passthrough("build takes no pass-through args", passthrough)?;
             let image_override = context.image_override()?;
             run_build_with(&args, image_override.as_deref(), &context.docker())
         }
         Command::Completion(args) => {
+            deprecated_command("completion");
             reject_passthrough("completion takes no pass-through args", passthrough)?;
             completion::dispatch(&args)
         }
         Command::Tenant(args) => {
+            deprecated_command("tenant");
             reject_passthrough("tenant takes no pass-through args", passthrough)?;
             tenant::dispatch(&context.root()?, &args.command)
         }
         Command::Component(args) => {
+            deprecated_command("component");
             reject_passthrough("component takes no pass-through args", passthrough)?;
             context.dispatch_component(&args)
         }
         Command::Config(args) => {
+            deprecated_command("config");
             reject_passthrough("config takes no pass-through args", passthrough)?;
             run_config_command(&args, context)
         }
         Command::Session(args) => {
+            deprecated_command("session");
             let agent = args.agent.unwrap_or(AgentKind::Codex);
             run_session_command(agent, &args, passthrough, context)
         }
-        Command::Traffic(args) => {
-            reject_passthrough("traffic takes no pass-through args", passthrough)?;
-            traffic::dispatch(&args)
-        }
     }
+}
+
+fn deprecated_command(command: &str) {
+    eprintln!(
+        "warning: `aibox {command}` is deprecated; use `aibox serve` and the Console instead"
+    );
 }
 
 /// Credential Propagation is global, so it rejects the Tenant and Coding Agent
@@ -391,7 +407,7 @@ fn run_agent_with(
     runspec::validate_aibox_mount_sources(&workspace, &mounts, root)?;
 
     if !docker.image_exists(&image)? {
-        anyhow::bail!("{image} is not present locally; build it first with `aibox build`");
+        anyhow::bail!("{image} is not present locally; build it first from Console Overview");
     }
 
     tenant.ensure_initialized()?;

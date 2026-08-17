@@ -538,12 +538,29 @@ pub(crate) struct SessionSummary {
 }
 
 /// One typed prompt from a session, for `get`.
+#[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct Prompt {
     /// The turn's timestamp (ISO-8601), or empty.
     pub timestamp: String,
     /// The full prompt text (all supported text content joined; injected
     /// wrappers already filtered by the backend).
     pub text: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct SessionListRow {
+    pub(crate) id: String,
+    pub(crate) display_id: String,
+    pub(crate) start_ts: String,
+    pub(crate) title: String,
+    pub(crate) warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct SessionListData {
+    pub(crate) sessions: Vec<SessionListRow>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) partial: bool,
 }
 
 /// A Coding Agent's on-disk Transcript format. The two implementations
@@ -891,6 +908,89 @@ fn list_with_printer(
         }
     }
     Ok(i32::from(failed))
+}
+
+pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<SessionListData> {
+    let discovery = backend.list_files(home)?;
+    let mut warnings = discovery
+        .errors
+        .into_iter()
+        .map(|error| terminal_safe(&error))
+        .collect::<Vec<_>>();
+    let mut sessions = Vec::new();
+    for file in discovery.files {
+        match backend.summarize_in(home, &file) {
+            Ok(summary) => {
+                let mut row_warnings = Vec::new();
+                if summary.diagnostics.malformed_lines != 0 {
+                    row_warnings.push(format!(
+                        "skipped {} malformed JSONL record(s)",
+                        summary.diagnostics.malformed_lines
+                    ));
+                }
+                if summary.diagnostics.unsupported_user_records != 0 {
+                    row_warnings.push(format!(
+                        "skipped {} malformed or unsupported user-like record(s)",
+                        summary.diagnostics.unsupported_user_records
+                    ));
+                }
+                sessions.push(SessionListRow {
+                    display_id: list_id(&summary.id),
+                    id: summary.id,
+                    start_ts: summary.start_ts,
+                    title: list_title(&summary.title),
+                    warnings: row_warnings,
+                });
+            }
+            Err(error) => warnings.push(format!("{}: {error:#}", safe_path(&file))),
+        }
+    }
+    sessions.sort_by(|left, right| right.start_ts.cmp(&left.start_ts));
+    let partial = !warnings.is_empty() || sessions.iter().any(|row| !row.warnings.is_empty());
+    Ok(SessionListData {
+        sessions,
+        warnings,
+        partial,
+    })
+}
+
+pub(crate) fn stream_prompt_data(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    query: &str,
+    visit: &mut dyn FnMut(Prompt) -> Result<bool>,
+) -> Result<(String, Vec<String>)> {
+    let path = resolve(backend, home, query)?;
+    let id = backend.id_of(&path);
+    let (_, diagnostics) = backend.for_each_prompt_in(home, &path, visit)?;
+    let mut warnings = Vec::new();
+    if diagnostics.malformed_lines != 0 {
+        warnings.push(format!(
+            "skipped {} malformed JSONL record(s)",
+            diagnostics.malformed_lines
+        ));
+    }
+    if diagnostics.unsupported_user_records != 0 {
+        warnings.push(format!(
+            "skipped {} malformed or unsupported user-like record(s)",
+            diagnostics.unsupported_user_records
+        ));
+    }
+    Ok((id, warnings))
+}
+
+pub(crate) fn delete_sessions(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    ids: &[String],
+    all: bool,
+) -> Result<usize> {
+    let targets = delete_targets(backend, home, ids, all)?;
+    let count = targets.len();
+    for path in targets {
+        remove_session_transcript(home, &path)?;
+    }
+    Ok(count)
 }
 
 /// Print your typed prompts from one session, numbered + timestamped, full text

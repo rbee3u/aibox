@@ -251,43 +251,49 @@ pub enum Command {
     /// Pass arguments verbatim after `--`, for example:
     /// `aibox run -- "fix the build"`.
     Run(RunArgs),
+    /// Start the local aibox Service, Console, and Request Proxy.
+    Serve(ServeArgs),
     /// Build the aibox Docker image.
+    #[command(hide = true)]
     Build(BuildArgs),
     /// Generate a shell completion registration script.
+    #[command(hide = true)]
     Completion(CompletionArgs),
     /// Manage aibox-managed Tenants.
+    #[command(hide = true)]
     Tenant(TenantArgs),
     /// Manage optional Tenant Components.
     ///
     /// The Host Tenant supports only status-line Components.
+    #[command(hide = true)]
     Component(ComponentArgs),
     /// Manage Named Configs, Current Config, and credential propagation.
+    #[command(hide = true)]
     Config(ConfigArgs),
     /// Browse saved Sessions on the host without starting Docker.
+    #[command(hide = true)]
     Session(SessionArgs),
-    /// Record and inspect HTTP/SSE traffic through a local host-side proxy.
-    Traffic(TrafficArgs),
 }
 
-/// Options for the host-side Traffic Proxy.
+/// Options for the local aibox Service.
 #[derive(Debug, Args)]
-pub struct TrafficArgs {
+pub struct ServeArgs {
     /// IP address and port to listen on.
     #[arg(
         long,
         value_name = "IP:PORT",
         default_value = "127.0.0.1:9923",
-        value_parser = parse_traffic_listen
+        value_parser = parse_listen
     )]
     pub listen: SocketAddr,
 }
 
-fn parse_traffic_listen(value: &str) -> Result<SocketAddr, String> {
+fn parse_listen(value: &str) -> Result<SocketAddr, String> {
     let address: SocketAddr = value.parse().map_err(|_| {
         "expected an IP address and nonzero port, for example 127.0.0.1:9923".to_string()
     })?;
     if address.port() == 0 {
-        return Err("Traffic Proxy port must not be 0".to_string());
+        return Err("listener port must not be 0".to_string());
     }
     Ok(address)
 }
@@ -956,33 +962,16 @@ mod tests {
     }
 
     #[test]
-    fn traffic_has_only_host_listener_options() {
-        let cli = Cli::try_parse_from(["aibox", "traffic"]).unwrap();
-        let Command::Traffic(args) = cli.command else {
-            panic!("expected traffic command");
-        };
-        assert_eq!(args.listen, "127.0.0.1:9923".parse().unwrap());
-
-        let cli = Cli::try_parse_from(["aibox", "traffic", "--listen", "0.0.0.0:8080"]).unwrap();
-        let Command::Traffic(args) = cli.command else {
-            panic!("expected traffic command");
+    fn serve_has_only_the_shared_listener_option() {
+        let cli = Cli::try_parse_from(["aibox", "serve", "--listen", "0.0.0.0:8080"]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve command");
         };
         assert_eq!(args.listen, "0.0.0.0:8080".parse().unwrap());
-
         for args in [
-            &["aibox", "traffic", "--listen", "127.0.0.1:0"][..],
-            &["aibox", "traffic", "--listen", "localhost:9923"][..],
-        ] {
-            assert_parse_error(args, ErrorKind::ValueValidation);
-        }
-        assert_parse_error(
-            &["aibox", "traffic", "--allow-remote"],
-            ErrorKind::UnknownArgument,
-        );
-        for args in [
-            &["aibox", "traffic", "--agent", "codex"][..],
-            &["aibox", "traffic", "--tenant", "work"][..],
-            &["aibox", "traffic", "--host"][..],
+            &["aibox", "serve", "--agent", "codex"][..],
+            &["aibox", "serve", "--tenant", "work"][..],
+            &["aibox", "serve", "--host"][..],
         ] {
             assert_parse_error(args, ErrorKind::UnknownArgument);
         }

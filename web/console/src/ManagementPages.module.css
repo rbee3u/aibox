@@ -1,0 +1,964 @@
+.page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.pageToolbar {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.iconButton {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+}
+
+.errorBanner,
+.inlineWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.errorBanner {
+  position: sticky;
+  z-index: 8;
+  top: 0;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--danger-line);
+}
+
+.inlineWarning {
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.loading {
+  display: grid;
+  min-height: 100px;
+  place-items: center;
+  color: var(--accent);
+}
+
+.loading svg,
+.operationPanel header svg:first-child,
+.dangerButton svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.metric {
+  display: grid;
+  min-width: 0;
+  min-height: 116px;
+  align-content: center;
+  gap: 4px;
+  padding: 18px 22px;
+  border-right: 1px solid var(--line);
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+.metric > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.metric strong {
+  font-size: 24px;
+  font-weight: 650;
+}
+.metric small {
+  overflow: hidden;
+  color: var(--faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.band {
+  padding: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.band h2,
+.detailHeader h2,
+.editorHeader h2,
+.dialog h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.bandHeading,
+.detailHeader,
+.editorHeader,
+.sectionHeading,
+.operationPanel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.bandHeading > div,
+.detailHeader > div,
+.editorHeader > div {
+  min-width: 0;
+}
+.bandHeading code,
+.detailHeader code {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actionRow,
+.dialogActions,
+.editorTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.actionRow {
+  margin-top: 16px;
+}
+.actionRow button,
+.primaryButton,
+.dangerButton,
+.componentRow button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.primaryButton {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.primaryButton:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent-strong);
+}
+.dangerButton {
+  border-color: var(--danger);
+  color: #fff;
+  background: var(--danger);
+}
+
+.goodStatus,
+.warnStatus,
+.neutralStatus {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.goodStatus {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.warnStatus {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.neutralStatus {
+  color: var(--muted);
+  background: var(--surface-inset);
+}
+
+.details {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 9px 16px;
+  margin: 14px 0 0;
+}
+.details dt {
+  color: var(--muted);
+}
+.details dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catalogPage,
+.configPage {
+  overflow: hidden;
+}
+
+.splitLayout {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: minmax(260px, 32%) minmax(0, 1fr);
+}
+
+.catalogPage > .splitLayout {
+  height: calc(100% - 52px);
+}
+
+.sessionPage > .splitLayout {
+  height: 100%;
+}
+
+.catalog,
+.configCatalog {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.createRow {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.createRow input {
+  min-width: 0;
+  flex: 1;
+}
+
+.catalogList {
+  padding: 6px;
+}
+
+.sessionCatalog {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.sessionToolbar {
+  display: flex;
+  min-width: 0;
+  min-height: 52px;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.sessionTenant {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sessionTenant select {
+  width: 100%;
+  min-width: 0;
+}
+
+.sessionAgents {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.sessionAgents button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  border-radius: 0;
+  padding: 0;
+}
+
+.sessionAgents button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.sessionAgents button:last-child {
+  margin-left: -1px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.sessionAgents button[aria-pressed="true"] {
+  z-index: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sessionSelectAll {
+  min-height: 30px;
+  flex: 0 0 auto;
+  border-color: transparent;
+  padding: 5px 6px;
+  color: var(--accent);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sessionSelectionCount {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  font:
+    600 10px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionWarnings:empty {
+  display: none;
+}
+
+.sessionWarnings {
+  max-height: 150px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.sessionWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.sessionList {
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  background: var(--surface);
+}
+
+.sessionRow {
+  position: relative;
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: stretch;
+  gap: 3px;
+  padding: 5px 7px 5px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.sessionRow::before {
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2px;
+  border-radius: 0 999px 999px 0;
+  background: transparent;
+  content: "";
+}
+
+.sessionRow:hover,
+.sessionRow:focus-within {
+  background: var(--surface-hover);
+}
+
+.currentSessionRow,
+.currentSessionRow:hover,
+.currentSessionRow:focus-within,
+.sessionRowSelected,
+.sessionRowSelected:hover,
+.sessionRowSelected:focus-within {
+  background: var(--surface-selected);
+}
+
+.currentSessionRow::before {
+  background: var(--accent);
+}
+
+.sessionSelectionRow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sessionSelectionRow.currentSessionRow::before {
+  background: transparent;
+}
+
+.sessionRowMain {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.sessionRowMain:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--ink);
+  background: transparent;
+}
+
+.sessionRowMain > span:not(.sessionSelectionIndicator) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.sessionRowMain strong,
+.sessionRowMain small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionRowMain small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sessionRowWarning {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.sessionDelete {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  align-self: center;
+  place-items: center;
+  border-color: transparent;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  opacity: 0.2;
+}
+
+.sessionRow:hover .sessionDelete,
+.sessionRow:focus-within .sessionDelete,
+.currentSessionRow .sessionDelete,
+.sessionDelete:focus-visible,
+.sessionDelete[aria-busy="true"] {
+  opacity: 1;
+}
+
+.sessionDelete:hover:not(:disabled),
+.sessionDelete:focus-visible {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.sessionSelectionRow .sessionRowMain {
+  padding-right: 34px;
+}
+
+.sessionSelectionIndicator {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  background: var(--surface);
+  transform: translateY(-50%);
+}
+
+.sessionRowSelected .sessionSelectionIndicator {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+.catalogRow,
+.selectedRow {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  margin: 0;
+  border-color: transparent;
+  text-align: left;
+  background: transparent;
+}
+.catalogRow:hover,
+.selectedRow {
+  border-color: transparent;
+  background: var(--surface-selected);
+}
+.catalogRow > span,
+.selectedRow > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.catalogRow strong,
+.selectedRow strong,
+.catalogRow small,
+.selectedRow small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalogRow small,
+.selectedRow small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.selectedRow {
+  color: var(--accent);
+}
+
+.detailPane,
+.configEditor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.detailHeader,
+.editorHeader {
+  min-height: 66px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.detailHeader > .iconButton:first-child {
+  display: none;
+}
+.sectionHeading {
+  padding: 14px 16px 8px;
+}
+.sectionHeading h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.sectionHeading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tableList,
+.promptList {
+  min-height: 0;
+  overflow: auto;
+}
+.componentRow {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: 22px minmax(120px, 1fr) minmax(80px, 120px) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.componentRow > div {
+  display: grid;
+  min-width: 0;
+}
+.componentRow small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.componentRow input {
+  min-width: 0;
+}
+
+.emptyPane,
+.emptyList,
+.revealPane {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.emptyList {
+  min-height: 100px;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.filters select {
+  min-width: 150px;
+}
+.segmented {
+  display: inline-flex;
+  align-items: center;
+}
+.segmented button {
+  border-radius: 0;
+}
+.segmented button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.segmented button:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.segmented button + button {
+  margin-left: -1px;
+}
+.segmented button[aria-pressed="true"] {
+  z-index: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.configLayout {
+  display: grid;
+  height: calc(100% - 52px);
+  min-height: 0;
+  grid-template-columns: 230px minmax(0, 1fr);
+}
+.configCatalog {
+  padding: 6px;
+}
+.configCatalog .createRow {
+  margin-top: 8px;
+  padding: 8px 4px;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+.catalogDivider {
+  padding: 14px 8px 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.editorHeader > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.editorHeader .actionRow {
+  margin: 0;
+}
+.fileTabs {
+  display: flex;
+  min-height: 38px;
+  align-items: end;
+  gap: 2px;
+  padding: 5px 10px 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+.fileTabs button {
+  min-height: 32px;
+  border-color: transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+.fileTabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+.editorTools {
+  min-height: 44px;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.editorTools > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.codeEditor {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  padding: 16px;
+  border: 0;
+  outline: 0;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.promptList {
+  padding: 12px 16px 24px;
+  background: var(--bg-canvas);
+}
+.promptList article {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.promptList article header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.promptList pre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--code-text);
+  font:
+    12px/1.55 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dialogBackdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(10 15 24 / 0.52);
+}
+.dialog {
+  width: min(430px, 100%);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+.dialog label {
+  display: grid;
+  gap: 7px;
+  margin-top: 18px;
+  color: var(--muted);
+}
+.dialogActions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+.wideDialog {
+  width: min(680px, 100%);
+}
+.planList {
+  max-height: 48vh;
+  margin-top: 14px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+.planList > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 3px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.planList span {
+  color: var(--muted);
+}
+
+.operationPanel {
+  position: fixed;
+  z-index: 25;
+  right: 18px;
+  bottom: 18px;
+  width: min(520px, calc(100vw - 36px));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+.operationPanel header {
+  min-height: 42px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+}
+.operationPanel header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+.operationPanel header > div strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.operationPanel header > span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.operationPanel pre {
+  max-height: 190px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font:
+    11px/1.5 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+}
+.operationPanel footer {
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .metric:nth-child(2) {
+    border-right: 0;
+  }
+  .metric:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 760px) {
+  .pageToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .filters {
+    justify-content: space-between;
+  }
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+  .metric {
+    min-height: 88px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .splitLayout,
+  .configLayout {
+    display: block;
+    height: calc(100% - 94px);
+  }
+  .sessionPage > .splitLayout {
+    height: 100%;
+  }
+  .catalog,
+  .configCatalog {
+    width: 100%;
+    height: 100%;
+    border-right: 0;
+  }
+  .detailPane,
+  .configEditor {
+    display: none;
+    width: 100%;
+    height: 100%;
+  }
+  .hasSelection .catalog {
+    display: none;
+  }
+  .hasSelection .detailPane {
+    display: flex;
+  }
+  .detailHeader > .iconButton:first-child {
+    display: inline-grid;
+  }
+  .componentRow {
+    grid-template-columns: 22px minmax(100px, 1fr) auto;
+  }
+  .componentRow input {
+    grid-column: 2;
+  }
+  .componentRow > span {
+    grid-column: 2;
+  }
+  .componentRow button {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+}
