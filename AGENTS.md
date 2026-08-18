@@ -14,9 +14,8 @@ references between them.
 
 ## Implementation Map
 
-- `src/cli.rs` defines the Clap surface and pass-through boundary;
-  `src/lib.rs` resolves command scope and orchestrates commands.
-  `src/completion.rs` owns dynamic, read-only host-side completion.
+- `src/cli.rs` defines the three-command Clap surface and Run pass-through
+  boundary; `src/lib.rs` resolves command scope and orchestrates commands.
 - `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
   Tenant resolution, lifecycle, layout, permissions, and shared path safety.
 - `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
@@ -45,26 +44,18 @@ files/templates, empty Current Config content, and invocation behavior in
 `session_codex.rs`. The Docker image, container Home, and orchestration remain
 shared.
 
-**Preserve the Run boundary during CLI migration.** Split argv at the first `--` before clap parses
-it, and pass the right side verbatim only to `run`. `run`, `config`, and
-`session` own separately scoped `--agent`/`--tenant` options; `component` owns
-`--tenant` and `--host` (Host supports statusline Components only); only
-`config`, `session`, and `component` accept `--host`. `build`,
-`completion`, and `tenant` accept none of them.
-`config propagate-auth` defaults to Host/Codex/Current and accepts only the
-redundant compatible selectors `--host`, `--agent codex`, and `--current`.
-Completion mirrors these scopes, stays read-only, runs on the host, and hides
-`propagate-auth` after an incompatible source selector.
-`serve` owns only `--listen`. `serve` and `run` are the primary commands;
-existing management commands remain hidden only by deprecation warnings for
-one compatibility release and must continue to preserve their old scopes.
+**Keep the CLI surface narrow.** Split argv at the first `--` before clap parses
+it, and pass the right side verbatim only to `run`. The public commands are
+`serve`, `run`, and `build`; `serve` owns only `--listen`, `build` owns only
+`--force`, and all Tenant, Component, Config, and Session management is exposed
+through the Console Control API. Removed management names must remain unknown
+Clap subcommands; do not add aliases, tombstones, or a completion protocol.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
-`host` is a valid Managed Tenant name. The Host Tenant is selected only with
-`--host` by Tenant-scoped commands; global Credential Propagation defaults its
-source to Host Current Config and may accept a redundant `--host`. The Host
-Tenant cannot Run and never appears in `tenant list` or deletion. Only
-`tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`.
+`host` is a valid Managed Tenant name. The Host Tenant is selected only by
+Console Tenant-scoped views. The Host Tenant cannot Run and never appears in the
+Managed Tenant list or deletion. Only `tenants/<name>` subtrees may be mounted
+from inside `$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
 `tenants/<name>` is a real directory. Named Config catalogs live under
@@ -89,30 +80,28 @@ the Host Tenant. Existing Host Home directory modes are never changed.
 **Keep Config Application explicit and one-shot.** A Run consumes Current
 Config and never reads or reapplies Named Config data. Each Named Config
 belongs to one Tenant and Coding Agent and defines only the fixed
-Config Fields centralized in `AgentKind`. `config apply` sets present fields,
+Config Fields centralized in `AgentKind`. The Console Configs module applies
+present fields,
 deletes missing fields and preserves unrelated native configuration. After all
 files succeed, record Last Application and derive Config Drift for the Console.
 Store it as the strict `last_application` section of the catalog-root
 `metadata.json`; this observational record never activates or reapplies a
 Named Config. Do not add reconciliation, rollback, or transaction state.
 
-**Keep Credential Propagation explicit and one-shot.** `config propagate-auth`
-copies one Host Codex Current Config `auth.json` snapshot only to older existing
+**Keep Credential Propagation explicit and one-shot.** The Console Configs
+module copies one Host Codex Current Config `auth.json` snapshot only to older existing
 same-account ChatGPT Credentials in complete safe Named Configs and Managed
 Tenant Current Configs. It creates nothing, retains no association, never runs
 automatically, and is distinct from Config Application. It ignores non-ChatGPT
 and different-account credentials, warns on malformed candidate content, and
 fails before writing on an unsafe structural view.
 
-**Keep Current Config direct and explicit.** `config get` and `config edit`
-require either a Named Config name or `--current`; other Config commands operate
-only on Named Configs except for global Credential Propagation. `get` prints
-every native file in Agent-defined order with file headings and without
-credential redaction. `edit` opens and commits each file separately in that
-order. Named Config edits validate the selected file before committing; Current
-Config edits preserve arbitrary bytes without syntax validation and may
-initialize a missing Managed Tenant. A later editor failure does not roll back
-an earlier committed file.
+**Keep Current Config direct and explicit.** The Console Configs module reveals
+or edits either a Named Config or Current Config. It presents every native file
+in Agent-defined order without credential redaction. Named Config writes validate
+the selected file before committing; Current Config writes preserve arbitrary
+bytes without syntax validation and may initialize a missing Managed Tenant. A
+later file failure does not roll back an earlier committed file.
 
 **Keep Agent permissions native.** Both built-in Named Config templates use
 native Current Config for non-interactive, unrestricted operation. Do not add
@@ -122,16 +111,16 @@ status line in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
 native auth file as a whole. Every Named Config file is mode `0600`.
 
 **Keep Components optional, native, and independently owned.** Tenant
-initialization does not install status lines or toolchains. `component` derives
+initialization does not install status lines or toolchains. The Console Components
+module derives
 statusline state from native Managed or Host Tenant files without a registry;
 Rust and Go remain Managed Tenant-only and install through the shared image with
 only the Tenant Home mounted. Status-line Components directly manage their
 script when applicable and their native configuration values. Status-line paths
 are not Config Fields, so Config Application preserves them without ownership
 or overlap machinery. Expose repairable partial state as `incomplete`.
-Component removal prompts before deleting any existing state and requires
-`--yes` in a non-interactive shell; it does not require a separate discard
-flag. Preserve Cargo and GOPATH user state across SDK replacement and removal.
+Component removal confirms before deleting any existing state. Preserve Cargo
+and GOPATH user state across SDK replacement and removal.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
@@ -141,20 +130,19 @@ entries.
 
 **Treat container-writable paths as untrusted.** Host-side reads, writes, and
 deletions reject symlinked or unexpected entries and validate relevant
-ancestors. `session list` may return readable rows with traversal errors;
-`session get` and `session delete` fail on a partial view. Transcripts without a
+ancestors. Console Session listing may return readable rows with traversal
+errors; Session detail and deletion fail on a partial view. Transcripts without a
 typed prompt remain visible and deletable. Malformed JSONL and unsupported
-user-like records warn and make `session list/get` nonzero without hiding an
+user-like records warn and make Session listing/detail nonzero without hiding an
 otherwise readable Transcript; deletion remains strict and format-independent.
 
-**Keep missing scopes quiet.** `config list` and `session list` return empty for
-a missing Managed Tenant, and `component list` reports its catalog as not
+**Keep missing scopes quiet.** Console Config and Session views return empty for
+a missing Managed Tenant, and the Components view reports its catalog as not
 installed. Host Component listing reports the two supported statuslines as not
-installed when the Host Home or Agent state is missing. Read-only commands and
-completion create nothing. `run`, `config create`, `config edit --current`,
-and Managed Tenant `component install` may initialize missing state;
-Host statusline install may initialize an Agent state directory inside an
-already existing Host Home.
+installed when the Host Home or Agent state is missing. Read-only views create
+nothing. Run, Config creation, Current Config editing, and Managed Tenant
+Component installation may initialize missing state; Host statusline install may
+initialize an Agent state directory inside an already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
 own interrupted filesystem work, but aibox provides no multi-process locking

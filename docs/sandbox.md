@@ -360,25 +360,6 @@ pip/venv/uv, and Node.js with npm. Rust and Go are installed on demand into a
 persistent Managed Tenant; see
 [Tenant Components](tenants.md#tenant-components).
 
-## Custom Images
-
-Set `AIBOX_IMAGE` to make image builds, Runs, and Rust/Go Component
-installations use another image tag:
-
-```sh
-AIBOX_IMAGE=local/aibox:dev aibox build
-AIBOX_IMAGE=local/aibox:dev aibox run
-AIBOX_IMAGE=local/aibox:dev aibox component install rust
-```
-
-A Run or a launched toolchain installer still requires the selected image to
-exist locally. To support a Run, a replacement image must:
-
-- provide the selected `codex` or `claude` executable on `PATH`;
-- use `/home/aibox` as `HOME`;
-- support `/workspace` as its working directory;
-- avoid an incompatible `ENTRYPOINT`.
-
 For complete output, an installed Claude status-line Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the
 branch field. It renders the model/reasoning, current directory (abbreviating

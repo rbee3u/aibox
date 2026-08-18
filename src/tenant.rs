@@ -5,11 +5,10 @@
 //! structural entries rather than following symlinks into arbitrary paths.
 
 use crate::agent::AgentKind;
-use crate::cli::TenantCommand;
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Collection containing all managed Tenant Homes.
@@ -138,35 +137,6 @@ impl ManagedTenant {
 }
 
 impl Tenant {
-    /// Resolve a Managed or Host Tenant without creating data.
-    pub fn resolve(root: &Path, host: bool, tenant: &str) -> Result<Self> {
-        if host {
-            Ok(Self::Host {
-                home_dir: host_home()?,
-                root_dir: root.to_path_buf(),
-            })
-        } else {
-            Ok(Self::Managed(ManagedTenant::resolve(root, tenant)?))
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resolve_with_home(
-        root: &Path,
-        host: bool,
-        tenant: &str,
-        host_home: &Path,
-    ) -> Result<Self> {
-        if host {
-            Ok(Self::Host {
-                home_dir: host_home.to_path_buf(),
-                root_dir: root.to_path_buf(),
-            })
-        } else {
-            Ok(Self::Managed(ManagedTenant::resolve(root, tenant)?))
-        }
-    }
-
     /// Select one Coding Agent in this Tenant.
     pub fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         let home = self.home_dir().to_path_buf();
@@ -211,22 +181,6 @@ impl Tenant {
 }
 
 impl TenantAgent {
-    /// Resolve a Tenant and select a Coding Agent without creating data.
-    pub fn resolve(agent: AgentKind, root: &Path, host: bool, tenant: &str) -> Result<Self> {
-        Ok(Tenant::resolve(root, host, tenant)?.for_agent(agent))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resolve_with_home(
-        agent: AgentKind,
-        root: &Path,
-        host: bool,
-        tenant: &str,
-        host_home: &Path,
-    ) -> Result<Self> {
-        Ok(Tenant::resolve_with_home(root, host, tenant, host_home)?.for_agent(agent))
-    }
-
     /// Home containing the selected Current Config and Sessions.
     pub fn home_dir(&self) -> &Path {
         self.tenant.home_dir()
@@ -311,24 +265,6 @@ impl TenantAgent {
     }
 }
 
-/// Execute one parsed Tenant command and return its process exit code.
-pub fn dispatch(root: &Path, command: &TenantCommand) -> Result<i32> {
-    match command {
-        TenantCommand::List => {
-            for tenant in list_tenants(root)? {
-                if !crate::print_line(&tenant)? {
-                    break;
-                }
-            }
-        }
-        TenantCommand::Create { tenant } => {
-            ManagedTenant::resolve(root, tenant)?.ensure_initialized()?;
-        }
-        TenantCommand::Delete { tenants, all, yes } => delete_tenants(root, tenants, *all, *yes)?,
-    }
-    Ok(0)
-}
-
 /// List completed Managed Tenant names without creating data.
 pub fn list_tenants(root: &Path) -> Result<Vec<String>> {
     let collection = root.join(TENANTS_DIR);
@@ -361,7 +297,7 @@ pub fn list_tenants(root: &Path) -> Result<Vec<String>> {
 }
 
 /// Delete selected Managed Tenants, or all completed Tenants when explicit.
-pub fn delete_tenants(root: &Path, tenants: &[String], all: bool, yes: bool) -> Result<()> {
+pub fn delete_tenants(root: &Path, tenants: &[String], all: bool) -> Result<()> {
     if all && !tenants.is_empty() {
         bail!("--all cannot be combined with Tenant names");
     }
@@ -391,17 +327,6 @@ pub fn delete_tenants(root: &Path, tenants: &[String], all: bool, yes: bool) -> 
         }
         unique
     };
-    if targets.is_empty() {
-        eprintln!(">> no Managed Tenants");
-        return Ok(());
-    }
-    if !yes {
-        for tenant in &targets {
-            if tenant_has_data(root, tenant)? && !confirm_delete(tenant)? {
-                bail!("aborted");
-            }
-        }
-    }
     for tenant in targets {
         delete_one(root, &tenant)?;
     }
@@ -471,27 +396,6 @@ fn delete_one(root: &Path, name: &str) -> Result<()> {
         sync_dir(&tenants)?;
     }
     Ok(())
-}
-
-fn tenant_has_data(root: &Path, name: &str) -> Result<bool> {
-    let tenant = ManagedTenant::resolve(root, name)?;
-    let collection = root.join(TENANTS_DIR);
-    if real_dir_exists(&collection, "Tenant collection")?
-        && (tenant.exists()?
-            || real_dir_exists(&tenant.creating_dir(), "Tenant creation staging directory")?
-            || real_dir_exists(&tenant.deleting_dir(), "Tenant deletion staging directory")?)
-    {
-        return Ok(true);
-    }
-    for agent in AgentKind::ALL {
-        let collection = root.join(agent.tag());
-        if real_dir_exists(&collection, "Named Config catalog collection")?
-            && real_dir_exists(&collection.join(name), "Named Config catalog")?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn ensure_home_baseline(home: &Path) -> Result<()> {
@@ -786,33 +690,6 @@ pub(crate) fn sync_dir(path: &Path) -> Result<()> {
         .with_context(|| format!("sync directory {}", path.display()))
 }
 
-fn confirm_delete(tenant: &str) -> Result<bool> {
-    if !io::stdin().is_terminal() {
-        bail!("refusing to delete Tenant '{tenant}' without --yes in a non-interactive shell");
-    }
-    eprint!("Delete Tenant '{tenant}'? [y/N] ");
-    io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
-}
-
-/// Restrict an existing regular file to owner read/write permissions.
-#[cfg(unix)]
-#[cfg(test)]
-pub fn set_600(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let file = open_real_file(path, "private config file")?;
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("chmod 600 {}", path.display()))
-}
-
-#[cfg(not(unix))]
-#[cfg(test)]
-pub fn set_600(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
 /// Size-bounded snapshot of one optional native file.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct FileSnapshot {
@@ -1013,7 +890,7 @@ mod tests {
         fs::create_dir(tenants.join("$creating-half")).unwrap();
 
         assert!(list_tenants(root.path()).unwrap().is_empty());
-        delete_tenants(root.path(), &[], true, true).unwrap();
+        delete_tenants(root.path(), &[], true).unwrap();
 
         assert!(!tenants.join("$deleting-gone").exists());
         assert!(!tenants.join("$creating-half").exists());
@@ -1092,39 +969,31 @@ mod tests {
             fs::create_dir_all(&catalog).unwrap();
             fs::write(catalog.join("metadata.json"), b"config metadata").unwrap();
         }
-        delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
-        delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
+        delete_tenants(root.path(), &["work".to_string()], false).unwrap();
+        delete_tenants(root.path(), &["work".to_string()], false).unwrap();
         assert!(!tenant.home_dir.exists());
         assert!(!root.path().join("claude/work").exists());
         assert!(!root.path().join("codex/work").exists());
     }
 
     #[test]
-    fn tenant_deletion_requires_explicit_selection_and_confirmation() {
+    fn tenant_deletion_requires_explicit_selection() {
         let root = tempfile::tempdir().unwrap();
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
-        let sentinel = tenant.home_dir.join("keep");
-        fs::write(&sentinel, b"tenant data").unwrap();
-
-        let empty = delete_tenants(root.path(), &[], false, true)
+        let empty = delete_tenants(root.path(), &[], false)
             .unwrap_err()
             .to_string();
         assert!(empty.contains("at least one Tenant"), "{empty}");
-
-        let mixed = delete_tenants(root.path(), &["work".to_string()], true, true)
+        let mixed = delete_tenants(root.path(), &["work".to_string()], true)
             .unwrap_err()
             .to_string();
         assert!(mixed.contains("--all cannot be combined"), "{mixed}");
-
-        if !io::stdin().is_terminal() {
-            let unconfirmed = delete_tenants(root.path(), &["work".to_string()], false, false)
-                .unwrap_err()
-                .to_string();
-            assert!(unconfirmed.contains("without --yes"), "{unconfirmed}");
-        }
-        assert_eq!(fs::read(&sentinel).unwrap(), b"tenant data");
-        assert_eq!(list_tenants(root.path()).unwrap(), ["work"]);
+        assert!(
+            list_tenants(root.path())
+                .unwrap()
+                .contains(&"work".to_string())
+        );
     }
 
     #[test]
@@ -1132,8 +1001,8 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("missing");
 
-        delete_tenants(&root, &["work".to_string()], false, true).unwrap();
-        delete_tenants(&root, &["work".to_string()], false, true).unwrap();
+        delete_tenants(&root, &["work".to_string()], false).unwrap();
+        delete_tenants(&root, &["work".to_string()], false).unwrap();
 
         assert!(!root.exists());
     }
@@ -1149,7 +1018,7 @@ mod tests {
 
         let list_error = list_tenants(root.path()).unwrap_err().to_string();
         assert!(list_error.contains("not a real directory"), "{list_error}");
-        let delete_error = delete_tenants(root.path(), &["work".to_string()], false, true)
+        let delete_error = delete_tenants(root.path(), &["work".to_string()], false)
             .unwrap_err()
             .to_string();
         assert!(
@@ -1217,7 +1086,7 @@ mod tests {
         let linked_catalog = root.path().join("claude/work");
         symlink(outside.path(), &linked_catalog).unwrap();
 
-        let error = delete_tenants(root.path(), &["work".to_string()], false, true)
+        let error = delete_tenants(root.path(), &["work".to_string()], false)
             .unwrap_err()
             .to_string();
 
@@ -1227,7 +1096,7 @@ mod tests {
         assert!(root.path().join("tenants/$deleting-work").is_dir());
 
         fs::remove_file(linked_catalog).unwrap();
-        delete_tenants(root.path(), &["work".to_string()], false, true).unwrap();
+        delete_tenants(root.path(), &["work".to_string()], false).unwrap();
 
         assert!(!root.path().join("tenants/$deleting-work").exists());
         assert_eq!(fs::read(outside.path().join("keep")).unwrap(), b"outside");
@@ -1247,7 +1116,7 @@ mod tests {
 
         let init_error = tenant.ensure_initialized().unwrap_err().to_string();
         assert!(init_error.contains("not a real directory"), "{init_error}");
-        let delete_error = delete_tenants(root.path(), &["work".to_string()], false, true)
+        let delete_error = delete_tenants(root.path(), &["work".to_string()], false)
             .unwrap_err()
             .to_string();
         assert!(

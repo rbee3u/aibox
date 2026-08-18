@@ -120,13 +120,6 @@ pub(crate) struct AuthPropagationPreview {
     pub(crate) updates: usize,
 }
 
-pub(super) fn propagate_auth_from(root: &Path, host_home: &Path) -> Result<i32> {
-    let plan = plan_auth_propagation_from(root, host_home)?;
-    let report = execute_auth_propagation(plan);
-    report.print()?;
-    Ok(i32::from(report.counts().failed > 0))
-}
-
 pub(crate) fn credential_propagation_source_available(
     root: &Path,
     host_home: &Path,
@@ -434,68 +427,6 @@ fn classify_auth(content: &[u8], expected_account_id: Option<&str>) -> AuthConte
         last_refresh_text: last_refresh_text.to_string(),
         value,
     })
-}
-
-impl AuthPropagationReport {
-    pub(super) fn counts(&self) -> PropagationCounts {
-        self.counts.clone()
-    }
-
-    fn print(&self) -> Result<()> {
-        let mut stdout_open = true;
-        for entry in &self.entries {
-            match &entry.outcome {
-                PropagationOutcome::Updated => {
-                    if stdout_open {
-                        stdout_open = crate::print_line(&format!("updated {}", entry.label))?;
-                    }
-                }
-                PropagationOutcome::Unchanged => {
-                    if stdout_open {
-                        stdout_open = crate::print_line(&format!("unchanged {}", entry.label))?;
-                    }
-                }
-                PropagationOutcome::Conflict { last_refresh } => {
-                    if stdout_open {
-                        stdout_open = crate::print_line(&format!(
-                            "conflict {}: same last_refresh {last_refresh} but JSON values differ",
-                            entry.label
-                        ))?;
-                    }
-                }
-                PropagationOutcome::Newer {
-                    target_last_refresh,
-                    source_last_refresh,
-                } => {
-                    if stdout_open {
-                        stdout_open = crate::print_line(&format!(
-                            "skipped {}: target last_refresh {target_last_refresh} is newer than source {source_last_refresh}",
-                            entry.label
-                        ))?;
-                    }
-                }
-                PropagationOutcome::Invalid { reason } => {
-                    eprintln!("warning {}: {reason}", entry.label);
-                }
-                PropagationOutcome::Failed { reason } => {
-                    eprintln!("failed {}: {reason}", entry.label);
-                }
-            }
-        }
-        let counts = self.counts();
-        if stdout_open {
-            crate::print_line(&format!(
-                "summary: updated={} unchanged={} conflicts={} newer={} invalid={} failed={}",
-                counts.updated,
-                counts.unchanged,
-                counts.conflicts,
-                counts.newer,
-                counts.invalid,
-                counts.failed
-            ))?;
-        }
-        Ok(())
-    }
 }
 
 fn counts_for(entries: &[PropagationEntry]) -> PropagationCounts {

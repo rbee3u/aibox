@@ -51,9 +51,8 @@ aibox run --agent claude -- "review the current changes"
 ```
 
 aibox parses only the left side and forwards the right side unchanged. The
-primary CLI is `aibox serve [--listen IP:PORT]` plus the complete `aibox run`
-surface. Previous management commands remain for one deprecation release and
-print a migration warning.
+public CLI is `aibox serve [--listen IP:PORT]`, `aibox run`, and `aibox build`.
+Tenant, Component, Config, and Session management lives in the Console.
 
 ## Filesystem Boundary
 
@@ -68,7 +67,7 @@ Each Run creates a disposable container with these possible bind mounts:
 The Filesystem Sandbox is not a complete authority boundary. Networking is
 enabled; credentials can authorize remote actions; writable mounts can be
 changed or deleted; and aibox adds no CPU or memory limits. The built-in Named
-Config templates created by `config create` disable Coding Agent approval
+Config templates created in the Console disable Coding Agent approval
 prompts because Docker is the Filesystem Sandbox. Named Configs are never
 created or applied automatically. Review the template before applying it when
 a more restrictive policy is required.
@@ -123,8 +122,9 @@ application records Last Application so the Console can derive Config Drift;
 this is not activation and never triggers reapplication. No backup or rollback
 state is retained. Reveal displays every native file, including credentials
 without redaction. When Host Codex refreshes a ChatGPT
-login, `propagate-auth` explicitly copies that newer credential snapshot to
-older same-account existing Configs without creating a persistent relationship.
+login, the Console Configs module explicitly copies that newer credential
+snapshot to older same-account existing Configs without creating a persistent
+relationship.
 Read [Configs](docs/configs.md) for the exact schema, Current Config behavior,
 Host Tenant risks, file modes, and partial-write behavior.
 
@@ -209,21 +209,12 @@ Request Proxy, while Console and Control API routes still require a loopback
 TCP peer. See
 [Request Proxy](docs/sandbox.md#request-proxy) for the complete behavior.
 
-## Deprecated Management CLI
+## CLI Surface
 
-```sh
-# Bash
-source <(aibox completion bash)
-# Zsh
-source <(aibox completion zsh)
-# Fish
-aibox completion fish | source
-```
-
-Completion and the former `build`, `tenant`, `component`, `config`, and
-`session` commands are retained for one compatibility release. New
-management workflows should use the Console; `run` keeps its full selector,
-Workspace, Extra Mount, and pass-through behavior.
+`aibox serve` starts the foreground Service and embedded Console. `aibox run`
+starts a transient Coding Agent Run. `aibox build` builds the fixed
+`aibox:latest` Runtime Image and accepts `--force` to bypass the Docker cache.
+All other lifecycle and diagnostic workflows are available in the Console.
 
 ## Learn More
 
@@ -234,7 +225,7 @@ Workspace, Extra Mount, and pass-through behavior.
 - [Configs](docs/configs.md): Named and Current Configs, fixed fields,
   credentials, one-time application, and filesystem behavior.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
-  cleanup, Request Proxy behavior, and custom images.
+  cleanup, Request Proxy behavior, and the fixed Runtime Image.
 - [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
   Coding Agent versions.
 

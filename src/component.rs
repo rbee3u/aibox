@@ -6,14 +6,13 @@
 //! directly from native files.
 
 use crate::agent::AgentKind;
-use crate::cli::{ComponentArgs, ComponentCommand};
 use crate::tenant::{self, FileSnapshot, ManagedTenant, Tenant, TenantAgent};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -54,7 +53,7 @@ impl ComponentKind {
     ];
     pub(crate) const STATUSLINES: [Self; 2] = [Self::ClaudeStatusline, Self::CodexStatusline];
 
-    /// Stable CLI name.
+    /// Stable Component name.
     pub fn name(self) -> &'static str {
         match self {
             Self::ClaudeStatusline => "claude-statusline",
@@ -104,11 +103,6 @@ enum StatuslinePartState {
     Absent,
     Current,
     Modified,
-}
-
-#[derive(Clone, Copy)]
-struct RemovalOptions {
-    skip_confirmation: bool,
 }
 
 /// A Component name and optional stable toolchain version.
@@ -176,61 +170,6 @@ fn validate_stable_version(version: &str) -> Result<String, String> {
     Ok(version.to_string())
 }
 
-/// Execute one parsed Component command and return its process exit code.
-pub fn dispatch(args: &ComponentArgs) -> Result<i32> {
-    let root = tenant::aibox_root()?;
-    let selected = Tenant::resolve(&root, args.tenant.host, args.tenant.tenant_name())?;
-    match &args.command {
-        ComponentCommand::List => list(&selected),
-        ComponentCommand::Install { component } => install(&selected, component),
-        ComponentCommand::Remove { component, yes } => remove(&selected, *component, *yes),
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn dispatch_with(
-    args: &ComponentArgs,
-    root: &Path,
-    host_home: &Path,
-    image_override: Option<&str>,
-    docker: &crate::docker::DockerCli,
-) -> Result<i32> {
-    let selected =
-        Tenant::resolve_with_home(root, args.tenant.host, args.tenant.tenant_name(), host_home)?;
-    match &args.command {
-        ComponentCommand::List => list(&selected),
-        ComponentCommand::Install { component } => {
-            install_with(&selected, component, image_override, docker)
-        }
-        ComponentCommand::Remove { component, yes } => remove(&selected, *component, *yes),
-    }
-}
-
-fn list(selected: &Tenant) -> Result<i32> {
-    let exists = tenant_home_exists(selected)?;
-    let mut failed = false;
-    for &kind in component_catalog(selected) {
-        let status = if exists {
-            // One unreadable native file must not hide the other Components,
-            // so report it as a row-level error like `session list` does.
-            match inspect(kind, selected.home_dir()) {
-                Ok(status) => status,
-                Err(error) => {
-                    eprintln!("!! {}: {error:#}", kind.name());
-                    failed = true;
-                    continue;
-                }
-            }
-        } else {
-            ComponentStatus::NotInstalled
-        };
-        if !crate::print_line(&format_status(kind, &status))? {
-            break;
-        }
-    }
-    Ok(i32::from(failed))
-}
-
 pub(crate) fn inspect_catalog(selected: &Tenant) -> Result<Vec<ComponentInspection>> {
     let exists = tenant_home_exists(selected)?;
     Ok(component_catalog(selected)
@@ -276,11 +215,9 @@ pub(crate) fn install_component_for_service(
             let Tenant::Managed(tenant) = selected else {
                 unreachable!("Host toolchains are rejected above")
             };
-            let image_override = crate::env_override("AIBOX_IMAGE")?;
             install_toolchain_with_mode(
                 tenant,
                 component,
-                image_override.as_deref(),
                 &crate::docker::DockerCli::system(),
                 true,
             )
@@ -289,7 +226,29 @@ pub(crate) fn install_component_for_service(
 }
 
 pub(crate) fn remove_component(selected: &Tenant, kind: ComponentKind) -> Result<i32> {
-    remove(selected, kind, true)
+    reject_host_toolchain(selected, kind)?;
+    if !tenant_home_exists(selected)? {
+        if matches!(selected, Tenant::Host { .. }) {
+            bail!(
+                "Host Home does not exist: {}",
+                selected.home_dir().display()
+            );
+        }
+        return Ok(0);
+    }
+    let status = inspect(kind, selected.home_dir())?;
+    if status == ComponentStatus::NotInstalled {
+        return Ok(0);
+    }
+    match kind {
+        ComponentKind::ClaudeStatusline => remove_claude_statusline(selected)?,
+        ComponentKind::CodexStatusline => remove_codex_statusline(selected)?,
+        ComponentKind::Rust => remove_rust(selected.home_dir())?,
+        ComponentKind::Go => {
+            tenant::remove_real_dir_if_exists(&selected.home_dir().join(".goroot"), "Go root")?;
+        }
+    }
+    Ok(0)
 }
 
 fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
@@ -306,78 +265,8 @@ fn install(selected: &Tenant, component: &ComponentSpec) -> Result<i32> {
     }
 }
 
-#[cfg(test)]
-fn install_with(
-    selected: &Tenant,
-    component: &ComponentSpec,
-    image_override: Option<&str>,
-    docker: &crate::docker::DockerCli,
-) -> Result<i32> {
-    reject_host_toolchain(selected, component.kind)?;
-    match component.kind {
-        ComponentKind::ClaudeStatusline => install_claude_statusline(selected),
-        ComponentKind::CodexStatusline => install_codex_statusline(selected),
-        ComponentKind::Rust | ComponentKind::Go => {
-            let Tenant::Managed(tenant) = selected else {
-                unreachable!("Host toolchains are rejected above")
-            };
-            install_toolchain_with(tenant, component, image_override, docker)
-        }
-    }
-}
-
 fn install_toolchain(tenant: &ManagedTenant, component: &ComponentSpec) -> Result<i32> {
-    let image_override = crate::env_override("AIBOX_IMAGE")?;
-    install_toolchain_with(
-        tenant,
-        component,
-        image_override.as_deref(),
-        &crate::docker::DockerCli::system(),
-    )
-}
-
-fn remove(selected: &Tenant, kind: ComponentKind, yes: bool) -> Result<i32> {
-    reject_host_toolchain(selected, kind)?;
-    if !tenant_home_exists(selected)? {
-        if matches!(selected, Tenant::Host { .. }) {
-            bail!(
-                "Host Home does not exist: {}",
-                selected.home_dir().display()
-            );
-        }
-        return Ok(0);
-    }
-    remove_from_tenant(
-        selected,
-        kind,
-        RemovalOptions {
-            skip_confirmation: yes,
-        },
-    )
-}
-
-fn remove_from_tenant(
-    selected: &Tenant,
-    kind: ComponentKind,
-    options: RemovalOptions,
-) -> Result<i32> {
-    reject_host_toolchain(selected, kind)?;
-    let status = inspect(kind, selected.home_dir())?;
-    if status == ComponentStatus::NotInstalled {
-        return Ok(0);
-    }
-    if !options.skip_confirmation && !confirm_remove(kind)? {
-        bail!("aborted");
-    }
-    match kind {
-        ComponentKind::ClaudeStatusline => remove_claude_statusline(selected)?,
-        ComponentKind::CodexStatusline => remove_codex_statusline(selected)?,
-        ComponentKind::Rust => remove_rust(selected.home_dir())?,
-        ComponentKind::Go => {
-            tenant::remove_real_dir_if_exists(&selected.home_dir().join(".goroot"), "Go root")?;
-        }
-    }
-    Ok(0)
+    install_toolchain_with(tenant, component, &crate::docker::DockerCli::system())
 }
 
 fn component_catalog(selected: &Tenant) -> &'static [ComponentKind] {
@@ -397,7 +286,7 @@ fn tenant_home_exists(selected: &Tenant) -> Result<bool> {
 fn reject_host_toolchain(selected: &Tenant, kind: ComponentKind) -> Result<()> {
     if matches!(selected, Tenant::Host { .. }) && !kind.is_statusline() {
         bail!(
-            "{} is unavailable to the Host Tenant; --host supports only claude-statusline and codex-statusline",
+            "{} is unavailable to the Host Tenant; it supports only claude-statusline and codex-statusline",
             kind.name()
         );
     }
@@ -418,21 +307,6 @@ fn statusline_status_from_parts(
             ComponentStatus::Incomplete
         }
         _ => ComponentStatus::Modified,
-    }
-}
-
-fn format_status(kind: ComponentKind, status: &ComponentStatus) -> String {
-    match status {
-        ComponentStatus::Installed {
-            version: Some(version),
-        } => format!("{} installed {version}", kind.name()),
-        ComponentStatus::Installed { version: None } => {
-            format!("{} installed", kind.name())
-        }
-        ComponentStatus::Modified => format!("{} modified", kind.name()),
-        ComponentStatus::Incomplete => format!("{} incomplete", kind.name()),
-        ComponentStatus::Unmanaged => format!("{} unmanaged", kind.name()),
-        ComponentStatus::NotInstalled => format!("{} not-installed", kind.name()),
     }
 }
 
@@ -719,16 +593,14 @@ fn prepare_statusline_install(tenant: &Tenant, agent: AgentKind) -> Result<Tenan
 fn install_toolchain_with(
     tenant: &ManagedTenant,
     component: &ComponentSpec,
-    image_override: Option<&str>,
     docker: &crate::docker::DockerCli,
 ) -> Result<i32> {
-    install_toolchain_with_mode(tenant, component, image_override, docker, false)
+    install_toolchain_with_mode(tenant, component, docker, false)
 }
 
 fn install_toolchain_with_mode(
     tenant: &ManagedTenant,
     component: &ComponentSpec,
-    image_override: Option<&str>,
     docker: &crate::docker::DockerCli,
     service_mode: bool,
 ) -> Result<i32> {
@@ -756,12 +628,11 @@ fn install_toolchain_with_mode(
         );
     }
 
-    let image = crate::image_for(image_override)?;
-    if image_override.is_some() {
-        eprintln!(">> image overridden by $AIBOX_IMAGE: {image}");
-    }
-    if !crate::docker::image_exists_with(docker, &image)? {
-        bail!("{image} is not present locally; build it first from Console Overview");
+    let image = crate::docker::IMAGE;
+    if !crate::docker::image_exists_with(docker, image)? {
+        bail!(
+            "{image} is not present locally; build it with `aibox build` or from Console Overview"
+        );
     }
 
     tenant.ensure_initialized()?;
@@ -782,9 +653,9 @@ fn install_toolchain_with_mode(
         OsString::from(component.version.as_deref().unwrap_or("")),
     ];
     if service_mode {
-        crate::docker::run_for_service(docker, &run_args, &image, &command, || {})
+        crate::docker::run_for_service(docker, &run_args, image, &command, || {})
     } else {
-        crate::docker::run_with(docker, &run_args, &image, &command, || {})
+        crate::docker::run_with(docker, &run_args, image, &command, || {})
     }
 }
 
@@ -872,20 +743,6 @@ fn remove_rust(home: &Path) -> Result<()> {
         tenant::remove_real_dir_if_exists(&rustup, "Rustup Home")?;
     }
     Ok(())
-}
-
-fn confirm_remove(kind: ComponentKind) -> Result<bool> {
-    if !io::stdin().is_terminal() {
-        bail!(
-            "refusing to remove Component '{}' without --yes in a non-interactive shell",
-            kind.name()
-        );
-    }
-    eprint!("Remove Component '{}'? [y/N] ", kind.name());
-    io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 fn write_atomic(path: &Path, content: &[u8], mode: Option<u32>) -> Result<()> {

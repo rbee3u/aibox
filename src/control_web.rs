@@ -427,7 +427,7 @@ async fn delete_tenants(
     let root = state.root.clone();
     blocking(move || {
         let _guard = guard;
-        tenant::delete_tenants(&root, &request.names, request.all, true)?;
+        tenant::delete_tenants(&root, &request.names, request.all)?;
         Ok(json!({"deleted": request.names, "all": request.all}))
     })
     .await
@@ -817,7 +817,7 @@ async fn delete_configs(
         Err(error) => return result_error(error),
     };
     mutate_blocking(state, move || {
-        config::delete_named_configs(&selected, &request.configs, request.all, true)?;
+        config::delete_named_configs(&selected, &request.configs, request.all)?;
         Ok(json!({"deleted": request.configs, "all": request.all}))
     })
     .await

@@ -15,8 +15,8 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   distributes refreshed ChatGPT credentials without synchronization.
 - [0005: Filesystem Sandbox and host trust](0005-filesystem-sandbox-and-host-trust.md)
   makes Docker the filesystem boundary and treats writable state as untrusted.
-- [0006: CLI-only command boundary](0006-cli-only-command-boundary.md) preserves
-  native Coding Agent arguments without exposing orchestration APIs.
+- [0006: Application-only command boundary](0006-cli-only-command-boundary.md)
+  preserves native Coding Agent arguments without exposing orchestration APIs.
 - [0007: Supervised Docker lifecycle](0007-supervised-docker-lifecycle.md) keeps
   container cleanup under wrapper control.
 - [0008: Global trusted Request Proxy](0008-global-trusted-request-service.md)
@@ -31,3 +31,5 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   bounds and cancels one Service-lifetime long-running action.
 - [0013: Last Application and Config Drift](0013-last-application-and-config-drift.md)
   records diagnostic application provenance without reconciliation.
+- [0014: Fixed Runtime Image](0014-fixed-runtime-image.md) keeps every Run,
+  build, and toolchain installer on `aibox:latest`.

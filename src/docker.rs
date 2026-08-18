@@ -42,7 +42,7 @@ pub(crate) use image_ops::{build_image_for_service, inspect_runtime_image};
 #[cfg(test)]
 pub(crate) use image_ops::{build_image_with, inspect_runtime_image_with};
 
-/// Local image tag used when no image override is supplied.
+/// Fixed local Runtime Image tag used by every Run and toolchain installer.
 pub const IMAGE: &str = "aibox:latest";
 
 /// Shared development-runtime Dockerfile with both Coding Agent CLIs installed.

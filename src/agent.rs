@@ -164,14 +164,6 @@ impl AgentKind {
         }
     }
 
-    /// Human-readable name used in user-facing messages.
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude",
-            Self::Codex => "Codex",
-        }
-    }
-
     /// Agent state directory relative to the selected Tenant Home or Host Home.
     pub const fn state_dir_name(self) -> &'static str {
         match self {
@@ -221,7 +213,7 @@ impl AgentKind {
         }
     }
 
-    /// Built-in native main configuration used by `config create`.
+    /// Built-in native main configuration used when the Console creates a Named Config.
     pub const fn config_template(self) -> &'static str {
         match self {
             Self::Claude => DEFAULT_CLAUDE_CONFIG,
@@ -229,7 +221,7 @@ impl AgentKind {
         }
     }
 
-    /// Built-in native credential template used by `config create`, if separate.
+    /// Built-in native credential template used when the Console creates a Named Config.
     pub const fn config_auth_template(self) -> Option<&'static str> {
         match self {
             Self::Claude => None,
@@ -278,9 +270,6 @@ mod tests {
 
     #[test]
     fn agent_kind_carries_agent_contracts() {
-        assert_eq!(AgentKind::Claude.display_name(), "Claude");
-        assert_eq!(AgentKind::Codex.display_name(), "Codex");
-
         for (
             agent,
             tag,

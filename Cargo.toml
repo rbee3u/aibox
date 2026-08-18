@@ -14,7 +14,6 @@ axum = { version = "0.8", features = ["http2"] }
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
-clap_complete = { version = "4", features = ["unstable-dynamic"] }
 futures-util = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }

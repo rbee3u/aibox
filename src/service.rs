@@ -68,14 +68,17 @@ pub(crate) fn dispatch(args: &ServeArgs) -> Result<i32> {
     }
     let root = tenant::aibox_root()?;
     let host_home = tenant::host_home()?;
-    let image_override = crate::env_override("AIBOX_IMAGE")?;
-    let image = crate::image_for(image_override.as_deref())?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("aibox-service")
         .build()
         .context("create aibox Service async runtime")?;
-    runtime.block_on(serve(args.listen, root, host_home, image))
+    runtime.block_on(serve(
+        args.listen,
+        root,
+        host_home,
+        crate::docker::IMAGE.to_string(),
+    ))
 }
 
 async fn serve(

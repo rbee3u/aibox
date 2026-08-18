@@ -28,9 +28,9 @@ Run. It is not a complete authority or network boundary.
 _Avoid_: Complete isolation, authority boundary
 
 **Runtime Image**:
-The shared local Docker image built by aibox and used for Runs and Managed
-Tenant toolchain installation. It is inspected and built independently of any
-Tenant.
+The fixed local Docker image named `aibox:latest`, built by aibox and used for
+Runs and Managed Tenant toolchain installation. It is inspected and built
+independently of any Tenant.
 _Avoid_: Agent image, Tenant image, persistent container
 
 **Extra Mount**:
@@ -59,7 +59,7 @@ _Avoid_: Public API, SDK, remote API
 **Service Lock**:
 The advisory `$AIBOX_ROOT/.service.lock` held for the lifetime of one aibox
 Service. It prevents a second Service for the same Root but does not coordinate
-`aibox run` or deprecated CLI management commands.
+`aibox run` or Console operations in another process.
 _Avoid_: Global lock, Run lock, filesystem transaction
 
 **Management Operation**:

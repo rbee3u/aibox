@@ -1,11 +1,10 @@
 //! Browse saved Sessions directly from a Tenant Home or Host Home without
 //! starting a container. Discovery, id resolution, listing, and deletion are shared;
 //! [`SessionBackend`] isolates the two Coding Agents' Transcript formats.
-//! Strict discovery protects `get` and `delete` from partial views, while
-//! `list` can report traversal errors alongside readable Sessions.
+//! Strict discovery protects Console detail and deletion from partial views,
+//! while listing can report traversal errors alongside readable Sessions.
 
 use crate::agent::AgentKind;
-use crate::cli::SessionCommand;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::Value;
@@ -13,7 +12,7 @@ use serde_json::Value;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Read, Write};
+use std::io::{self, BufRead, Read};
 use std::path::{Component, Path, PathBuf};
 
 // Transcripts stream line by line, but a container-written JSONL record still
@@ -21,14 +20,9 @@ use std::path::{Component, Path, PathBuf};
 const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const UUID_TEXT_LEN: usize = 36;
 const UUID_SUFFIX_LEN: usize = 12;
-const LIST_ID_MIN_WIDTH: usize = UUID_SUFFIX_LEN;
 
 fn terminal_safe(value: &str) -> String {
     terminal_safe_with(value, |_| false)
-}
-
-fn terminal_safe_prompt(value: &str) -> String {
-    terminal_safe_with(value, |character| matches!(character, '\n' | '\t'))
 }
 
 fn terminal_safe_with(value: &str, keep_control: impl Fn(char) -> bool) -> String {
@@ -49,8 +43,8 @@ fn safe_path(path: &Path) -> String {
 
 /// Resolve a Transcript directory only through real directory entries beneath
 /// the selected Home. The Home is writable by a Coding Agent, so following a
-/// `.claude`/`.codex` ancestor symlink it planted could make host-side
-/// `session delete` remove Transcripts outside the Tenant.
+/// `.claude`/`.codex` ancestor symlink it planted could make Console deletion
+/// remove Transcripts outside the Tenant.
 pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {
     let mut path = home.to_path_buf();
     if !crate::tenant::real_dir_exists(&path, "tenant home")? {
@@ -65,7 +59,7 @@ pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Op
     Ok(Some(path))
 }
 
-/// Transcript discovery for `session list`: usable files plus non-fatal walk
+/// Transcript discovery for Console Session listing: usable files plus non-fatal walk
 /// errors that should be reported without hiding every readable transcript.
 #[derive(Default)]
 pub(crate) struct SessionDiscovery {
@@ -164,20 +158,6 @@ fn session_dir_exists(base: &Path) -> Result<bool> {
     }
 }
 
-#[cfg(test)]
-fn for_each_json_line_with_limit(
-    home: &Path,
-    path: &Path,
-    max_line_bytes: u64,
-    mut visit: impl FnMut(&Value),
-) -> Result<()> {
-    try_for_each_json_line_with_limit(home, path, max_line_bytes, |value| {
-        visit(value);
-        Ok(true)
-    })
-    .map(|_| ())
-}
-
 fn try_for_each_json_line(
     home: &Path,
     path: &Path,
@@ -190,7 +170,7 @@ fn try_for_each_json_line(
 /// records skipped. A line that is not valid UTF-8 JSON counts as a malformed
 /// record; open, size-limit, and I/O read failures remain errors.
 ///
-/// A Tenant's Transcripts can be hundreds of megabytes and `session list`
+/// A Tenant's Transcripts can be hundreds of megabytes and Session listing
 /// visits every one, so neither a complete file nor all parsed records are held
 /// in memory.
 fn try_for_each_json_line_with_limit(
@@ -524,10 +504,6 @@ impl TranscriptDiagnostics {
             PromptRecord::NotTyped => None,
         }
     }
-
-    fn has_warnings(self) -> bool {
-        self.malformed_lines != 0 || self.unsupported_user_records != 0
-    }
 }
 
 /// One Session's list-row data.
@@ -602,7 +578,7 @@ pub(crate) trait SessionBackend {
         walk_jsonl(&base, |name| self.keep_transcript_name(name))
     }
 
-    /// Transcript files for `session list`: the tolerant walk, so one bad
+    /// Transcript files for Console Session listing: the tolerant walk, so one bad
     /// child path does not hide every readable session.
     fn list_files(&self, home: &Path) -> Result<SessionDiscovery> {
         let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
@@ -747,25 +723,6 @@ pub(crate) fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
     }
 }
 
-/// Dispatch a host-side session action.
-///
-/// The return value is the command exit code; `list` returns 1 when it can show
-/// only a partial result.
-pub(crate) fn dispatch(
-    agent: AgentKind,
-    home: &Path,
-    command: Option<&SessionCommand>,
-) -> Result<i32> {
-    let backend = backend_for(agent);
-    match command {
-        None | Some(SessionCommand::List) => list(backend.as_ref(), home),
-        Some(SessionCommand::Get { id }) => get(backend.as_ref(), home, id),
-        Some(SessionCommand::Delete { ids, all, yes }) => {
-            delete(backend.as_ref(), home, ids, *all, *yes)
-        }
-    }
-}
-
 /// Resolve a full id or unique suffix to exactly one transcript path. A single
 /// exact id wins even when it is a suffix of other ids (otherwise that session
 /// could never be addressed at all), but duplicate exact ids remain ambiguous
@@ -838,84 +795,6 @@ fn list_id(id: &str) -> String {
     } else {
         terminal_safe(id)
     }
-}
-
-/// List this Tenant's Sessions, newest first: `shortid  date  title`.
-///
-/// Every Transcript lists (tool/injected-only shells show an empty title), so
-/// nothing is hidden from `list` or `delete --all`. Columns are
-/// `%-12s  %-16s  %s` for UUID ids; non-UUID ids are shown in full. Titles are
-/// collapsed to one line and capped at 64 chars.
-fn list(backend: &dyn SessionBackend, home: &Path) -> Result<i32> {
-    list_with_printer(backend, home, crate::print_line)
-}
-
-fn list_with_printer(
-    backend: &dyn SessionBackend,
-    home: &Path,
-    mut print: impl FnMut(&str) -> Result<bool>,
-) -> Result<i32> {
-    struct Row {
-        start_ts: String,
-        id: String,
-        title: String,
-    }
-
-    let mut rows = Vec::new();
-    let discovery = backend.list_files(home)?;
-    let mut failed = !discovery.errors.is_empty();
-    for error in discovery.errors {
-        eprintln!("!! {}", terminal_safe(&error));
-    }
-    for file in discovery.files {
-        match backend.summarize_in(home, &file) {
-            Ok(summary) => {
-                if report_transcript_diagnostics(&file, summary.diagnostics) {
-                    failed = true;
-                }
-                let title = list_title(&summary.title);
-                rows.push(Row {
-                    start_ts: summary.start_ts,
-                    id: summary.id,
-                    title,
-                });
-            }
-            Err(error) => {
-                eprintln!(
-                    "!! {}: {}",
-                    safe_path(&file),
-                    terminal_safe(&format!("{error:#}"))
-                );
-                failed = true;
-            }
-        }
-    }
-    if rows.is_empty() {
-        if !failed {
-            eprintln!(">> no sessions in this tenant");
-        }
-        return Ok(i32::from(failed));
-    }
-    // Newest first: ISO-8601 sorts lexically, so a plain string sort works.
-    rows.sort_by(|a, b| b.start_ts.cmp(&a.start_ts));
-
-    for Row {
-        start_ts,
-        id,
-        title,
-    } in rows
-    {
-        // Canonical UUIDs are safe ASCII; arbitrary ids come from transcript
-        // file names inside the container-writable tenant home and are escaped.
-        let short_id = list_id(&id);
-        let timestamp = fmt_ts(&start_ts);
-        if !print(&format!(
-            "{short_id:<LIST_ID_MIN_WIDTH$}  {timestamp:<16}  {title}"
-        ))? {
-            break; // reader hung up; nothing left to show
-        }
-    }
-    Ok(i32::from(failed))
 }
 
 pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<SessionListData> {
@@ -1019,75 +898,6 @@ pub(crate) fn delete_sessions(
     Ok(count)
 }
 
-/// Print your typed prompts from one session, numbered + timestamped, full text
-/// (for copy-paste).
-fn get(backend: &dyn SessionBackend, home: &Path, id: &str) -> Result<i32> {
-    get_with_printer(backend, home, id, crate::print_line)
-}
-
-fn get_with_printer(
-    backend: &dyn SessionBackend,
-    home: &Path,
-    id: &str,
-    mut print: impl FnMut(&str) -> Result<bool>,
-) -> Result<i32> {
-    let path = resolve(backend, home, id)?;
-    let sid = backend.id_of(&path);
-    eprintln!(">> session {}", terminal_safe(&sid));
-    let mut index = 0;
-    let (prompt_count, diagnostics) = backend.for_each_prompt_in(home, &path, &mut |prompt| {
-        index += 1;
-        let timestamp = fmt_ts(&prompt.timestamp);
-        let text = terminal_safe_prompt(&prompt.text);
-        print(&format!("\n[{index}] {timestamp}\n{text}"))
-    })?;
-    if prompt_count == 0 {
-        print("(no typed prompts in this session)")?;
-    }
-    Ok(i32::from(report_transcript_diagnostics(&path, diagnostics)))
-}
-
-fn report_transcript_diagnostics(path: &Path, diagnostics: TranscriptDiagnostics) -> bool {
-    if diagnostics.malformed_lines != 0 {
-        eprintln!(
-            "!! {}: skipped {} malformed JSONL record(s)",
-            safe_path(path),
-            diagnostics.malformed_lines
-        );
-    }
-    if diagnostics.unsupported_user_records != 0 {
-        eprintln!(
-            "!! {}: skipped {} malformed or unsupported user-like record(s)",
-            safe_path(path),
-            diagnostics.unsupported_user_records
-        );
-    }
-    diagnostics.has_warnings()
-}
-
-/// Delete explicitly selected transcripts, asking once per target unless `yes`
-/// is set. `--all` selects every transcript; an empty selection is an error.
-fn delete(
-    backend: &dyn SessionBackend,
-    home: &Path,
-    ids: &[String],
-    all: bool,
-    yes: bool,
-) -> Result<i32> {
-    let targets = delete_targets(backend, home, ids, all)?;
-    if targets.is_empty() {
-        eprintln!(">> no sessions in this tenant");
-        return Ok(0);
-    }
-
-    let stdin = io::stdin();
-    if !yes && !stdin.is_terminal() {
-        bail!("refusing to delete sessions without --yes in a non-interactive shell");
-    }
-    let mut input = stdin.lock();
-    delete_targets_with_input(backend, home, targets, yes, &mut input)
-}
-
 fn delete_targets(
     backend: &dyn SessionBackend,
     home: &Path,
@@ -1120,50 +930,6 @@ fn delete_targets(
         }
     }
     Ok(targets)
-}
-
-fn delete_targets_with_input(
-    backend: &dyn SessionBackend,
-    home: &Path,
-    targets: Vec<PathBuf>,
-    yes: bool,
-    input: &mut dyn BufRead,
-) -> Result<i32> {
-    for path in targets {
-        let sid = backend.id_of(&path);
-        let delete = yes || confirm_delete(&sid, input)?;
-        if delete {
-            remove_session_transcript(home, &path)?;
-            eprintln!(">> deleted {}", terminal_safe(&sid));
-        } else {
-            eprintln!(">> kept {}", terminal_safe(&sid));
-        }
-    }
-    Ok(0)
-}
-
-fn confirm_delete(sid: &str, input: &mut dyn BufRead) -> Result<bool> {
-    eprint!("delete session {}? [y/N] ", terminal_safe(sid));
-    io::stderr()
-        .flush()
-        .context("flush session delete prompt")?;
-    let mut answer = String::new();
-    input
-        .read_line(&mut answer)
-        .context("read session delete confirmation")?;
-    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
-}
-
-/// Format an ISO-8601 timestamp as `YYYY-MM-DD HH:MM` for display, or empty if
-/// the timestamp is empty. Positional slicing, not real date parsing — the stored
-/// value is already ISO-8601.
-fn fmt_ts(ts: &str) -> String {
-    if ts.is_empty() {
-        return String::new();
-    }
-    let date: String = ts.chars().take(10).collect();
-    let time: String = ts.chars().skip(11).take(5).collect();
-    terminal_safe(format!("{date} {time}").trim_end())
 }
 
 /// Collapse runs of control characters and non-plain-space whitespace to a

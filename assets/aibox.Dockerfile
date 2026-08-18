@@ -2,8 +2,7 @@
 # Shared development runtime for aibox. It installs both OpenAI Codex and
 # Claude Code into one image; the Rust wrapper selects which binary to run.
 #
-# Build:
-#   aibox build
+# Build with `aibox build` or from Console Overview.
 
 FROM debian:bookworm-slim
 
