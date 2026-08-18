@@ -72,6 +72,12 @@ pub(crate) struct ConfigCatalogEntry {
     pub(crate) detail: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct CurrentConfigInspection {
+    pub(crate) present_files: usize,
+    pub(crate) expected_files: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct NamedConfigLayout {
     main: bool,
@@ -345,6 +351,33 @@ pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<Config
     }
     configs.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(configs)
+}
+
+/// Inspect fixed Current Config file presence without reading their contents.
+pub(crate) fn inspect_current_config(selected: &TenantAgent) -> Result<CurrentConfigInspection> {
+    let expected_files = selected.agent.config_files().len();
+    let home_label = match &selected.tenant {
+        Tenant::Managed(_) => "Tenant Home",
+        Tenant::Host { .. } => "Host Home",
+    };
+    if !tenant::real_dir_exists(selected.home_dir(), home_label)?
+        || !tenant::real_dir_exists(&selected.agent_state_dir, "Agent state directory")?
+    {
+        return Ok(CurrentConfigInspection {
+            present_files: 0,
+            expected_files,
+        });
+    }
+    let mut present_files = 0;
+    for file in selected.agent.config_files() {
+        if tenant::real_file_exists(&selected.state_file(file), "Current Config file")? {
+            present_files += 1;
+        }
+    }
+    Ok(CurrentConfigInspection {
+        present_files,
+        expected_files,
+    })
 }
 
 /// Return every raw file in a Named Config, including invalid content for repair.

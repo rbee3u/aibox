@@ -650,6 +650,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn topology_and_session_summary_are_read_only_domain_views() {
+        let root = tempfile::tempdir().unwrap();
+        crate::tenant::ManagedTenant::resolve(root.path(), "work")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let state = test_state(root.path());
+        let host_codex = state.host_home.join(".codex");
+        let host_claude = state.host_home.join(".claude");
+        let app = router(state);
+
+        let topology = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/topology",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(topology.status(), StatusCode::OK);
+        let topology_body = topology.into_body().collect().await.unwrap().to_bytes();
+        let topology: Value = serde_json::from_slice(&topology_body).unwrap();
+        let tenants = topology["tenants"].as_array().unwrap();
+        assert_eq!(tenants.len(), 2);
+        assert_eq!(tenants[0]["kind"], "host");
+        assert_eq!(tenants[1]["name"], "work");
+        assert_eq!(tenants[0]["agents"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            tenants[0]["agents"][0]["current_config"]["present_files"],
+            0
+        );
+
+        let summary = app
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/sessions/summary?scope=host&agent=codex",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(summary.status(), StatusCode::OK);
+        let summary_body = summary.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&summary_body).unwrap(),
+            serde_json::json!({"count": 0, "warnings": [], "partial": false})
+        );
+        assert!(!host_codex.exists());
+        assert!(!host_claude.exists());
+    }
+
+    #[tokio::test]
     async fn session_delete_api_stays_within_the_selected_tenant_and_agent() {
         let root = tempfile::tempdir().unwrap();
         for name in ["work", "other"] {

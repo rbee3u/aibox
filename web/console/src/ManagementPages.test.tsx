@@ -1,11 +1,15 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ControlApi } from "./controlApi";
 import type { ConfigListData, SessionListData, SessionRow, TenantRow } from "./controlApi";
-import { ConfigPage, SessionPage } from "./ManagementPages";
+import { ConfigPage, SessionPage, TenantPage } from "./ManagementPages";
 import styles from "./ManagementPages.module.css";
 import { deferred } from "./test/fixtures";
+
+afterEach(() => {
+  window.history.replaceState(null, "", "/");
+});
 
 const firstSession = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -48,6 +52,30 @@ const tenants = [
   },
 ] satisfies TenantRow[];
 
+const tenantRows = [
+  {
+    kind: "host",
+    name: null,
+    display_name: "Host Tenant",
+    home: "/home/test",
+    exists: true,
+  },
+  {
+    kind: "managed",
+    name: "default",
+    display_name: "default",
+    home: "/home/test/.aibox/tenants/default",
+    exists: true,
+  },
+  {
+    kind: "managed",
+    name: "work",
+    display_name: "work",
+    home: "/var/lib/aibox/tenants/work",
+    exists: true,
+  },
+] satisfies TenantRow[];
+
 function list(sessions: SessionRow[], warnings: string[] = []): SessionListData {
   return {
     sessions,
@@ -83,6 +111,193 @@ function sessionQuery(path: string): URLSearchParams {
   return new URL(path, "http://aibox.test").searchParams;
 }
 
+function tenantApi({
+  rows = tenantRows,
+  components = [],
+  post = vi.fn().mockResolvedValue({ deleted: 1 }),
+}: {
+  rows?: TenantRow[];
+  components?: Array<{
+    kind: string;
+    supports_version: boolean;
+    status: string | null;
+    version: string | null;
+    error: string | null;
+  }>;
+  post?: ReturnType<typeof vi.fn>;
+} = {}) {
+  const get = vi.fn((path: string) => {
+    if (path === "/_aibox/api/tenants") return Promise.resolve(rows);
+    if (path.startsWith("/_aibox/api/components?")) return Promise.resolve(components);
+    return Promise.reject(new Error(`Unexpected GET ${path}`));
+  });
+  const api = {
+    bootstrap: { version: "test", csrf_token: "token" },
+    get,
+    post,
+  } as unknown as ControlApi;
+  return { api, get, post };
+}
+
+describe("TenantPage", () => {
+  it("restores a Tenant and selected Component from the shareable URL", async () => {
+    window.history.replaceState(null, "", "/_aibox/ui/tenants?scope=managed%3Awork&component=rust");
+    const { api, get } = tenantApi({
+      components: [
+        {
+          kind: "rust",
+          supports_version: true,
+          status: "installed",
+          version: "1.89.0",
+          error: null,
+        },
+      ],
+    });
+
+    render(<TenantPage api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "work" })).toBeInTheDocument();
+    const rust = await screen.findByText("rust");
+    expect(rust.closest(`.${styles.componentRow}`)).toHaveAttribute("aria-current", "true");
+    expect(get).toHaveBeenCalledWith("/_aibox/api/components?scope=managed&tenant=work");
+  });
+
+  it("groups Host and Managed Tenants and shows home paths", async () => {
+    const { api } = tenantApi();
+
+    render(<TenantPage api={api} />);
+
+    expect(await screen.findByText("Managed Tenants")).toBeInTheDocument();
+    expect(screen.getByText("~")).toBeInTheDocument();
+    expect(screen.getByText("~/.aibox/tenants/default")).toBeInTheDocument();
+    expect(screen.getByText("/var/lib/aibox/tenants/work")).toBeInTheDocument();
+    expect(screen.queryByText("managed")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh Tenants" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Tenants" })).toBeEnabled();
+
+    const layout = document.querySelector(`.${styles.tenantLayout}`);
+    expect(layout).not.toHaveClass(styles.hasSelection);
+  });
+
+  it("protects Host from bulk selection and disables create in selection mode", async () => {
+    const { api } = tenantApi();
+    const user = userEvent.setup();
+
+    render(<TenantPage api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Select Tenants" }));
+
+    const host = screen.getByRole("button", { name: "Host Tenant cannot be selected" });
+    expect(host).toBeDisabled();
+    expect(host.parentElement).toHaveClass(styles.configRowProtected);
+    expect(screen.getByText("Protected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Tenant" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deselect default" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Deselect work" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("creates a DNS-label Tenant from the plus dialog and opens its detail", async () => {
+    const rows = [...tenantRows];
+    const post = vi.fn((path: string, body: { name?: string }) => {
+      if (path === "/_aibox/api/tenants") {
+        rows.push({
+          kind: "managed",
+          name: body.name ?? "",
+          display_name: body.name ?? "",
+          home: `/home/test/.aibox/tenants/${body.name ?? ""}`,
+          exists: true,
+        });
+        return Promise.resolve({ created: body.name });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const { api } = tenantApi({
+      rows,
+      post,
+    });
+    const user = userEvent.setup();
+
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Tenant" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Tenant" });
+    const input = within(dialog).getByRole("textbox", { name: "Tenant name" });
+    await user.type(input, "Bad_Name");
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "new-tenant");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/_aibox/api/tenants", { name: "new-tenant" }),
+    );
+    expect(await screen.findByRole("heading", { name: "new-tenant" })).toBeInTheDocument();
+  });
+
+  it("uses a no-input confirmation for single deletion", async () => {
+    const post = vi.fn().mockResolvedValue({ deleted: 1 });
+    const { api } = tenantApi({ post });
+    const user = userEvent.setup();
+
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Tenant work?" });
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Delete Tenant" }));
+
+    expect(post).toHaveBeenCalledWith("/_aibox/api/tenants/delete", {
+      names: ["work"],
+      all: false,
+      confirmation: "work",
+    });
+  });
+
+  it("keeps surviving selections after a partial batch deletion failure", async () => {
+    let rows = [...tenantRows];
+    const post = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants/delete") {
+        rows = rows.filter((row) => row.name !== "default");
+        return Promise.reject(new Error("default could not be deleted"));
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(rows);
+      if (path.startsWith("/_aibox/api/components?")) return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const api = {
+      bootstrap: { version: "test", csrf_token: "token" },
+      get,
+      post,
+    } as unknown as ControlApi;
+    const user = userEvent.setup();
+
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Select Tenants" }));
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected Tenants" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete selected Managed Tenants?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Deselect default" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Deselect work" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+  });
+});
+
 describe("ConfigPage", () => {
   function configFile(file: string, content: string) {
     return {
@@ -92,6 +307,53 @@ describe("ConfigPage", () => {
       content_base64: btoa(content),
     };
   }
+
+  it("restores scope, Agent, Named Config, and file while reporting dirty edits", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?scope=host&agent=claude&config=team&file=settings.json",
+    );
+    const catalog = {
+      named_configs: ["team"],
+      configs: [{ name: "team", state: "ready" }],
+      files: ["settings.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?scope=host&agent=claude") {
+        return Promise.resolve(catalog);
+      }
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string, body: Record<string, unknown>) => {
+      if (path === "/_aibox/api/configs/reveal") {
+        return Promise.resolve(configFile(String(body.file), '{"model":"test"}\n'));
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const api = { get, post } as unknown as ControlApi;
+    const onDirtyChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
+
+    expect(await screen.findByRole("button", { name: "Tenant: Host Tenant" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Claude" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "team" })).toHaveAttribute("aria-pressed", "true");
+    const editor = await screen.findByRole("textbox", { name: "settings.json content" });
+    await user.type(editor, "changed");
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    expect(post).toHaveBeenCalledWith("/_aibox/api/configs/reveal", {
+      scope: "host",
+      agent: "claude",
+      current: false,
+      config: "team",
+      file: "settings.json",
+    });
+  });
 
   it("renders row actions and protects Current and Applied Configs from bulk selection", async () => {
     const catalog = {
@@ -202,6 +464,7 @@ describe("ConfigPage", () => {
     expect(protectedApplied).toBeDisabled();
     expect(protectedCurrent.parentElement).toHaveClass(styles.configRowProtected);
     expect(protectedApplied.parentElement).toHaveClass(styles.configRowProtected);
+    expect(screen.getByRole("button", { name: "Create Named Config" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Select all" }));
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deselect draft" })).toHaveAttribute(
@@ -214,6 +477,50 @@ describe("ConfigPage", () => {
     );
     expect(warningMarker).toBeInTheDocument();
     expect(errorMarker).toBeInTheDocument();
+  });
+
+  it("uses a no-input confirmation for one Named Config deletion", async () => {
+    const catalog = {
+      named_configs: ["custom"],
+      configs: [{ name: "custom", state: "ready" }],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path.startsWith("/_aibox/api/configs?")) return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string, body: { file?: string }) => {
+      if (path === "/_aibox/api/configs/reveal") {
+        return Promise.resolve(configFile(body.file ?? "config.toml", "current content"));
+      }
+      if (path === "/_aibox/api/configs/delete") return Promise.resolve({ deleted: ["custom"] });
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const api = {
+      bootstrap: { version: "test", csrf_token: "token" },
+      get,
+      post,
+    } as unknown as ControlApi;
+    const user = userEvent.setup();
+
+    render(<ConfigPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Delete Named Config custom" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Named Config custom?" });
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Current Config stays unchanged");
+    await user.click(within(dialog).getByRole("button", { name: "Delete Config" }));
+
+    expect(post).toHaveBeenCalledWith("/_aibox/api/configs/delete", {
+      scope: "managed",
+      tenant: "default",
+      agent: "codex",
+      configs: ["custom"],
+      all: false,
+      confirmation: "custom",
+    });
   });
 
   it.each([
@@ -542,6 +849,32 @@ describe("ConfigPage", () => {
 });
 
 describe("SessionPage", () => {
+  it("restores repeated filters and a uniquely sourced Session from the URL", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/_aibox/ui/sessions?scope=managed%3Adefault&scope=host&agent=codex&agent=claude&session_scope=host&session_agent=claude&session=${firstSession.id}`,
+    );
+    const { api, get, streamSession } = fakeApi({
+      sessions: () => list([firstSession]),
+    });
+
+    render(<SessionPage api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "First prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tenant: 2 tenants" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: 2 agents" })).toBeInTheDocument();
+    const sessionCalls = get.mock.calls.filter(([path]) =>
+      String(path).startsWith("/_aibox/api/sessions?"),
+    );
+    expect(sessionCalls).toHaveLength(4);
+    expect(streamSession).toHaveBeenCalledWith(
+      `/_aibox/api/sessions/prompts?scope=host&agent=claude&id=${firstSession.id}`,
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("defaults to compact single-select Tenant and Agent menus", async () => {
     const { api } = fakeApi();
     const user = userEvent.setup();

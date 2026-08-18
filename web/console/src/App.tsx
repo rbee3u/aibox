@@ -1,13 +1,8 @@
 import { Box, Menu } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRequestApi } from "./api";
-import {
-  ConfigPage,
-  OperationPanel,
-  OverviewPage,
-  SessionPage,
-  TenantPage,
-} from "./ManagementPages";
+import { ConfigPage, OperationPanel, SessionPage, TenantPage } from "./ManagementPages";
+import { OverviewPage, type ConsoleNavigate } from "./OverviewPage";
 import { RequestsPage } from "./RequestsPage";
 import { ControlApi } from "./controlApi";
 import type { Operation } from "./controlApi";
@@ -48,6 +43,9 @@ export function App() {
   const [operation, setOperation] = useState<Operation | null>(null);
   const [operationDismissed, setOperationDismissed] = useState<string | null>(null);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [locationVersion, setLocationVersion] = useState(0);
+  const configDirty = useRef(false);
+  const acceptedLocation = useRef(currentLocation());
 
   useEffect(() => {
     void ControlApi.connect()
@@ -76,9 +74,28 @@ export function App() {
   }, [api]);
 
   useEffect(() => {
-    const onPopState = () => setActive(moduleFromPath());
+    const onPopState = () => {
+      const next = currentLocation();
+      if (configDirty.current && !confirmDiscardedConfig()) {
+        window.history.pushState(null, "", acceptedLocation.current);
+        return;
+      }
+      acceptedLocation.current = next;
+      setActive(moduleFromPath());
+      setLocationVersion((value) => value + 1);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    const preventDirtyUnload = (event: BeforeUnloadEvent) => {
+      if (!configDirty.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventDirtyUnload);
+    return () => window.removeEventListener("beforeunload", preventDirtyUnload);
   }, []);
 
   useEffect(() => {
@@ -91,11 +108,33 @@ export function App() {
   );
   const activeModule = modules.find((module) => module.id === active)!;
 
-  function navigate(module: ModuleId) {
-    window.history.pushState(null, "", `/_aibox/ui/${module}`);
+  const commitLocation = useCallback(
+    (module: ModuleId, query?: URLSearchParams, replace = false) => {
+      const suffix = query?.toString();
+      const next = `/_aibox/ui/${module}${suffix ? `?${suffix}` : ""}`;
+      window.history[replace ? "replaceState" : "pushState"](null, "", next);
+      acceptedLocation.current = next;
+    },
+    [],
+  );
+
+  const navigate: ConsoleNavigate = (module, query) => {
+    if (configDirty.current && !confirmDiscardedConfig()) return;
+    commitLocation(module, query);
     setActive(module);
     setMobileOpen(false);
-  }
+  };
+
+  const updatePageLocation = useCallback(
+    (module: ModuleId, query: URLSearchParams, replace = false) => {
+      commitLocation(module, query, replace);
+    },
+    [commitLocation],
+  );
+
+  const recordConfigDirty = useCallback((dirty: boolean) => {
+    configDirty.current = dirty;
+  }, []);
 
   function recordOperation(value: Operation) {
     setOperation(value);
@@ -178,10 +217,37 @@ export function App() {
               <span>Connecting to AIBox Service</span>
             </div>
           )}
-          {api && active === "overview" && <OverviewPage api={api} onOperation={recordOperation} />}
-          {api && active === "tenants" && <TenantPage api={api} onOperation={recordOperation} />}
-          {api && active === "configs" && <ConfigPage api={api} />}
-          {api && active === "sessions" && <SessionPage api={api} />}
+          {api && active === "overview" && (
+            <OverviewPage
+              api={api}
+              operation={operation}
+              onNavigate={navigate}
+              onOperation={recordOperation}
+            />
+          )}
+          {api && active === "tenants" && (
+            <TenantPage
+              api={api}
+              locationVersion={locationVersion}
+              onLocationChange={updatePageLocation}
+              onOperation={recordOperation}
+            />
+          )}
+          {api && active === "configs" && (
+            <ConfigPage
+              api={api}
+              locationVersion={locationVersion}
+              onDirtyChange={recordConfigDirty}
+              onLocationChange={updatePageLocation}
+            />
+          )}
+          {api && active === "sessions" && (
+            <SessionPage
+              api={api}
+              locationVersion={locationVersion}
+              onLocationChange={updatePageLocation}
+            />
+          )}
           {requestApi && active === "requests" && (
             <RequestsPage api={requestApi} standalone={false} />
           )}
@@ -197,6 +263,14 @@ export function App() {
       )}
     </div>
   );
+}
+
+function currentLocation(): string {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
+function confirmDiscardedConfig(): boolean {
+  return window.confirm("Discard unsaved Config changes and continue?");
 }
 
 function mergeOperation(

@@ -50,6 +50,14 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
             printf 'sha256:fake-image\n'
             exit 0
             ;;
+        metadata)
+            printf '{"id":"sha256:0123456789abcdef","created_at":"2026-08-18T01:02:03Z","size_bytes":4242}\n'
+            exit 0
+            ;;
+        metadata-invalid)
+            printf 'not-json\n'
+            exit 0
+            ;;
         missing-localized)
             printf 'image not found: %s\n' "${5:-}" >&2
             exit 1
@@ -391,6 +399,45 @@ fn image_ref_for_exact_ls_adds_latest_only_when_tagless() {
         image_ref_for_exact_ls("repo/name@sha256:abc"),
         "repo/name@sha256:abc"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_image_inspection_returns_safe_metadata_and_parse_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_docker(dir.path());
+    let docker = |mode: &str| {
+        fake_docker(
+            dir.path(),
+            [("AIBOX_FAKE_DOCKER_IMAGE_MODE", OsString::from(mode))],
+        )
+    };
+
+    let metadata = inspect_runtime_image_with(&docker("metadata"), "repo/name:tag").unwrap();
+    assert!(metadata.present);
+    assert_eq!(metadata.id.as_deref(), Some("sha256:0123456789abcdef"));
+    assert_eq!(metadata.created_at.as_deref(), Some("2026-08-18T01:02:03Z"));
+    assert_eq!(metadata.size_bytes, Some(4242));
+    assert_eq!(metadata.detail, None);
+
+    let invalid = inspect_runtime_image_with(&docker("metadata-invalid"), "repo/name:tag").unwrap();
+    assert!(invalid.present);
+    assert_eq!(invalid.id, None);
+    assert!(
+        invalid
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("parse docker image metadata"))
+    );
+
+    let missing = inspect_runtime_image_with(&docker("missing-empty"), "repo/name:tag").unwrap();
+    assert!(!missing.present);
+    assert_eq!(missing.id, None);
+
+    let error = inspect_runtime_image_with(&docker("daemon-error"), "repo/name:tag")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Cannot connect"), "{error}");
 }
 
 #[cfg(unix)]

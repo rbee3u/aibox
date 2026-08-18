@@ -2,7 +2,8 @@
 
 use crate::agent::AgentKind;
 use crate::component::{self, ComponentKind, ComponentSpec, ComponentStatus};
-use crate::operation::OperationSnapshot;
+use crate::request_assessment::effective_assessment;
+use crate::request_store::AssessmentLevel;
 use crate::service::{PendingAuthPropagation, ServiceState};
 use crate::tenant::{self, ManagedTenant, Tenant};
 use crate::{config, docker, request_web, session};
@@ -37,6 +38,7 @@ pub(crate) fn router() -> Router<ServiceState> {
         .route("/_aibox/requests/app.js", get(request_web::js))
         .route("/_aibox/api/bootstrap", get(bootstrap))
         .route("/_aibox/api/overview", get(overview))
+        .route("/_aibox/api/topology", get(topology))
         .route("/_aibox/api/tenants", get(list_tenants).post(create_tenant))
         .route("/_aibox/api/tenants/delete", post(delete_tenants))
         .route("/_aibox/api/components", get(list_components))
@@ -57,6 +59,7 @@ pub(crate) fn router() -> Router<ServiceState> {
             post(execute_auth_propagation),
         )
         .route("/_aibox/api/sessions", get(list_sessions))
+        .route("/_aibox/api/sessions/summary", get(session_summary))
         .route("/_aibox/api/sessions/prompts", get(session_prompts))
         .route("/_aibox/api/sessions/delete", post(delete_sessions))
         .route("/_aibox/api/operations/current", get(current_operation))
@@ -84,52 +87,256 @@ async fn bootstrap(State(state): State<ServiceState>) -> Json<BootstrapResponse>
 
 #[derive(Serialize)]
 struct OverviewResponse {
+    service: ServiceOverview,
+    docker: DockerOverview,
+    runtime_image: RuntimeImageOverview,
+    managed_tenants: usize,
+    host_available: bool,
+    requests: RequestOverview,
+}
+
+#[derive(Serialize)]
+struct ServiceOverview {
     version: &'static str,
     listen: String,
     uptime_seconds: u64,
     aibox_root: String,
-    docker: String,
-    docker_error: Option<String>,
-    runtime_image: String,
-    image_available: bool,
-    managed_tenants: usize,
-    request_records: usize,
-    request_bytes: u64,
-    operation: Option<OperationSnapshot>,
+}
+
+#[derive(Serialize)]
+struct DockerOverview {
+    status: &'static str,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RuntimeImageOverview {
+    reference: String,
+    status: &'static str,
+    id: Option<String>,
+    created_at: Option<String>,
+    size_bytes: Option<u64>,
+    detail: Option<String>,
+}
+
+#[derive(Default, Serialize)]
+struct RequestOverview {
+    total: usize,
+    active: usize,
+    warning: usize,
+    error: usize,
+    bytes: u64,
 }
 
 async fn overview(State(state): State<ServiceState>) -> Response<Body> {
     let root = state.root.clone();
+    let host_home = state.host_home.clone();
     let image = state.image.clone();
     let request = state.request.store.clone();
-    let operation = state.operations.snapshot();
     let listen = state.listen;
     let uptime = state.started.elapsed().as_secs();
     blocking(move || {
         let tenants = tenant::list_tenants(&root)?;
-        let (docker_state, docker_error, image_available) =
-            match docker::image_exists(image.as_str()) {
-                Ok(available) => ("available".to_string(), None, available),
-                Err(error) => ("unavailable".to_string(), Some(format!("{error:#}")), false),
-            };
+        let host_available = tenant::real_dir_exists(&host_home, "Host Home")?;
+        let (docker, runtime_image) = match docker::inspect_runtime_image(image.as_str()) {
+            Ok(inspection) => (
+                DockerOverview {
+                    status: "available",
+                    error: None,
+                },
+                RuntimeImageOverview {
+                    reference: image.to_string(),
+                    status: if inspection.present {
+                        "built"
+                    } else {
+                        "missing"
+                    },
+                    id: inspection.id,
+                    created_at: inspection.created_at,
+                    size_bytes: inspection.size_bytes,
+                    detail: inspection.detail,
+                },
+            ),
+            Err(error) => (
+                DockerOverview {
+                    status: "unavailable",
+                    error: Some(format!("{error:#}")),
+                },
+                RuntimeImageOverview {
+                    reference: image.to_string(),
+                    status: "unknown",
+                    id: None,
+                    created_at: None,
+                    size_bytes: None,
+                    detail: None,
+                },
+            ),
+        };
         let records = request.scan_summaries()?;
-        let request_bytes = directory_size(request.root())?;
+        let mut requests = RequestOverview {
+            total: records.len(),
+            bytes: directory_size(request.root())?,
+            ..RequestOverview::default()
+        };
+        for record in records {
+            match effective_assessment(&record.summary, record.active).level {
+                AssessmentLevel::Active => requests.active += 1,
+                AssessmentLevel::Warning => requests.warning += 1,
+                AssessmentLevel::Error => requests.error += 1,
+                AssessmentLevel::Ok => {}
+            }
+        }
         Ok(OverviewResponse {
-            version: env!("CARGO_PKG_VERSION"),
-            listen: listen.to_string(),
-            uptime_seconds: uptime,
-            aibox_root: root.display().to_string(),
-            docker: docker_state,
-            docker_error,
-            runtime_image: image.to_string(),
-            image_available,
+            service: ServiceOverview {
+                version: env!("CARGO_PKG_VERSION"),
+                listen: listen.to_string(),
+                uptime_seconds: uptime,
+                aibox_root: root.display().to_string(),
+            },
+            docker,
+            runtime_image,
             managed_tenants: tenants.len(),
-            request_records: records.len(),
-            request_bytes,
-            operation,
+            host_available,
+            requests,
         })
     })
     .await
+}
+
+#[derive(Serialize)]
+struct TopologyResponse {
+    tenants: Vec<TopologyTenant>,
+}
+
+#[derive(Serialize)]
+struct TopologyTenant {
+    kind: &'static str,
+    name: Option<String>,
+    display_name: String,
+    home: String,
+    exists: bool,
+    agents: Vec<TopologyAgent>,
+    components: TopologyComponents,
+}
+
+#[derive(Serialize)]
+struct TopologyAgent {
+    agent: AgentKind,
+    current_config: TopologyCurrentConfig,
+    named_configs: TopologyNamedConfigs,
+    application: config::ApplicationStatus,
+}
+
+#[derive(Serialize)]
+struct TopologyCurrentConfig {
+    present_files: usize,
+    expected_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TopologyNamedConfigs {
+    entries: Vec<config::ConfigCatalogEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TopologyComponents {
+    entries: Vec<ComponentRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn topology(State(state): State<ServiceState>) -> Response<Body> {
+    let root = state.root.clone();
+    let host_home = state.host_home.clone();
+    blocking(move || {
+        let host_exists = tenant::real_dir_exists(&host_home, "Host Home")?;
+        let mut selected = vec![(
+            Tenant::Host {
+                home_dir: host_home.as_ref().clone(),
+                root_dir: root.as_ref().clone(),
+            },
+            "host",
+            None,
+            "Host Tenant".to_string(),
+            host_exists,
+        )];
+        for name in tenant::list_tenants(&root)? {
+            let managed = ManagedTenant::resolve(&root, &name)?;
+            selected.push((
+                Tenant::Managed(managed),
+                "managed",
+                Some(name.clone()),
+                name,
+                true,
+            ));
+        }
+        let tenants = selected
+            .into_iter()
+            .map(|(tenant, kind, name, display_name, exists)| {
+                let agents = [AgentKind::Codex, AgentKind::Claude]
+                    .into_iter()
+                    .map(|agent| topology_agent(&tenant, agent))
+                    .collect();
+                let components = match component_rows(&tenant) {
+                    Ok(entries) => TopologyComponents {
+                        entries,
+                        error: None,
+                    },
+                    Err(error) => TopologyComponents {
+                        entries: Vec::new(),
+                        error: Some(format!("{error:#}")),
+                    },
+                };
+                TopologyTenant {
+                    kind,
+                    name,
+                    display_name,
+                    home: tenant.home_dir().display().to_string(),
+                    exists,
+                    agents,
+                    components,
+                }
+            })
+            .collect();
+        Ok(TopologyResponse { tenants })
+    })
+    .await
+}
+
+fn topology_agent(tenant: &Tenant, agent: AgentKind) -> TopologyAgent {
+    let selected = tenant.for_agent(agent);
+    let current_config = match config::inspect_current_config(&selected) {
+        Ok(inspection) => TopologyCurrentConfig {
+            present_files: inspection.present_files,
+            expected_files: inspection.expected_files,
+            error: None,
+        },
+        Err(error) => TopologyCurrentConfig {
+            present_files: 0,
+            expected_files: agent.config_files().len(),
+            error: Some(format!("{error:#}")),
+        },
+    };
+    let named_configs = match config::inspect_named_configs(&selected) {
+        Ok(entries) => TopologyNamedConfigs {
+            entries,
+            error: None,
+        },
+        Err(error) => TopologyNamedConfigs {
+            entries: Vec::new(),
+            error: Some(format!("{error:#}")),
+        },
+    };
+    TopologyAgent {
+        agent,
+        current_config,
+        named_configs,
+        application: config::application_status(&selected),
+    }
 }
 
 #[derive(Serialize)]
@@ -260,29 +467,29 @@ async fn list_components(
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
-    blocking(move || {
-        let rows = component::inspect_catalog(&selected)?
-            .into_iter()
-            .map(|inspection| {
-                let (status, version) = inspection.status.map_or((None, None), |status| {
-                    let version = match &status {
-                        ComponentStatus::Installed { version } => version.clone(),
-                        _ => None,
-                    };
-                    (Some(component_status_name(&status).to_string()), version)
-                });
-                ComponentRow {
-                    kind: inspection.kind.name().to_string(),
-                    supports_version: inspection.kind.supports_version(),
-                    status,
-                    version,
-                    error: inspection.error,
-                }
-            })
-            .collect::<Vec<_>>();
-        Ok(rows)
-    })
-    .await
+    blocking(move || component_rows(&selected)).await
+}
+
+fn component_rows(selected: &Tenant) -> Result<Vec<ComponentRow>> {
+    Ok(component::inspect_catalog(selected)?
+        .into_iter()
+        .map(|inspection| {
+            let (status, version) = inspection.status.map_or((None, None), |status| {
+                let version = match &status {
+                    ComponentStatus::Installed { version } => version.clone(),
+                    _ => None,
+                };
+                (Some(component_status_name(&status).to_string()), version)
+            });
+            ComponentRow {
+                kind: inspection.kind.name().to_string(),
+                supports_version: inspection.kind.supports_version(),
+                status,
+                version,
+                error: inspection.error,
+            }
+        })
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -635,6 +842,25 @@ async fn list_sessions(
     .await
 }
 
+async fn session_summary(
+    State(state): State<ServiceState>,
+    Query(query): Query<AgentScopeQuery>,
+) -> Response<Body> {
+    let tenant = match resolve_tenant(&state, &query.scope) {
+        Ok(tenant) => tenant,
+        Err(error) => return result_error(error),
+    };
+    if let Err(error) = tenant.validate_session_home() {
+        return result_error(error);
+    }
+    let home = tenant.home_dir().to_path_buf();
+    blocking(move || {
+        let backend = session::backend_for(query.agent);
+        session::discovery_summary(backend.as_ref(), &home)
+    })
+    .await
+}
+
 #[derive(Deserialize)]
 struct SessionDetailQuery {
     #[serde(flatten)]
@@ -798,7 +1024,7 @@ async fn start_build(
 ) -> Response<Body> {
     let image = state.image.clone();
     let kind = if request.force {
-        "rebuild image without cache"
+        "build image without cache"
     } else {
         "build image"
     };

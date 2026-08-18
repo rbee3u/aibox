@@ -24,18 +24,71 @@ export interface Operation {
 }
 
 export interface OverviewData {
-  version: string;
-  listen: string;
-  uptime_seconds: number;
-  aibox_root: string;
-  docker: string;
-  docker_error: string | null;
-  runtime_image: string;
-  image_available: boolean;
+  service: {
+    version: string;
+    listen: string;
+    uptime_seconds: number;
+    aibox_root: string;
+  };
+  docker: {
+    status: "available" | "unavailable";
+    error: string | null;
+  };
+  runtime_image: {
+    reference: string;
+    status: "built" | "missing" | "unknown";
+    id: string | null;
+    created_at: string | null;
+    size_bytes: number | null;
+    detail: string | null;
+  };
   managed_tenants: number;
-  request_records: number;
-  request_bytes: number;
-  operation: Operation | null;
+  host_available: boolean;
+  requests: {
+    total: number;
+    active: number;
+    warning: number;
+    error: number;
+    bytes: number;
+  };
+}
+
+export interface TopologyCurrentConfig {
+  present_files: number;
+  expected_files: number;
+  error?: string;
+}
+
+export interface TopologyNamedConfigs {
+  entries: ConfigCatalogEntry[];
+  error?: string;
+}
+
+export interface TopologyAgent {
+  agent: Agent;
+  current_config: TopologyCurrentConfig;
+  named_configs: TopologyNamedConfigs;
+  application: ApplicationStatus;
+}
+
+export interface TopologyComponents {
+  entries: ComponentRow[];
+  error?: string;
+}
+
+export interface TopologyTenant extends TenantRow {
+  agents: TopologyAgent[];
+  components: TopologyComponents;
+}
+
+export interface TopologyData {
+  tenants: TopologyTenant[];
+}
+
+export interface SessionSummaryData {
+  count: number;
+  warnings: string[];
+  partial: boolean;
 }
 
 export interface TenantRow {

@@ -125,6 +125,22 @@ impl SessionBackend for ExplicitFilesBackend {
 }
 
 #[test]
+fn discovery_summary_counts_paths_without_opening_transcripts() {
+    let home = tempfile::tempdir().unwrap();
+    let missing = home.path().join("missing.jsonl");
+    let backend = ExplicitFilesBackend::with_list_errors(
+        vec![missing],
+        vec!["unsafe child\nwith control text".to_string()],
+    );
+
+    let summary = discovery_summary(&backend, home.path()).unwrap();
+
+    assert_eq!(summary.count, 1);
+    assert!(summary.partial);
+    assert_eq!(summary.warnings, ["unsafe child\\nwith control text"]);
+}
+
+#[test]
 fn transcript_line_reader_rejects_oversized_lines_without_reading_the_whole_file() {
     let home = tempfile::tempdir().unwrap();
     let path = write_session(home.path(), "oversized");

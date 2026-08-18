@@ -7,32 +7,18 @@ import {
   ChevronDown,
   ChevronLeft,
   CircleStop,
-  Container,
   Download,
-  FileClock,
-  FileCog,
-  FileCode2,
-  Hammer,
-  House,
   ListChecks,
   LoaderCircle,
   Plus,
   RefreshCw,
   Save,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  ControlApi,
-  decodeBase64,
-  encodeBase64,
-  formatBytes,
-  scopeBody,
-  scopeQuery,
-} from "./controlApi";
+import { ControlApi, decodeBase64, encodeBase64, scopeBody, scopeQuery } from "./controlApi";
 import type {
   Agent,
   ApplicationStatus,
@@ -41,7 +27,6 @@ import type {
   ConfigFileData,
   ConfigListData,
   Operation,
-  OverviewData,
   Prompt,
   PropagationPreview,
   PropagationReport,
@@ -56,10 +41,22 @@ import { NotificationCenter } from "./components/NotificationCenter";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { AgentIcon } from "./icons";
 import { formatTimestamp } from "./utils";
+import type { ModuleId } from "./moduleIcons";
+import { resourceIcons } from "./resourceIcons";
 import styles from "./ManagementPages.module.css";
+
+const ComponentIcon = resourceIcons.component;
+const CurrentConfigIcon = resourceIcons.currentConfig;
+const HostTenantIcon = resourceIcons.hostTenant;
+const ManagedTenantIcon = resourceIcons.managedTenant;
+const NamedConfigIcon = resourceIcons.namedConfig;
+const SessionIcon = resourceIcons.session;
 
 interface PageProps {
   api: ControlApi;
+  locationVersion?: number;
+  onDirtyChange?: (dirty: boolean) => void;
+  onLocationChange?: (module: ModuleId, query: URLSearchParams, replace?: boolean) => void;
   onOperation?: (operation: Operation) => void;
 }
 
@@ -106,6 +103,7 @@ function IconButton({
 
 function ConfirmDialog({
   title,
+  description,
   confirmation,
   confirmLabel,
   busy,
@@ -113,6 +111,7 @@ function ConfirmDialog({
   onConfirm,
 }: {
   title: string;
+  description?: ReactNode;
   confirmation?: string;
   confirmLabel: string;
   busy: boolean;
@@ -131,6 +130,7 @@ function ConfirmDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <h2 id="confirm-title">{title}</h2>
+        {description}
         {confirmation && (
           <label>
             Type <code>{confirmation}</code> to confirm
@@ -155,192 +155,249 @@ function ConfirmDialog({
   );
 }
 
-function Metric({ label, value, detail }: { label: string; value: ReactNode; detail?: string }) {
-  return (
-    <div className={styles.metric}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {detail && <small title={detail}>{detail}</small>}
-    </div>
-  );
-}
-
-export function OverviewPage({ api, onOperation }: PageProps) {
-  const [data, setData] = useState<OverviewData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      setData(await api.get<OverviewData>("/_aibox/api/overview"));
-      setError(null);
-    } catch (cause) {
-      setError(messageOf(cause));
-    }
-  }, [api]);
-  useEffect(() => void load(), [load]);
-
-  async function build(force: boolean) {
-    setBusy(true);
-    try {
-      const operation = await api.post<Operation>("/_aibox/api/operations/build", { force });
-      onOperation?.(operation);
-      setData((current) => (current ? { ...current, operation } : current));
-      setError(null);
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!data && !error) return <Loading />;
-  return (
-    <div className={styles.page}>
-      <PageError error={error} />
-      <div className={styles.pageToolbar}>
-        <div />
-        <IconButton label="Refresh status" onClick={() => void load()}>
-          <RefreshCw size={16} />
-        </IconButton>
-      </div>
-      {data && (
-        <>
-          <section className={styles.metricGrid} aria-label="Service status">
-            <Metric label="Service" value="Running" detail={`${data.listen} · ${data.version}`} />
-            <Metric
-              label="Docker"
-              value={data.docker === "available" ? "Available" : "Unavailable"}
-              detail={data.docker_error ?? undefined}
-            />
-            <Metric label="Managed Tenants" value={data.managed_tenants} />
-            <Metric
-              label="Requests"
-              value={data.request_records}
-              detail={formatBytes(data.request_bytes)}
-            />
-          </section>
-          <section className={styles.band}>
-            <div className={styles.bandHeading}>
-              <div>
-                <h2>Runtime image</h2>
-                <code>{data.runtime_image}</code>
-              </div>
-              <span className={data.image_available ? styles.goodStatus : styles.warnStatus}>
-                {data.image_available ? "Built" : "Missing"}
-              </span>
-            </div>
-            <div className={styles.actionRow}>
-              <button
-                className={styles.primaryButton}
-                onClick={() => void build(false)}
-                disabled={busy}
-              >
-                <Hammer size={15} /> Build
-              </button>
-              <button onClick={() => void build(true)} disabled={busy}>
-                <RefreshCw size={15} /> Rebuild without cache
-              </button>
-            </div>
-          </section>
-          <section className={styles.band}>
-            <h2>Storage</h2>
-            <dl className={styles.details}>
-              <dt>aibox Root</dt>
-              <dd>
-                <code>{data.aibox_root}</code>
-              </dd>
-              <dt>Uptime</dt>
-              <dd>{formatDuration(data.uptime_seconds)}</dd>
-            </dl>
-          </section>
-        </>
-      )}
-    </div>
-  );
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours) return `${hours}h ${minutes}m`;
-  if (minutes) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-}
-
 function tenantScope(row: TenantRow): Scope {
   return row.kind === "host" ? { scope: "host" } : { scope: "managed", tenant: row.name! };
 }
 
-export function TenantPage({ api, onOperation }: PageProps) {
+type TenantKey = "host" | `managed:${string}`;
+type TenantDeleteTarget = { names: string[] };
+
+function tenantKeyOf(row: TenantRow): TenantKey {
+  return row.kind === "host" ? "host" : `managed:${row.name}`;
+}
+
+function tenantKeyFromParam(value: string | null): TenantKey | null {
+  if (value === "host") return "host";
+  if (value?.startsWith("managed:") && CONFIG_NAME_PATTERN.test(value.slice(8))) {
+    return value as TenantKey;
+  }
+  return null;
+}
+
+function pageSearch(): URLSearchParams {
+  return new URLSearchParams(window.location.search);
+}
+
+function changePageLocation(
+  module: ModuleId,
+  query: URLSearchParams,
+  onLocationChange?: PageProps["onLocationChange"],
+  replace = false,
+) {
+  onLocationChange?.(module, query, replace);
+}
+
+function tenantLocation(key: TenantKey | null, component?: string | null): URLSearchParams {
+  const query = new URLSearchParams();
+  if (key) query.set("scope", key);
+  if (key && component) query.set("component", component);
+  return query;
+}
+
+function abbreviateTenantHome(path: string, hostHome: string | null): string {
+  if (!hostHome) return path;
+  if (path === hostHome) return "~";
+  const prefix = hostHome.endsWith("/") ? hostHome : `${hostHome}/`;
+  return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
+}
+
+export function TenantPage({ api, locationVersion = 0, onLocationChange, onOperation }: PageProps) {
+  const [initialRoute] = useState(pageSearch);
+  const observedLocationVersion = useRef(locationVersion);
+  const initialKey = tenantKeyFromParam(initialRoute.get("scope"));
   const [tenants, setTenants] = useState<TenantRow[]>([]);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(initialKey);
+  const [selectedComponent, setSelectedComponent] = useState<string | null>(
+    initialKey ? initialRoute.get("component") : null,
+  );
   const [components, setComponents] = useState<ComponentRow[]>([]);
   const [versions, setVersions] = useState<Record<string, string>>({});
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<TenantRow | null>(null);
-  const keyOf = (row: TenantRow) => (row.kind === "host" ? "host" : `managed:${row.name}`);
-  const selected = tenants.find((row) => keyOf(row) === selectedKey) ?? null;
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<TenantKey>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<TenantDeleteTarget | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(initialKey !== null);
+  const preserveComponentError = useRef(false);
+  const selected = tenants.find((row) => tenantKeyOf(row) === selectedKey) ?? null;
+  const hostTenant = tenants.find((row) => row.kind === "host") ?? null;
+  const managedTenants = useMemo(
+    () =>
+      tenants
+        .filter(
+          (row): row is TenantRow & { kind: "managed"; name: string } =>
+            row.kind === "managed" && Boolean(row.name),
+        )
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    [tenants],
+  );
+  const selectableKeys = managedTenants.map((row) => tenantKeyOf(row));
+  const allSelectable =
+    selectableKeys.length > 0 && selectableKeys.every((key) => selectedKeys.has(key));
+  const selectedCount = selectedKeys.size;
+  const createNameValid = CONFIG_NAME_PATTERN.test(newName);
 
-  const loadTenants = useCallback(async () => {
+  useEffect(() => {
+    if (observedLocationVersion.current === locationVersion) return;
+    observedLocationVersion.current = locationVersion;
+    const query = pageSearch();
+    const key = tenantKeyFromParam(query.get("scope"));
+    setSelectedKey(key);
+    setSelectedComponent(key ? query.get("component") : null);
+    setDetailOpen(key !== null);
+  }, [locationVersion]);
+
+  const loadTenants = useCallback(async (): Promise<TenantRow[] | null> => {
     try {
       const rows = await api.get<TenantRow[]>("/_aibox/api/tenants");
       setTenants(rows);
-      setSelectedKey(
-        (current) =>
-          current ??
-          (rows.find((row) => row.name === "default") ? "managed:default" : keyOf(rows[0])),
-      );
+      setSelectedKey((current) => {
+        if (current && rows.some((row) => tenantKeyOf(row) === current)) return current;
+        const fallback =
+          rows.find((row) => row.kind === "managed" && row.name === "default") ??
+          rows.find((row) => row.kind === "managed") ??
+          rows.find((row) => row.kind === "host");
+        if (current) {
+          setSelectedComponent(null);
+          setDetailOpen(false);
+          changePageLocation("tenants", new URLSearchParams(), onLocationChange, true);
+        }
+        return fallback ? tenantKeyOf(fallback) : null;
+      });
+      setSelectedKeys((current) => {
+        const available = new Set(rows.map((row) => tenantKeyOf(row)));
+        return new Set([...current].filter((key) => available.has(key) && key !== "host"));
+      });
       setError(null);
+      return rows;
     } catch (cause) {
       setError(messageOf(cause));
+      return null;
     }
-  }, [api]);
+  }, [api, onLocationChange]);
   useEffect(() => void loadTenants(), [loadTenants]);
 
   const loadComponents = useCallback(async () => {
-    if (!selected) return;
+    if (!selected) {
+      setComponents([]);
+      return;
+    }
     try {
       const query = scopeQuery(tenantScope(selected));
-      setComponents(await api.get<ComponentRow[]>(`/_aibox/api/components?${query}`));
-      setError(null);
+      const rows = await api.get<ComponentRow[]>(`/_aibox/api/components?${query}`);
+      setComponents(rows);
+      if (selectedComponent && !rows.some((row) => row.kind === selectedComponent)) {
+        setSelectedComponent(null);
+        changePageLocation(
+          "tenants",
+          tenantLocation(tenantKeyOf(selected)),
+          onLocationChange,
+          true,
+        );
+      }
+      if (preserveComponentError.current) preserveComponentError.current = false;
+      else setError(null);
     } catch (cause) {
-      setError(messageOf(cause));
+      if (preserveComponentError.current) preserveComponentError.current = false;
+      else setError(messageOf(cause));
     }
-  }, [api, selected]);
+  }, [api, onLocationChange, selected, selectedComponent]);
   useEffect(() => void loadComponents(), [loadComponents]);
 
+  async function refreshTenants() {
+    setRefreshing(true);
+    try {
+      await loadTenants();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function createTenant() {
-    if (!newName) return;
+    if (!createNameValid) return;
     setBusy(true);
     try {
       await api.post("/_aibox/api/tenants", { name: newName });
       const created = newName;
       setNewName("");
+      setCreateError(null);
+      setCreateOpen(false);
       await loadTenants();
-      setSelectedKey(`managed:${created}`);
+      const key = `managed:${created}` as TenantKey;
+      setSelectedKey(key);
+      setSelectedComponent(null);
+      setDetailOpen(true);
+      changePageLocation("tenants", tenantLocation(key), onLocationChange);
     } catch (cause) {
-      setError(messageOf(cause));
+      setCreateError(messageOf(cause));
     } finally {
       setBusy(false);
     }
   }
 
-  async function deleteTenant() {
-    if (!deleteTarget?.name) return;
+  function toggleTenant(key: TenantKey) {
+    if (key === "host") return;
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAllTenants() {
+    setSelectedKeys(allSelectable ? new Set() : new Set(selectableKeys));
+  }
+
+  function cancelSelection() {
+    setSelectionMode(false);
+    setSelectedKeys(new Set());
+  }
+
+  function requestTenantDelete(names: string[]) {
+    if (names.length === 0) return;
+    setDeleteTarget({ names });
+  }
+
+  async function deleteTenants() {
+    if (!deleteTarget || deleteTarget.names.length === 0) return;
+    const requestedNames = deleteTarget.names;
+    const wasSelectionMode = selectionMode;
     setBusy(true);
     try {
       await api.post("/_aibox/api/tenants/delete", {
-        names: [deleteTarget.name],
+        names: requestedNames,
         all: false,
-        confirmation: deleteTarget.name,
+        confirmation: requestedNames.length === 1 ? requestedNames[0] : "",
       });
       setDeleteTarget(null);
-      setSelectedKey(null);
+      setSelectionMode(false);
+      setSelectedKeys(new Set());
       await loadTenants();
     } catch (cause) {
-      setError(messageOf(cause));
+      const deletionError = messageOf(cause);
+      setDeleteTarget(null);
+      const refreshed = await loadTenants();
+      if (refreshed) {
+        const selectedStillExists =
+          selectedKey !== null && refreshed.some((row) => tenantKeyOf(row) === selectedKey);
+        if (selectedKey !== null && !selectedStillExists) {
+          preserveComponentError.current = true;
+        }
+        const remaining = requestedNames.filter((name) =>
+          refreshed.some((row) => row.kind === "managed" && row.name === name),
+        );
+        setSelectedKeys(
+          wasSelectionMode
+            ? new Set(remaining.map((name) => `managed:${name}` as TenantKey))
+            : new Set(),
+        );
+        setSelectionMode(wasSelectionMode && remaining.length > 0);
+      }
+      setError(deletionError);
     } finally {
       setBusy(false);
     }
@@ -368,62 +425,195 @@ export function TenantPage({ api, onOperation }: PageProps) {
   return (
     <div className={`${styles.page} ${styles.catalogPage}`}>
       <PageError error={error} />
-      <div className={`${styles.splitLayout} ${selected ? styles.hasSelection : ""}`}>
-        <aside className={styles.catalog} aria-label="Tenants">
-          <form
-            className={styles.createRow}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void createTenant();
-            }}
-          >
-            <input
-              aria-label="New Tenant name"
-              placeholder="tenant-name"
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-            />
-            <IconButton label="Create Tenant" type="submit" disabled={busy || !newName}>
-              <Plus size={16} />
-            </IconButton>
-          </form>
-          <div className={styles.catalogList}>
-            {tenants.map((row) => (
-              <button
-                className={keyOf(row) === selectedKey ? styles.selectedRow : styles.catalogRow}
-                type="button"
-                key={keyOf(row)}
-                onClick={() => setSelectedKey(keyOf(row))}
-              >
-                {row.kind === "host" ? (
-                  <House size={16} data-icon="host-tenant" />
-                ) : (
-                  <Container size={16} data-icon="managed-tenant" />
-                )}
-                <span>
-                  <strong>{row.display_name}</strong>
-                  <small>{row.kind}</small>
-                </span>
-              </button>
-            ))}
+      <div
+        className={`${styles.splitLayout} ${styles.tenantLayout} ${detailOpen ? styles.hasSelection : ""}`}
+      >
+        <aside className={styles.tenantCatalog} aria-label="Tenants">
+          <div className={styles.sessionToolbar}>
+            {selectionMode ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.sessionCancelSelection}
+                  disabled={busy}
+                  onClick={cancelSelection}
+                >
+                  Cancel
+                </button>
+                <div className={styles.sessionSelectionActions}>
+                  <span className={styles.sessionSelectionCount}>{selectedCount} selected</span>
+                  <button
+                    type="button"
+                    className={styles.sessionSelectAll}
+                    disabled={selectableKeys.length === 0 || busy}
+                    onClick={toggleAllTenants}
+                  >
+                    {allSelectable ? "Clear all" : "Select all"}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.sessionDeleteSelected}
+                    aria-label="Delete selected Tenants"
+                    disabled={selectedCount === 0 || busy}
+                    onClick={() =>
+                      requestTenantDelete([...selectedKeys].map((key) => key.slice(8)))
+                    }
+                  >
+                    <Trash2 size={14} aria-hidden="true" /> Delete selected
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className={styles.sessionHeaderActions}>
+                <button
+                  type="button"
+                  className={styles.sessionRefresh}
+                  aria-label={refreshing ? "Refreshing Tenants" : "Refresh Tenants"}
+                  aria-busy={refreshing}
+                  disabled={refreshing || busy}
+                  onClick={() => void refreshTenants()}
+                >
+                  <RefreshCw className={refreshing ? styles.spinning : undefined} size={14} />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  className={styles.sessionSelect}
+                  aria-label="Select Tenants"
+                  disabled={selectableKeys.length === 0 || refreshing || busy}
+                  onClick={() => setSelectionMode(true)}
+                >
+                  <ListChecks size={14} /> Select
+                </button>
+              </div>
+            )}
+          </div>
+          <div className={styles.configList} aria-busy={refreshing}>
+            <div className={styles.configRowGroup}>
+              {hostTenant && (
+                <div
+                  className={`${styles.configRow} ${selectedKey === "host" ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
+                >
+                  <button
+                    type="button"
+                    className={styles.configRowMain}
+                    aria-label={selectionMode ? "Host Tenant cannot be selected" : "Host Tenant"}
+                    aria-pressed={!selectionMode && selectedKey === "host"}
+                    disabled={busy || refreshing || selectionMode}
+                    onClick={() => {
+                      setSelectedKey("host");
+                      setSelectedComponent(null);
+                      setDetailOpen(true);
+                      changePageLocation("tenants", tenantLocation("host"), onLocationChange);
+                    }}
+                  >
+                    <HostTenantIcon size={16} data-icon="host-tenant" />
+                    <span className={styles.tenantRowText}>
+                      <strong>Host Tenant</strong>
+                      <small className={styles.tenantPath} title={hostTenant.home}>
+                        {abbreviateTenantHome(hostTenant.home, hostTenant.home)}
+                      </small>
+                    </span>
+                    {selectionMode && <span className={styles.configProtected}>Protected</span>}
+                  </button>
+                </div>
+              )}
+              <div className={styles.catalogDivider}>
+                <span>Managed Tenants</span>
+                <IconButton
+                  className={styles.configAddButton}
+                  label="Create Tenant"
+                  disabled={busy || refreshing || selectionMode}
+                  onClick={() => {
+                    setCreateError(null);
+                    setCreateOpen(true);
+                  }}
+                >
+                  <Plus size={15} />
+                </IconButton>
+              </div>
+              {managedTenants.map((row) => {
+                const key = tenantKeyOf(row);
+                const selectedForInspection = key === selectedKey;
+                const selectedForDeletion = selectedKeys.has(key);
+                return (
+                  <div
+                    key={key}
+                    className={`${styles.configRow} ${selectedForInspection ? styles.configRowInspected : ""} ${selectedForDeletion ? styles.configRowSelected : ""} ${selectionMode ? styles.configRowSelection : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className={styles.configRowMain}
+                      aria-label={
+                        selectionMode
+                          ? `${selectedForDeletion ? "Deselect" : "Select"} ${row.display_name}`
+                          : row.display_name
+                      }
+                      aria-pressed={selectionMode ? selectedForDeletion : selectedForInspection}
+                      disabled={busy || refreshing}
+                      onClick={() => {
+                        if (selectionMode) toggleTenant(key);
+                        else {
+                          setSelectedKey(key);
+                          setSelectedComponent(null);
+                          setDetailOpen(true);
+                          changePageLocation("tenants", tenantLocation(key), onLocationChange);
+                        }
+                      }}
+                    >
+                      <ManagedTenantIcon size={16} data-icon="managed-tenant" />
+                      <span className={styles.tenantRowText}>
+                        <strong>{row.display_name}</strong>
+                        <small className={styles.tenantPath} title={row.home}>
+                          {abbreviateTenantHome(row.home, hostTenant?.home ?? null)}
+                        </small>
+                      </span>
+                      {selectionMode && (
+                        <span className={styles.sessionSelectionIndicator} aria-hidden="true">
+                          {selectedForDeletion && <Check size={15} strokeWidth={3} />}
+                        </span>
+                      )}
+                    </button>
+                    {!selectionMode && (
+                      <div className={styles.configRowActions}>
+                        <IconButton
+                          className={`${styles.configRowAction} ${styles.configDeleteAction}`}
+                          label={`Delete Tenant ${row.display_name}`}
+                          disabled={busy}
+                          onClick={() => requestTenantDelete([row.name])}
+                        >
+                          <Trash2 size={15} />
+                        </IconButton>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {managedTenants.length === 0 && (
+                <div className={styles.configListEmpty}>No Managed Tenants found.</div>
+              )}
+            </div>
           </div>
         </aside>
         <section className={styles.detailPane}>
           {selected ? (
             <>
               <div className={styles.detailHeader}>
-                <IconButton label="Back to Tenants" onClick={() => setSelectedKey(null)}>
+                <IconButton
+                  label="Back to Tenants"
+                  onClick={() => {
+                    setSelectedKey(null);
+                    setSelectedComponent(null);
+                    setDetailOpen(false);
+                    changePageLocation("tenants", new URLSearchParams(), onLocationChange);
+                  }}
+                >
                   <ChevronLeft size={17} />
                 </IconButton>
                 <div>
                   <h2>{selected.display_name}</h2>
                   <code>{selected.home}</code>
                 </div>
-                {selected.kind === "managed" && (
-                  <IconButton label="Delete Tenant" onClick={() => setDeleteTarget(selected)}>
-                    <Trash2 size={16} />
-                  </IconButton>
-                )}
               </div>
               <div className={styles.sectionHeading}>
                 <div>
@@ -438,8 +628,22 @@ export function TenantPage({ api, onOperation }: PageProps) {
                 {components.map((row) => {
                   const installed = row.status && row.status !== "not-installed";
                   return (
-                    <div className={styles.componentRow} key={row.kind}>
-                      <Wrench size={17} aria-hidden="true" />
+                    <div
+                      className={`${styles.componentRow} ${selectedComponent === row.kind ? styles.componentRowSelected : ""}`}
+                      key={row.kind}
+                      aria-current={selectedComponent === row.kind ? "true" : undefined}
+                      onClick={() => {
+                        if (!selected) return;
+                        const key = tenantKeyOf(selected);
+                        setSelectedComponent(row.kind);
+                        changePageLocation(
+                          "tenants",
+                          tenantLocation(key, row.kind),
+                          onLocationChange,
+                        );
+                      }}
+                    >
+                      <ComponentIcon size={17} aria-hidden="true" />
                       <div>
                         <strong>{row.kind}</strong>
                         <small>{row.error ?? row.status ?? "Unavailable"}</small>
@@ -478,15 +682,97 @@ export function TenantPage({ api, onOperation }: PageProps) {
           )}
         </section>
       </div>
-      {deleteTarget?.name && (
+      {createOpen && (
+        <div className={styles.dialogBackdrop} onMouseDown={() => !busy && setCreateOpen(false)}>
+          <form
+            className={styles.dialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-tenant-title"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (createNameValid && !busy) void createTenant();
+            }}
+          >
+            <h2 id="create-tenant-title">Create Tenant</h2>
+            <label>
+              Name
+              <input
+                autoFocus
+                aria-label="Tenant name"
+                value={newName}
+                onChange={(event) => {
+                  setNewName(event.target.value);
+                  setCreateError(null);
+                }}
+                aria-invalid={newName.length > 0 && !createNameValid}
+              />
+            </label>
+            {createError && <div className={styles.inlineWarning}>{createError}</div>}
+            <div className={styles.dialogActions}>
+              <button type="button" onClick={() => setCreateOpen(false)} disabled={busy}>
+                Cancel
+              </button>
+              <button
+                className={styles.primaryButton}
+                type="submit"
+                disabled={!createNameValid || busy}
+              >
+                <Plus size={14} /> Create
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
-          title={`Delete Tenant ${deleteTarget.name}?`}
-          confirmation={deleteTarget.name}
+          title={`Delete Tenant ${deleteTarget.names[0]}?`}
+          description={
+            <p className={styles.dialogDescription}>
+              This permanently deletes the Tenant Home, Sessions, Components state, and Named
+              Configs for this Tenant.
+            </p>
+          }
           confirmLabel="Delete Tenant"
           busy={busy}
           onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => void deleteTenant()}
+          onConfirm={() => void deleteTenants()}
         />
+      )}
+      {deleteTarget && deleteTarget.names.length > 1 && (
+        <div className={styles.dialogBackdrop}>
+          <section
+            className={`${styles.dialog} ${styles.wideDialog}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-tenants-title"
+          >
+            <h2 id="delete-tenants-title">Delete selected Managed Tenants?</h2>
+            <p className={styles.dialogDescription}>
+              This permanently deletes each Tenant Home, its Sessions and Components state, and its
+              Named Configs.
+            </p>
+            <div className={styles.planList}>
+              {deleteTarget.names.map((name) => (
+                <code key={name}>{name}</code>
+              ))}
+            </div>
+            <div className={styles.dialogActions}>
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={busy}>
+                Cancel
+              </button>
+              <button
+                className={styles.dangerButton}
+                type="button"
+                onClick={() => void deleteTenants()}
+                disabled={busy}
+              >
+                <Trash2 size={14} /> Delete selected
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
@@ -513,6 +799,48 @@ function configScopeKey(scope: Scope): ConfigScopeKey {
 
 function scopeFromConfigKey(key: ConfigScopeKey): Scope {
   return key === "host" ? { scope: "host" } : { scope: "managed", tenant: key.slice(8) };
+}
+
+interface ConfigRouteState {
+  scope: Scope;
+  agent: Agent;
+  selection: ConfigSelection;
+  file: string | null;
+  detailOpen: boolean;
+}
+
+function readConfigRoute(): ConfigRouteState {
+  const query = pageSearch();
+  const scopeKey = tenantKeyFromParam(query.get("scope")) ?? "managed:default";
+  const agent = query.get("agent") === "claude" ? "claude" : "codex";
+  const config = query.get("config");
+  const current = query.get("current") === "1";
+  const detailOpen = current || (config !== null && CONFIG_NAME_PATTERN.test(config));
+  return {
+    scope: scopeFromConfigKey(scopeKey),
+    agent,
+    selection:
+      !current && config && CONFIG_NAME_PATTERN.test(config)
+        ? { current: false, config }
+        : { current: true },
+    file: detailOpen ? query.get("file") : null,
+    detailOpen,
+  };
+}
+
+function configLocation(
+  scope: Scope,
+  agent: Agent,
+  selection: ConfigSelection | null,
+  file?: string | null,
+): URLSearchParams {
+  const query = new URLSearchParams();
+  query.set("scope", configScopeKey(scope));
+  query.set("agent", agent);
+  if (selection?.current) query.set("current", "1");
+  else if (selection) query.set("config", selection.config);
+  if (selection && file) query.set("file", file);
+  return query;
 }
 
 interface ConfigIssuePresentation {
@@ -545,13 +873,20 @@ function configIssueDescriptionId(scope: Scope, agent: Agent, name: string): str
   return `config-issue-${configScopeKey(scope).replace(":", "-")}-${agent}-${name}`;
 }
 
-export function ConfigPage({ api }: PageProps) {
+export function ConfigPage({
+  api,
+  locationVersion = 0,
+  onDirtyChange,
+  onLocationChange,
+}: PageProps) {
+  const [initialRoute] = useState(readConfigRoute);
+  const observedLocationVersion = useRef(locationVersion);
   const tenants = useTenants(api);
-  const [scope, setScope] = useState<Scope>({ scope: "managed", tenant: "default" });
-  const [agent, setAgent] = useState<Agent>("codex");
+  const [scope, setScope] = useState<Scope>(initialRoute.scope);
+  const [agent, setAgent] = useState<Agent>(initialRoute.agent);
   const [catalog, setCatalog] = useState<ConfigListData | null>(null);
-  const [selection, setSelection] = useState<ConfigSelection>({ current: true });
-  const [file, setFile] = useState<string | null>(null);
+  const [selection, setSelection] = useState<ConfigSelection>(initialRoute.selection);
+  const [file, setFile] = useState<string | null>(initialRoute.file);
   const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
   const [editor, setEditor] = useState("");
   const [editorMode, setEditorMode] = useState<"text" | "base64">("text");
@@ -567,11 +902,24 @@ export function ConfigPage({ api }: PageProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ConfigPendingAction | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(initialRoute.detailOpen);
   const [preview, setPreview] = useState<PropagationPreview | null>(null);
   const [report, setReport] = useState<PropagationReport | null>(null);
   const catalogController = useRef<AbortController | null>(null);
   const fileLoadGeneration = useRef(0);
+
+  useEffect(() => {
+    if (observedLocationVersion.current === locationVersion) return;
+    observedLocationVersion.current = locationVersion;
+    const route = readConfigRoute();
+    setScope(route.scope);
+    setAgent(route.agent);
+    setSelection(route.selection);
+    setFile(route.file);
+    setDetailOpen(route.detailOpen);
+    setSelectionMode(false);
+    setSelectedNames(new Set());
+  }, [locationVersion]);
 
   const tenantOptions = useMemo<SessionFilterOption<ConfigScopeKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
@@ -596,7 +944,7 @@ export function ConfigPage({ api }: PageProps) {
             {
               value: "host" as const,
               label: "Host Tenant",
-              icon: <House size={14} aria-hidden="true" />,
+              icon: <HostTenantIcon size={14} aria-hidden="true" />,
             },
           ]
         : []),
@@ -604,7 +952,7 @@ export function ConfigPage({ api }: PageProps) {
         value: `managed:${tenant.name}` as const,
         label: tenant.exists ? tenant.display_name : `${tenant.display_name} (not created)`,
         summaryLabel: tenant.display_name,
-        icon: <Container size={14} aria-hidden="true" />,
+        icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
       })),
     ];
   }, [tenants]);
@@ -668,10 +1016,8 @@ export function ConfigPage({ api }: PageProps) {
   useEffect(() => {
     setCatalog(null);
     setSnapshot(null);
-    setSelection({ current: true });
     setSelectionMode(false);
     setSelectedNames(new Set());
-    setDetailOpen(false);
     void loadCatalog();
     return () => catalogController.current?.abort();
   }, [loadCatalog]);
@@ -695,8 +1041,10 @@ export function ConfigPage({ api }: PageProps) {
   }, [editor, editorMode, snapshot]);
   const editorDirty =
     snapshot !== null &&
-    editorBytes !== null &&
-    encodeBase64(editorBytes) !== snapshot.content_base64;
+    (editorBytes === null || encodeBase64(editorBytes) !== snapshot.content_base64);
+
+  useEffect(() => onDirtyChange?.(editorDirty), [editorDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   function setEditorFromSnapshot(value: ConfigFileData) {
     const bytes = decodeBase64(value.content_base64);
@@ -824,6 +1172,11 @@ export function ConfigPage({ api }: PageProps) {
       setSelectionMode(false);
       setSelectedNames(new Set());
       setDetailOpen(false);
+      changePageLocation(
+        "configs",
+        configLocation(scopeFromConfigKey(next), agent, null),
+        onLocationChange,
+      );
     });
   }
 
@@ -836,6 +1189,7 @@ export function ConfigPage({ api }: PageProps) {
       setSelectionMode(false);
       setSelectedNames(new Set());
       setDetailOpen(false);
+      changePageLocation("configs", configLocation(scope, next, null), onLocationChange);
     });
   }
 
@@ -843,6 +1197,12 @@ export function ConfigPage({ api }: PageProps) {
     requestEditorAction(() => {
       setSelection({ current: false, config: name });
       setDetailOpen(true);
+      const nextSelection: ConfigSelection = { current: false, config: name };
+      changePageLocation(
+        "configs",
+        configLocation(scope, agent, nextSelection, file),
+        onLocationChange,
+      );
     });
   }
 
@@ -850,6 +1210,11 @@ export function ConfigPage({ api }: PageProps) {
     requestEditorAction(() => {
       setSelection({ current: true });
       setDetailOpen(true);
+      changePageLocation(
+        "configs",
+        configLocation(scope, agent, { current: true }, file),
+        onLocationChange,
+      );
     });
   }
 
@@ -886,6 +1251,11 @@ export function ConfigPage({ api }: PageProps) {
       await loadCatalog("background");
       setSelection({ current: false, config: name });
       setDetailOpen(true);
+      changePageLocation(
+        "configs",
+        configLocation(scope, agent, { current: false, config: name }, file),
+        onLocationChange,
+      );
     } catch (cause) {
       setCreateError(messageOf(cause));
     } finally {
@@ -925,6 +1295,7 @@ export function ConfigPage({ api }: PageProps) {
       if (deletedSelected) {
         setSelection({ current: true });
         setDetailOpen(false);
+        changePageLocation("configs", configLocation(scope, agent, null), onLocationChange, true);
       }
       await loadCatalog("background");
     } catch (cause) {
@@ -945,6 +1316,7 @@ export function ConfigPage({ api }: PageProps) {
         ) {
           setSelection({ current: true });
           setDetailOpen(false);
+          changePageLocation("configs", configLocation(scope, agent, null), onLocationChange, true);
         }
       }
       setError(deletionError);
@@ -1033,7 +1405,7 @@ export function ConfigPage({ api }: PageProps) {
                     options={tenantOptions}
                     pluralLabel="tenants"
                     selected={new Set([configScopeKey(scope)])}
-                    triggerIcon={<Container size={14} aria-hidden="true" />}
+                    triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
                     allowMultiple={false}
                   />
                   <SessionMultiSelect
@@ -1109,7 +1481,7 @@ export function ConfigPage({ api }: PageProps) {
                   disabled={busy || loadingCatalog || (selectionMode ? true : false)}
                   onClick={() => void openCurrent()}
                 >
-                  <FileCog size={16} data-icon="current-config" />
+                  <CurrentConfigIcon size={16} data-icon="current-config" />
                   <span className={styles.configRowText}>
                     <strong>Current</strong>
                   </span>
@@ -1136,7 +1508,7 @@ export function ConfigPage({ api }: PageProps) {
                 <IconButton
                   className={styles.configAddButton}
                   label="Create Named Config"
-                  disabled={busy || loadingCatalog}
+                  disabled={busy || loadingCatalog || selectionMode}
                   onClick={() =>
                     requestEditorAction(() => {
                       setCreateError(null);
@@ -1181,7 +1553,7 @@ export function ConfigPage({ api }: PageProps) {
                           : void openConfig(entry.name)
                       }
                     >
-                      <FileCode2 size={16} />
+                      <NamedConfigIcon size={16} />
                       <span className={styles.configRowText}>
                         <span className={styles.configRowTitle}>
                           <strong>{entry.name}</strong>
@@ -1263,7 +1635,19 @@ export function ConfigPage({ api }: PageProps) {
           {catalog ? (
             <>
               <div className={styles.configEditorHeader}>
-                <IconButton label="Back to Configs" onClick={() => setDetailOpen(false)}>
+                <IconButton
+                  label="Back to Configs"
+                  onClick={() =>
+                    requestEditorAction(() => {
+                      setDetailOpen(false);
+                      changePageLocation(
+                        "configs",
+                        configLocation(scope, agent, null),
+                        onLocationChange,
+                      );
+                    })
+                  }
+                >
                   <ChevronLeft size={17} />
                 </IconButton>
                 {catalog.files.length > 1 ? (
@@ -1274,7 +1658,16 @@ export function ConfigPage({ api }: PageProps) {
                         role="tab"
                         aria-selected={file === name}
                         key={name}
-                        onClick={() => requestEditorAction(() => setFile(name))}
+                        onClick={() =>
+                          requestEditorAction(() => {
+                            setFile(name);
+                            changePageLocation(
+                              "configs",
+                              configLocation(scope, agent, selection, name),
+                              onLocationChange,
+                            );
+                          })
+                        }
                       >
                         {name}
                       </button>
@@ -1325,7 +1718,7 @@ export function ConfigPage({ api }: PageProps) {
                 </>
               ) : (
                 <div className={styles.emptyPane}>
-                  <FileCode2 size={22} />
+                  <NamedConfigIcon size={22} />
                   <span>Unable to load {file ?? "configuration"}.</span>
                 </div>
               )}
@@ -1414,7 +1807,12 @@ export function ConfigPage({ api }: PageProps) {
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
           title={`Delete Named Config ${deleteTarget.names[0]}?`}
-          confirmation={deleteTarget.names[0]}
+          description={
+            <p className={styles.dialogDescription}>
+              This deletes only the Named Config. Current Config stays unchanged; if this was the
+              last applied source, Config Drift will report it as missing.
+            </p>
+          }
           confirmLabel="Delete Config"
           busy={busy}
           onCancel={() => setDeleteTarget(null)}
@@ -1430,6 +1828,9 @@ export function ConfigPage({ api }: PageProps) {
             aria-labelledby="delete-configs-title"
           >
             <h2 id="delete-configs-title">Delete selected Named Configs?</h2>
+            <p className={styles.dialogDescription}>
+              This deletes only the selected Named Configs. Current Config files are not changed.
+            </p>
             <div className={styles.planList}>
               {deleteTarget.names.map((name) => (
                 <code key={name}>{name}</code>
@@ -1586,6 +1987,62 @@ function sessionSource(scopeKey: SessionScopeKey, agent: Agent): SessionSource {
     agent,
     agentLabel: agentLabel(agent),
   };
+}
+
+interface SessionRouteSelection {
+  scopeKey: SessionScopeKey;
+  agent: Agent;
+  id: string;
+}
+
+interface SessionRouteState {
+  scopes: Set<SessionScopeKey>;
+  agents: Set<Agent>;
+  selection: SessionRouteSelection | null;
+}
+
+function readSessionRoute(): SessionRouteState {
+  const query = pageSearch();
+  const scopes = new Set(
+    query
+      .getAll("scope")
+      .map(tenantKeyFromParam)
+      .filter((value): value is SessionScopeKey => value !== null),
+  );
+  const agents = new Set(
+    query
+      .getAll("agent")
+      .filter((value): value is Agent => value === "codex" || value === "claude"),
+  );
+  if (scopes.size === 0) scopes.add("managed:default");
+  if (agents.size === 0) agents.add("codex");
+
+  const selectedScope = tenantKeyFromParam(query.get("session_scope"));
+  const selectedAgent = query.get("session_agent");
+  const id = query.get("session");
+  const selection: SessionRouteSelection | null =
+    selectedScope && (selectedAgent === "codex" || selectedAgent === "claude") && id
+      ? { scopeKey: selectedScope, agent: selectedAgent, id }
+      : null;
+  return { scopes, agents, selection };
+}
+
+function sessionLocation(
+  scopes: ReadonlySet<SessionScopeKey>,
+  agents: ReadonlySet<Agent>,
+  selection?: SessionRouteSelection | null,
+): URLSearchParams {
+  const query = new URLSearchParams();
+  for (const scope of [...scopes].sort()) query.append("scope", scope);
+  for (const agent of SESSION_AGENT_OPTIONS.map((option) => option.value)) {
+    if (agents.has(agent)) query.append("agent", agent);
+  }
+  if (selection) {
+    query.set("session_scope", selection.scopeKey);
+    query.set("session_agent", selection.agent);
+    query.set("session", selection.id);
+  }
+  return query;
 }
 
 function sourcedSession(source: SessionSource, row: SessionRow): SourcedSession {
@@ -1865,12 +2322,17 @@ function SessionMultiSelect<T extends string>({
   );
 }
 
-export function SessionPage({ api }: PageProps) {
+export function SessionPage({ api, locationVersion = 0, onLocationChange }: PageProps) {
+  const [initialRoute] = useState(readSessionRoute);
+  const observedLocationVersion = useRef(locationVersion);
   const tenants = useTenants(api);
   const [selectedScopes, setSelectedScopes] = useState<Set<SessionScopeKey>>(
-    () => new Set(["managed:default"]),
+    () => initialRoute.scopes,
   );
-  const [selectedAgents, setSelectedAgents] = useState<Set<Agent>>(() => new Set(["codex"]));
+  const [selectedAgents, setSelectedAgents] = useState<Set<Agent>>(() => initialRoute.agents);
+  const [routeSelection, setRouteSelection] = useState<SessionRouteSelection | null>(
+    initialRoute.selection,
+  );
   const [data, setData] = useState<AggregatedSessionData | null>(null);
   const [currentSession, setCurrentSession] = useState<SourcedSession | null>(null);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
@@ -1919,7 +2381,7 @@ export function SessionPage({ api }: PageProps) {
             {
               value: "host" as const,
               label: "Host Tenant",
-              icon: <House size={14} aria-hidden="true" />,
+              icon: <HostTenantIcon size={14} aria-hidden="true" />,
             },
           ]
         : []),
@@ -1927,7 +2389,7 @@ export function SessionPage({ api }: PageProps) {
         value: `managed:${tenant.name}` as const,
         label: tenant.exists ? tenant.display_name : `${tenant.display_name} (not created)`,
         summaryLabel: tenant.display_name,
-        icon: <Container size={14} aria-hidden="true" />,
+        icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
       })),
     ];
   }, [tenants]);
@@ -1964,6 +2426,66 @@ export function SessionPage({ api }: PageProps) {
     setPrompts([]);
     setPromptWarnings([]);
   }, [abortPromptStream]);
+
+  const openSession = useCallback(
+    async (row: SourcedSession, updateLocation = true) => {
+      abortPromptStream();
+      const controller = new AbortController();
+      streamController.current = controller;
+      currentSessionRef.current = row;
+      setCurrentSession(row);
+      setPrompts([]);
+      setPromptWarnings([]);
+      setLoadingPrompts(true);
+      if (updateLocation) {
+        const nextSelection = {
+          scopeKey: row.source.scopeKey,
+          agent: row.source.agent,
+          id: row.id,
+        };
+        setRouteSelection(nextSelection);
+        changePageLocation(
+          "sessions",
+          sessionLocation(selectedScopes, selectedAgents, nextSelection),
+          onLocationChange,
+        );
+      }
+      const query = scopeQuery(row.source.scope);
+      query.set("agent", row.source.agent);
+      query.set("id", row.id);
+      try {
+        const result = await api.streamSession(
+          `/_aibox/api/sessions/prompts?${query}`,
+          (prompt) => setPrompts((current) => [...current, prompt]),
+          controller.signal,
+        );
+        if (streamController.current === controller) setPromptWarnings(result.warnings);
+      } catch (cause) {
+        if (!sessionRequestCancelled(cause, controller.signal)) {
+          setError(
+            `Couldn’t load Session from ${row.source.scopeLabel} · ${row.source.agentLabel}: ${messageOf(cause)}`,
+          );
+        }
+      } finally {
+        if (streamController.current === controller) {
+          streamController.current = null;
+          setLoadingPrompts(false);
+        }
+      }
+    },
+    [abortPromptStream, api, onLocationChange, selectedAgents, selectedScopes],
+  );
+
+  useEffect(() => {
+    if (observedLocationVersion.current === locationVersion) return;
+    observedLocationVersion.current = locationVersion;
+    const route = readSessionRoute();
+    clearInspection();
+    setData(null);
+    setSelectedScopes(route.scopes);
+    setSelectedAgents(route.agents);
+    setRouteSelection(route.selection);
+  }, [clearInspection, locationVersion]);
 
   const load = useCallback(
     async (kind: "initial" | "refresh" = "initial"): Promise<AggregatedSessionData | null> => {
@@ -2086,6 +2608,37 @@ export function SessionPage({ api }: PageProps) {
   }, [abortPromptStream, clearInspection, load]);
 
   useEffect(() => {
+    if (!routeSelection || !data || loadingList) return;
+    const row = data.sessions.find(
+      (candidate) =>
+        candidate.source.scopeKey === routeSelection.scopeKey &&
+        candidate.source.agent === routeSelection.agent &&
+        candidate.id === routeSelection.id,
+    );
+    if (row) {
+      if (currentSessionRef.current?.key !== row.key) void openSession(row, false);
+      return;
+    }
+    setRouteSelection(null);
+    clearInspection();
+    changePageLocation(
+      "sessions",
+      sessionLocation(selectedScopes, selectedAgents),
+      onLocationChange,
+      true,
+    );
+  }, [
+    clearInspection,
+    data,
+    loadingList,
+    onLocationChange,
+    openSession,
+    routeSelection,
+    selectedAgents,
+    selectedScopes,
+  ]);
+
+  useEffect(() => {
     if (selectionMode || !focusSelectAfterExit.current) return;
     focusSelectAfterExit.current = false;
     const target = selectButton.current;
@@ -2103,39 +2656,6 @@ export function SessionPage({ api }: PageProps) {
       setFocusAfterDelete(undefined);
     }
   }, [data, deletion, focusAfterDelete]);
-
-  async function openSession(row: SourcedSession) {
-    abortPromptStream();
-    const controller = new AbortController();
-    streamController.current = controller;
-    currentSessionRef.current = row;
-    setCurrentSession(row);
-    setPrompts([]);
-    setPromptWarnings([]);
-    setLoadingPrompts(true);
-    const query = scopeQuery(row.source.scope);
-    query.set("agent", row.source.agent);
-    query.set("id", row.id);
-    try {
-      const result = await api.streamSession(
-        `/_aibox/api/sessions/prompts?${query}`,
-        (prompt) => setPrompts((current) => [...current, prompt]),
-        controller.signal,
-      );
-      if (streamController.current === controller) setPromptWarnings(result.warnings);
-    } catch (cause) {
-      if (!sessionRequestCancelled(cause, controller.signal)) {
-        setError(
-          `Couldn’t load Session from ${row.source.scopeLabel} · ${row.source.agentLabel}: ${messageOf(cause)}`,
-        );
-      }
-    } finally {
-      if (streamController.current === controller) {
-        streamController.current = null;
-        setLoadingPrompts(false);
-      }
-    }
-  }
 
   function toggleSession(key: string) {
     setSelectedKeys((current) => {
@@ -2158,11 +2678,31 @@ export function SessionPage({ api }: PageProps) {
   }
 
   function commitScopes(values: ReadonlySet<SessionScopeKey>) {
-    setSelectedScopes(new Set(values));
+    const next = new Set(values);
+    clearInspection();
+    setData(null);
+    setRouteSelection(null);
+    setSelectedScopes(next);
+    changePageLocation("sessions", sessionLocation(next, selectedAgents), onLocationChange);
   }
 
   function commitAgents(values: ReadonlySet<Agent>) {
-    setSelectedAgents(new Set(values));
+    const next = new Set(values);
+    clearInspection();
+    setData(null);
+    setRouteSelection(null);
+    setSelectedAgents(next);
+    changePageLocation("sessions", sessionLocation(selectedScopes, next), onLocationChange);
+  }
+
+  function closeSessionInspection() {
+    clearInspection();
+    setRouteSelection(null);
+    changePageLocation(
+      "sessions",
+      sessionLocation(selectedScopes, selectedAgents),
+      onLocationChange,
+    );
   }
 
   async function requestSessionDeletion(source: SessionSource, ids: string[]) {
@@ -2345,7 +2885,7 @@ export function SessionPage({ api }: PageProps) {
                     options={tenantOptions}
                     pluralLabel="tenants"
                     selected={selectedScopes}
-                    triggerIcon={<Container size={14} aria-hidden="true" />}
+                    triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
                   />
                   <SessionMultiSelect
                     className={styles.sessionAgentFilter}
@@ -2444,7 +2984,7 @@ export function SessionPage({ api }: PageProps) {
                     disabled={deletionBusy || loadingList}
                     onClick={() => (selectionMode ? toggleSession(row.key) : void openSession(row))}
                   >
-                    <FileClock size={16} data-icon="session-record" aria-hidden="true" />
+                    <SessionIcon size={16} data-icon="session-record" aria-hidden="true" />
                     <span>
                       <strong>{title}</strong>
                       <small className={styles.sessionRowMetadata}>
@@ -2497,7 +3037,7 @@ export function SessionPage({ api }: PageProps) {
             })}
             {data?.sessions.length === 0 && !loadingList && (
               <div className={styles.sessionListEmpty}>
-                <FileClock size={22} data-icon="session-list-empty" aria-hidden="true" />
+                <SessionIcon size={22} data-icon="session-list-empty" aria-hidden="true" />
                 <strong>No Sessions found</strong>
                 <p>No Sessions were found for the selected Tenants and Coding Agents.</p>
               </div>
@@ -2508,7 +3048,7 @@ export function SessionPage({ api }: PageProps) {
           {currentSession ? (
             <>
               <div className={styles.detailHeader}>
-                <IconButton label="Back to Sessions" onClick={clearInspection}>
+                <IconButton label="Back to Sessions" onClick={closeSessionInspection}>
                   <ChevronLeft size={17} />
                 </IconButton>
                 <div>
@@ -2537,7 +3077,7 @@ export function SessionPage({ api }: PageProps) {
                 {loadingPrompts && <Loading />}
                 {!loadingPrompts && prompts.length === 0 && (
                   <div className={styles.sessionEmptyPane}>
-                    <FileClock size={24} aria-hidden="true" />
+                    <SessionIcon size={24} aria-hidden="true" />
                     <h2>No typed prompts</h2>
                     <p>This Session&apos;s Transcript contains no supported typed user prompts.</p>
                   </div>
@@ -2546,7 +3086,7 @@ export function SessionPage({ api }: PageProps) {
             </>
           ) : (
             <div className={styles.sessionEmptyPane}>
-              <FileClock size={26} data-icon="session-empty" aria-hidden="true" />
+              <SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />
               <h2>Select a Session</h2>
               <p>Choose a Session to inspect its prompts and Transcript warnings.</p>
             </div>

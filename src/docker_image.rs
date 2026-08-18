@@ -2,6 +2,7 @@
 
 use super::DockerCli;
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
@@ -177,6 +178,89 @@ pub(crate) fn image_exists_with(docker: &DockerCli, image: &str) -> Result<bool>
         inspect_stderr.trim(),
         list.status,
         list_stderr.trim()
+    )
+}
+
+/// Metadata available from an exact local Runtime Image inspection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeImageInspection {
+    pub(crate) present: bool,
+    pub(crate) id: Option<String>,
+    pub(crate) created_at: Option<String>,
+    pub(crate) size_bytes: Option<u64>,
+    pub(crate) detail: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DockerImageMetadata {
+    id: String,
+    created_at: String,
+    size_bytes: u64,
+}
+
+/// Inspect one exact Runtime Image without exposing its configuration or layers.
+pub(crate) fn inspect_runtime_image(image: &str) -> Result<RuntimeImageInspection> {
+    inspect_runtime_image_with(&DockerCli::system(), image)
+}
+
+pub(crate) fn inspect_runtime_image_with(
+    docker: &DockerCli,
+    image: &str,
+) -> Result<RuntimeImageInspection> {
+    const FORMAT: &str =
+        r#"{"id":{{json .Id}},"created_at":{{json .Created}},"size_bytes":{{.Size}}}"#;
+    let inspect = docker
+        .command()
+        .args(["image", "inspect", "--format", FORMAT, image])
+        .output()
+        .context("inspect docker image metadata (is docker installed?)")?;
+    if inspect.status.success() {
+        return match serde_json::from_slice::<DockerImageMetadata>(&inspect.stdout) {
+            Ok(metadata) => Ok(RuntimeImageInspection {
+                present: true,
+                id: Some(metadata.id),
+                created_at: Some(metadata.created_at),
+                size_bytes: Some(metadata.size_bytes),
+                detail: None,
+            }),
+            Err(error) => Ok(RuntimeImageInspection {
+                present: true,
+                id: None,
+                created_at: None,
+                size_bytes: None,
+                detail: Some(format!("parse docker image metadata: {error}")),
+            }),
+        };
+    }
+
+    let list_ref = image_ref_for_exact_ls(image);
+    let list = docker
+        .command()
+        .args(["image", "ls", "--quiet", "--no-trunc", &list_ref])
+        .output()
+        .context("list docker image (is docker installed?)")?;
+    if list.status.success() {
+        let present = !String::from_utf8_lossy(&list.stdout).trim().is_empty();
+        return Ok(RuntimeImageInspection {
+            present,
+            id: None,
+            created_at: None,
+            size_bytes: None,
+            detail: present.then(|| {
+                format!(
+                    "docker image metadata unavailable: {}",
+                    String::from_utf8_lossy(&inspect.stderr).trim()
+                )
+            }),
+        });
+    }
+
+    bail!(
+        "docker image inspect failed ({}): {}; docker image ls failed ({}): {}",
+        inspect.status,
+        String::from_utf8_lossy(&inspect.stderr).trim(),
+        list.status,
+        String::from_utf8_lossy(&list.stderr).trim()
     )
 }
 

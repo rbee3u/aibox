@@ -34,13 +34,13 @@ use std::time::{Duration, Instant};
 #[path = "docker_image.rs"]
 mod image_ops;
 
-pub(crate) use image_ops::build_image_for_service;
-#[cfg(test)]
-pub(crate) use image_ops::build_image_with;
 pub(crate) use image_ops::image_exists_with;
 #[cfg(test)]
 use image_ops::image_ref_for_exact_ls;
 pub use image_ops::{BuildCache, build_image, image_exists};
+pub(crate) use image_ops::{build_image_for_service, inspect_runtime_image};
+#[cfg(test)]
+pub(crate) use image_ops::{build_image_with, inspect_runtime_image_with};
 
 /// Local image tag used when no image override is supplied.
 pub const IMAGE: &str = "aibox:latest";

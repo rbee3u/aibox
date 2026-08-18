@@ -7,6 +7,7 @@
 use crate::agent::AgentKind;
 use crate::cli::SessionCommand;
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 use serde_json::Value;
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -72,6 +73,13 @@ pub(crate) struct SessionDiscovery {
     pub files: Vec<PathBuf>,
     /// Non-fatal traversal failures to report alongside partial list results.
     pub errors: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SessionDiscoverySummary {
+    pub(crate) count: usize,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) partial: bool,
 }
 
 /// Whether a walked entry is a Transcript we want: a regular `.jsonl` file
@@ -951,6 +959,24 @@ pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<Ses
         sessions,
         warnings,
         partial,
+    })
+}
+
+/// Count safely discoverable Transcripts without opening or parsing them.
+pub(crate) fn discovery_summary(
+    backend: &dyn SessionBackend,
+    home: &Path,
+) -> Result<SessionDiscoverySummary> {
+    let discovery = backend.list_files(home)?;
+    let warnings = discovery
+        .errors
+        .into_iter()
+        .map(|error| terminal_safe(&error))
+        .collect::<Vec<_>>();
+    Ok(SessionDiscoverySummary {
+        count: discovery.files.len(),
+        partial: !warnings.is_empty(),
+        warnings,
     })
 }
 

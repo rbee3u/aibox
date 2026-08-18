@@ -27,6 +27,12 @@ The boundary that limits a Coding Agent's local host-filesystem access during a
 Run. It is not a complete authority or network boundary.
 _Avoid_: Complete isolation, authority boundary
 
+**Runtime Image**:
+The shared local Docker image built by aibox and used for Runs and Managed
+Tenant toolchain installation. It is inspected and built independently of any
+Tenant.
+_Avoid_: Agent image, Tenant image, persistent container
+
 **Extra Mount**:
 An explicit grant that exposes an additional host path inside the Filesystem
 Sandbox for a Run.

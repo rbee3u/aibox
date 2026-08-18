@@ -77,12 +77,14 @@ references, so `assets/console.css` and `assets/console.js` are served as
 ## Code Boundaries
 
 `src/App.tsx` owns the persistent AIBox shell, URL-backed module navigation,
-sidebar preferences, and latest Management Operation surface.
+sidebar preferences, latest Management Operation surface, and protection for
+unsaved Config edits across in-app, history, and browser navigation.
 `src/SidebarUtilities.tsx` owns the sidebar resource catalog, brand icons, and
 theme control.
-`src/ManagementPages.tsx` owns Overview, Tenants/Components, Configs, and
-Sessions. Desktop layouts support 1024px and wider with a collapsible sidebar;
-narrow layouts use one-panel catalog/detail navigation.
+`src/OverviewPage.tsx` owns Overview. `src/ManagementPages.tsx` owns
+Tenants/Components, Configs, and Sessions. Desktop layouts support 1024px and
+wider with a collapsible sidebar; narrow layouts use one-panel catalog/detail
+navigation.
 
 `src/controlApi.ts` owns the Console-internal Control API and startup CSRF
 token; `src/api.ts` remains the Request API client. Their TypeScript
@@ -91,6 +93,55 @@ Request Outcome, the top-level Coding Agent Session ID, the persisted Model
 Protocol Summary and Record Assessment, and normalized Diagnostics groups.
 Components receive an API interface so tests can use deterministic fakes
 without sockets.
+
+## Overview and Management Navigation
+
+Overview is an operational view with three full-width bands. Key facts combine
+Service health, Tenant and Host availability, Config and Component health,
+Requests, version, listen address, and the aibox Root. Runtime reports Docker
+availability and exact local Runtime Image status (`built`, `missing`, or
+`unknown`) with its reference, short ID, creation time, and size. Its explicit
+actions are **Build** and **Build without cache**.
+
+Resource topology is Tenant-centered: each Managed or Host Tenant contains its
+Codex and Claude resources, while Components are Tenant-owned siblings of the
+Coding Agents. Coding Agent branches expose Current Config presence, every
+Named Config, and an on-demand Session summary. Requests and Runtime are global
+and therefore never appear in the Tenant tree.
+
+The topology is a left-to-right node-and-edge canvas with separate node-body
+navigation and output-side disclosure controls. It grows to its complete scaled
+height so Overview remains the only vertical scroll container; native
+horizontal scrolling appears only when a narrow layout or manual zoom exceeds
+the available width. The topology never converts vertical wheel input into
+horizontal movement.
+
+Desktop initializes with the whole graph fitted to the viewport, while narrow
+layouts retain 100% scale. Zoom is bounded to 50%-150% in 10% steps, with Fit
+and 100% reset controls in the sticky topology toolbar. Fit mode follows layout
+and viewport width changes; manual zoom remains stable through later topology
+changes. Expansion and zoom compensate the relevant scroll positions to keep
+the operated or active node anchored. Tenant roots are ordered with the Host
+Tenant first, `default` second, and remaining Managed Tenants by display name.
+Only `default` opens initially, including its Codex Named Config leaves; other
+Tenant roots remain collapsed. Search preserves the graph layout, expands
+matching paths, highlights matches, and dims unrelated nodes. Needs attention
+instead prunes and reflows the graph to warning and error paths. Hover or
+keyboard focus traces a path back to the Service root, and diagnostic details
+use lightweight popovers. The topology retains ARIA tree semantics, roving
+focus, and arrow-key navigation.
+
+Overview status polls every 15 seconds while the document is visible; topology
+changes only on its explicit refresh. Expanding Sessions performs discovery
+only and does not parse Transcript content. Topology expansion, filters, zoom,
+and viewport position are deliberately not persisted.
+
+Management selections are shareable URL state. Tenants use `scope` and optional
+`component`; Configs use `scope`, `agent`, either `current=1` or `config`, and
+optional `file`; Sessions use repeated `scope` and `agent`, plus
+`session_scope`, `session_agent`, and `session` for the selected Session. Dirty
+Config file edits require confirmation before in-app navigation, history
+navigation, or page unload can discard them.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-record polling. The Summary is

@@ -15,8 +15,8 @@ persistent in named Tenants.
 - **Native configuration.** Runs use the Coding Agent's real configuration
   files. Named Configs are applied explicitly, observed for drift, and never
   reapplied by a Run.
-- **Local Console.** Manage images, Tenants, Components, Configs, Sessions, and
-  Requests from one foreground Service.
+- **Local Console.** Manage the Runtime Image, Tenants, Components, Configs,
+  Sessions, and Requests from one foreground Service.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ cargo install --locked --path .
 aibox serve
 ```
 
-Open `http://127.0.0.1:9923/`. Build the runtime image from Overview, then keep
+Open `http://127.0.0.1:9923/`. Build the Runtime Image from Overview, then keep
 the Service running while using the Console or Request Proxy.
 
 From another terminal in a Workspace directory, start Codex or Claude and
@@ -104,7 +104,7 @@ Install optional status lines or Tenant-local toolchains from a Tenant's
 Components view without changing the Tenant baseline.
 
 Omitting a Rust or Go version installs the current stable release. Toolchain
-installation uses the shared Docker image and requires a built runtime image;
+installation uses the shared Docker image and requires a built Runtime Image;
 status lines directly edit their native Current Config values; Host statusline
 Components are available through `--host`, while Rust and Go remain Managed
 Tenant-only. See

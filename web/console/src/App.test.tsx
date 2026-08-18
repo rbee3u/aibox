@@ -3,23 +3,31 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ControlApi } from "./controlApi";
-import type { OverviewData } from "./controlApi";
+import type { OverviewData, TopologyData } from "./controlApi";
 import { recordList } from "./test/fixtures";
 
 const overview = {
-  version: "1.2.3",
-  listen: "127.0.0.1:8080",
-  uptime_seconds: 60,
-  aibox_root: "/tmp/aibox",
-  docker: "available",
-  docker_error: null,
-  runtime_image: "aibox:latest",
-  image_available: true,
+  service: {
+    version: "1.2.3",
+    listen: "127.0.0.1:8080",
+    uptime_seconds: 60,
+    aibox_root: "/tmp/aibox",
+  },
+  docker: { status: "available", error: null },
+  runtime_image: {
+    reference: "aibox:latest",
+    status: "built",
+    id: "sha256:1234567890abcdef",
+    created_at: "2026-08-18T12:00:00Z",
+    size_bytes: 1024,
+    detail: null,
+  },
   managed_tenants: 1,
-  request_records: 2,
-  request_bytes: 1024,
-  operation: null,
+  host_available: true,
+  requests: { total: 2, active: 0, warning: 0, error: 0, bytes: 1024 },
 } satisfies OverviewData;
+
+const topology = { tenants: [] } satisfies TopologyData;
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -168,6 +176,7 @@ function mockControlApi() {
     get: vi.fn((path: string) => {
       if (path === "/_aibox/api/operations/current") return Promise.resolve({ operation: null });
       if (path === "/_aibox/api/overview") return Promise.resolve(overview);
+      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
       return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
     }),
   } as unknown as ControlApi;

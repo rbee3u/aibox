@@ -536,6 +536,51 @@ fn inspected_incomplete_configs_report_missing_files_in_agent_order() {
 }
 
 #[test]
+fn current_config_inspection_counts_fixed_files_without_reading_contents() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+
+    assert_eq!(
+        inspect_current_config(&selected).unwrap(),
+        CurrentConfigInspection {
+            present_files: 0,
+            expected_files: 2,
+        }
+    );
+
+    tenant::ensure_real_dir(&selected.agent_state_dir, "Agent state directory").unwrap();
+    fs::write(
+        selected.state_file("config.toml"),
+        b"not valid toml and intentionally unread",
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_current_config(&selected).unwrap(),
+        CurrentConfigInspection {
+            present_files: 1,
+            expected_files: 2,
+        }
+    );
+
+    fs::write(selected.state_file("auth.json"), b"not valid json").unwrap();
+    assert_eq!(inspect_current_config(&selected).unwrap().present_files, 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn current_config_inspection_rejects_symlinked_fixed_files() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Claude);
+    tenant::ensure_real_dir(&selected.agent_state_dir, "Agent state directory").unwrap();
+    let outside = root.path().join("outside-settings.json");
+    fs::write(&outside, "{}").unwrap();
+    symlink(&outside, selected.state_file("settings.json")).unwrap();
+
+    let error = inspect_current_config(&selected).unwrap_err().to_string();
+    assert!(error.contains("is not a regular file"), "{error}");
+}
+
+#[test]
 fn get_prints_native_files_in_order_with_unredacted_content_and_missing_markers() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
