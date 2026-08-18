@@ -76,6 +76,7 @@ export interface ConfigListData {
   configs: ConfigCatalogEntry[];
   files: string[];
   application: ApplicationStatus;
+  credential_propagation_available: boolean;
 }
 
 export interface ConfigFileData {

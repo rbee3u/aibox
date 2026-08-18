@@ -127,20 +127,26 @@ pub(super) fn propagate_auth_from(root: &Path, host_home: &Path) -> Result<i32> 
     Ok(i32::from(report.counts().failed > 0))
 }
 
+pub(crate) fn credential_propagation_source_available(
+    root: &Path,
+    host_home: &Path,
+) -> Result<bool> {
+    if !tenant::real_dir_exists(host_home, "Host Home")? {
+        return Ok(false);
+    }
+    let (_, _, source) = capture_host_source(root, host_home)?;
+    Ok(source.present
+        && matches!(
+            classify_auth(&source.content, None),
+            AuthContent::ChatGpt(_)
+        ))
+}
+
 pub(crate) fn plan_auth_propagation_from(
     root: &Path,
     host_home: &Path,
 ) -> Result<AuthPropagationPlan> {
-    let host = Tenant::Host {
-        home_dir: host_home.to_path_buf(),
-        root_dir: root.to_path_buf(),
-    }
-    .for_agent(AgentKind::Codex);
-    let source_file = host
-        .agent
-        .native_auth_file()
-        .expect("Codex has a native auth file");
-    let source = capture_optional_agent_file(&host, source_file)?;
+    let (host, source_file, source) = capture_host_source(root, host_home)?;
     if !source.present {
         bail!(
             "Host Codex Current Config {source_file} does not exist: {}",
@@ -157,8 +163,35 @@ pub(crate) fn plan_auth_propagation_from(
         }
     };
 
+    plan_auth_propagation(root, &host, source_file, source, source_credentials)
+}
+
+fn capture_host_source(
+    root: &Path,
+    host_home: &Path,
+) -> Result<(TenantAgent, &'static str, FileSnapshot)> {
+    let host = Tenant::Host {
+        home_dir: host_home.to_path_buf(),
+        root_dir: root.to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
+    let source_file = host
+        .agent
+        .native_auth_file()
+        .expect("Codex has a native auth file");
+    let source = capture_optional_agent_file(&host, source_file)?;
+    Ok((host, source_file, source))
+}
+
+fn plan_auth_propagation(
+    root: &Path,
+    host: &TenantAgent,
+    source_file: &str,
+    source: FileSnapshot,
+    source_credentials: ChatGptCredentials,
+) -> Result<AuthPropagationPlan> {
     let mut candidates = Vec::new();
-    discover_named_auth_candidates(&host, "host", &mut candidates)?;
+    discover_named_auth_candidates(host, "host", &mut candidates)?;
     for tenant_name in discover_managed_tenant_names(root)? {
         let managed = ManagedTenant::resolve(root, &tenant_name)?;
         let selected = managed.for_agent(AgentKind::Codex);

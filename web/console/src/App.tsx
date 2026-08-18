@@ -1,4 +1,4 @@
-import { Activity, Box, Gauge, Menu, Radio, Settings2, Users } from "lucide-react";
+import { Box, Menu } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createRequestApi } from "./api";
 import {
@@ -14,16 +14,20 @@ import type { Operation } from "./controlApi";
 import { readPreference, storePreference } from "./preferences";
 import { SidebarUtilities } from "./SidebarUtilities";
 import { usePersistentTheme } from "./usePersistentTheme";
+import { moduleIcons, type ModuleId } from "./moduleIcons";
 import styles from "./App.module.css";
 
-type ModuleId = "overview" | "tenants" | "configs" | "sessions" | "requests";
-
 const modules = [
-  { id: "overview", label: "Overview", detail: "Current status", icon: Gauge },
-  { id: "tenants", label: "Tenants", detail: "Identity & Components", icon: Users },
-  { id: "configs", label: "Configs", detail: "Native configuration", icon: Settings2 },
-  { id: "sessions", label: "Sessions", detail: "Agent transcripts", icon: Activity },
-  { id: "requests", label: "Requests", detail: "Inspect your LLM requests", icon: Radio },
+  { id: "overview", label: "Overview", detail: "Current status", icon: moduleIcons.overview },
+  { id: "tenants", label: "Tenants", detail: "Identity & Components", icon: moduleIcons.tenants },
+  { id: "configs", label: "Configs", detail: "Native configuration", icon: moduleIcons.configs },
+  { id: "sessions", label: "Sessions", detail: "Agent transcripts", icon: moduleIcons.sessions },
+  {
+    id: "requests",
+    label: "Requests",
+    detail: "Inspect your LLM requests",
+    icon: moduleIcons.requests,
+  },
 ] as const;
 
 const SIDEBAR_COLLAPSED_KEY = "aibox-console-sidebar-collapsed";
@@ -121,7 +125,7 @@ export function App() {
                 title={collapsed ? module.label : undefined}
                 onClick={() => navigate(module.id)}
               >
-                <Icon size={18} />
+                <Icon size={18} data-icon={module.id} />
                 <span>
                   <strong>{module.label}</strong>
                   <small>{module.detail}</small>

@@ -229,6 +229,60 @@ fn credential_propagation_requires_a_valid_host_chatgpt_source() {
 }
 
 #[test]
+fn credential_propagation_source_availability_requires_valid_host_chatgpt_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let home_parent = tempfile::tempdir().unwrap();
+    let missing_home = home_parent.path().join("missing-home");
+
+    assert!(!credential_propagation_source_available(root.path(), &missing_home).unwrap());
+
+    let home = tempfile::tempdir().unwrap();
+    assert!(!credential_propagation_source_available(root.path(), home.path()).unwrap());
+
+    install_host_source(root.path(), home.path(), br#"{"OPENAI_API_KEY":"sk-test"}"#);
+    assert!(!credential_propagation_source_available(root.path(), home.path()).unwrap());
+
+    install_host_source(
+        root.path(),
+        home.path(),
+        br#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-a"},"last_refresh":"bad"}"#,
+    );
+    assert!(!credential_propagation_source_available(root.path(), home.path()).unwrap());
+
+    install_host_source(
+        root.path(),
+        home.path(),
+        &chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source"),
+    );
+    assert!(credential_propagation_source_available(root.path(), home.path()).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn credential_propagation_source_availability_rejects_an_unsafe_source_path() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::NamedTempFile::new().unwrap();
+    fs::write(
+        source.path(),
+        chatgpt_auth("account-a", "2026-08-08T04:22:23Z", "source"),
+    )
+    .unwrap();
+    let host = Tenant::Host {
+        home_dir: home.path().to_path_buf(),
+        root_dir: root.path().to_path_buf(),
+    }
+    .for_agent(AgentKind::Codex);
+    tenant::ensure_real_dir(&host.agent_state_dir, "Agent state directory").unwrap();
+    symlink(source.path(), host.state_file("auth.json")).unwrap();
+
+    let error = credential_propagation_source_available(root.path(), home.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a regular file"), "{error}");
+}
+
+#[test]
 fn credential_propagation_does_not_create_missing_or_scan_orphaned_configs() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -432,6 +486,53 @@ fn claude_named_config_uses_one_native_file_with_the_token_in_env() {
     )
     .unwrap();
     assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-example");
+}
+
+#[test]
+fn inspected_incomplete_configs_report_missing_files_in_agent_order() {
+    let root = tempfile::tempdir().unwrap();
+    let codex = selected(root.path(), AgentKind::Codex);
+    codex.ensure_named_config_catalog().unwrap();
+
+    for name in ["empty", "main-only"] {
+        tenant::ensure_real_dir(&codex.named_config_dir(name), "Named Config directory").unwrap();
+    }
+    let main = codex.named_config_file("main-only", "config.toml");
+    fs::write(&main, "model = \"test\"\n").unwrap();
+    tenant::set_600(&main).unwrap();
+
+    let codex_entries = inspect_named_configs(&codex).unwrap();
+    let empty = codex_entries
+        .iter()
+        .find(|entry| entry.name == "empty")
+        .unwrap();
+    assert_eq!(empty.state, "incomplete");
+    assert_eq!(
+        empty.detail.as_deref(),
+        Some(
+            "Missing required files: config.toml, auth.json. Use Repair to restore this Named Config."
+        )
+    );
+    let main_only = codex_entries
+        .iter()
+        .find(|entry| entry.name == "main-only")
+        .unwrap();
+    assert_eq!(main_only.state, "incomplete");
+    assert_eq!(
+        main_only.detail.as_deref(),
+        Some("Missing required file: auth.json. Use Repair to restore this Named Config.")
+    );
+
+    let claude = selected(root.path(), AgentKind::Claude);
+    claude.ensure_named_config_catalog().unwrap();
+    tenant::ensure_real_dir(&claude.named_config_dir("empty"), "Named Config directory").unwrap();
+    let claude_entries = inspect_named_configs(&claude).unwrap();
+    assert_eq!(claude_entries.len(), 1);
+    assert_eq!(claude_entries[0].state, "incomplete");
+    assert_eq!(
+        claude_entries[0].detail.as_deref(),
+        Some("Missing required file: settings.json. Use Repair to restore this Named Config.")
+    );
 }
 
 #[test]

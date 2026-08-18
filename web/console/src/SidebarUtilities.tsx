@@ -1,6 +1,4 @@
-import anthropicIcon from "@lobehub/icons-static-svg/icons/anthropic.svg";
 import githubIcon from "@lobehub/icons-static-svg/icons/github.svg";
-import openaiIcon from "@lobehub/icons-static-svg/icons/openai.svg";
 import {
   Check,
   ChevronLeft,
@@ -20,6 +18,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { AgentIcon, BrandIcon } from "./icons";
 import type { ThemePreference } from "./usePersistentTheme";
 import styles from "./App.module.css";
 
@@ -40,17 +39,18 @@ interface ThemeOption {
 const resources = [
   {
     href: "https://github.com/rbee3u/aibox",
-    icon: githubIcon,
+    source: githubIcon,
+    name: "github",
     label: "GitHub",
   },
   {
     href: "https://developers.openai.com/codex/cli",
-    icon: openaiIcon,
+    agent: "codex",
     label: "Codex docs",
   },
   {
     href: "https://code.claude.com/docs/en/overview",
-    icon: anthropicIcon,
+    agent: "claude",
     label: "Claude docs",
   },
 ] as const;
@@ -81,7 +81,11 @@ export function SidebarUtilities({
             rel="noopener noreferrer"
             title={collapsed ? resource.label : undefined}
           >
-            <BrandIcon source={resource.icon} />
+            {"agent" in resource ? (
+              <AgentIcon agent={resource.agent} size={17} />
+            ) : (
+              <BrandIcon source={resource.source} name={resource.name} />
+            )}
             <span className={styles.utilityLabel}>{resource.label}</span>
           </a>
         ))}
@@ -105,19 +109,6 @@ export function SidebarUtilities({
         </button>
       </div>
     </footer>
-  );
-}
-
-function BrandIcon({ source }: { source: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={styles.brandIcon}
-      // The SVG data URLs contain single quotes. Quoting the CSS URL keeps
-      // those characters inside the URL token instead of making the mask
-      // declaration invalid in the browser.
-      style={{ "--brand-icon": `url("${source}")` } as CSSProperties}
-    />
   );
 }
 

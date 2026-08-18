@@ -245,6 +245,7 @@
 
 .sessionPage > .splitLayout {
   height: 100%;
+  grid-template-columns: clamp(340px, 34%, 560px) minmax(0, 1fr);
 }
 
 .catalog,
@@ -279,74 +280,316 @@
 }
 
 .sessionToolbar {
+  position: relative;
   display: flex;
   min-width: 0;
-  min-height: 52px;
+  min-height: 48px;
   align-items: center;
-  gap: 5px;
-  padding: 8px 9px;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 10px 7px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-shell);
 }
 
-.sessionTenant {
+.sessionFilters,
+.sessionHeaderActions,
+.sessionSelectionActions {
+  display: flex;
   min-width: 0;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.sessionFilters {
   flex: 1 1 auto;
 }
 
-.sessionTenant select {
-  width: 100%;
+.sessionHeaderActions,
+.sessionSelectionActions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.sessionFilter {
+  position: relative;
   min-width: 0;
 }
 
-.sessionAgents {
+.sessionTenantFilter,
+.sessionAgentFilter {
+  max-width: 100px;
+  flex: 1 1 0;
+}
+
+.sessionFilterTrigger {
+  display: grid;
+  width: 100%;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 4px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sessionFilterTriggerIcon,
+.sessionFilterOptionIcon {
+  color: var(--muted);
+}
+
+.sessionFilterTriggerIcon,
+.sessionFilterOptionIcon,
+.sessionFilterOptionCheckSlot {
+  display: grid;
+  place-items: center;
+}
+
+.sessionFilterTriggerIcon {
+  width: 14px;
+  height: 14px;
+}
+
+.sessionFilterTriggerSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionFilterSummaryCompact {
+  display: none;
+}
+
+.sessionFilterTrigger > svg:last-child {
+  flex: 0 0 auto;
+  transition: transform var(--transition-fast);
+}
+
+.sessionFilterChevronOpen {
+  transform: rotate(180deg);
+}
+
+.sessionFilterMenu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  width: clamp(140px, 150%, 160px);
+  max-width: calc(100cqw - 18px);
+  max-height: min(320px, calc(100vh - 170px));
+  gap: 2px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.sessionAgentFilter .sessionFilterMenu {
+  right: 0;
+  left: auto;
+}
+
+.sessionFilterOptions {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.sessionFilterOption {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 6px 7px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.sessionFilterOptionSingle,
+.sessionFilterOptionMultiple {
+  display: grid;
+}
+
+.sessionFilterOptionSingle {
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+}
+
+.sessionFilterOptionMultiple {
+  grid-template-columns: 14px 16px minmax(0, 1fr);
+}
+
+.sessionFilterOption:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.sessionFilterOption:has(input:checked) {
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.sessionFilterOptionSelected {
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.sessionFilterOption:has(input:disabled) {
+  cursor: default;
+}
+
+.sessionFilterOption input {
+  width: 14px;
+  height: 14px;
+  min-height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.sessionFilterOptionIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.sessionFilterOptionLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionFilterOptionCheckSlot {
+  width: 14px;
+  height: 14px;
+}
+
+.sessionFilterOptionCheck {
+  color: var(--accent);
+}
+
+.sessionFilterMenuHeader,
+.sessionFilterMenuFooter {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--line-soft);
+}
+
+.sessionFilterMenuHeader {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0 2px 4px;
+}
+
+.sessionFilterMenuFooter {
+  justify-content: space-between;
+  border-top: 1px solid var(--line-soft);
+  padding: 4px 2px 0;
+}
+
+.sessionFilterMenuFooterMultiple {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+}
+
+.sessionFilterMenuHeader button,
+.sessionFilterMenuFooter button {
   display: inline-flex;
+  min-height: 28px;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-color: transparent;
+  padding: 4px 6px;
+  color: var(--ink-secondary);
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.sessionAgents button {
-  display: inline-grid;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-  place-items: center;
-  border-radius: 0;
-  padding: 0;
-}
-
-.sessionAgents button:first-child {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
-.sessionAgents button:last-child {
-  margin-left: -1px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.sessionAgents button[aria-pressed="true"] {
-  z-index: 1;
-  border-color: var(--accent);
+.sessionFilterMenuHeader button:hover:not(:disabled),
+.sessionFilterMenuFooter button:hover:not(:disabled) {
+  border-color: transparent;
   color: var(--accent);
   background: var(--accent-soft);
 }
 
+.sessionFilterModeAction {
+  color: var(--accent) !important;
+  font-weight: 650;
+}
+
+.sessionFilterCommitActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  justify-self: end;
+}
+
+.sessionFilterCommitActions button:last-child {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.sessionRefresh,
+.sessionSelect,
+.sessionCancelSelection,
 .sessionSelectAll {
+  display: inline-flex;
   min-height: 30px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   border-color: transparent;
-  padding: 5px 6px;
-  color: var(--accent);
+  padding: 5px 7px;
   background: transparent;
   font-size: 11px;
-  font-weight: 700;
   white-space: nowrap;
 }
 
+.sessionRefresh,
+.sessionSelect {
+  color: var(--ink-secondary);
+}
+
+.sessionRefresh:hover:not(:disabled),
+.sessionSelect:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sessionCancelSelection,
+.sessionSelectAll {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.sessionSelectAll {
+  text-align: left;
+}
+
 .sessionSelectionCount {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
+  margin-right: 3px;
   color: var(--muted);
   font:
     600 10px/1 ui-monospace,
@@ -354,7 +597,21 @@
     Menlo,
     monospace;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionDeleteSelected {
+  display: inline-flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-color: var(--danger-line);
+  padding: 5px 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -379,6 +636,70 @@
   overscroll-behavior-y: contain;
   scrollbar-gutter: stable;
   background: var(--surface);
+}
+
+.sessionListEmpty,
+.sessionEmptyPane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  place-content: center;
+  justify-items: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.sessionListEmpty {
+  height: 100%;
+  min-height: 180px;
+  gap: 5px;
+  padding: 28px;
+}
+
+.sessionListEmpty > svg {
+  margin-bottom: 3px;
+  color: var(--faint);
+}
+
+.sessionListEmpty strong {
+  color: var(--ink-secondary);
+  font-size: 12px;
+}
+
+.sessionListEmpty p,
+.sessionEmptyPane p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sessionListEmpty p {
+  max-width: 260px;
+}
+
+.sessionEmptyPane {
+  flex: 1;
+  gap: 0;
+  padding: 28px;
+}
+
+.promptList .sessionEmptyPane {
+  min-height: 100%;
+}
+
+.sessionEmptyPane > svg {
+  margin-bottom: 12px;
+  color: var(--accent);
+}
+
+.sessionEmptyPane h2 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.sessionEmptyPane p {
+  max-width: 360px;
 }
 
 .sessionRow {
@@ -466,6 +787,25 @@
 .sessionRowMain small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.sessionRowMetadata {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 9px;
+}
+
+.sessionRowMetadata > span,
+.sessionRowMetadata time {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionRowMetadata time {
+  text-align: right;
 }
 
 .sessionRowWarning {
@@ -590,6 +930,21 @@
 .detailHeader > .iconButton:first-child {
   display: none;
 }
+
+.sessionDetailSource {
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionDetailSource code {
+  display: inline;
+}
 .sectionHeading {
   padding: 14px 16px 8px;
 }
@@ -665,6 +1020,9 @@
   align-items: center;
 }
 .segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-radius: 0;
 }
 .segmented button:first-child {
@@ -685,25 +1043,252 @@
 
 .configLayout {
   display: grid;
-  height: calc(100% - 52px);
+  height: 100%;
   min-height: 0;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: clamp(340px, 34%, 560px) minmax(0, 1fr);
 }
 .configCatalog {
-  padding: 6px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  container-type: inline-size;
 }
-.configCatalog .createRow {
-  margin-top: 8px;
-  padding: 8px 4px;
-  border-top: 1px solid var(--line);
-  border-bottom: 0;
+.configWarnings:empty {
+  display: none;
+}
+.configWarnings {
+  max-height: 150px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+.configWarnings .inlineWarning {
+  margin: 8px;
+}
+.configList {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  background: var(--surface);
+}
+.configRowGroup {
+  min-width: 0;
+}
+.configRow {
+  position: relative;
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 3px;
+  padding: 2px 7px 2px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+.configRow::before {
+  position: absolute;
+  inset: 5px auto 5px 0;
+  width: 2px;
+  border-radius: 0 999px 999px 0;
+  background: transparent;
+  content: "";
+}
+.configRow:hover,
+.configRow:focus-within {
+  background: var(--surface-hover);
+}
+.configRowInspected,
+.configRowInspected:hover,
+.configRowInspected:focus-within,
+.configRowSelected,
+.configRowSelected:hover,
+.configRowSelected:focus-within {
+  background: var(--surface-selected);
+}
+.configRowInspected::before {
+  background: var(--accent);
+}
+.configRowSelection,
+.configRowProtected {
+  grid-template-columns: minmax(0, 1fr);
+}
+.configRowSelection.configRowInspected::before {
+  background: transparent;
+}
+.configRowProtected {
+  background: var(--surface-inset);
+}
+.configRowMain {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+.configRowMain:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--ink);
+  background: transparent;
+}
+.configRowMain:disabled {
+  color: var(--ink);
+  opacity: 1;
+}
+.configRowText {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+.configRowTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+.configRowTitle strong,
+.configRowText > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.configRowActions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.configRowPrimaryAction {
+  display: inline-flex;
+  width: auto;
+  min-width: 64px;
+  height: 30px;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  border-color: var(--line);
+  padding: 0 10px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 650;
+}
+.configRowPrimaryAction:hover:not(:disabled),
+.configRowPrimaryAction:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.configPropagateAction {
+  width: 95px;
+}
+.configRowAction,
+.configAddButton {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  flex-basis: 30px;
+  align-self: center;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+.configRowAction:hover:not(:disabled),
+.configRowAction:focus-visible,
+.configAddButton:hover:not(:disabled),
+.configAddButton:focus-visible {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.configDeleteAction:hover:not(:disabled),
+.configDeleteAction:focus-visible {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.configDriftBadge {
+  flex: 0 0 auto;
+}
+.configProtected {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--muted);
+  background: var(--surface-inset);
+  font-size: 10px;
+  font-weight: 650;
+}
+.configRowSelection .configRowMain {
+  padding-right: 34px;
+}
+.configRowProtected .configRowMain {
+  padding-right: 0;
+}
+.configRowSelected .sessionSelectionIndicator {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.configListEmpty {
+  display: grid;
+  min-height: 180px;
+  place-content: center;
+  padding: 28px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 .catalogDivider {
-  padding: 14px 8px 5px;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 7px 7px 14px;
+  border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
+}
+.configEditorHeader {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+.configEditorHeader > .iconButton:first-child {
+  display: none;
+  margin-left: 8px;
+}
+.configEditorHeader h2 {
+  min-width: 0;
+  margin: 0;
+  padding: 0 16px;
+  overflow: hidden;
+  font:
+    600 12px/1.5 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.configEditorHeader .fileTabs {
+  min-width: 0;
+  flex: 1;
+  align-self: stretch;
 }
 .editorHeader > div:first-child {
   display: flex;
@@ -837,6 +1422,11 @@
   padding: 8px 3px;
   border-bottom: 1px solid var(--line-soft);
 }
+.planList > code {
+  display: block;
+  padding: 8px 3px;
+  border-bottom: 1px solid var(--line-soft);
+}
 .planList span {
   color: var(--muted);
 }
@@ -891,6 +1481,16 @@
   font-size: 11px;
 }
 
+@container (max-width: 360px) {
+  .sessionFilterSummaryFull {
+    display: none;
+  }
+
+  .sessionFilterSummaryCompact {
+    display: inline;
+  }
+}
+
 @media (max-width: 1100px) {
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -924,6 +1524,9 @@
     display: block;
     height: calc(100% - 94px);
   }
+  .configLayout {
+    height: 100%;
+  }
   .sessionPage > .splitLayout {
     height: 100%;
   }
@@ -945,7 +1548,16 @@
   .hasSelection .detailPane {
     display: flex;
   }
+  .configDetailOpen .configCatalog {
+    display: none;
+  }
+  .configDetailOpen .configEditor {
+    display: flex;
+  }
   .detailHeader > .iconButton:first-child {
+    display: inline-grid;
+  }
+  .configEditorHeader > .iconButton:first-child {
     display: inline-grid;
   }
   .componentRow {

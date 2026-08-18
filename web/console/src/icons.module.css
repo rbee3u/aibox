@@ -1,0 +1,9 @@
+.brandIcon {
+  display: inline-block;
+  width: var(--brand-icon-size);
+  height: var(--brand-icon-size);
+  flex: 0 0 var(--brand-icon-size);
+  background: currentColor;
+  -webkit-mask: var(--brand-icon) center / contain no-repeat;
+  mask: var(--brand-icon) center / contain no-repeat;
+}

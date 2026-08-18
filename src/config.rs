@@ -20,8 +20,8 @@ use time::format_description::well_known::Rfc3339;
 mod auth;
 
 pub(crate) use auth::{
-    AuthPropagationPlan, AuthPropagationPreview, execute_auth_propagation,
-    plan_auth_propagation_from, preview_auth_propagation,
+    AuthPropagationPlan, AuthPropagationPreview, credential_propagation_source_available,
+    execute_auth_propagation, plan_auth_propagation_from, preview_auth_propagation,
 };
 #[cfg(test)]
 use auth::{AuthPropagationReport, PropagationCounts, PropagationOutcome};
@@ -81,6 +81,23 @@ struct NamedConfigLayout {
 impl NamedConfigLayout {
     fn complete(self, selected: &TenantAgent) -> bool {
         self.main && (selected.agent.native_auth_file().is_none() || self.auth)
+    }
+
+    fn missing_files(self, selected: &TenantAgent) -> Vec<&'static str> {
+        selected
+            .agent
+            .config_files()
+            .iter()
+            .copied()
+            .filter(|file| {
+                if *file == selected.agent.main_config_file() {
+                    !self.main
+                } else {
+                    debug_assert_eq!(Some(*file), selected.agent.native_auth_file());
+                    !self.auth
+                }
+            })
+            .collect()
     }
 }
 
@@ -294,7 +311,17 @@ pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<Config
             continue;
         }
         let (state, detail) = match inspect_named_config_directory(selected, &name) {
-            Ok(Some(layout)) if !layout.complete(selected) => ("incomplete", None),
+            Ok(Some(layout)) if !layout.complete(selected) => {
+                let missing = layout.missing_files(selected);
+                let noun = if missing.len() == 1 { "file" } else { "files" };
+                (
+                    "incomplete",
+                    Some(format!(
+                        "Missing required {noun}: {}. Use Repair to restore this Named Config.",
+                        missing.join(", ")
+                    )),
+                )
+            }
             Ok(Some(_))
                 if private_directory(&selected.named_config_dir(&name))
                     && selected.agent.config_files().iter().all(|file| {
@@ -853,14 +880,11 @@ fn ensure_complete_named_config(selected: &TenantAgent, config: &str) -> Result<
         bail!("Named Config '{config}' does not exist");
     };
     if !layout.complete(selected) {
-        let missing = if layout.main {
-            selected
-                .agent
-                .native_auth_file()
-                .expect("incomplete config with main file must require auth")
-        } else {
-            selected.agent.main_config_file()
-        };
+        let missing = layout
+            .missing_files(selected)
+            .into_iter()
+            .next()
+            .expect("incomplete Named Config must have a missing file");
         bail!("Named Config '{config}' is incomplete: missing {missing}");
     }
     validate_private_directory(&selected.named_config_dir(config))?;

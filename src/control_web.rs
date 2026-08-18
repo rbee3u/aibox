@@ -379,6 +379,7 @@ struct ConfigListResponse {
     configs: Vec<config::ConfigCatalogEntry>,
     files: &'static [&'static str],
     application: config::ApplicationStatus,
+    credential_propagation_available: bool,
 }
 
 async fn list_configs(
@@ -389,8 +390,14 @@ async fn list_configs(
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
+    let check_credential_propagation =
+        query.scope.scope == "host" && query.agent == AgentKind::Codex;
+    let root = state.root.clone();
+    let host_home = state.host_home.clone();
     blocking(move || {
         let configs = config::inspect_named_configs(&selected)?;
+        let credential_propagation_available = check_credential_propagation
+            && config::credential_propagation_source_available(&root, &host_home)?;
         Ok(ConfigListResponse {
             named_configs: configs
                 .iter()
@@ -400,6 +407,7 @@ async fn list_configs(
             configs,
             files: selected.agent.config_files(),
             application: config::application_status(&selected),
+            credential_propagation_available,
         })
     })
     .await

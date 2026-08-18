@@ -35,21 +35,42 @@ describe("Console App", () => {
     await screen.findByRole("region", { name: "Service status" });
     const resources = screen.getByRole("navigation", { name: "Resources" });
     const expected = [
-      ["GitHub", "https://github.com/rbee3u/aibox"],
-      ["Codex docs", "https://developers.openai.com/codex/cli"],
-      ["Claude docs", "https://code.claude.com/docs/en/overview"],
+      ["GitHub", "https://github.com/rbee3u/aibox", "github"],
+      ["Codex docs", "https://developers.openai.com/codex/cli", "codex"],
+      ["Claude docs", "https://code.claude.com/docs/en/overview", "claude"],
     ];
 
-    for (const [name, href] of expected) {
+    for (const [name, href, iconName] of expected) {
       const link = within(resources).getByRole("link", { name });
       expect(link).toHaveAttribute("href", href);
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
       const icon = link.querySelector<HTMLElement>("span");
       expect(icon?.style.getPropertyValue("--brand-icon")).toMatch(/^url\("data:image\/svg\+xml,/);
+      expect(icon).toHaveAttribute("data-icon", iconName);
     }
     expect(within(screen.getByRole("banner")).queryByRole("link")).not.toBeInTheDocument();
     expect(screen.getByText("v1.2.3")).toBeInTheDocument();
+  });
+
+  it("uses domain-specific icons for the primary modules", async () => {
+    mockControlApi();
+    render(<App />);
+
+    await screen.findByRole("region", { name: "Service status" });
+    const modules = screen.getByRole("navigation", { name: "Modules" });
+    const expected = [
+      ["Overview", "overview", "lucide-layout-dashboard"],
+      ["Tenants", "tenants", "lucide-users-round"],
+      ["Configs", "configs", "lucide-file-sliders"],
+      ["Sessions", "sessions", "lucide-messages-square"],
+      ["Requests", "requests", "lucide-arrow-left-right"],
+    ];
+
+    for (const [label, iconName, iconClass] of expected) {
+      const button = within(modules).getByRole("button", { name: new RegExp(`^${label}`) });
+      expect(button.querySelector(`[data-icon="${iconName}"]`)).toHaveClass(iconClass);
+    }
   });
 
   it("persists the desktop sidebar preference and defaults invalid values to expanded", async () => {

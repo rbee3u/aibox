@@ -2,7 +2,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Clock3,
+  Inbox,
   ListChecks,
   LoaderCircle,
   RefreshCw,
@@ -195,7 +195,7 @@ export function RecordList({
       <div className={styles.records} aria-busy={loading}>
         {records.length === 0 ? (
           <div className={styles.empty}>
-            <Clock3 size={22} aria-hidden="true" />
+            <Inbox size={22} data-icon="request-empty" aria-hidden="true" />
             <p>No request recorded yet.</p>
           </div>
         ) : (

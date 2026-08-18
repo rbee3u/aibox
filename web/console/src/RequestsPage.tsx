@@ -1,11 +1,10 @@
 import {
-  BookOpen,
+  ArrowLeftRight,
   Box,
   ChevronLeft,
   CircleAlert,
   GitFork,
   LoaderCircle,
-  Radio,
   SunMoon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +16,7 @@ import { RecordList } from "./components/RecordList";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { useRecordInspection, type InspectionFailure } from "./useRecordInspection";
 import { usePersistentTheme, type ThemePreference } from "./usePersistentTheme";
+import { AgentIcon } from "./icons";
 import type { RecordList as RecordListData, RecordSummary, RequestApi } from "./types";
 import styles from "./RequestsPage.module.css";
 
@@ -47,17 +47,17 @@ function StandaloneHeader() {
       </div>
       <nav className={styles.resources} aria-label="Resources">
         <a href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">
-          <BookOpen size={14} aria-hidden="true" /> Codex docs
+          <AgentIcon agent="codex" size={14} /> Codex docs
         </a>
         <a
           href="https://code.claude.com/docs/en/overview"
           target="_blank"
           rel="noopener noreferrer"
         >
-          <BookOpen size={14} aria-hidden="true" /> Claude docs
+          <AgentIcon agent="claude" size={14} /> Claude docs
         </a>
         <a href="https://github.com/rbee3u/aibox" target="_blank" rel="noopener noreferrer">
-          <GitFork size={14} aria-hidden="true" /> GitHub
+          <GitFork size={14} data-icon="github" aria-hidden="true" /> GitHub
         </a>
         <label className={styles.themeControl}>
           <SunMoon size={14} aria-hidden="true" />
@@ -448,7 +448,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
             </section>
           ) : (
             <section className={styles.emptyDetail}>
-              <Radio size={26} aria-hidden="true" />
+              <ArrowLeftRight size={26} data-icon="request-detail-empty" aria-hidden="true" />
               <h1>Select a request</h1>
               <p>Choose a Request Record to inspect its summary and raw data.</p>
             </section>

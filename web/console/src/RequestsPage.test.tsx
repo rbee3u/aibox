@@ -83,20 +83,21 @@ describe("Requests page", () => {
     const banner = screen.getByRole("banner");
     const resources = within(banner).getByRole("navigation", { name: "Resources" });
     const links = [
-      ["Codex docs", "https://developers.openai.com/codex/cli"],
-      ["Claude docs", "https://code.claude.com/docs/en/overview"],
-      ["GitHub", "https://github.com/rbee3u/aibox"],
+      ["Codex docs", "https://developers.openai.com/codex/cli", "codex"],
+      ["Claude docs", "https://code.claude.com/docs/en/overview", "claude"],
+      ["GitHub", "https://github.com/rbee3u/aibox", "github"],
     ] as const;
     expect(
       within(resources)
         .getAllByRole("link")
         .map((link) => link.textContent?.trim()),
     ).toEqual(links.map(([name]) => name));
-    for (const [name, href] of links) {
+    for (const [name, href, iconName] of links) {
       const link = within(resources).getByRole("link", { name });
       expect(link).toHaveAttribute("href", href);
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      expect(link.querySelector(`[data-icon="${iconName}"]`)).toBeInTheDocument();
     }
     expect(within(banner).getByRole("combobox", { name: "Color theme" })).toHaveValue("system");
 
@@ -201,6 +202,9 @@ describe("Requests page", () => {
 
     expect(detailSignal?.aborted).toBe(true);
     expect(screen.getByRole("heading", { name: "Select a request" })).toBeInTheDocument();
+    expect(document.querySelector('[data-icon="request-detail-empty"]')).toHaveClass(
+      "lucide-arrow-left-right",
+    );
     await waitFor(() => expect(row).toHaveFocus());
     expect(window.location.pathname).toBe("/_aibox/ui/requests");
 
@@ -669,6 +673,7 @@ describe("Requests page", () => {
 
     await screen.findByText("Page 1 · 0 shown · 0 total");
     expect(screen.getByText("No request recorded yet.")).toBeInTheDocument();
+    expect(document.querySelector('[data-icon="request-empty"]')).toHaveClass("lucide-inbox");
     expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id, secondPageSummary.id]);
     expect(listRecords).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
   });
