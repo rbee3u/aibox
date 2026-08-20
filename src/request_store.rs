@@ -27,8 +27,8 @@
 #[cfg(test)]
 use crate::request_assessment::diagnostic_findings;
 use crate::request_assessment::{calculate_assessment, refresh_assessment};
-use crate::request_console::{AbnormalRecordEvent, RequestConsole};
 use crate::request_interpretation::{ProtocolSummary, coding_agent_session_id};
+use crate::request_reporter::{AbnormalRecordEvent, RequestReporter};
 use crate::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
 use crate::tenant;
 use anyhow::{Context, Result, bail};
@@ -374,7 +374,7 @@ pub(crate) struct RequestStore {
     root: PathBuf,
     active: Arc<Mutex<HashMap<String, Instant>>>,
     namespace: Arc<RwLock<()>>,
-    console: Option<RequestConsole>,
+    reporter: Option<RequestReporter>,
 }
 
 /// Shared lookup for a Record directory whose name changes at terminalization.
@@ -524,10 +524,13 @@ pub(crate) enum RecordDetailReadError {
 impl RequestStore {
     #[cfg(test)]
     pub fn open(aibox_root: &Path) -> Result<Self> {
-        Self::open_with_console(aibox_root, None)
+        Self::open_with_reporter(aibox_root, None)
     }
 
-    pub fn open_with_console(aibox_root: &Path, console: Option<RequestConsole>) -> Result<Self> {
+    pub fn open_with_reporter(
+        aibox_root: &Path,
+        reporter: Option<RequestReporter>,
+    ) -> Result<Self> {
         tenant::ensure_real_dir(aibox_root, "aibox root")?;
         let root = aibox_root.join("requests");
         tenant::ensure_real_dir(&root, "Request Record collection")?;
@@ -536,7 +539,7 @@ impl RequestStore {
             root,
             active: Arc::new(Mutex::new(HashMap::new())),
             namespace: Arc::new(RwLock::new(())),
-            console,
+            reporter,
         })
     }
 
@@ -545,8 +548,8 @@ impl RequestStore {
     }
 
     pub(crate) fn warning(&self, category: &str, id: Option<&str>) {
-        if let Some(console) = &self.console {
-            console.warning(category, id);
+        if let Some(reporter) = &self.reporter {
+            reporter.warning(category, id);
         }
     }
 
@@ -805,8 +808,8 @@ impl RequestStore {
             outcome,
             error,
         };
-        if let Some(console) = &self.console {
-            console.record_finished(AbnormalRecordEvent {
+        if let Some(reporter) = &self.reporter {
+            reporter.record_finished(AbnormalRecordEvent {
                 id: &record.id,
                 method: &snapshot.request.method,
                 host: &record.locator.display_host,

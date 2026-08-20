@@ -6,7 +6,7 @@ export default defineConfig({
   publicDir: false,
   plugins: [react()],
   build: {
-    outDir: "../../assets",
+    outDir: "../assets",
     // The shared assets directory also contains non-Vite inputs such as the Dockerfile.
     emptyOutDir: false,
     assetsInlineLimit: () => true,

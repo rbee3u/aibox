@@ -1,8 +1,8 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { URL } from "node:url";
 
-const generatedIndex = new URL("../../../assets/index.html", import.meta.url);
-const embeddedHtml = new URL("../../../assets/console.html", import.meta.url);
+const generatedIndex = new URL("../../assets/index.html", import.meta.url);
+const embeddedHtml = new URL("../../assets/console.html", import.meta.url);
 
 function assertExactlyOnce(content, value) {
   const first = content.indexOf(value);

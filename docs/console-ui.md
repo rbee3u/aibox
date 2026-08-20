@@ -1,6 +1,6 @@
 # Console UI Development
 
-The Console is a React and TypeScript application under `web/console/`. It
+The Console is a React and TypeScript application under `console/`. It
 contains Overview, Tenants/Components, Configs, Sessions, and the complete
 Requests module. Node and npm are development tools only. The Rust binary
 continues to embed the generated files in `assets/console.html`,
@@ -45,14 +45,14 @@ listener. They deliberately avoid committed screenshot baselines and remain
 separate from the routine socket-free checks:
 
 ```sh
-npm --prefix web/console run test:chrome        # Installed stable Chrome
-npm --prefix web/console run test:browsers      # Firefox and WebKit behavior smoke
+npm --prefix console run test:chrome        # Installed stable Chrome
+npm --prefix console run test:browsers      # Firefox and WebKit behavior smoke
 ```
 
 The browser smoke projects require the matching optional Playwright browsers:
 
 ```sh
-npm --prefix web/console exec playwright install firefox webkit
+npm --prefix console exec playwright install firefox webkit
 ```
 
 There is intentionally no required Vite development server. Generate the
@@ -69,7 +69,7 @@ To test the installed `aibox` command instead, run `make install` after
 rebuilding the assets.
 
 Do not edit the generated files in `assets/console.*` directly. Change the
-source under `web/console/`—application code in `src/` or the HTML shell in
+source under `console/`—application code in `src/` or the HTML shell in
 `index.html`—and rebuild before committing. The publish step rewrites the asset
 references, so `assets/console.css` and `assets/console.js` are served as
 `/_aibox/ui/app.css` and `/_aibox/ui/app.js`.

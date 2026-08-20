@@ -41,19 +41,19 @@ check:
 	cargo clippy --all-targets -- -D warnings
 
 console-ci:
-	npm --prefix web/console ci
+	npm --prefix console ci
 
 console-format:
-	npm --prefix web/console run format
+	npm --prefix console run format
 
 console-build:
-	npm --prefix web/console run build
+	npm --prefix console run build
 
 console-test:
-	npm --prefix web/console run test
+	npm --prefix console run test
 
 console-lint:
-	npm --prefix web/console run lint
+	npm --prefix console run lint
 
 console-check:
-	npm --prefix web/console run check
+	npm --prefix console run check

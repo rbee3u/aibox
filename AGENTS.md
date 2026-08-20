@@ -33,7 +33,7 @@ references between them.
   `src/request_web.rs` owns the Request API and embedded Console assets.
 - `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
   Root-local Service, Console Control API, and ephemeral Management Operations.
-- `web/console/` is the editable Console, including the Requests module.
+- `console/` is the editable Console, including the Requests module.
   `assets/console.*` is generated output; use `docs/console-ui.md`.
 
 ## Constraints
@@ -174,7 +174,7 @@ streams with deterministic synchronization. Keep real-socket Reqwest transport
 checks explicit and ignored, and run them only in a network-permitted host or
 CI environment. Test the embedded UI in layers: Rust route/API tests,
 then Vitest module and component tests for the React and TypeScript source in
-`web/console/`, then optional headless Chromium/Playwright interaction and
+`console/`, then optional headless Chromium/Playwright interaction and
 screenshots in a development image or CI. Edit that source rather than the
 generated `assets/console.*` bundle, as `docs/console-ui.md` describes. Desktop
 Browser access is never required for routine changes. A headless browser uses

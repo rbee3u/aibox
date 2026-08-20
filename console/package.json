@@ -13,7 +13,7 @@
     "test:chrome": "playwright test --project=desktop-chrome",
     "test:browsers": "playwright test --project=desktop-firefox --project=desktop-webkit",
     "lint": "eslint .",
-    "check": "prettier --check . && tsc && npm run build && node --check ../../assets/console.js && npm run test && npm run lint"
+    "check": "prettier --check . && tsc && npm run build && node --check ../assets/console.js && npm run test && npm run lint"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",

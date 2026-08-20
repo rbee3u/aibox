@@ -104,10 +104,10 @@ async fn serve(
     let _lock = acquire_service_lock(&root)?;
     ensure_default_managed_tenant(&root)?;
     let shutdown = CancellationToken::new();
-    let request = RequestState::new_with_console(
+    let request = RequestState::new_with_reporter(
         &root,
         shutdown.clone(),
-        Some(crate::request_console::RequestConsole::new()),
+        Some(crate::request_reporter::RequestReporter::new()),
     )?;
     let state = ServiceState {
         root: Arc::new(root),
@@ -469,7 +469,7 @@ mod tests {
             listen: "127.0.0.1:9923".parse().unwrap(),
             started: Instant::now(),
             csrf: Arc::new("test-csrf".to_string()),
-            request: RequestState::new_with_console(root, shutdown, None).unwrap(),
+            request: RequestState::new_with_reporter(root, shutdown, None).unwrap(),
             operations: OperationManager::new(),
             mutation: Arc::new(Mutex::new(())),
             auth_propagation: Arc::new(std::sync::Mutex::new(None)),

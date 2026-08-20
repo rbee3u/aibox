@@ -241,7 +241,7 @@ maps behavior to its owning modules. Run the complete Rust checks with:
 make check
 ```
 
-Changes under `web/console/` also require `make console-check`; install its
+Changes under `console/` also require `make console-check`; install its
 locked dependencies first with `make console-ci`. See
 [Console UI Development](docs/console-ui.md) for the generated-asset and
 optional browser-test workflow.

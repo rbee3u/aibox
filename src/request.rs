@@ -5,7 +5,7 @@
 //! The proxy is global rather than Tenant-owned and never starts Docker; see
 //! `docs/adr/0008-global-trusted-request-service.md`.
 
-use crate::request_console::RequestConsole;
+use crate::request_reporter::RequestReporter;
 use crate::request_store::RequestStore;
 use anyhow::Result;
 use std::path::Path;
@@ -36,16 +36,16 @@ pub(crate) struct AppState {
 impl AppState {
     #[cfg(test)]
     pub(crate) fn new(root: &Path, shutdown: CancellationToken) -> Result<Self> {
-        Self::new_with_console(root, shutdown, None)
+        Self::new_with_reporter(root, shutdown, None)
     }
 
-    pub(crate) fn new_with_console(
+    pub(crate) fn new_with_reporter(
         root: &Path,
         shutdown: CancellationToken,
-        console: Option<RequestConsole>,
+        reporter: Option<RequestReporter>,
     ) -> Result<Self> {
         Ok(Self {
-            store: RequestStore::open_with_console(root, console)?,
+            store: RequestStore::open_with_reporter(root, reporter)?,
             shutdown,
             response_tasks: TaskTracker::new(),
             allow_private_upstream: false,

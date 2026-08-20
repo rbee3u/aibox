@@ -7,12 +7,12 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
-pub(crate) struct RequestConsole {
-    state: Arc<Mutex<ConsoleState>>,
+pub(crate) struct RequestReporter {
+    state: Arc<Mutex<ReporterState>>,
     output: Arc<Mutex<()>>,
 }
 
-struct ConsoleState {
+struct ReporterState {
     tty: bool,
     warned: HashSet<String>,
 }
@@ -28,14 +28,14 @@ pub(crate) struct AbnormalRecordEvent<'a> {
     pub(crate) error_kind: Option<ErrorKind>,
 }
 
-impl RequestConsole {
+impl RequestReporter {
     pub(crate) fn new() -> Self {
         Self::with_tty(io::stderr().is_terminal())
     }
 
     fn with_tty(tty: bool) -> Self {
         Self {
-            state: Arc::new(Mutex::new(ConsoleState {
+            state: Arc::new(Mutex::new(ReporterState {
                 tty,
                 warned: HashSet::new(),
             })),
@@ -99,7 +99,7 @@ impl RequestConsole {
         let _ = stderr.flush();
     }
 
-    fn with_state<R>(&self, read: impl FnOnce(&ConsoleState) -> R) -> R {
+    fn with_state<R>(&self, read: impl FnOnce(&ReporterState) -> R) -> R {
         let state = self
             .state
             .lock()
@@ -107,7 +107,7 @@ impl RequestConsole {
         read(&state)
     }
 
-    fn with_state_mut<R>(&self, update: impl FnOnce(&mut ConsoleState) -> R) -> R {
+    fn with_state_mut<R>(&self, update: impl FnOnce(&mut ReporterState) -> R) -> R {
         let mut state = self
             .state
             .lock()
@@ -122,7 +122,7 @@ fn should_report_record(outcome: Outcome, assessment_level: AssessmentLevel) -> 
 }
 
 fn render_event(tty: bool, timestamp: &str, level: &str, message: &str) -> String {
-    let timestamp = format_console_timestamp(timestamp);
+    let timestamp = format_report_timestamp(timestamp);
     if !tty {
         return format!("{timestamp} [{level}] {message}");
     }
@@ -135,7 +135,7 @@ fn render_event(tty: bool, timestamp: &str, level: &str, message: &str) -> Strin
     format!("{timestamp} {color}[{level}]\x1b[0m {message}")
 }
 
-fn format_console_timestamp(timestamp: &str) -> String {
+fn format_report_timestamp(timestamp: &str) -> String {
     let rfc3339 = time::format_description::well_known::Rfc3339;
     let Ok(observed) = time::OffsetDateTime::parse(timestamp, &rfc3339) else {
         return timestamp.to_string();
@@ -143,7 +143,7 @@ fn format_console_timestamp(timestamp: &str) -> String {
     let milliseconds = time::format_description::parse_borrowed::<1>(
         "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z",
     )
-    .expect("static Request Console timestamp format is valid");
+    .expect("static Request reporter timestamp format is valid");
     observed
         .to_offset(time::UtcOffset::UTC)
         .format(&milliseconds)
@@ -222,33 +222,33 @@ mod tests {
     }
 
     #[test]
-    fn console_timestamp_is_utc_with_fixed_truncated_milliseconds() {
+    fn report_timestamp_is_utc_with_fixed_truncated_milliseconds() {
         assert_eq!(
-            format_console_timestamp("2026-08-13T13:08:24.976874375Z"),
+            format_report_timestamp("2026-08-13T13:08:24.976874375Z"),
             "2026-08-13T13:08:24.976Z"
         );
         assert_eq!(
-            format_console_timestamp("2026-08-13T13:08:24Z"),
+            format_report_timestamp("2026-08-13T13:08:24Z"),
             "2026-08-13T13:08:24.000Z"
         );
         assert_eq!(
-            format_console_timestamp("2026-08-13T13:08:24.1Z"),
+            format_report_timestamp("2026-08-13T13:08:24.1Z"),
             "2026-08-13T13:08:24.100Z"
         );
         assert_eq!(
-            format_console_timestamp("2026-08-13T13:08:24.999999999Z"),
+            format_report_timestamp("2026-08-13T13:08:24.999999999Z"),
             "2026-08-13T13:08:24.999Z"
         );
         assert_eq!(
-            format_console_timestamp("2026-08-13T15:08:24.976874375+02:00"),
+            format_report_timestamp("2026-08-13T15:08:24.976874375+02:00"),
             "2026-08-13T13:08:24.976Z"
         );
     }
 
     #[test]
-    fn console_timestamp_preserves_invalid_input() {
+    fn report_timestamp_preserves_invalid_input() {
         assert_eq!(
-            format_console_timestamp("not-a-timestamp"),
+            format_report_timestamp("not-a-timestamp"),
             "not-a-timestamp"
         );
     }
