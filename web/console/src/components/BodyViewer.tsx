@@ -192,7 +192,11 @@ export function BodyViewer({
             </button>
           </div>
           {loadingBody && (
-            <LoaderCircle className={styles.loading} size={15} aria-label="Loading body" />
+            <LoaderCircle
+              className={`${styles.loading} spin`}
+              size={15}
+              aria-label="Loading body"
+            />
           )}
           <button
             type="button"
@@ -216,6 +220,9 @@ export function BodyViewer({
             <Download size={15} aria-hidden="true" />
           </button>
         </div>
+      </div>
+      <div className={styles.bodyNotice} role="note">
+        Raw Body data may contain sensitive values and is displayed without redaction.
       </div>
       {bodyContent}
     </>
@@ -415,7 +422,9 @@ function SseEventList({
 function BodyState({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
   return (
     <div className={styles.bodyState} role="status">
-      {loading && <LoaderCircle className={styles.loading} size={16} aria-hidden="true" />}
+      {loading && (
+        <LoaderCircle className={`${styles.loading} spin`} size={16} aria-hidden="true" />
+      )}
       {children}
     </div>
   );

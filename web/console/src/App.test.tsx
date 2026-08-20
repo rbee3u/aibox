@@ -76,8 +76,9 @@ describe("Console App", () => {
     ];
 
     for (const [label, iconName, iconClass] of expected) {
-      const button = within(modules).getByRole("button", { name: new RegExp(`^${label}`) });
-      expect(button.querySelector(`[data-icon="${iconName}"]`)).toHaveClass(iconClass);
+      const link = within(modules).getByRole("link", { name: new RegExp(`^${label}`) });
+      expect(link.querySelector(`[data-icon="${iconName}"]`)).toHaveClass(iconClass);
+      expect(link).toHaveAttribute("href", `/_aibox/ui/${iconName}`);
     }
   });
 
@@ -145,7 +146,7 @@ describe("Console App", () => {
     expect(screen.getByRole("button", { name: "Color theme: Light" })).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "Color theme: Light" }));
-    await user.click(screen.getByRole("button", { name: /Overview/ }));
+    await user.click(screen.getByRole("link", { name: /Overview/ }));
     expect(screen.queryByRole("menu", { name: "Color theme" })).not.toBeInTheDocument();
   });
 
@@ -162,11 +163,41 @@ describe("Console App", () => {
     expect(screen.getByRole("button", { name: "Color theme: Light" })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
 
-    await user.click(screen.getByRole("button", { name: /Overview/ }));
+    await user.click(screen.getByRole("link", { name: /Overview/ }));
 
     await screen.findByRole("region", { name: "Service status" });
     expect(screen.getByRole("button", { name: "Color theme: Light" })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  });
+
+  it("treats mobile navigation as an inert focus-managed drawer", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
+    mockControlApi();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("region", { name: "Service status" });
+    const navigation = screen.getByLabelText("Console navigation", { selector: "aside" });
+    const menu = screen.getByRole("button", { name: "Open navigation" });
+    expect(navigation).toHaveAttribute("aria-hidden", "true");
+    expect(navigation).toHaveProperty("inert", true);
+
+    await user.click(menu);
+    expect(navigation).not.toHaveAttribute("aria-hidden");
+    expect(navigation).toHaveProperty("inert", false);
+    await waitFor(() => expect(screen.getByRole("link", { name: /Overview/ })).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+    expect(navigation).toHaveAttribute("aria-hidden", "true");
+    expect(navigation).toHaveProperty("inert", true);
+    await waitFor(() => expect(menu).toHaveFocus());
   });
 });
 

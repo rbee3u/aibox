@@ -54,8 +54,11 @@ Clap subcommands; do not add aliases, tombstones, or a completion protocol.
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only by
 Console Tenant-scoped views. The Host Tenant cannot Run and never appears in the
-Managed Tenant list or deletion. Only `tenants/<name>` subtrees may be mounted
-from inside `$AIBOX_ROOT`.
+Managed Tenant list or deletion. The Default Managed Tenant named `default` is
+protected from deletion. Service startup creates or repairs its Tenant Home
+baseline after acquiring the Service Lock and fails before listening when that
+cannot be done safely. Only `tenants/<name>` subtrees may be mounted from inside
+`$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
 `tenants/<name>` is a real directory. Named Config catalogs live under
@@ -140,9 +143,10 @@ otherwise readable Transcript; deletion remains strict and format-independent.
 a missing Managed Tenant, and the Components view reports its catalog as not
 installed. Host Component listing reports the two supported statuslines as not
 installed when the Host Home or Agent state is missing. Read-only views create
-nothing. Run, Config creation, Current Config editing, and Managed Tenant
-Component installation may initialize missing state; Host statusline install may
-initialize an Agent state directory inside an already existing Host Home.
+nothing. Service startup initializes the Default Managed Tenant; Run, Config
+creation, Current Config editing, and Managed Tenant Component installation may
+initialize other missing state. Host statusline install may initialize an Agent
+state directory inside an already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
 own interrupted filesystem work, but aibox provides no multi-process locking

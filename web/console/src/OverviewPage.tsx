@@ -42,13 +42,13 @@ import {
   type TopologyTenant,
 } from "./controlApi";
 import { AgentIcon } from "./icons";
-import { moduleIcons, type ModuleId } from "./moduleIcons";
-import { resourceIcons } from "./resourceIcons";
+import { IconButton } from "./components/IconButton";
+import { moduleIcons, resourceIcons, type ModuleId } from "./consoleIcons";
 import { formatTimestamp } from "./utils";
 import styles from "./OverviewPage.module.css";
 
 const OVERVIEW_POLL_MS = 15_000;
-const MIN_ZOOM = 0.5;
+const MIN_ZOOM = 0.65;
 const MAX_ZOOM = 1.5;
 const ZOOM_STEP = 0.1;
 const MOBILE_CANVAS_WIDTH = 760;
@@ -92,6 +92,13 @@ type TreeIcon =
 interface NavigationTarget {
   module: ModuleId;
   query?: URLSearchParams;
+}
+
+interface AttentionItem {
+  label: string;
+  detail: string;
+  tone: "warning" | "error";
+  target?: NavigationTarget;
 }
 
 interface SessionRequest {
@@ -413,6 +420,59 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
     : 0;
   const operationRunning = operation?.state === "running";
   const buildDisabled = buildPosting || operationRunning || overview?.docker.status !== "available";
+  const buildUnavailableReason = buildPosting
+    ? "Build request is being submitted."
+    : buildDisabled
+      ? buildDisabledReason(overview, operation)
+      : null;
+  const attentionItems = useMemo<AttentionItem[]>(() => {
+    const items: AttentionItem[] = [];
+    if (overviewError)
+      items.push({ label: "Service status", detail: overviewError, tone: "error" });
+    if (overview?.docker.status === "unavailable")
+      items.push({
+        label: "Docker",
+        detail: overview.docker.error ?? "Docker is unavailable.",
+        tone: "error",
+      });
+    if (overview && overview.runtime_image.status !== "built")
+      items.push({
+        label: "Runtime Image",
+        detail: overview.runtime_image.detail ?? "Build the Runtime Image before starting a Run.",
+        tone: overview.runtime_image.status === "missing" ? "warning" : "error",
+      });
+    if (overview?.host_available === false)
+      items.push({
+        label: "Host Tenant",
+        detail: "The Host Home is unavailable.",
+        tone: "warning",
+        target: { module: "tenants", query: new URLSearchParams("scope=host") },
+      });
+    if (health?.configAttention)
+      items.push({
+        label: "Configs",
+        detail: `${health.configAttention} Named Config${health.configAttention === 1 ? " needs" : "s need"} attention.`,
+        tone: health.configErrors ? "error" : "warning",
+        target: topology ? firstConfigAttentionTarget(topology) : { module: "configs" },
+      });
+    if (health?.componentAttention)
+      items.push({
+        label: "Components",
+        detail: `${health.componentAttention} Component${health.componentAttention === 1 ? " needs" : "s need"} attention.`,
+        tone: health.componentErrors ? "error" : "warning",
+        target: topology ? firstComponentAttentionTarget(topology) : { module: "tenants" },
+      });
+    if (overview?.requests.error || overview?.requests.warning)
+      items.push({
+        label: "Request Records",
+        detail: `${overview.requests.error} errors · ${overview.requests.warning} warnings`,
+        tone: overview.requests.error ? "error" : "warning",
+        target: { module: "requests" },
+      });
+    if (topologyError)
+      items.push({ label: "Resource inspection", detail: topologyError, tone: "error" });
+    return items;
+  }, [health, overview, overviewError, topology, topologyError]);
 
   async function build(force: boolean) {
     setBuildPosting(true);
@@ -535,7 +595,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
               disabled={overviewRefreshing}
               onClick={() => void loadOverview(true)}
             >
-              <RefreshCw className={overviewRefreshing ? styles.spinning : undefined} size={16} />
+              <RefreshCw className={overviewRefreshing ? "spin" : undefined} size={16} />
             </IconButton>
           }
         />
@@ -543,19 +603,25 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
           <Fact
             icon={<Server size={18} />}
             label="Service"
-            value={overview ? "Running" : "Loading"}
-            detail={overview ? formatDuration(elapsedUptime) : "Connecting"}
-            tone="good"
+            value={overviewError ? "Unavailable" : overview ? "Running" : "Loading"}
+            detail={overviewError ?? (overview ? formatDuration(elapsedUptime) : "Connecting")}
+            tone={overviewError ? "error" : overview ? "good" : "neutral"}
           />
           <Fact
             icon={<TenantsModuleIcon size={18} />}
             label="Managed Tenants"
             value={overview?.managed_tenants ?? "—"}
-            detail={
-              overview ? `Host ${overview.host_available ? "available" : "unavailable"}` : "Loading"
-            }
-            tone={overview?.host_available === false ? "warning" : "neutral"}
+            detail={overview ? "Runnable persistent identities" : "Loading"}
+            tone="neutral"
             onClick={() => onNavigate("tenants")}
+          />
+          <Fact
+            icon={<HostTenantIcon size={18} />}
+            label="Host Tenant"
+            value={overview ? (overview.host_available ? "Available" : "Unavailable") : "—"}
+            detail="Console-only view of the Host Home"
+            tone={overview?.host_available === false ? "warning" : "neutral"}
+            onClick={() => onNavigate("tenants", new URLSearchParams("scope=host"))}
           />
           <Fact
             icon={<ConfigsModuleIcon size={18} />}
@@ -608,6 +674,33 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             onClick={() => onNavigate("requests")}
           />
         </div>
+        <section className={styles.attentionPanel} aria-labelledby="attention-title">
+          <div>
+            <span>Attention summary</span>
+            <h3 id="attention-title">Needs attention</h3>
+          </div>
+          {attentionItems.length === 0 ? (
+            <p className={styles.healthySummary}>No warnings or errors are currently reported.</p>
+          ) : (
+            <div className={styles.attentionList}>
+              {attentionItems.map((item) => (
+                <button
+                  type="button"
+                  key={`${item.label}:${item.detail}`}
+                  className={styles[item.tone]}
+                  disabled={!item.target}
+                  onClick={() => item.target && onNavigate(item.target.module, item.target.query)}
+                >
+                  <AlertTriangle size={15} aria-hidden="true" />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
         <div className={styles.metadataStrip}>
           <Metadata
             icon={<Box size={14} />}
@@ -628,6 +721,135 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             wide
           />
         </div>
+      </section>
+
+      <section ref={treeRef} className={styles.topologySection} aria-labelledby="topology-title">
+        <div className={styles.topologyHeading}>
+          <SectionHeading
+            eyebrow="Persistent identities"
+            title="Resource topology"
+            id="topology-title"
+          />
+          <span>
+            {topology
+              ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.some((tenant) => tenant.kind === "host") ? "Host Tenant" : "No Host Tenant"}`
+              : "Loading topology"}
+          </span>
+        </div>
+        <>
+          <div className={styles.topologyToolbar}>
+            <label className={styles.searchField}>
+              <Search size={15} aria-hidden="true" />
+              <span className={styles.srOnly}>Filter topology</span>
+              <input
+                type="search"
+                placeholder="Filter resources"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            {query.trim() && (
+              <span className={styles.matchCount} aria-live="polite">
+                {topologySearch.matches.size} matched
+              </span>
+            )}
+            <button
+              type="button"
+              className={attentionOnly ? styles.filterActive : undefined}
+              aria-pressed={attentionOnly}
+              onClick={() => setAttentionOnly((value) => !value)}
+            >
+              <ShieldAlert size={15} /> Needs attention
+            </button>
+            <IconButton
+              label="Expand topology (Session summaries remain on demand)"
+              disabled={!topology}
+              onClick={() => topology && replaceExpansion(structuralIds(topology))}
+            >
+              <ChevronsUpDown size={16} />
+            </IconButton>
+            <IconButton
+              label="Collapse all Tenant branches"
+              disabled={!topology}
+              onClick={() => replaceExpansion(new Set())}
+            >
+              <ChevronsDownUp size={16} />
+            </IconButton>
+            <IconButton
+              label={topologyRefreshing ? "Refreshing topology" : "Refresh topology"}
+              disabled={topologyRefreshing}
+              onClick={() => void loadTopology(true)}
+            >
+              <RefreshCw className={topologyRefreshing ? "spin" : undefined} size={16} />
+            </IconButton>
+            <div className={styles.zoomControls} aria-label="Topology zoom controls">
+              <IconButton
+                label="Zoom out"
+                disabled={!topologyMetrics || topologyZoom <= MIN_ZOOM}
+                onClick={() => changeTopologyZoom(topologyZoom - ZOOM_STEP)}
+              >
+                <Minus size={15} />
+              </IconButton>
+              <button
+                type="button"
+                className={styles.zoomValue}
+                disabled={!topologyMetrics}
+                title="Reset topology zoom to 100%"
+                aria-label={`Reset topology zoom to 100% (currently ${Math.round(topologyZoom * 100)}%)`}
+                onClick={() => changeTopologyZoom(1)}
+              >
+                {Math.round(topologyZoom * 100)}%
+              </button>
+              <IconButton
+                label="Zoom in"
+                disabled={!topologyMetrics || topologyZoom >= MAX_ZOOM}
+                onClick={() => changeTopologyZoom(topologyZoom + ZOOM_STEP)}
+              >
+                <Plus size={15} />
+              </IconButton>
+              <IconButton
+                label="Fit topology to width"
+                disabled={!topologyMetrics}
+                aria-pressed={topologyZoomMode === "fit"}
+                onClick={fitTopology}
+              >
+                <Scan size={15} />
+              </IconButton>
+            </div>
+          </div>
+          {topologyError && (
+            <ErrorBanner message={`Topology unavailable: ${topologyError}`} local />
+          )}
+          {!filteredTree && !topologyError && (
+            <div className={styles.treeLoading}>
+              <LoaderCircle className="spin" size={20} /> Inspecting Tenant state
+            </div>
+          )}
+          {filteredTree && (
+            <TopologyCanvas
+              root={filteredTree}
+              expanded={expanded}
+              forcedExpanded={forcedExpanded}
+              activeNode={renderedActiveNode}
+              query={query.trim()}
+              search={topologySearch}
+              zoom={topologyZoom}
+              sessionLoads={sessionLoads}
+              onMetricsChange={updateTopologyMetrics}
+              registerNode={(id, element) => {
+                if (element) nodeRefs.current.set(id, element);
+                else nodeRefs.current.delete(id);
+              }}
+              onFocus={setActiveNode}
+              onKeyDown={navigateTree}
+              onToggle={toggleNode}
+              onNavigate={onNavigate}
+              onRefreshSession={(node) =>
+                node.sessionRequest && void loadSessionSummary(node.id, node.sessionRequest, true)
+              }
+            />
+          )}
+        </>
       </section>
 
       <section className={styles.runtimeSection} aria-labelledby="runtime-title">
@@ -674,18 +896,15 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
           <div className={styles.runtimeActions}>
             {operationRunning && (
               <span className={styles.operationState} title={operation.kind}>
-                <LoaderCircle className={styles.spinning} size={14} /> {operation.kind}
+                <LoaderCircle className="spin" size={14} /> {operation.kind}
               </span>
             )}
             <button
               className={styles.primaryButton}
               type="button"
               disabled={buildDisabled}
-              title={
-                buildDisabled
-                  ? buildDisabledReason(overview, operation)
-                  : "Build Runtime Image using Docker cache"
-              }
+              aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
+              title={buildUnavailableReason ?? "Build Runtime Image using Docker cache"}
               onClick={() => void build(false)}
             >
               <Hammer size={15} /> Build
@@ -693,10 +912,10 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             <button
               type="button"
               disabled={buildDisabled}
+              aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
               title={
-                buildDisabled
-                  ? buildDisabledReason(overview, operation)
-                  : "Re-run every layer without cache and pull a fresh base image"
+                buildUnavailableReason ??
+                "Re-run every layer without cache and pull a fresh base image"
               }
               onClick={() => void build(true)}
             >
@@ -704,131 +923,15 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             </button>
           </div>
         </div>
+        {buildUnavailableReason && (
+          <p id="runtime-build-unavailable" className={styles.buildUnavailable} role="status">
+            {buildUnavailableReason}
+          </p>
+        )}
         {overview?.runtime_image.detail && (
           <div className={styles.runtimeNotice} role="status">
             <AlertTriangle size={15} /> {overview.runtime_image.detail}
           </div>
-        )}
-      </section>
-
-      <section ref={treeRef} className={styles.topologySection} aria-labelledby="topology-title">
-        <div className={styles.topologyHeading}>
-          <SectionHeading
-            eyebrow="Persistent identities"
-            title="Resource topology"
-            id="topology-title"
-          />
-          <span>{topology ? `${topology.tenants.length} Tenants` : "Loading topology"}</span>
-        </div>
-        <div className={styles.topologyToolbar}>
-          <label className={styles.searchField}>
-            <Search size={15} aria-hidden="true" />
-            <span className={styles.srOnly}>Filter topology</span>
-            <input
-              type="search"
-              placeholder="Filter resources"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          {query.trim() && (
-            <span className={styles.matchCount} aria-live="polite">
-              {topologySearch.matches.size} matched
-            </span>
-          )}
-          <button
-            type="button"
-            className={attentionOnly ? styles.filterActive : undefined}
-            aria-pressed={attentionOnly}
-            onClick={() => setAttentionOnly((value) => !value)}
-          >
-            <ShieldAlert size={15} /> Needs attention
-          </button>
-          <IconButton
-            label="Expand topology (Session summaries remain on demand)"
-            disabled={!topology}
-            onClick={() => topology && replaceExpansion(structuralIds(topology))}
-          >
-            <ChevronsUpDown size={16} />
-          </IconButton>
-          <IconButton
-            label="Collapse all Tenant branches"
-            disabled={!topology}
-            onClick={() => replaceExpansion(new Set())}
-          >
-            <ChevronsDownUp size={16} />
-          </IconButton>
-          <IconButton
-            label={topologyRefreshing ? "Refreshing topology" : "Refresh topology"}
-            disabled={topologyRefreshing}
-            onClick={() => void loadTopology(true)}
-          >
-            <RefreshCw className={topologyRefreshing ? styles.spinning : undefined} size={16} />
-          </IconButton>
-          <div className={styles.zoomControls} aria-label="Topology zoom controls">
-            <IconButton
-              label="Zoom out"
-              disabled={!topologyMetrics || topologyZoom <= MIN_ZOOM}
-              onClick={() => changeTopologyZoom(topologyZoom - ZOOM_STEP)}
-            >
-              <Minus size={15} />
-            </IconButton>
-            <button
-              type="button"
-              className={styles.zoomValue}
-              disabled={!topologyMetrics}
-              title="Reset topology zoom to 100%"
-              aria-label={`Reset topology zoom to 100% (currently ${Math.round(topologyZoom * 100)}%)`}
-              onClick={() => changeTopologyZoom(1)}
-            >
-              {Math.round(topologyZoom * 100)}%
-            </button>
-            <IconButton
-              label="Zoom in"
-              disabled={!topologyMetrics || topologyZoom >= MAX_ZOOM}
-              onClick={() => changeTopologyZoom(topologyZoom + ZOOM_STEP)}
-            >
-              <Plus size={15} />
-            </IconButton>
-            <IconButton
-              label="Fit topology to width"
-              disabled={!topologyMetrics}
-              aria-pressed={topologyZoomMode === "fit"}
-              onClick={fitTopology}
-            >
-              <Scan size={15} />
-            </IconButton>
-          </div>
-        </div>
-        {topologyError && <ErrorBanner message={`Topology unavailable: ${topologyError}`} local />}
-        {!filteredTree && !topologyError && (
-          <div className={styles.treeLoading}>
-            <LoaderCircle className={styles.spinning} size={20} /> Inspecting Tenant state
-          </div>
-        )}
-        {filteredTree && (
-          <TopologyCanvas
-            root={filteredTree}
-            expanded={expanded}
-            forcedExpanded={forcedExpanded}
-            activeNode={renderedActiveNode}
-            query={query.trim()}
-            search={topologySearch}
-            zoom={topologyZoom}
-            sessionLoads={sessionLoads}
-            onMetricsChange={updateTopologyMetrics}
-            registerNode={(id, element) => {
-              if (element) nodeRefs.current.set(id, element);
-              else nodeRefs.current.delete(id);
-            }}
-            onFocus={setActiveNode}
-            onKeyDown={navigateTree}
-            onToggle={toggleNode}
-            onNavigate={onNavigate}
-            onRefreshSession={(node) =>
-              node.sessionRequest && void loadSessionSummary(node.id, node.sessionRequest, true)
-            }
-          />
         )}
       </section>
     </div>
@@ -854,18 +957,6 @@ function SectionHeading({
       </div>
       {action}
     </div>
-  );
-}
-
-function IconButton({
-  label,
-  children,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; children: ReactNode }) {
-  return (
-    <button className={styles.iconButton} type="button" title={label} aria-label={label} {...props}>
-      {children}
-    </button>
   );
 }
 
@@ -1713,6 +1804,56 @@ function sessionSummaryNode(parentId: string, load: SessionLoad): TopologyNode {
   };
 }
 
+function attentionScope(tenant: TopologyTenant): string {
+  return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
+}
+
+function configAttentionTarget(
+  tenant: TopologyTenant,
+  agent: TopologyAgent,
+  config?: string,
+): NavigationTarget {
+  const query = new URLSearchParams();
+  query.set("scope", attentionScope(tenant));
+  query.set("agent", agent.agent);
+  if (config) query.set("config", config);
+  else query.set("current", "1");
+  return { module: "configs", query };
+}
+
+function firstConfigAttentionTarget(data: TopologyData): NavigationTarget {
+  for (const tenant of orderTenants(data.tenants)) {
+    for (const agent of tenant.agents) {
+      if (
+        agent.current_config.error ||
+        ["dirty", "source-missing", "comparison-error"].includes(agent.application.drift)
+      ) {
+        return configAttentionTarget(tenant, agent);
+      }
+      const entry = agent.named_configs.entries.find(
+        (candidate) => candidate.state === "incomplete" || candidate.state === "invalid",
+      );
+      if (entry) return configAttentionTarget(tenant, agent, entry.name);
+      if (agent.named_configs.error) return configAttentionTarget(tenant, agent);
+    }
+  }
+  return { module: "configs" };
+}
+
+function firstComponentAttentionTarget(data: TopologyData): NavigationTarget {
+  for (const tenant of orderTenants(data.tenants)) {
+    const query = new URLSearchParams();
+    query.set("scope", attentionScope(tenant));
+    const entry = tenant.components.entries.find(
+      (candidate) =>
+        candidate.error || ["modified", "incomplete", "unmanaged"].includes(candidate.status ?? ""),
+    );
+    if (entry) query.set("component", entry.kind);
+    if (entry || tenant.components.error) return { module: "tenants", query };
+  }
+  return { module: "tenants" };
+}
+
 function summarizeTopology(data: TopologyData): TopologyHealth {
   const summary: TopologyHealth = {
     configTotal: 0,
@@ -1806,15 +1947,7 @@ function structuralIds(data: TopologyData): Set<string> {
 }
 
 function defaultExpansion(data: TopologyData): Set<string> {
-  const primary =
-    data.tenants.find((tenant) => tenant.kind === "managed" && tenant.name === "default") ??
-    data.tenants.find((tenant) => tenant.kind === "host");
-  if (!primary) return new Set();
-  const base = tenantId(primary);
-  const expanded = new Set([base]);
-  expanded.add(`${base}/agent:codex`);
-  expanded.add(`${base}/agent:codex/named-configs`);
-  return expanded;
+  return structuralIds(data);
 }
 
 function collectVisibleNodes(

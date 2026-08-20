@@ -20,9 +20,8 @@
   border-radius: var(--radius-md);
   padding: 9px 10px;
   box-shadow: var(--shadow-md);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
-  animation: notificationIn var(--transition-base);
   pointer-events: auto;
 }
 
@@ -73,7 +72,7 @@
 
 .action {
   padding: 4px 7px;
-  font-weight: 750;
+  font-weight: var(--weight-bold);
 }
 
 .dismiss {
@@ -88,17 +87,4 @@
   border-color: currentColor;
   color: inherit;
   background: color-mix(in srgb, currentColor 8%, transparent);
-}
-
-@keyframes notificationIn {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .notification {
-    animation: none;
-  }
 }

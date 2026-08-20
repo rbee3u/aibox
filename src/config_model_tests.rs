@@ -1,5 +1,109 @@
 use super::*;
 
+fn visual_inputs(agent: AgentKind, content: &str) -> Vec<VisualFieldInput> {
+    visual_fields(agent, content)
+        .unwrap()
+        .into_iter()
+        .map(|field| VisualFieldInput {
+            path: field.path,
+            included: field.included,
+            value: field.value,
+        })
+        .collect()
+}
+
+fn visual_input_mut<'a>(
+    inputs: &'a mut [VisualFieldInput],
+    path: &str,
+) -> &'a mut VisualFieldInput {
+    inputs.iter_mut().find(|field| field.path == path).unwrap()
+}
+
+#[test]
+fn visual_schema_comes_from_agent_fields() {
+    let claude = visual_fields(
+        AgentKind::Claude,
+        r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}"#,
+    )
+    .unwrap();
+    let token = claude
+        .iter()
+        .find(|field| field.path == "env.ANTHROPIC_AUTH_TOKEN")
+        .unwrap();
+    assert_eq!(token.label, "Anthropic auth token");
+    assert_eq!(token.group, "Endpoint & credentials");
+    assert!(token.sensitive);
+    assert!(token.included);
+
+    let codex = visual_fields(AgentKind::Codex, "approval_policy = \"never\"\n").unwrap();
+    let approval = codex
+        .iter()
+        .find(|field| field.path == "approval_policy")
+        .unwrap();
+    assert_eq!(approval.value_kind, "string");
+    assert_eq!(approval.suggestions, ["untrusted", "on-request", "never"]);
+    assert_eq!(codex.len(), AgentKind::Codex.main_config_fields().len());
+}
+
+#[test]
+fn visual_claude_rendering_supports_omit_empty_strings_and_booleans() {
+    let original = r#"{
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://example.com",
+        "ANTHROPIC_AUTH_TOKEN": "secret"
+      },
+      "skipDangerousModePermissionPrompt": true
+    }"#;
+    let mut inputs = visual_inputs(AgentKind::Claude, original);
+    visual_input_mut(&mut inputs, "env.ANTHROPIC_BASE_URL").included = false;
+    visual_input_mut(&mut inputs, "env.ANTHROPIC_AUTH_TOKEN").value =
+        Some(Value::String(String::new()));
+    visual_input_mut(&mut inputs, "skipDangerousModePermissionPrompt").value =
+        Some(Value::Bool(false));
+
+    let rendered = render_visual_main(AgentKind::Claude, original, &inputs).unwrap();
+    let value: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(value["env"].get("ANTHROPIC_BASE_URL").is_none());
+    assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "");
+    assert_eq!(value["skipDangerousModePermissionPrompt"], false);
+}
+
+#[test]
+fn visual_codex_rendering_preserves_comments_and_accepts_custom_values() {
+    let original = "# keep this comment\napproval_policy = \"never\"\nsandbox_mode = \"workspace-write\"\n\n[model_providers.custom]\nrequires_openai_auth = true\n";
+    let mut inputs = visual_inputs(AgentKind::Codex, original);
+    visual_input_mut(&mut inputs, "approval_policy").value =
+        Some(Value::String("future-policy".to_string()));
+    visual_input_mut(&mut inputs, "sandbox_mode").included = false;
+    visual_input_mut(&mut inputs, "model_providers.custom.requires_openai_auth").value =
+        Some(Value::Bool(false));
+
+    let rendered = render_visual_main(AgentKind::Codex, original, &inputs).unwrap();
+    assert!(rendered.starts_with("# keep this comment\n"), "{rendered}");
+    let document = rendered.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["approval_policy"].as_str(), Some("future-policy"));
+    assert!(document.get("sandbox_mode").is_none());
+    assert_eq!(
+        document["model_providers"]["custom"]["requires_openai_auth"].as_bool(),
+        Some(false)
+    );
+}
+
+#[test]
+fn visual_rendering_requires_each_fixed_field_once() {
+    let mut inputs = visual_inputs(AgentKind::Codex, "");
+    inputs.pop();
+    assert!(render_visual_main(AgentKind::Codex, "", &inputs).is_err());
+
+    let mut inputs = visual_inputs(AgentKind::Codex, "");
+    inputs.push(VisualFieldInput {
+        path: inputs[0].path.clone(),
+        included: false,
+        value: None,
+    });
+    assert!(render_visual_main(AgentKind::Codex, "", &inputs).is_err());
+}
+
 #[test]
 fn schema_accepts_only_fixed_fields_and_types() {
     NamedConfigDefinition::parse(

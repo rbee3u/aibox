@@ -9,18 +9,23 @@ import type { Operation } from "./controlApi";
 import { readPreference, storePreference } from "./preferences";
 import { SidebarUtilities } from "./SidebarUtilities";
 import { usePersistentTheme } from "./usePersistentTheme";
-import { moduleIcons, type ModuleId } from "./moduleIcons";
+import { moduleIcons, type ModuleId } from "./consoleIcons";
 import styles from "./App.module.css";
 
 const modules = [
   { id: "overview", label: "Overview", detail: "Current status", icon: moduleIcons.overview },
   { id: "tenants", label: "Tenants", detail: "Identity & Components", icon: moduleIcons.tenants },
   { id: "configs", label: "Configs", detail: "Native configuration", icon: moduleIcons.configs },
-  { id: "sessions", label: "Sessions", detail: "Agent transcripts", icon: moduleIcons.sessions },
+  {
+    id: "sessions",
+    label: "Sessions",
+    detail: "Coding Agent transcripts",
+    icon: moduleIcons.sessions,
+  },
   {
     id: "requests",
     label: "Requests",
-    detail: "Inspect your LLM requests",
+    detail: "Request diagnostics",
     icon: moduleIcons.requests,
   },
 ] as const;
@@ -39,13 +44,22 @@ export function App() {
     () => readPreference(SIDEBAR_COLLAPSED_KEY) === "true",
   );
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileLayout, setMobileLayout] = useState(
+    () => window.matchMedia?.("(max-width: 900px)").matches ?? false,
+  );
   const [theme, setTheme] = usePersistentTheme();
   const [operation, setOperation] = useState<Operation | null>(null);
+  const [operationConnection, setOperationConnection] = useState<
+    "connecting" | "connected" | "reconnecting"
+  >("connecting");
   const [operationDismissed, setOperationDismissed] = useState<string | null>(null);
+  const [operationExpanded, setOperationExpanded] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [locationVersion, setLocationVersion] = useState(0);
   const configDirty = useRef(false);
   const acceptedLocation = useRef(currentLocation());
+  const sidebarRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     void ControlApi.connect()
@@ -62,6 +76,8 @@ export function App() {
   useEffect(() => {
     if (!api) return;
     const source = new EventSource("/_aibox/api/operations/events");
+    source.addEventListener("open", () => setOperationConnection("connected"));
+    source.addEventListener("error", () => setOperationConnection("reconnecting"));
     source.addEventListener("operation", (event) => {
       const value = JSON.parse((event as MessageEvent<string>).data) as {
         operation: Operation | null;
@@ -102,6 +118,59 @@ export function App() {
     storePreference(SIDEBAR_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
 
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const query = window.matchMedia("(max-width: 900px)");
+    const update = () => {
+      setMobileLayout(query.matches);
+      if (!query.matches) setMobileOpen(false);
+    };
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  const closeMobileNavigation = useCallback((restoreFocus = true) => {
+    setMobileOpen(false);
+    if (restoreFocus) window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    sidebar.inert = mobileLayout && !mobileOpen;
+    if (!mobileLayout || !mobileOpen) return;
+
+    const focusable = () =>
+      [...sidebar.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), select")].filter(
+        (element) => !element.hidden && element.tabIndex >= 0,
+      );
+    window.requestAnimationFrame(() =>
+      (sidebar.querySelector<HTMLElement>('[aria-current="page"]') ?? focusable()[0])?.focus(),
+    );
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobileNavigation();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      const first = elements[0];
+      const last = elements.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [closeMobileNavigation, mobileLayout, mobileOpen]);
+
   const requestApi = useMemo(
     () => (api ? createRequestApi(fetch, api.bootstrap.csrf_token) : null),
     [api],
@@ -122,7 +191,7 @@ export function App() {
     if (configDirty.current && !confirmDiscardedConfig()) return;
     commitLocation(module, query);
     setActive(module);
-    setMobileOpen(false);
+    if (mobileLayout) closeMobileNavigation();
   };
 
   const updatePageLocation = useCallback(
@@ -141,35 +210,60 @@ export function App() {
     setOperationDismissed(null);
   }
 
+  const visibleOperation =
+    api && operation && operationDismissed !== operation.id ? operation : null;
+
   return (
-    <div className={`${styles.app} ${collapsed ? styles.collapsed : ""}`}>
+    <div
+      className={`${styles.app} ${collapsed ? styles.collapsed : ""} ${
+        visibleOperation && operationExpanded ? styles.operationExpanded : ""
+      }`}
+    >
       <aside
+        ref={sidebarRef}
+        id="console-navigation"
         className={`${styles.sidebar} ${mobileOpen ? styles.mobileOpen : ""}`}
         aria-label="Console navigation"
+        aria-hidden={mobileLayout && !mobileOpen ? "true" : undefined}
       >
-        <div className={styles.brand}>
+        <div className={styles.brand} title={collapsed ? "AIBox · Put AI in a Box" : undefined}>
           <span className={styles.mark}>
             <Box size={23} strokeWidth={2.2} />
           </span>
-          <strong>AIBox</strong>
+          <span className={styles.brandCopy}>
+            <strong>AIBox</strong>
+            <small>· Put AI in a Box</small>
+          </span>
         </div>
         <nav className={styles.moduleNav} aria-label="Modules">
           {modules.map((module) => {
             const Icon = module.icon;
             return (
-              <button
-                type="button"
+              <a
                 key={module.id}
+                href={`/_aibox/ui/${module.id}`}
                 aria-current={active === module.id ? "page" : undefined}
                 title={collapsed ? module.label : undefined}
-                onClick={() => navigate(module.id)}
+                onClick={(event) => {
+                  if (
+                    event.defaultPrevented ||
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  navigate(module.id);
+                }}
               >
                 <Icon size={18} data-icon={module.id} />
                 <span>
                   <strong>{module.label}</strong>
                   <small>{module.detail}</small>
                 </span>
-              </button>
+              </a>
             );
           })}
         </nav>
@@ -186,21 +280,24 @@ export function App() {
           className={styles.scrim}
           type="button"
           aria-label="Close navigation"
-          onClick={() => setMobileOpen(false)}
+          onClick={() => closeMobileNavigation()}
         />
       )}
       <div className={styles.workspace}>
         <header className={styles.topbar}>
           <button
+            ref={menuButtonRef}
             className={styles.menuButton}
             type="button"
             aria-label="Open navigation"
+            aria-controls="console-navigation"
+            aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={18} />
           </button>
           <div className={styles.pageTitle}>
-            <strong>{activeModule.label}</strong>
+            <h1>{activeModule.label}</h1>
             <span>·</span>
             <small>{activeModule.detail}</small>
           </div>
@@ -228,6 +325,7 @@ export function App() {
           {api && active === "tenants" && (
             <TenantPage
               api={api}
+              operation={operation}
               locationVersion={locationVersion}
               onLocationChange={updatePageLocation}
               onOperation={recordOperation}
@@ -236,6 +334,7 @@ export function App() {
           {api && active === "configs" && (
             <ConfigPage
               api={api}
+              operation={operation}
               locationVersion={locationVersion}
               onDirtyChange={recordConfigDirty}
               onLocationChange={updatePageLocation}
@@ -244,21 +343,22 @@ export function App() {
           {api && active === "sessions" && (
             <SessionPage
               api={api}
+              operation={operation}
               locationVersion={locationVersion}
               onLocationChange={updatePageLocation}
             />
           )}
-          {requestApi && active === "requests" && (
-            <RequestsPage api={requestApi} standalone={false} />
-          )}
+          {requestApi && active === "requests" && <RequestsPage api={requestApi} />}
         </main>
       </div>
-      {api && operation && operationDismissed !== operation.id && (
+      {api && visibleOperation && (
         <OperationPanel
           api={api}
-          operation={operation}
+          operation={visibleOperation}
+          connection={operationConnection}
           onOperation={recordOperation}
-          onDismiss={() => setOperationDismissed(operation.id)}
+          onDismiss={() => setOperationDismissed(visibleOperation.id)}
+          onExpandedChange={setOperationExpanded}
         />
       )}
     </div>

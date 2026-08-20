@@ -42,6 +42,25 @@ credential bytes. Named Config writes validate the selected file before commit.
 Current Config writes preserve arbitrary bytes without syntax validation and may
 initialize a missing Managed Tenant or Agent state directory.
 
+The detail editor has two modes. A complete, safe Named Config main file
+(`settings.json` for Claude or `config.toml` for Codex) opens in **Visual Editor**
+when its native content is valid. Visual fields are sourced from the fixed
+`AgentKind` Config Field contract and are grouped with a friendly label, native
+path, description, and an **Include** switch. Turning Include off omits that
+Config Field; Config Application then removes the field from Current Config.
+Included empty strings and custom values are valid. Suggested values in a select
+are convenience choices, not a closed enum. Sensitive fields use a masked input
+with an explicit reveal control. Safe incomplete Named Config files remain
+Raw-only until the Config is repaired.
+
+**Raw Editor** remains available for supported Named Config main files and is the
+only editor for Current Config and Codex `auth.json`. It uses native JSON/TOML
+syntax highlighting and debounced backend diagnostics. Diagnostics prevent a
+switch from Raw to Visual but do not change Current Config's arbitrary-byte save
+semantics. A non-UTF-8 Current Config is read-only in the Console and can be
+downloaded as its original bytes. Switching modes, files, Configs, or scopes
+uses the existing unsaved-change confirmation.
+
 Each file is committed independently. If a later file fails, an earlier file is
 not rolled back. Existing file modes are preserved for Current Config; newly
 created Current Config files use mode `0600`.
@@ -105,8 +124,9 @@ updated.
 
 There is no activation state, migration reader, backup, rollback, lock
 directory, or Run History. A missing read-only scope stays quiet and creates no
-directories. The Console is the management boundary; the public CLI remains
-limited to `serve`, `run`, and `build`.
+directories. Service startup is the separate lifecycle operation that ensures
+the Default Managed Tenant baseline. The Console is the management boundary;
+the public CLI remains limited to `serve`, `run`, and `build`.
 
 ## Config Fields
 

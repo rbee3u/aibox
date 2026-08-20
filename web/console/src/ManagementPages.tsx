@@ -6,8 +6,11 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  ChevronUp,
   CircleStop,
   Download,
+  Eye,
+  EyeOff,
   ListChecks,
   LoaderCircle,
   Plus,
@@ -16,8 +19,18 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { basicSetup } from "codemirror";
+import { json } from "@codemirror/lang-json";
+import { lintGutter, setDiagnostics } from "@codemirror/lint";
+import { EditorView, keymap } from "@codemirror/view";
+import { EditorState, type Extension } from "@codemirror/state";
+import { defaultKeymap, indentWithTab } from "@codemirror/commands";
+import { searchKeymap } from "@codemirror/search";
+import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { tags } from "@lezer/highlight";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { ControlApi, decodeBase64, encodeBase64, scopeBody, scopeQuery } from "./controlApi";
 import type {
   Agent,
@@ -25,24 +38,28 @@ import type {
   ComponentRow,
   ConfigCatalogEntry,
   ConfigFileData,
+  ConfigVisualField,
   ConfigListData,
   Operation,
   Prompt,
   PropagationPreview,
   PropagationReport,
+  PropagationOutcome,
   Scope,
   SessionListData,
   SessionRow,
   TenantRow,
 } from "./controlApi";
-import { ConfirmDialog as DestructiveConfirmDialog } from "./components/ConfirmDialog";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { Dialog } from "./components/Dialog";
+import { EmptyState } from "./components/EmptyState";
+import { IconButton } from "./components/IconButton";
 import { IssueIndicator, type IssueTone } from "./components/IssueIndicator";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { AgentIcon } from "./icons";
 import { formatTimestamp } from "./utils";
-import type { ModuleId } from "./moduleIcons";
-import { resourceIcons } from "./resourceIcons";
+import { resourceIcons, type ModuleId } from "./consoleIcons";
 import styles from "./ManagementPages.module.css";
 
 const ComponentIcon = resourceIcons.component;
@@ -52,8 +69,22 @@ const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
 const SessionIcon = resourceIcons.session;
 
+const configHighlightStyle = HighlightStyle.define([
+  { tag: tags.propertyName, class: "cm-config-key" },
+  { tag: tags.string, class: "cm-config-string" },
+  { tag: tags.number, class: "cm-config-number" },
+  { tag: [tags.bool, tags.null, tags.atom], class: "cm-config-boolean" },
+  { tag: tags.comment, class: "cm-config-comment" },
+  { tag: tags.invalid, class: "cm-config-invalid" },
+]);
+
+function codeMirrorCspNonce(): string {
+  return document.querySelector<HTMLMetaElement>('meta[name="aibox-csp-nonce"]')?.content ?? "";
+}
+
 interface PageProps {
   api: ControlApi;
+  operation?: Operation | null;
   locationVersion?: number;
   onDirtyChange?: (dirty: boolean) => void;
   onLocationChange?: (module: ModuleId, query: URLSearchParams, replace?: boolean) => void;
@@ -64,12 +95,17 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function PageError({ error }: { error: string | null }) {
+function PageError({ error, onRetry }: { error: string | null; onRetry?: () => void }) {
   if (!error) return null;
   return (
     <div className={styles.errorBanner} role="alert">
       <AlertTriangle size={16} aria-hidden="true" />
       <span>{error}</span>
+      {onRetry && (
+        <button type="button" onClick={onRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 }
@@ -77,80 +113,17 @@ function PageError({ error }: { error: string | null }) {
 function Loading() {
   return (
     <div className={styles.loading}>
-      <LoaderCircle size={22} aria-label="Loading" />
+      <LoaderCircle className="spin" size={22} aria-label="Loading" />
     </div>
   );
 }
 
-function IconButton({
-  label,
-  children,
-  className,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; children: ReactNode }) {
+function MutationUnavailable({ operation }: { operation?: Operation | null }) {
+  if (operation?.state !== "running") return null;
   return (
-    <button
-      className={`${styles.iconButton} ${className ?? ""}`}
-      type="button"
-      title={label}
-      aria-label={label}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-}
-
-function ConfirmDialog({
-  title,
-  description,
-  confirmation,
-  confirmLabel,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  description?: ReactNode;
-  confirmation?: string;
-  confirmLabel: string;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const [typed, setTyped] = useState("");
-  const enabled = !confirmation || typed === confirmation;
-  return (
-    <div className={styles.dialogBackdrop} role="presentation" onMouseDown={onCancel}>
-      <section
-        className={styles.dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <h2 id="confirm-title">{title}</h2>
-        {description}
-        {confirmation && (
-          <label>
-            Type <code>{confirmation}</code> to confirm
-            <input autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} />
-          </label>
-        )}
-        <div className={styles.dialogActions}>
-          <button type="button" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button
-            className={styles.dangerButton}
-            type="button"
-            onClick={onConfirm}
-            disabled={!enabled || busy}
-          >
-            {busy && <LoaderCircle size={14} aria-hidden="true" />} {confirmLabel}
-          </button>
-        </div>
-      </section>
+    <div className={styles.mutationUnavailable} role="status">
+      A Management Operation is active. Changes are temporarily unavailable; browsing and refresh
+      remain available.
     </div>
   );
 }
@@ -161,6 +134,86 @@ function tenantScope(row: TenantRow): Scope {
 
 type TenantKey = "host" | `managed:${string}`;
 type TenantDeleteTarget = { names: string[] };
+type ComponentRemoveTarget = { row: ComponentRow; tenantLabel: string };
+
+const COMPONENT_LABELS: Record<string, string> = {
+  "claude-statusline": "Claude status line",
+  "codex-statusline": "Codex status line",
+  rust: "Rust toolchain",
+  go: "Go toolchain",
+};
+
+function componentLabel(kind: string): string {
+  return COMPONENT_LABELS[kind] ?? kind;
+}
+
+function componentPresentation(row: ComponentRow): {
+  statusLabel: string;
+  statusClass: string;
+  primaryAction: "Install" | "Repair" | "Restore" | "Retry inspection" | null;
+  canRemove: boolean;
+  detail: string;
+} {
+  if (row.error || !row.status) {
+    return {
+      statusLabel: "Inspection error",
+      statusClass: styles.errorStatus,
+      primaryAction: "Retry inspection",
+      canRemove: false,
+      detail: row.error ?? "Component state could not be inspected safely.",
+    };
+  }
+  switch (row.status) {
+    case "not-installed":
+      return {
+        statusLabel: "Not installed",
+        statusClass: styles.neutralStatus,
+        primaryAction: "Install",
+        canRemove: false,
+        detail: "No Component-owned state was detected.",
+      };
+    case "installed":
+      return {
+        statusLabel: "Installed",
+        statusClass: styles.goodStatus,
+        primaryAction: null,
+        canRemove: true,
+        detail: row.version ? `Installed version ${row.version}.` : "Installed and healthy.",
+      };
+    case "incomplete":
+      return {
+        statusLabel: "Incomplete",
+        statusClass: styles.warnStatus,
+        primaryAction: "Repair",
+        canRemove: true,
+        detail: "Recognizable Component state is incomplete and can be repaired.",
+      };
+    case "modified":
+      return {
+        statusLabel: "Modified",
+        statusClass: styles.warnStatus,
+        primaryAction: "Restore",
+        canRemove: true,
+        detail: "Detected state differs from the AIBox definition.",
+      };
+    case "unmanaged":
+      return {
+        statusLabel: "Unmanaged",
+        statusClass: styles.warnStatus,
+        primaryAction: null,
+        canRemove: true,
+        detail: "Detected state is not owned by AIBox and will not be overwritten.",
+      };
+    default:
+      return {
+        statusLabel: row.status,
+        statusClass: styles.warnStatus,
+        primaryAction: null,
+        canRemove: false,
+        detail: "This Component state is not recognized by this Console version.",
+      };
+  }
+}
 
 function tenantKeyOf(row: TenantRow): TenantKey {
   return row.kind === "host" ? "host" : `managed:${row.name}`;
@@ -201,7 +254,13 @@ function abbreviateTenantHome(path: string, hostHome: string | null): string {
   return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
 }
 
-export function TenantPage({ api, locationVersion = 0, onLocationChange, onOperation }: PageProps) {
+export function TenantPage({
+  api,
+  operation,
+  locationVersion = 0,
+  onLocationChange,
+  onOperation,
+}: PageProps) {
   const [initialRoute] = useState(pageSearch);
   const observedLocationVersion = useRef(locationVersion);
   const initialKey = tenantKeyFromParam(initialRoute.get("scope"));
@@ -215,14 +274,23 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadingTenants, setLoadingTenants] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<TenantKey>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<TenantDeleteTarget | null>(null);
+  const [componentRemoveTarget, setComponentRemoveTarget] = useState<ComponentRemoveTarget | null>(
+    null,
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(initialKey !== null);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const tenantRowButtons = useRef(new Map<string, HTMLButtonElement>());
   const preserveComponentError = useRef(false);
+  const refreshedOperation = useRef<string | null>(null);
+  const createTitleId = useId();
+  const createHelpId = useId();
   const selected = tenants.find((row) => tenantKeyOf(row) === selectedKey) ?? null;
   const hostTenant = tenants.find((row) => row.kind === "host") ?? null;
   const managedTenants = useMemo(
@@ -235,11 +303,14 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
         .sort((left, right) => left.name.localeCompare(right.name)),
     [tenants],
   );
-  const selectableKeys = managedTenants.map((row) => tenantKeyOf(row));
+  const selectableKeys = managedTenants
+    .filter((row) => row.name !== "default")
+    .map((row) => tenantKeyOf(row));
   const allSelectable =
     selectableKeys.length > 0 && selectableKeys.every((key) => selectedKeys.has(key));
   const selectedCount = selectedKeys.size;
   const createNameValid = CONFIG_NAME_PATTERN.test(newName);
+  const mutationBusy = busy || operation?.state === "running";
 
   useEffect(() => {
     if (observedLocationVersion.current === locationVersion) return;
@@ -250,6 +321,12 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
     setSelectedComponent(key ? query.get("component") : null);
     setDetailOpen(key !== null);
   }, [locationVersion]);
+
+  useEffect(() => {
+    if (!detailOpen || !selectedKey || !window.matchMedia?.("(max-width: 760px)").matches) return;
+    const frame = window.requestAnimationFrame(() => detailHeadingRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailOpen, selectedKey]);
 
   const loadTenants = useCallback(async (): Promise<TenantRow[] | null> => {
     try {
@@ -270,13 +347,19 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
       });
       setSelectedKeys((current) => {
         const available = new Set(rows.map((row) => tenantKeyOf(row)));
-        return new Set([...current].filter((key) => available.has(key) && key !== "host"));
+        return new Set(
+          [...current].filter(
+            (key) => available.has(key) && key !== "host" && key !== "managed:default",
+          ),
+        );
       });
       setError(null);
       return rows;
     } catch (cause) {
       setError(messageOf(cause));
       return null;
+    } finally {
+      setLoadingTenants(false);
     }
   }, [api, onLocationChange]);
   useEffect(() => void loadTenants(), [loadTenants]);
@@ -308,6 +391,14 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
   }, [api, onLocationChange, selected, selectedComponent]);
   useEffect(() => void loadComponents(), [loadComponents]);
 
+  useEffect(() => {
+    if (!operation || operation.state === "running" || refreshedOperation.current === operation.id)
+      return;
+    refreshedOperation.current = operation.id;
+    void loadTenants();
+    void loadComponents();
+  }, [loadComponents, loadTenants, operation]);
+
   async function refreshTenants() {
     setRefreshing(true);
     try {
@@ -315,6 +406,13 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
     } finally {
       setRefreshing(false);
     }
+  }
+
+  async function retryTenantPage() {
+    setError(null);
+    setLoadingTenants(true);
+    const rows = await loadTenants();
+    if (rows) await loadComponents();
   }
 
   async function createTenant() {
@@ -340,7 +438,7 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
   }
 
   function toggleTenant(key: TenantKey) {
-    if (key === "host") return;
+    if (key === "host" || key === "managed:default") return;
     setSelectedKeys((current) => {
       const next = new Set(current);
       if (!next.delete(key)) next.add(key);
@@ -424,7 +522,8 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
 
   return (
     <div className={`${styles.page} ${styles.catalogPage}`}>
-      <PageError error={error} />
+      <PageError error={error} onRetry={() => void retryTenantPage()} />
+      <MutationUnavailable operation={operation} />
       <div
         className={`${styles.splitLayout} ${styles.tenantLayout} ${detailOpen ? styles.hasSelection : ""}`}
       >
@@ -454,7 +553,7 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
                     type="button"
                     className={styles.sessionDeleteSelected}
                     aria-label="Delete selected Tenants"
-                    disabled={selectedCount === 0 || busy}
+                    disabled={selectedCount === 0 || mutationBusy}
                     onClick={() =>
                       requestTenantDelete([...selectedKeys].map((key) => key.slice(8)))
                     }
@@ -465,22 +564,20 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
               </>
             ) : (
               <div className={styles.sessionHeaderActions}>
-                <button
-                  type="button"
+                <IconButton
                   className={styles.sessionRefresh}
-                  aria-label={refreshing ? "Refreshing Tenants" : "Refresh Tenants"}
+                  label={refreshing ? "Refreshing Tenants" : "Refresh Tenants"}
                   aria-busy={refreshing}
-                  disabled={refreshing || busy}
+                  disabled={refreshing || loadingTenants}
                   onClick={() => void refreshTenants()}
                 >
-                  <RefreshCw className={refreshing ? styles.spinning : undefined} size={14} />
-                  Refresh
-                </button>
+                  <RefreshCw className={refreshing ? "spin" : undefined} size={14} />
+                </IconButton>
                 <button
                   type="button"
                   className={styles.sessionSelect}
                   aria-label="Select Tenants"
-                  disabled={selectableKeys.length === 0 || refreshing || busy}
+                  disabled={selectableKeys.length === 0 || refreshing || loadingTenants || busy}
                   onClick={() => setSelectionMode(true)}
                 >
                   <ListChecks size={14} /> Select
@@ -488,111 +585,134 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
               </div>
             )}
           </div>
-          <div className={styles.configList} aria-busy={refreshing}>
-            <div className={styles.configRowGroup}>
-              {hostTenant && (
-                <div
-                  className={`${styles.configRow} ${selectedKey === "host" ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
-                >
-                  <button
-                    type="button"
-                    className={styles.configRowMain}
-                    aria-label={selectionMode ? "Host Tenant cannot be selected" : "Host Tenant"}
-                    aria-pressed={!selectionMode && selectedKey === "host"}
-                    disabled={busy || refreshing || selectionMode}
-                    onClick={() => {
-                      setSelectedKey("host");
-                      setSelectedComponent(null);
-                      setDetailOpen(true);
-                      changePageLocation("tenants", tenantLocation("host"), onLocationChange);
-                    }}
-                  >
-                    <HostTenantIcon size={16} data-icon="host-tenant" />
-                    <span className={styles.tenantRowText}>
-                      <strong>Host Tenant</strong>
-                      <small className={styles.tenantPath} title={hostTenant.home}>
-                        {abbreviateTenantHome(hostTenant.home, hostTenant.home)}
-                      </small>
-                    </span>
-                    {selectionMode && <span className={styles.configProtected}>Protected</span>}
-                  </button>
-                </div>
-              )}
-              <div className={styles.catalogDivider}>
-                <span>Managed Tenants</span>
-                <IconButton
-                  className={styles.configAddButton}
-                  label="Create Tenant"
-                  disabled={busy || refreshing || selectionMode}
-                  onClick={() => {
-                    setCreateError(null);
-                    setCreateOpen(true);
-                  }}
-                >
-                  <Plus size={15} />
-                </IconButton>
-              </div>
-              {managedTenants.map((row) => {
-                const key = tenantKeyOf(row);
-                const selectedForInspection = key === selectedKey;
-                const selectedForDeletion = selectedKeys.has(key);
-                return (
+          <div className={styles.configList} aria-busy={refreshing || loadingTenants}>
+            {loadingTenants ? (
+              <Loading />
+            ) : (
+              <div className={styles.configRowGroup}>
+                {hostTenant && (
                   <div
-                    key={key}
-                    className={`${styles.configRow} ${selectedForInspection ? styles.configRowInspected : ""} ${selectedForDeletion ? styles.configRowSelected : ""} ${selectionMode ? styles.configRowSelection : ""}`}
+                    className={`${styles.configRow} ${styles.tenantRow} ${selectedKey === "host" ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
                   >
                     <button
+                      ref={(element) => {
+                        if (element) tenantRowButtons.current.set("host", element);
+                        else tenantRowButtons.current.delete("host");
+                      }}
                       type="button"
                       className={styles.configRowMain}
-                      aria-label={
-                        selectionMode
-                          ? `${selectedForDeletion ? "Deselect" : "Select"} ${row.display_name}`
-                          : row.display_name
-                      }
-                      aria-pressed={selectionMode ? selectedForDeletion : selectedForInspection}
-                      disabled={busy || refreshing}
+                      aria-label={selectionMode ? "Host Tenant cannot be selected" : "Host Tenant"}
+                      aria-pressed={!selectionMode && selectedKey === "host"}
+                      disabled={refreshing || selectionMode}
                       onClick={() => {
-                        if (selectionMode) toggleTenant(key);
-                        else {
-                          setSelectedKey(key);
-                          setSelectedComponent(null);
-                          setDetailOpen(true);
-                          changePageLocation("tenants", tenantLocation(key), onLocationChange);
-                        }
+                        setSelectedKey("host");
+                        setSelectedComponent(null);
+                        setDetailOpen(true);
+                        changePageLocation("tenants", tenantLocation("host"), onLocationChange);
                       }}
                     >
-                      <ManagedTenantIcon size={16} data-icon="managed-tenant" />
+                      <HostTenantIcon size={16} data-icon="host-tenant" />
                       <span className={styles.tenantRowText}>
-                        <strong>{row.display_name}</strong>
-                        <small className={styles.tenantPath} title={row.home}>
-                          {abbreviateTenantHome(row.home, hostTenant?.home ?? null)}
+                        <strong>Host Tenant</strong>
+                        <small className={styles.tenantPath} title={hostTenant.home}>
+                          Console-only · {abbreviateTenantHome(hostTenant.home, hostTenant.home)}
                         </small>
                       </span>
-                      {selectionMode && (
-                        <span className={styles.sessionSelectionIndicator} aria-hidden="true">
-                          {selectedForDeletion && <Check size={15} strokeWidth={3} />}
-                        </span>
-                      )}
+                      <span className={styles.hostRiskBadge}>Host risk</span>
+                      {selectionMode && <span className={styles.configProtected}>Protected</span>}
                     </button>
-                    {!selectionMode && (
-                      <div className={styles.configRowActions}>
-                        <IconButton
-                          className={`${styles.configRowAction} ${styles.configDeleteAction}`}
-                          label={`Delete Tenant ${row.display_name}`}
-                          disabled={busy}
-                          onClick={() => requestTenantDelete([row.name])}
-                        >
-                          <Trash2 size={15} />
-                        </IconButton>
-                      </div>
-                    )}
                   </div>
-                );
-              })}
-              {managedTenants.length === 0 && (
-                <div className={styles.configListEmpty}>No Managed Tenants found.</div>
-              )}
-            </div>
+                )}
+                <div className={styles.catalogDivider}>
+                  <span>Managed Tenants</span>
+                  <IconButton
+                    className={styles.configAddButton}
+                    label="Create Managed Tenant"
+                    disabled={mutationBusy || refreshing || selectionMode}
+                    onClick={() => {
+                      setCreateError(null);
+                      setCreateOpen(true);
+                    }}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                </div>
+                {managedTenants.map((row) => {
+                  const key = tenantKeyOf(row);
+                  const isDefault = row.name === "default";
+                  const selectedForInspection = key === selectedKey;
+                  const selectedForDeletion = selectedKeys.has(key);
+                  return (
+                    <div
+                      key={key}
+                      className={`${styles.configRow} ${styles.tenantRow} ${selectedForInspection ? styles.configRowInspected : ""} ${selectedForDeletion ? styles.configRowSelected : ""} ${selectionMode ? styles.configRowSelection : ""} ${isDefault ? styles.configRowProtected : ""}`}
+                    >
+                      <button
+                        ref={(element) => {
+                          if (element) tenantRowButtons.current.set(key, element);
+                          else tenantRowButtons.current.delete(key);
+                        }}
+                        type="button"
+                        className={styles.configRowMain}
+                        aria-label={
+                          selectionMode
+                            ? isDefault
+                              ? "Default Managed Tenant is protected and cannot be selected"
+                              : `${selectedForDeletion ? "Deselect" : "Select"} ${row.display_name}`
+                            : `${row.display_name}, Managed Tenant${isDefault ? ", Default, Protected" : ""}`
+                        }
+                        aria-pressed={selectionMode ? selectedForDeletion : selectedForInspection}
+                        disabled={refreshing || (selectionMode && isDefault)}
+                        onClick={() => {
+                          if (selectionMode) toggleTenant(key);
+                          else {
+                            setSelectedKey(key);
+                            setSelectedComponent(null);
+                            setDetailOpen(true);
+                            changePageLocation("tenants", tenantLocation(key), onLocationChange);
+                          }
+                        }}
+                      >
+                        <ManagedTenantIcon size={16} data-icon="managed-tenant" />
+                        <span className={styles.tenantRowText}>
+                          <strong>{row.display_name}</strong>
+                          <small className={styles.tenantPath} title={row.home}>
+                            Managed Tenant ·{" "}
+                            {abbreviateTenantHome(row.home, hostTenant?.home ?? null)}
+                          </small>
+                        </span>
+                        {isDefault && <span className={styles.defaultBadge}>Default</span>}
+                        {isDefault && <span className={styles.configProtected}>Protected</span>}
+                        {selectionMode && !isDefault && (
+                          <span className={styles.sessionSelectionIndicator} aria-hidden="true">
+                            {selectedForDeletion && <Check size={15} strokeWidth={3} />}
+                          </span>
+                        )}
+                      </button>
+                      {!selectionMode && !isDefault && (
+                        <div className={styles.configRowActions}>
+                          <IconButton
+                            className={`${styles.configRowAction} ${styles.configDeleteAction}`}
+                            label={`Delete Tenant ${row.display_name}`}
+                            disabled={mutationBusy}
+                            onClick={() => requestTenantDelete([row.name])}
+                          >
+                            <Trash2 size={15} />
+                          </IconButton>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {managedTenants.length === 0 && !error && (
+                  <EmptyState
+                    variant="list"
+                    icon={<ManagedTenantIcon size={22} aria-hidden="true" />}
+                    title="No Managed Tenants found."
+                  />
+                )}
+              </div>
+            )}
           </div>
         </aside>
         <section className={styles.detailPane}>
@@ -602,17 +722,28 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
                 <IconButton
                   label="Back to Tenants"
                   onClick={() => {
+                    const focusKey = selectedKey;
                     setSelectedKey(null);
                     setSelectedComponent(null);
                     setDetailOpen(false);
                     changePageLocation("tenants", new URLSearchParams(), onLocationChange);
+                    window.requestAnimationFrame(() => {
+                      if (focusKey) tenantRowButtons.current.get(focusKey)?.focus();
+                    });
                   }}
                 >
                   <ChevronLeft size={17} />
                 </IconButton>
                 <div>
-                  <h2>{selected.display_name}</h2>
+                  <h2 ref={detailHeadingRef} tabIndex={-1}>
+                    {selected.display_name}
+                  </h2>
                   <code>{selected.home}</code>
+                  {selected.kind === "host" && (
+                    <span className={styles.hostRiskNotice}>
+                      Console-only · Changes affect native files in the Host Home.
+                    </span>
+                  )}
                 </div>
               </div>
               <div className={styles.sectionHeading}>
@@ -626,31 +757,42 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
               </div>
               <div className={styles.tableList}>
                 {components.map((row) => {
-                  const installed = row.status && row.status !== "not-installed";
+                  const presentation = componentPresentation(row);
+                  const label = componentLabel(row.kind);
+                  const supportsVersion =
+                    row.supports_version &&
+                    (presentation.primaryAction === "Install" ||
+                      presentation.primaryAction === "Repair" ||
+                      presentation.primaryAction === "Restore");
                   return (
                     <div
                       className={`${styles.componentRow} ${selectedComponent === row.kind ? styles.componentRowSelected : ""}`}
                       key={row.kind}
-                      aria-current={selectedComponent === row.kind ? "true" : undefined}
-                      onClick={() => {
-                        if (!selected) return;
-                        const key = tenantKeyOf(selected);
-                        setSelectedComponent(row.kind);
-                        changePageLocation(
-                          "tenants",
-                          tenantLocation(key, row.kind),
-                          onLocationChange,
-                        );
-                      }}
                     >
-                      <ComponentIcon size={17} aria-hidden="true" />
-                      <div>
-                        <strong>{row.kind}</strong>
-                        <small>{row.error ?? row.status ?? "Unavailable"}</small>
-                      </div>
-                      {row.supports_version && !installed && (
+                      <button
+                        type="button"
+                        className={styles.componentRowSelect}
+                        aria-pressed={selectedComponent === row.kind}
+                        onClick={() => {
+                          if (!selected) return;
+                          const key = tenantKeyOf(selected);
+                          setSelectedComponent(row.kind);
+                          changePageLocation(
+                            "tenants",
+                            tenantLocation(key, row.kind),
+                            onLocationChange,
+                          );
+                        }}
+                      >
+                        <ComponentIcon size={17} aria-hidden="true" />
+                        <span>
+                          <strong>{label}</strong>
+                          <small>{presentation.detail}</small>
+                        </span>
+                      </button>
+                      {supportsVersion && (
                         <input
-                          aria-label={`${row.kind} version`}
+                          aria-label={`${label} version`}
                           placeholder="stable"
                           value={versions[row.kind] ?? ""}
                           onChange={(event) =>
@@ -658,44 +800,71 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
                           }
                         />
                       )}
-                      <span className={installed ? styles.goodStatus : styles.neutralStatus}>
-                        {row.version ?? row.status}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void mutateComponent(row, !installed)}
-                      >
-                        {installed ? <Trash2 size={14} /> : <Download size={14} />}
-                        {installed ? "Remove" : "Install"}
-                      </button>
+                      <span className={presentation.statusClass}>{presentation.statusLabel}</span>
+                      <div className={styles.componentActions}>
+                        {presentation.primaryAction === "Retry inspection" ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void loadComponents()}
+                          >
+                            <RefreshCw size={14} /> Retry inspection
+                          </button>
+                        ) : presentation.primaryAction ? (
+                          <button
+                            type="button"
+                            disabled={mutationBusy}
+                            onClick={() => void mutateComponent(row, true)}
+                          >
+                            <Download size={14} /> {presentation.primaryAction}
+                          </button>
+                        ) : null}
+                        {presentation.canRemove && (
+                          <button
+                            type="button"
+                            className={styles.componentRemoveAction}
+                            disabled={mutationBusy}
+                            onClick={() =>
+                              setComponentRemoveTarget({
+                                row,
+                                tenantLabel: selected.display_name,
+                              })
+                            }
+                          >
+                            <Trash2 size={14} />
+                            {row.status === "unmanaged" ? "Remove detected state" : "Remove"}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </>
           ) : (
-            <div className={styles.emptyPane}>
-              <Box size={24} />
-              <span>Select a Tenant</span>
-            </div>
+            <EmptyState
+              variant="detail"
+              icon={<ManagedTenantIcon size={26} aria-hidden="true" />}
+              title="Select a Tenant"
+              description="Choose a Tenant to inspect its Components."
+            />
           )}
         </section>
       </div>
       {createOpen && (
-        <div className={styles.dialogBackdrop} onMouseDown={() => !busy && setCreateOpen(false)}>
+        <Dialog
+          className={styles.dialog}
+          ariaLabelledBy={createTitleId}
+          busy={mutationBusy}
+          onCancel={() => setCreateOpen(false)}
+        >
           <form
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-tenant-title"
-            onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !busy) void createTenant();
+              if (createNameValid && !mutationBusy) void createTenant();
             }}
           >
-            <h2 id="create-tenant-title">Create Tenant</h2>
+            <h2 id={createTitleId}>Create Managed Tenant</h2>
             <label>
               Name
               <input
@@ -707,8 +876,18 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
                   setCreateError(null);
                 }}
                 aria-invalid={newName.length > 0 && !createNameValid}
+                aria-describedby={createHelpId}
               />
             </label>
+            <p id={createHelpId} className={styles.dialogDescription}>
+              Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or
+              number.
+            </p>
+            {newName.length > 0 && !createNameValid && (
+              <div className={styles.inlineWarning} role="alert">
+                Enter a valid lowercase DNS label.
+              </div>
+            )}
             {createError && <div className={styles.inlineWarning}>{createError}</div>}
             <div className={styles.dialogActions}>
               <button type="button" onClick={() => setCreateOpen(false)} disabled={busy}>
@@ -717,13 +896,18 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
               <button
                 className={styles.primaryButton}
                 type="submit"
-                disabled={!createNameValid || busy}
+                disabled={!createNameValid || mutationBusy}
               >
-                <Plus size={14} /> Create
+                {busy ? (
+                  <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                ) : (
+                  <Plus size={14} />
+                )}
+                {busy ? "Creating…" : "Create"}
               </button>
             </div>
           </form>
-        </div>
+        </Dialog>
       )}
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
@@ -734,45 +918,61 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
               Configs for this Tenant.
             </p>
           }
+          confirmation={deleteTarget.names[0]}
           confirmLabel="Delete Tenant"
-          busy={busy}
+          busy={mutationBusy}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => void deleteTenants()}
         />
       )}
       {deleteTarget && deleteTarget.names.length > 1 && (
-        <div className={styles.dialogBackdrop}>
-          <section
-            className={`${styles.dialog} ${styles.wideDialog}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-tenants-title"
-          >
-            <h2 id="delete-tenants-title">Delete selected Managed Tenants?</h2>
-            <p className={styles.dialogDescription}>
-              This permanently deletes each Tenant Home, its Sessions and Components state, and its
-              Named Configs.
-            </p>
-            <div className={styles.planList}>
-              {deleteTarget.names.map((name) => (
-                <code key={name}>{name}</code>
-              ))}
+        <ConfirmDialog
+          title="Delete selected Managed Tenants?"
+          description={
+            <>
+              <p className={styles.dialogDescription}>
+                This permanently deletes each Tenant Home, its Sessions and Components state, and
+                its Named Configs.
+              </p>
+              <div className={styles.planList}>
+                {deleteTarget.names.map((name) => (
+                  <code key={name}>{name}</code>
+                ))}
+              </div>
+            </>
+          }
+          confirmLabel="Delete selected"
+          busy={mutationBusy}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void deleteTenants()}
+        />
+      )}
+      {componentRemoveTarget && (
+        <ConfirmDialog
+          title={`Remove ${componentLabel(componentRemoveTarget.row.kind)}?`}
+          description={
+            <div className={styles.dialogDescription}>
+              <p>
+                Tenant: <strong>{componentRemoveTarget.tenantLabel}</strong>
+              </p>
+              <p>
+                Current state:{" "}
+                <strong>{componentPresentation(componentRemoveTarget.row).statusLabel}</strong>
+              </p>
+              <p>
+                Existing Component-owned state will be deleted. Cargo and GOPATH user state is
+                preserved for toolchains.
+              </p>
             </div>
-            <div className={styles.dialogActions}>
-              <button type="button" onClick={() => setDeleteTarget(null)} disabled={busy}>
-                Cancel
-              </button>
-              <button
-                className={styles.dangerButton}
-                type="button"
-                onClick={() => void deleteTenants()}
-                disabled={busy}
-              >
-                <Trash2 size={14} /> Delete selected
-              </button>
-            </div>
-          </section>
-        </div>
+          }
+          confirmLabel="Remove Component"
+          busy={mutationBusy}
+          onCancel={() => setComponentRemoveTarget(null)}
+          onConfirm={() => {
+            const row = componentRemoveTarget.row;
+            void mutateComponent(row, false).then(() => setComponentRemoveTarget(null));
+          }}
+        />
       )}
     </div>
   );
@@ -780,15 +980,41 @@ export function TenantPage({ api, locationVersion = 0, onLocationChange, onOpera
 
 function useTenants(api: ControlApi) {
   const [tenants, setTenants] = useState<TenantRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
-    void api.get<TenantRow[]>("/_aibox/api/tenants").then(setTenants);
-  }, [api]);
-  return tenants;
+    let disposed = false;
+    setLoading(true);
+    void api
+      .get<TenantRow[]>("/_aibox/api/tenants")
+      .then((rows) => {
+        if (disposed) return;
+        setTenants(rows);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (!disposed) setError(messageOf(cause));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [api, generation]);
+  return {
+    tenants,
+    loading,
+    error,
+    retry: () => setGeneration((value) => value + 1),
+  };
 }
 
 type ConfigSelection = { current: true; config?: never } | { current: false; config: string };
 type ConfigScopeKey = "host" | `managed:${string}`;
 type ConfigDeleteTarget = { names: string[] };
+type ConfigApplyTarget = { name: string };
 type ConfigPendingAction = { run: () => void | Promise<void> };
 
 const CONFIG_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -850,6 +1076,10 @@ interface ConfigIssuePresentation {
   accessibleLabel: string;
 }
 
+type ConfigVisualFieldInput = Pick<ConfigVisualField, "path" | "included"> & {
+  value?: string | boolean;
+};
+
 function configIssuePresentation(entry: ConfigCatalogEntry): ConfigIssuePresentation | null {
   if (entry.state === "ready") return null;
   const incomplete = entry.state === "incomplete";
@@ -873,15 +1103,175 @@ function configIssueDescriptionId(scope: Scope, agent: Agent, name: string): str
   return `config-issue-${configScopeKey(scope).replace(":", "-")}-${agent}-${name}`;
 }
 
+function propagationGroup(
+  status: PropagationOutcome["status"],
+): "updated" | "skipped" | "attention" {
+  if (status === "updated") return "updated";
+  if (status === "unchanged") return "skipped";
+  return "attention";
+}
+
+function propagationDetail(outcome: PropagationOutcome): string | null {
+  const timestamps = [
+    outcome.source_last_refresh ? `source ${outcome.source_last_refresh}` : null,
+    outcome.target_last_refresh ? `target ${outcome.target_last_refresh}` : null,
+    outcome.last_refresh ? `last refresh ${outcome.last_refresh}` : null,
+  ].filter(Boolean);
+  return [outcome.reason, ...timestamps].filter(Boolean).join(" · ") || null;
+}
+
+function VisualConfigFields({
+  fields,
+  onChange,
+}: {
+  fields: ConfigVisualField[];
+  onChange: (path: string, update: Partial<ConfigVisualField>) => void;
+}) {
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const groups = useMemo(() => {
+    const grouped = new Map<string, ConfigVisualField[]>();
+    for (const field of fields)
+      grouped.set(field.group, [...(grouped.get(field.group) ?? []), field]);
+    return [...grouped.entries()];
+  }, [fields]);
+  return (
+    <div className={styles.visualEditor}>
+      {groups.map(([group, groupFields]) => (
+        <section className={styles.visualGroup} key={group}>
+          <header>
+            <h3>{group}</h3>
+            <span>Include fields only when this Named Config should project them.</span>
+          </header>
+          <div className={styles.visualFieldGrid}>
+            {groupFields.map((field) => {
+              const value = field.value ?? (field.value_kind === "bool" ? false : "");
+              const fieldId = `config-field-${field.path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+              const descriptionId = `${fieldId}-description`;
+              const isRevealed = revealed.has(field.path);
+              const hasSuggestions = field.suggestions.length > 0;
+              const isCustom =
+                hasSuggestions && typeof value === "string" && !field.suggestions.includes(value);
+              return (
+                <article
+                  className={styles.visualField}
+                  key={field.path}
+                  role="group"
+                  aria-labelledby={fieldId}
+                  aria-describedby={descriptionId}
+                >
+                  <div className={styles.visualFieldHeader}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        aria-label={`Include ${field.label}`}
+                        checked={field.included}
+                        onChange={(event) =>
+                          onChange(field.path, { included: event.target.checked })
+                        }
+                      />
+                      <span>
+                        <strong id={fieldId}>{field.label}</strong>
+                        <code>{field.path}</code>
+                      </span>
+                    </label>
+                  </div>
+                  <p id={descriptionId}>{field.description}</p>
+                  {field.value_kind === "bool" ? (
+                    <label className={styles.visualValueControl}>
+                      <input
+                        type="checkbox"
+                        aria-label={`${field.label} value`}
+                        aria-describedby={descriptionId}
+                        checked={Boolean(value)}
+                        disabled={!field.included}
+                        onChange={(event) => onChange(field.path, { value: event.target.checked })}
+                      />
+                      <span>{value ? "Enabled" : "Disabled"}</span>
+                    </label>
+                  ) : hasSuggestions ? (
+                    <>
+                      <select
+                        aria-label={`${field.label} value`}
+                        aria-describedby={descriptionId}
+                        disabled={!field.included}
+                        value={isCustom ? "__custom" : String(value)}
+                        onChange={(event) => {
+                          if (event.target.value === "__custom")
+                            onChange(field.path, { value: "" });
+                          else onChange(field.path, { value: event.target.value });
+                        }}
+                      >
+                        <option value="">Select a value</option>
+                        {field.suggestions.map((suggestion) => (
+                          <option key={suggestion} value={suggestion}>
+                            {suggestion}
+                          </option>
+                        ))}
+                        <option value="__custom">Custom</option>
+                      </select>
+                      {(isCustom || value === "") && (
+                        <input
+                          className={styles.visualCustomInput}
+                          disabled={!field.included}
+                          value={String(value)}
+                          onChange={(event) => onChange(field.path, { value: event.target.value })}
+                          aria-label={`${field.label} custom value`}
+                          aria-describedby={descriptionId}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <div className={styles.visualTextControl}>
+                      <input
+                        type={field.sensitive && !isRevealed ? "password" : "text"}
+                        disabled={!field.included}
+                        value={String(value)}
+                        onChange={(event) => onChange(field.path, { value: event.target.value })}
+                        aria-label={field.label}
+                        aria-describedby={descriptionId}
+                      />
+                      {field.sensitive && (
+                        <IconButton
+                          label={isRevealed ? `Hide ${field.label}` : `Show ${field.label}`}
+                          onClick={() =>
+                            setRevealed((current) => {
+                              const next = new Set(current);
+                              if (next.has(field.path)) next.delete(field.path);
+                              else next.add(field.path);
+                              return next;
+                            })
+                          }
+                        >
+                          {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </IconButton>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function ConfigPage({
   api,
+  operation,
   locationVersion = 0,
   onDirtyChange,
   onLocationChange,
 }: PageProps) {
   const [initialRoute] = useState(readConfigRoute);
   const observedLocationVersion = useRef(locationVersion);
-  const tenants = useTenants(api);
+  const {
+    tenants,
+    loading: loadingTenants,
+    error: tenantError,
+    retry: retryTenants,
+  } = useTenants(api);
   const [scope, setScope] = useState<Scope>(initialRoute.scope);
   const [agent, setAgent] = useState<Agent>(initialRoute.agent);
   const [catalog, setCatalog] = useState<ConfigListData | null>(null);
@@ -889,24 +1279,101 @@ export function ConfigPage({
   const [file, setFile] = useState<string | null>(initialRoute.file);
   const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
   const [editor, setEditor] = useState("");
-  const [editorMode, setEditorMode] = useState<"text" | "base64">("text");
+  const [editorMode, setEditorMode] = useState<"visual" | "raw">("raw");
+  const [visualFields, setVisualFields] = useState<ConfigVisualField[] | null>(null);
+  const [visualError, setVisualError] = useState<string | null>(null);
+  const [textEditable, setTextEditable] = useState(true);
+  const [rawDiagnostics, setRawDiagnostics] = useState<
+    Array<{ message: string; line: number; column: number }>
+  >([]);
+  const rawEditorParent = useRef<HTMLDivElement | null>(null);
+  const rawEditorView = useRef<EditorView | null>(null);
+  const diagnoseTimer = useRef<number | null>(null);
+  const diagnoseGeneration = useRef(0);
+  const rawDiagnoseContext = useRef({ api, scope, agent, selection, file });
+  const useCodeMirror = typeof navigator === "undefined" || !/jsdom/i.test(navigator.userAgent);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<"idle" | "saving" | "saved">("idle");
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<ConfigDeleteTarget | null>(null);
+  const [applyTarget, setApplyTarget] = useState<ConfigApplyTarget | null>(null);
+  const [applyFeedback, setApplyFeedback] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ConfigPendingAction | null>(null);
   const [detailOpen, setDetailOpen] = useState(initialRoute.detailOpen);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const detailBackButtonRef = useRef<HTMLButtonElement>(null);
+  const configRowButtons = useRef(new Map<string, HTMLButtonElement>());
   const [preview, setPreview] = useState<PropagationPreview | null>(null);
   const [report, setReport] = useState<PropagationReport | null>(null);
   const catalogController = useRef<AbortController | null>(null);
   const fileLoadGeneration = useRef(0);
+  const saveFeedbackTimer = useRef<number | null>(null);
+  const unsavedTitleId = useId();
+  const createTitleId = useId();
+  const createHelpId = useId();
+  const propagationTitleId = useId();
+  const operationRunning = operation?.state === "running";
+  const mutationBusy = busy || operationRunning;
+
+  useEffect(() => {
+    rawDiagnoseContext.current = { api, scope, agent, selection, file };
+  }, [agent, api, file, scope, selection]);
+
+  const scheduleRawDiagnose = useCallback((value: string) => {
+    if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
+    const generation = ++diagnoseGeneration.current;
+    diagnoseTimer.current = window.setTimeout(() => {
+      const {
+        api: currentApi,
+        scope: currentScope,
+        agent: currentAgent,
+        selection: currentSelection,
+        file: currentFile,
+      } = rawDiagnoseContext.current;
+      if (!currentFile) return;
+      void currentApi
+        .post<{
+          diagnostics: Array<{ severity?: string; message: string; line: number; column: number }>;
+        }>("/_aibox/api/configs/diagnose", {
+          ...scopeBody(currentScope),
+          agent: currentAgent,
+          current: currentSelection.current,
+          config: currentSelection.current ? null : currentSelection.config,
+          file: currentFile,
+          content_base64: encodeBase64(new TextEncoder().encode(value)),
+        })
+        .then((result) => {
+          if (diagnoseGeneration.current === generation)
+            setRawDiagnostics(Array.isArray(result.diagnostics) ? result.diagnostics : []);
+        })
+        .catch(() => {
+          if (diagnoseGeneration.current === generation) setRawDiagnostics([]);
+        });
+    }, 250);
+  }, []);
+
+  useEffect(
+    () => () => {
+      diagnoseGeneration.current += 1;
+      if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (observedLocationVersion.current === locationVersion) return;
@@ -921,6 +1388,14 @@ export function ConfigPage({
     setSelectedNames(new Set());
   }, [locationVersion]);
 
+  useEffect(() => {
+    if (!detailOpen || !window.matchMedia?.("(max-width: 760px)").matches) return;
+    const frame = window.requestAnimationFrame(() =>
+      (detailHeadingRef.current ?? detailBackButtonRef.current)?.focus(),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailOpen, file, selection]);
+
   const tenantOptions = useMemo<SessionFilterOption<ConfigScopeKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
     const managed = tenants
@@ -928,16 +1403,6 @@ export function ConfigPage({
         Boolean(tenant.kind === "managed" && tenant.name),
       )
       .sort((left, right) => left.name.localeCompare(right.name));
-    if (!managed.some((tenant) => tenant.name === "default")) {
-      managed.push({
-        kind: "managed",
-        name: "default",
-        display_name: "default",
-        home: "",
-        exists: false,
-      });
-      managed.sort((left, right) => left.name.localeCompare(right.name));
-    }
     return [
       ...(host
         ? [
@@ -950,7 +1415,7 @@ export function ConfigPage({
         : []),
       ...managed.map((tenant) => ({
         value: `managed:${tenant.name}` as const,
-        label: tenant.exists ? tenant.display_name : `${tenant.display_name} (not created)`,
+        label: tenant.display_name,
         summaryLabel: tenant.display_name,
         icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
       })),
@@ -966,6 +1431,14 @@ export function ConfigPage({
       })),
     [],
   );
+  const configTenantLabel =
+    scope.scope === "host"
+      ? "Host Tenant"
+      : (tenants.find((tenant) => tenant.kind === "managed" && tenant.name === scope.tenant)
+          ?.display_name ?? scope.tenant);
+  const configSelectionLabel = selection.current
+    ? "Current Config"
+    : `Named Config ${selection.config}`;
 
   const loadCatalog = useCallback(
     async (kind: "initial" | "refresh" | "background" = "initial") => {
@@ -989,11 +1462,7 @@ export function ConfigPage({
         setSelectedNames(
           (current) =>
             new Set(
-              [...current].filter(
-                (name) =>
-                  data.configs.some((entry) => entry.name === name) &&
-                  data.application.last_application?.applied !== name,
-              ),
+              [...current].filter((name) => data.configs.some((entry) => entry.name === name)),
             ),
         );
         setError(null);
@@ -1024,46 +1493,79 @@ export function ConfigPage({
 
   const appliedName = catalog?.application.last_application?.applied ?? null;
   const selectedCount = selectedNames.size;
-  const selectableNames =
-    catalog?.configs.filter((entry) => entry.name !== appliedName).map((entry) => entry.name) ?? [];
+  const selectableNames = catalog?.configs.map((entry) => entry.name) ?? [];
   const allSelectable =
     selectableNames.length > 0 && selectableNames.every((name) => selectedNames.has(name));
 
   const editorBytes = useMemo(() => {
     if (!snapshot) return null;
     try {
-      return editorMode === "text"
-        ? new TextEncoder().encode(editor)
-        : decodeBase64(editor.replace(/\s/g, ""));
+      if (!textEditable) return null;
+      return new TextEncoder().encode(editor);
     } catch {
       return null;
     }
-  }, [editor, editorMode, snapshot]);
+  }, [editor, snapshot, textEditable]);
+  const visualDirty =
+    snapshot !== null &&
+    visualFields !== null &&
+    JSON.stringify(visualFields.map(({ path, included, value }) => ({ path, included, value }))) !==
+      JSON.stringify(
+        (snapshot.visual ?? []).map(({ path, included, value }) => ({ path, included, value })),
+      );
   const editorDirty =
     snapshot !== null &&
-    (editorBytes === null || encodeBase64(editorBytes) !== snapshot.content_base64);
+    (editorMode === "visual"
+      ? visualDirty
+      : editorBytes !== null && encodeBase64(editorBytes) !== snapshot.content_base64);
 
   useEffect(() => onDirtyChange?.(editorDirty), [editorDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-  function setEditorFromSnapshot(value: ConfigFileData) {
-    const bytes = decodeBase64(value.content_base64);
-    try {
-      setEditor(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      setEditorMode("text");
-    } catch {
-      setEditor(value.content_base64);
-      setEditorMode("base64");
-    }
-  }
+  const setEditorFromSnapshot = useCallback(
+    (value: ConfigFileData, preferredMode?: "visual" | "raw") => {
+      diagnoseGeneration.current += 1;
+      if (diagnoseTimer.current !== null) {
+        window.clearTimeout(diagnoseTimer.current);
+        diagnoseTimer.current = null;
+      }
+      const bytes = decodeBase64(value.content_base64);
+      try {
+        const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        const mode = preferredMode ?? (value.visual ? "visual" : "raw");
+        setEditor(content);
+        setEditorMode(mode);
+        setVisualFields(value.visual ?? null);
+        setVisualError(value.visual_error ?? null);
+        setTextEditable(true);
+        setRawDiagnostics([]);
+        if (mode === "raw") scheduleRawDiagnose(content);
+      } catch {
+        setEditor("");
+        setEditorMode("raw");
+        setVisualFields(null);
+        setVisualError("This file is not valid UTF-8 and cannot be edited in the Console.");
+        setTextEditable(false);
+        setRawDiagnostics([]);
+      }
+    },
+    [scheduleRawDiagnose],
+  );
 
   useEffect(() => {
     if (!catalog || !file) {
+      diagnoseGeneration.current += 1;
       setSnapshot(null);
       setEditor("");
       return;
     }
     const generation = ++fileLoadGeneration.current;
+    diagnoseGeneration.current += 1;
+    if (diagnoseTimer.current !== null) {
+      window.clearTimeout(diagnoseTimer.current);
+      diagnoseTimer.current = null;
+    }
+    setRawDiagnostics([]);
     setSnapshot(null);
     setEditor("");
     setLoadingFile(true);
@@ -1078,7 +1580,7 @@ export function ConfigPage({
       .post<ConfigFileData>("/_aibox/api/configs/reveal", body)
       .then((value) => {
         if (fileLoadGeneration.current !== generation) return;
-        setEditorFromSnapshot(value);
+        setEditorFromSnapshot(value, selection.current ? "raw" : undefined);
         setSnapshot(value);
       })
       .catch((cause) => {
@@ -1091,28 +1593,50 @@ export function ConfigPage({
     return () => {
       if (fileLoadGeneration.current === generation) fileLoadGeneration.current += 1;
     };
-  }, [agent, api, catalog, file, scope, selection]);
+  }, [agent, api, catalog, file, scope, selection, setEditorFromSnapshot]);
 
-  function switchEditorMode(next: "text" | "base64") {
+  function switchEditorMode(next: "visual" | "raw") {
     if (next === editorMode) return;
-    try {
-      if (next === "base64") {
-        setEditor(encodeBase64(new TextEncoder().encode(editor)));
-      } else {
-        setEditor(
-          new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64(editor.replace(/\s/g, ""))),
+    if (next === "visual") {
+      if (!visualFields || visualError || rawDiagnostics.length > 0) {
+        setError(
+          visualError ??
+            rawDiagnostics[0]?.message ??
+            "Fix Raw Editor errors before switching to Visual.",
         );
+        return;
+      }
+    }
+    requestEditorAction(() => {
+      if (next === "visual") {
+        diagnoseGeneration.current += 1;
+        if (diagnoseTimer.current !== null) {
+          window.clearTimeout(diagnoseTimer.current);
+          diagnoseTimer.current = null;
+        }
       }
       setEditorMode(next);
       setError(null);
-    } catch (cause) {
-      setError(`Cannot convert editor content: ${messageOf(cause)}`);
-    }
+    });
+  }
+
+  function updateVisualField(path: string, update: Partial<ConfigVisualField>) {
+    setVisualFields(
+      (fields) =>
+        fields?.map((field) => (field.path === path ? { ...field, ...update } : field)) ?? null,
+    );
+  }
+
+  function visualPayload(): ConfigVisualFieldInput[] | undefined {
+    if (editorMode !== "visual" || !visualFields) return undefined;
+    return visualFields.map(({ path, included, value }) => ({ path, included, value }));
   }
 
   async function saveFile(refreshCatalog: boolean): Promise<boolean> {
-    if (!snapshot || !file || editorBytes === null) return false;
+    if (operationRunning || !snapshot || !file || editorBytes === null) return false;
     setBusy(true);
+    setSaveFeedback("saving");
+    if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
     try {
       const value = await api.post<ConfigFileData>("/_aibox/api/configs/save", {
         ...scopeBody(scope),
@@ -1122,19 +1646,107 @@ export function ConfigPage({
         file,
         revision: snapshot.revision,
         content_base64: encodeBase64(editorBytes),
+        visual: visualPayload(),
       });
-      setEditorFromSnapshot(value);
+      setEditorFromSnapshot(value, editorMode);
       setSnapshot(value);
       setError(null);
       if (refreshCatalog) await loadCatalog("background");
+      setSaveFeedback("saved");
+      saveFeedbackTimer.current = window.setTimeout(() => {
+        setSaveFeedback("idle");
+        saveFeedbackTimer.current = null;
+      }, 4_000);
       return true;
     } catch (cause) {
+      setSaveFeedback("idle");
       setError(messageOf(cause));
       return false;
     } finally {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (editorDirty && saveFeedback === "saved") setSaveFeedback("idle");
+  }, [editorDirty, saveFeedback]);
+
+  useEffect(() => {
+    if (
+      !useCodeMirror ||
+      !rawEditorParent.current ||
+      editorMode !== "raw" ||
+      !snapshot ||
+      !textEditable
+    )
+      return;
+    rawEditorView.current?.destroy();
+    const language: Extension = file?.endsWith(".json") ? json() : StreamLanguage.define(toml);
+    const view = new EditorView({
+      parent: rawEditorParent.current,
+      state: EditorState.create({
+        doc: editor,
+        extensions: [
+          basicSetup,
+          language,
+          EditorView.cspNonce.of(codeMirrorCspNonce()),
+          syntaxHighlighting(configHighlightStyle),
+          lintGutter(),
+          keymap.of([...defaultKeymap, indentWithTab, ...searchKeymap]),
+          EditorView.contentAttributes.of({ "aria-label": `${file} content` }),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            const value = update.state.doc.toString();
+            setEditor(value);
+            scheduleRawDiagnose(value);
+          }),
+        ],
+      }),
+    });
+    rawEditorView.current = view;
+    return () => {
+      diagnoseGeneration.current += 1;
+      if (diagnoseTimer.current !== null) {
+        window.clearTimeout(diagnoseTimer.current);
+        diagnoseTimer.current = null;
+      }
+      view.destroy();
+      rawEditorView.current = null;
+    };
+    // The instance is recreated only when the selected file or editor mode changes.
+    // The document is synchronized below so typing never tears down the view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode, file, scheduleRawDiagnose, snapshot, textEditable, useCodeMirror]);
+
+  useEffect(() => {
+    const view = rawEditorView.current;
+    if (!useCodeMirror) return;
+    if (!view || editorMode !== "raw") return;
+    const current = view.state.doc.toString();
+    if (current === editor) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: editor },
+    });
+  }, [editor, editorMode, useCodeMirror]);
+
+  useEffect(() => {
+    const view = rawEditorView.current;
+    if (!useCodeMirror) return;
+    if (!view || editorMode !== "raw") return;
+    const diagnostics = rawDiagnostics.map((diagnostic) => {
+      const line = Math.max(1, diagnostic.line);
+      const column = Math.max(1, diagnostic.column);
+      const lineInfo = view.state.doc.line(Math.min(line, view.state.doc.lines));
+      const from = Math.min(lineInfo.from + column - 1, lineInfo.to);
+      return {
+        from,
+        to: Math.min(from + 1, lineInfo.to),
+        severity: "error" as const,
+        message: diagnostic.message,
+      };
+    });
+    view.dispatch(setDiagnostics(view.state, diagnostics));
+  }, [rawDiagnostics, editorMode, useCodeMirror]);
 
   function restoreSnapshot() {
     if (!snapshot) return;
@@ -1241,7 +1853,7 @@ export function ConfigPage({
   }
 
   async function createConfig(name: string) {
-    if (!name) return;
+    if (operationRunning || !name) return;
     setBusy(true);
     try {
       await api.post("/_aibox/api/configs/create", { ...scopeBody(scope), agent, config: name });
@@ -1264,19 +1876,42 @@ export function ConfigPage({
   }
 
   async function applyConfig(name: string) {
+    if (operationRunning) return;
     setBusy(true);
+    setApplyFeedback(null);
+    let applyError: string | null = null;
     try {
       await api.post("/_aibox/api/configs/apply", { ...scopeBody(scope), agent, config: name });
-      await loadCatalog("background");
     } catch (cause) {
-      setError(messageOf(cause));
+      applyError = `${messageOf(cause)} Some Current Config files may already have been updated.`;
     } finally {
+      const refreshed = await loadCatalog("background");
+      if (refreshed) {
+        await Promise.allSettled(
+          refreshed.files.map((currentFile) =>
+            api.post<ConfigFileData>("/_aibox/api/configs/reveal", {
+              ...scopeBody(scope),
+              agent,
+              current: true,
+              config: null,
+              file: currentFile,
+            }),
+          ),
+        );
+      }
+      setApplyTarget(null);
+      setError(applyError);
+      if (!applyError) {
+        setApplyFeedback(
+          `Applied Named Config ${name} to Current Config. This is a one-time projection; it is not an Active Config.`,
+        );
+      }
       setBusy(false);
     }
   }
 
   async function deleteConfigs() {
-    if (!deleteTarget || deleteTarget.names.length === 0) return;
+    if (operationRunning || !deleteTarget || deleteTarget.names.length === 0) return;
     const requestedNames = deleteTarget.names;
     const wasSelectionMode = selectionMode;
     setBusy(true);
@@ -1303,10 +1938,8 @@ export function ConfigPage({
       setDeleteTarget(null);
       const refreshed = await loadCatalog("background");
       if (refreshed) {
-        const remaining = requestedNames.filter(
-          (name) =>
-            refreshed.configs.some((entry) => entry.name === name) &&
-            refreshed.application.last_application?.applied !== name,
+        const remaining = requestedNames.filter((name) =>
+          refreshed.configs.some((entry) => entry.name === name),
         );
         setSelectedNames(wasSelectionMode ? new Set(remaining) : new Set());
         setSelectionMode(wasSelectionMode && remaining.length > 0);
@@ -1338,7 +1971,7 @@ export function ConfigPage({
   }
 
   async function executePropagation() {
-    if (!preview) return;
+    if (operationRunning || !preview) return;
     setBusy(true);
     try {
       setReport(
@@ -1356,10 +1989,28 @@ export function ConfigPage({
   }
 
   const createNameValid = CONFIG_NAME_PATTERN.test(newName);
+  const propagationHasFailures =
+    report?.entries.some((entry) => entry.outcome.status === "failed") ?? false;
+  const propagationNeedsAttention =
+    report?.entries.some((entry) => propagationGroup(entry.outcome.status) === "attention") ??
+    false;
 
   return (
     <div className={`${styles.page} ${styles.configPage}`}>
-      <PageError error={error} />
+      <PageError
+        error={tenantError ?? error}
+        onRetry={
+          tenantError
+            ? retryTenants
+            : error
+              ? () => {
+                  setError(null);
+                  void loadCatalog("refresh");
+                }
+              : undefined
+        }
+      />
+      <MutationUnavailable operation={operation} />
       <div className={`${styles.configLayout} ${detailOpen ? styles.configDetailOpen : ""}`}>
         <aside className={styles.configCatalog} aria-label="Configs">
           <div className={styles.sessionToolbar}>
@@ -1387,7 +2038,7 @@ export function ConfigPage({
                     type="button"
                     className={styles.sessionDeleteSelected}
                     aria-label="Delete selected Named Configs"
-                    disabled={selectedCount === 0 || busy}
+                    disabled={selectedCount === 0 || mutationBusy}
                     onClick={() => requestDelete([...selectedNames])}
                   >
                     <Trash2 size={14} aria-hidden="true" /> Delete selected
@@ -1411,20 +2062,19 @@ export function ConfigPage({
                   <SessionMultiSelect
                     className={styles.sessionAgentFilter}
                     disabled={busy || loadingCatalog || refreshing}
-                    label="Agent"
+                    label="Coding Agent"
                     onCommit={selectAgent}
                     options={agentOptions}
-                    pluralLabel="agents"
+                    pluralLabel="Coding Agents"
                     selected={new Set([agent])}
                     triggerIcon={<AgentIcon agent={agent} size={14} />}
                     allowMultiple={false}
                   />
                 </div>
                 <div className={styles.sessionHeaderActions}>
-                  <button
-                    type="button"
+                  <IconButton
                     className={styles.sessionRefresh}
-                    aria-label={refreshing ? "Refreshing Configs" : "Refresh Configs"}
+                    label={refreshing ? "Refreshing Configs" : "Refresh Configs"}
                     aria-busy={refreshing}
                     disabled={loadingCatalog || refreshing || busy}
                     onClick={() =>
@@ -1433,9 +2083,8 @@ export function ConfigPage({
                       })
                     }
                   >
-                    <RefreshCw className={refreshing ? styles.spinning : undefined} size={14} />
-                    Refresh
-                  </button>
+                    <RefreshCw className={refreshing ? "spin" : undefined} size={14} />
+                  </IconButton>
                   <button
                     type="button"
                     className={styles.sessionSelect}
@@ -1449,7 +2098,22 @@ export function ConfigPage({
               </>
             )}
           </div>
-          <div className={styles.configWarnings}>
+          <div className={styles.configWarnings} aria-live="polite">
+            {appliedName && !applyFeedback && (
+              <div className={styles.applicationNotice}>
+                <Check size={15} aria-hidden="true" />
+                <span>
+                  Last applied: <strong>Named Config {appliedName}</strong>. Application is a
+                  one-time projection to Current Config, not an Active Config.
+                </span>
+              </div>
+            )}
+            {applyFeedback && (
+              <div className={styles.applicationNotice} role="status">
+                <Check size={15} aria-hidden="true" />
+                <span>{applyFeedback}</span>
+              </div>
+            )}
             {catalog?.application.drift === "source-missing" && (
               <div className={styles.inlineWarning}>
                 <AlertTriangle size={15} />
@@ -1466,12 +2130,16 @@ export function ConfigPage({
             )}
           </div>
           <div className={styles.configList} aria-busy={loadingCatalog}>
-            {loadingCatalog && !catalog && <Loading />}
+            {(loadingTenants || loadingCatalog) && !catalog && <Loading />}
             <div className={styles.configRowGroup}>
               <div
                 className={`${styles.configRow} ${selection.current ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
               >
                 <button
+                  ref={(element) => {
+                    if (element) configRowButtons.current.set("current", element);
+                    else configRowButtons.current.delete("current");
+                  }}
                   type="button"
                   className={styles.configRowMain}
                   aria-label={
@@ -1483,7 +2151,7 @@ export function ConfigPage({
                 >
                   <CurrentConfigIcon size={16} data-icon="current-config" />
                   <span className={styles.configRowText}>
-                    <strong>Current</strong>
+                    <strong>Current Config</strong>
                   </span>
                   {selectionMode && <span className={styles.configProtected}>Protected</span>}
                 </button>
@@ -1496,10 +2164,10 @@ export function ConfigPage({
                       className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
                       title="Propagate credentials"
                       aria-label="Propagate credentials"
-                      disabled={busy}
+                      disabled={mutationBusy}
                       onClick={() => void previewPropagation()}
                     >
-                      Propagate
+                      Propagate credentials
                     </button>
                   )}
               </div>
@@ -1508,7 +2176,7 @@ export function ConfigPage({
                 <IconButton
                   className={styles.configAddButton}
                   label="Create Named Config"
-                  disabled={busy || loadingCatalog || selectionMode}
+                  disabled={mutationBusy || loadingCatalog || selectionMode}
                   onClick={() =>
                     requestEditorAction(() => {
                       setCreateError(null);
@@ -1530,27 +2198,25 @@ export function ConfigPage({
                 return (
                   <div
                     key={entry.name}
-                    className={`${styles.configRow} ${selectedForInspection ? styles.configRowInspected : ""} ${selectedForDeletion ? styles.configRowSelected : ""} ${selectionMode ? styles.configRowSelection : ""} ${selectionMode && applied ? styles.configRowProtected : ""}`}
+                    className={`${styles.configRow} ${selectedForInspection ? styles.configRowInspected : ""} ${selectedForDeletion ? styles.configRowSelected : ""} ${selectionMode ? styles.configRowSelection : ""}`}
                   >
                     <button
+                      ref={(element) => {
+                        if (element) configRowButtons.current.set(entry.name, element);
+                        else configRowButtons.current.delete(entry.name);
+                      }}
                       type="button"
                       className={styles.configRowMain}
                       aria-label={
                         selectionMode
-                          ? applied
-                            ? `${entry.name} is Applied and cannot be selected`
-                            : `${selectedForDeletion ? "Deselect" : "Select"} ${entry.name}`
+                          ? `${selectedForDeletion ? "Deselect" : "Select"} ${entry.name}`
                           : entry.name
                       }
                       aria-describedby={issueDescriptionId}
                       aria-pressed={selectionMode ? selectedForDeletion : selectedForInspection}
-                      disabled={busy || loadingCatalog || (selectionMode && applied)}
+                      disabled={busy || loadingCatalog}
                       onClick={() =>
-                        selectionMode
-                          ? applied
-                            ? undefined
-                            : toggleConfig(entry.name)
-                          : void openConfig(entry.name)
+                        selectionMode ? toggleConfig(entry.name) : void openConfig(entry.name)
                       }
                     >
                       <NamedConfigIcon size={16} />
@@ -1568,13 +2234,10 @@ export function ConfigPage({
                           {applied && <ConfigDriftBadge status={catalog.application} />}
                         </span>
                       </span>
-                      {selectionMode && !applied && (
+                      {selectionMode && (
                         <span className={styles.sessionSelectionIndicator} aria-hidden="true">
                           {selectedForDeletion && <Check size={15} strokeWidth={3} />}
                         </span>
-                      )}
-                      {selectionMode && applied && (
-                        <span className={styles.configProtected}>Protected</span>
                       )}
                       {issue && (
                         <span id={issueDescriptionId} className="srOnly">
@@ -1591,13 +2254,17 @@ export function ConfigPage({
                             title={
                               applied && catalog.application.drift === "clean"
                                 ? "Already clean"
-                                : `Apply Named Config ${entry.name}`
+                                : `Apply Named Config ${entry.name} to Current Config`
                             }
-                            aria-label={`Apply Named Config ${entry.name}`}
-                            disabled={busy || (applied && catalog.application.drift === "clean")}
-                            onClick={() => requestEditorAction(() => applyConfig(entry.name))}
+                            aria-label={`Apply Named Config ${entry.name} to Current Config`}
+                            disabled={
+                              mutationBusy || (applied && catalog.application.drift === "clean")
+                            }
+                            onClick={() =>
+                              requestEditorAction(() => setApplyTarget({ name: entry.name }))
+                            }
                           >
-                            Apply
+                            Apply to Current Config
                           </button>
                         )}
                         {entry.state === "incomplete" && (
@@ -1606,7 +2273,7 @@ export function ConfigPage({
                             className={styles.configRowPrimaryAction}
                             title={`Repair Named Config ${entry.name}`}
                             aria-label={`Repair Named Config ${entry.name}`}
-                            disabled={busy}
+                            disabled={mutationBusy}
                             onClick={() => requestEditorAction(() => createConfig(entry.name))}
                           >
                             Repair
@@ -1615,7 +2282,7 @@ export function ConfigPage({
                         <IconButton
                           className={`${styles.configRowAction} ${styles.configDeleteAction}`}
                           label={`Delete Named Config ${entry.name}`}
-                          disabled={busy}
+                          disabled={mutationBusy}
                           onClick={() => requestDelete([entry.name])}
                         >
                           <Trash2 size={15} />
@@ -1626,7 +2293,11 @@ export function ConfigPage({
                 );
               })}
               {catalog && catalog.configs.length === 0 && !loadingCatalog && (
-                <div className={styles.configListEmpty}>No Named Configs found.</div>
+                <EmptyState
+                  variant="list"
+                  icon={<NamedConfigIcon size={22} aria-hidden="true" />}
+                  title="No Named Configs found."
+                />
               )}
             </div>
           </div>
@@ -1636,107 +2307,254 @@ export function ConfigPage({
             <>
               <div className={styles.configEditorHeader}>
                 <IconButton
+                  buttonRef={detailBackButtonRef}
                   label="Back to Configs"
                   onClick={() =>
                     requestEditorAction(() => {
+                      const focusKey = selection.current ? "current" : selection.config;
                       setDetailOpen(false);
                       changePageLocation(
                         "configs",
                         configLocation(scope, agent, null),
                         onLocationChange,
                       );
+                      window.requestAnimationFrame(() => {
+                        if (focusKey) configRowButtons.current.get(focusKey)?.focus();
+                      });
                     })
                   }
                 >
                   <ChevronLeft size={17} />
                 </IconButton>
-                {catalog.files.length > 1 ? (
-                  <div className={styles.fileTabs} role="tablist" aria-label="Config files">
-                    {catalog.files.map((name) => (
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={file === name}
-                        key={name}
-                        onClick={() =>
-                          requestEditorAction(() => {
-                            setFile(name);
-                            changePageLocation(
-                              "configs",
-                              configLocation(scope, agent, selection, name),
-                              onLocationChange,
-                            );
-                          })
-                        }
-                      >
-                        {name}
-                      </button>
-                    ))}
+                <div className={styles.configContextStack}>
+                  <div className={styles.contextFacts} aria-label="Config editing context">
+                    <span>
+                      <small>Scope</small>
+                      <strong>
+                        {configTenantLabel}
+                        {scope.scope === "host" && <em>Host risk</em>}
+                      </strong>
+                    </span>
+                    <span>
+                      <small>Agent</small>
+                      <strong>{agent === "codex" ? "Codex" : "Claude"}</strong>
+                    </span>
+                    <span>
+                      <small>Config</small>
+                      <strong>{configSelectionLabel}</strong>
+                    </span>
+                    <span>
+                      <small>File</small>
+                      <strong className={styles.contextFile}>{file ?? "—"}</strong>
+                    </span>
                   </div>
-                ) : (
-                  <h2>{file ?? "Configuration"}</h2>
-                )}
+                  {(selection.current || file === "auth.json" || editorMode === "raw") && (
+                    <span className={styles.sensitiveContext}>
+                      Native content may contain credentials and is displayed without redaction.
+                    </span>
+                  )}
+                  {catalog.files.length > 1 ? (
+                    <div className={styles.fileTabs} role="tablist" aria-label="Config files">
+                      {catalog.files.map((name, index) => (
+                        <button
+                          type="button"
+                          id={`config-file-tab-${name.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+                          role="tab"
+                          aria-selected={file === name}
+                          aria-controls="config-file-panel"
+                          tabIndex={file === name ? 0 : -1}
+                          key={name}
+                          onKeyDown={(event) => {
+                            const last = catalog.files.length - 1;
+                            let next: number;
+                            if (event.key === "ArrowRight") next = index === last ? 0 : index + 1;
+                            else if (event.key === "ArrowLeft")
+                              next = index === 0 ? last : index - 1;
+                            else if (event.key === "Home") next = 0;
+                            else if (event.key === "End") next = last;
+                            else return;
+                            event.preventDefault();
+                            const nextFile = catalog.files[next];
+                            requestEditorAction(() => {
+                              setFile(nextFile);
+                              changePageLocation(
+                                "configs",
+                                configLocation(scope, agent, selection, nextFile),
+                                onLocationChange,
+                              );
+                              window.requestAnimationFrame(() =>
+                                document
+                                  .getElementById(
+                                    `config-file-tab-${nextFile.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+                                  )
+                                  ?.focus(),
+                              );
+                            });
+                          }}
+                          onClick={() =>
+                            requestEditorAction(() => {
+                              setFile(name);
+                              changePageLocation(
+                                "configs",
+                                configLocation(scope, agent, selection, name),
+                                onLocationChange,
+                              );
+                            })
+                          }
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <h2 ref={detailHeadingRef} tabIndex={-1}>
+                      {file ?? "Configuration"}
+                    </h2>
+                  )}
+                </div>
               </div>
-              {loadingFile ? (
-                <Loading />
-              ) : snapshot ? (
-                <>
-                  <div className={styles.editorTools}>
-                    <span>{snapshot.exists ? "Existing file" : "New file"}</span>
-                    <div className={styles.segmented} aria-label="Editor encoding">
+              <div
+                id="config-file-panel"
+                className={styles.configFilePanel}
+                role="tabpanel"
+                aria-labelledby={
+                  file && catalog.files.length > 1
+                    ? `config-file-tab-${file.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+                    : undefined
+                }
+              >
+                {loadingFile ? (
+                  <Loading />
+                ) : snapshot ? (
+                  <>
+                    <div className={styles.editorTools}>
+                      <span>{snapshot.exists ? "Existing file" : "New file"}</span>
+                      <div className={styles.segmented} aria-label="Editor mode">
+                        {visualFields && (
+                          <button
+                            type="button"
+                            aria-pressed={editorMode === "visual"}
+                            onClick={() => switchEditorMode("visual")}
+                          >
+                            Visual
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-pressed={editorMode === "raw"}
+                          onClick={() => switchEditorMode("raw")}
+                        >
+                          Raw
+                        </button>
+                      </div>
                       <button
+                        className={styles.primaryButton}
                         type="button"
-                        aria-pressed={editorMode === "text"}
-                        onClick={() => switchEditorMode("text")}
+                        disabled={
+                          mutationBusy ||
+                          !editorDirty ||
+                          (editorMode === "raw" && editorBytes === null)
+                        }
+                        onClick={() => void saveFile(true)}
                       >
-                        UTF-8
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={editorMode === "base64"}
-                        onClick={() => switchEditorMode("base64")}
-                      >
-                        Base64
+                        {saveFeedback === "saving" ? (
+                          <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                        ) : (
+                          <Save size={14} />
+                        )}
+                        <span aria-live="polite">
+                          {saveFeedback === "saving"
+                            ? "Saving…"
+                            : saveFeedback === "saved"
+                              ? "Saved"
+                              : "Save"}
+                        </span>
                       </button>
                     </div>
-                    <button
-                      className={styles.primaryButton}
-                      type="button"
-                      disabled={busy || !editorDirty || editorBytes === null}
-                      onClick={() => void saveFile(true)}
-                    >
-                      <Save size={14} /> Save
-                    </button>
+                    {editorMode === "visual" && visualFields ? (
+                      <VisualConfigFields fields={visualFields} onChange={updateVisualField} />
+                    ) : textEditable ? (
+                      useCodeMirror ? (
+                        <div
+                          ref={rawEditorParent}
+                          className={styles.codeEditor}
+                          aria-label={`${file} content`}
+                        />
+                      ) : (
+                        <textarea
+                          className={`${styles.codeEditor} ${styles.codeEditorFallback}`}
+                          aria-label={`${file} content`}
+                          value={editor}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setEditor(value);
+                            scheduleRawDiagnose(value);
+                          }}
+                          spellCheck={false}
+                        />
+                      )
+                    ) : (
+                      <div className={styles.binaryConfigNotice} role="status">
+                        <AlertTriangle size={18} aria-hidden="true" />
+                        <span>
+                          This file is not valid UTF-8 and cannot be edited in the Console.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const bytes = decodeBase64(snapshot.content_base64);
+                            const copy = new Uint8Array(bytes);
+                            const url = URL.createObjectURL(
+                              new Blob([copy.buffer], { type: "application/octet-stream" }),
+                            );
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = file ?? "config";
+                            link.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
+                          <Download size={14} /> Download raw file
+                        </button>
+                      </div>
+                    )}
+                    {editorMode === "raw" && rawDiagnostics.length > 0 && (
+                      <div className={styles.editorDiagnostics} role="alert">
+                        {rawDiagnostics.map((diagnostic, index) => (
+                          <span key={`${diagnostic.line}-${diagnostic.column}-${index}`}>
+                            Line {diagnostic.line}, column {diagnostic.column}: {diagnostic.message}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className={styles.emptyPane}>
+                    <NamedConfigIcon size={22} />
+                    <span>Unable to load {file ?? "configuration"}.</span>
                   </div>
-                  <textarea
-                    className={styles.codeEditor}
-                    aria-label={`${file} content`}
-                    spellCheck={false}
-                    value={editor}
-                    onChange={(event) => setEditor(event.target.value)}
-                  />
-                </>
-              ) : (
-                <div className={styles.emptyPane}>
-                  <NamedConfigIcon size={22} />
-                  <span>Unable to load {file ?? "configuration"}.</span>
-                </div>
-              )}
+                )}
+              </div>
             </>
-          ) : (
+          ) : loadingTenants || loadingCatalog ? (
             <Loading />
+          ) : (
+            <div className={styles.emptyPane} role="status">
+              <AlertTriangle size={22} aria-hidden="true" />
+              <span>Configuration is unavailable. Use Retry to load it again.</span>
+            </div>
           )}
         </section>
       </div>
       {pendingAction && (
-        <div className={styles.dialogBackdrop}>
-          <section
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="config-unsaved-title"
-          >
-            <h2 id="config-unsaved-title">Unsaved changes</h2>
+        <Dialog
+          className={styles.dialog}
+          ariaLabelledBy={unsavedTitleId}
+          busy={mutationBusy}
+          onCancel={() => setPendingAction(null)}
+        >
+          <section>
+            <h2 id={unsavedTitleId}>Unsaved changes</h2>
             <p>Save changes to {file ?? "this file"} before continuing?</p>
             <div className={styles.dialogActions}>
               <button type="button" onClick={() => setPendingAction(null)} disabled={busy}>
@@ -1753,28 +2571,28 @@ export function ConfigPage({
                 className={styles.primaryButton}
                 type="button"
                 onClick={() => void saveAndRunPendingAction()}
-                disabled={busy || editorBytes === null}
+                disabled={mutationBusy || editorBytes === null}
               >
                 Save and continue
               </button>
             </div>
           </section>
-        </div>
+        </Dialog>
       )}
       {createOpen && (
-        <div className={styles.dialogBackdrop} onMouseDown={() => !busy && setCreateOpen(false)}>
+        <Dialog
+          className={styles.dialog}
+          ariaLabelledBy={createTitleId}
+          busy={mutationBusy}
+          onCancel={() => setCreateOpen(false)}
+        >
           <form
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-config-title"
-            onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !busy) void createConfig(newName);
+              if (createNameValid && !mutationBusy) void createConfig(newName);
             }}
           >
-            <h2 id="create-config-title">Create Named Config</h2>
+            <h2 id={createTitleId}>Create Named Config</h2>
             <label>
               Name
               <input
@@ -1786,8 +2604,18 @@ export function ConfigPage({
                   setCreateError(null);
                 }}
                 aria-invalid={newName.length > 0 && !createNameValid}
+                aria-describedby={createHelpId}
               />
             </label>
+            <p id={createHelpId} className={styles.dialogDescription}>
+              Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or
+              number.
+            </p>
+            {newName.length > 0 && !createNameValid && (
+              <div className={styles.inlineWarning} role="alert">
+                Enter a valid lowercase DNS label.
+              </div>
+            )}
             {createError && <div className={styles.inlineWarning}>{createError}</div>}
             <div className={styles.dialogActions}>
               <button type="button" onClick={() => setCreateOpen(false)} disabled={busy}>
@@ -1796,13 +2624,48 @@ export function ConfigPage({
               <button
                 className={styles.primaryButton}
                 type="submit"
-                disabled={!createNameValid || busy}
+                disabled={!createNameValid || mutationBusy}
               >
-                <Plus size={14} /> Create
+                {busy ? (
+                  <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                ) : (
+                  <Plus size={14} />
+                )}
+                {busy ? "Creating…" : "Create"}
               </button>
             </div>
           </form>
-        </div>
+        </Dialog>
+      )}
+      {applyTarget && (
+        <ConfirmDialog
+          title={`Apply Named Config ${applyTarget.name} to Current Config?`}
+          description={
+            <div className={styles.dialogDescription}>
+              <p>
+                Tenant: <strong>{configTenantLabel}</strong>
+                <br />
+                Coding Agent: <strong>{agent === "codex" ? "Codex" : "Claude"}</strong>
+                <br />
+                Source: <strong>Named Config {applyTarget.name}</strong>
+                <br />
+                Target: <strong>Current Config</strong>
+              </p>
+              <p>
+                Included fixed Config Fields may be added or replaced; omitted fixed fields are
+                removed. Unrelated native configuration is preserved. This is a one-time projection
+                to Current Config and does not create an Active Config. Files commit one at a time;
+                a later file failure does not roll back earlier updates.
+              </p>
+            </div>
+          }
+          confirmation={scope.scope === "host" ? "Host Tenant" : undefined}
+          confirmLabel="Apply to Current Config"
+          variant="primary"
+          busy={mutationBusy}
+          onCancel={() => setApplyTarget(null)}
+          onConfirm={() => void applyConfig(applyTarget.name)}
+        />
       )}
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
@@ -1814,63 +2677,98 @@ export function ConfigPage({
             </p>
           }
           confirmLabel="Delete Config"
-          busy={busy}
+          busy={mutationBusy}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => void deleteConfigs()}
         />
       )}
       {deleteTarget && deleteTarget.names.length > 1 && (
-        <div className={styles.dialogBackdrop}>
-          <section
-            className={`${styles.dialog} ${styles.wideDialog}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-configs-title"
-          >
-            <h2 id="delete-configs-title">Delete selected Named Configs?</h2>
-            <p className={styles.dialogDescription}>
-              This deletes only the selected Named Configs. Current Config files are not changed.
-            </p>
-            <div className={styles.planList}>
-              {deleteTarget.names.map((name) => (
-                <code key={name}>{name}</code>
-              ))}
-            </div>
-            <div className={styles.dialogActions}>
-              <button type="button" onClick={() => setDeleteTarget(null)} disabled={busy}>
-                Cancel
-              </button>
-              <button
-                className={styles.dangerButton}
-                type="button"
-                onClick={() => void deleteConfigs()}
-                disabled={busy}
-              >
-                <Trash2 size={14} /> Delete selected
-              </button>
-            </div>
-          </section>
-        </div>
+        <ConfirmDialog
+          title="Delete selected Named Configs?"
+          description={
+            <>
+              <p className={styles.dialogDescription}>
+                This deletes only the selected Named Configs. Current Config files are not changed.
+                If a last applied source is deleted, Config Drift becomes Source missing.
+              </p>
+              <div className={styles.planList}>
+                {deleteTarget.names.map((name) => (
+                  <code key={name}>{name}</code>
+                ))}
+              </div>
+            </>
+          }
+          confirmLabel="Delete selected"
+          busy={mutationBusy}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void deleteConfigs()}
+        />
       )}
       {(preview || report) && (
-        <div className={styles.dialogBackdrop}>
-          <section
-            className={`${styles.dialog} ${styles.wideDialog}`}
-            role="dialog"
-            aria-modal="true"
-          >
-            <h2>{preview ? "Credential Propagation preview" : "Credential Propagation result"}</h2>
-            <div className={styles.planList}>
-              {(preview?.preview.entries ?? report?.entries ?? []).map((entry) => (
-                <div key={entry.label}>
-                  <code>{entry.label}</code>
-                  <span>
-                    {entry.outcome.status === "updated" && preview
-                      ? "update"
-                      : entry.outcome.status}
-                  </span>
-                </div>
-              ))}
+        <Dialog
+          className={`${styles.dialog} ${styles.wideDialog}`}
+          ariaLabelledBy={propagationTitleId}
+          busy={mutationBusy}
+          onCancel={() => {
+            setPreview(null);
+            setReport(null);
+          }}
+        >
+          <section>
+            <h2 id={propagationTitleId}>
+              {preview ? "Credential Propagation preview" : "Credential Propagation result"}
+            </h2>
+            {report && (
+              <div
+                className={`${styles.propagationSummary} ${
+                  propagationHasFailures || propagationNeedsAttention
+                    ? styles.propagationSummaryPartial
+                    : styles.propagationSummaryComplete
+                }`}
+                role={propagationHasFailures ? "alert" : "status"}
+              >
+                {propagationHasFailures
+                  ? "Partially completed. Successful credential updates were kept; failed targets need attention."
+                  : propagationNeedsAttention
+                    ? "Credential propagation completed with targets that need attention."
+                    : "Credential propagation completed."}
+              </div>
+            )}
+            <div className={styles.propagationGroups}>
+              {(["updated", "skipped", "attention"] as const).map((group) => {
+                const entries = (preview?.preview.entries ?? report?.entries ?? []).filter(
+                  (entry) => propagationGroup(entry.outcome.status) === group,
+                );
+                if (entries.length === 0) return null;
+                const heading =
+                  group === "updated"
+                    ? "Updated"
+                    : group === "skipped"
+                      ? "Skipped"
+                      : "Needs attention";
+                return (
+                  <section key={group}>
+                    <h3>
+                      {heading} <span>{entries.length}</span>
+                    </h3>
+                    <div className={styles.planList}>
+                      {entries.map((entry) => (
+                        <div key={entry.label}>
+                          <code>{entry.label}</code>
+                          <span>
+                            {preview && entry.outcome.status === "updated"
+                              ? "Will update"
+                              : entry.outcome.status}
+                            {propagationDetail(entry.outcome) && (
+                              <small>{propagationDetail(entry.outcome)}</small>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
               {(preview?.preview.entries.length ?? report?.entries.length ?? 0) === 0 && (
                 <p>No matching credentials.</p>
               )}
@@ -1889,15 +2787,18 @@ export function ConfigPage({
                 <button
                   className={styles.primaryButton}
                   type="button"
-                  disabled={busy || preview.preview.updates === 0}
+                  disabled={mutationBusy || preview.preview.updates === 0}
                   onClick={() => void executePropagation()}
                 >
-                  Apply {preview.preview.updates} update{preview.preview.updates === 1 ? "" : "s"}
+                  {busy && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+                  {busy
+                    ? "Propagating…"
+                    : `Propagate ${preview.preview.updates} credential update${preview.preview.updates === 1 ? "" : "s"}`}
                 </button>
               )}
             </div>
           </section>
-        </div>
+        </Dialog>
       )}
     </div>
   );
@@ -2099,6 +3000,7 @@ function SessionMultiSelect<T extends string>({
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedOption = options.find((option) => selected.has(option.value));
   const summary =
     selected.size === 1
@@ -2156,6 +3058,22 @@ function SessionMultiSelect<T extends string>({
     if (!draftChanged) return;
     onCommit(new Set(draft));
     closeAndFocusTrigger();
+  }
+
+  function handleSingleOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = (index + 1) % options.length;
+    if (event.key === "ArrowUp") nextIndex = (index - 1 + options.length) % options.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = options.length - 1;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAndFocusTrigger();
+      return;
+    }
+    if (nextIndex === null) return;
+    event.preventDefault();
+    optionRefs.current[nextIndex]?.focus();
   }
 
   return (
@@ -2265,8 +3183,12 @@ function SessionMultiSelect<T extends string>({
                       active ? styles.sessionFilterOptionSelected : ""
                     }`}
                     key={option.value}
+                    ref={(element) => {
+                      optionRefs.current[index] = element;
+                    }}
                     title={option.label}
                     onClick={() => commitOnly(option.value)}
+                    onKeyDown={(event) => handleSingleOptionKeyDown(event, index)}
                   >
                     <span className={styles.sessionFilterOptionIcon}>{option.icon}</span>
                     <span className={styles.sessionFilterOptionLabel}>{option.label}</span>
@@ -2322,10 +3244,15 @@ function SessionMultiSelect<T extends string>({
   );
 }
 
-export function SessionPage({ api, locationVersion = 0, onLocationChange }: PageProps) {
+export function SessionPage({ api, operation, locationVersion = 0, onLocationChange }: PageProps) {
   const [initialRoute] = useState(readSessionRoute);
   const observedLocationVersion = useRef(locationVersion);
-  const tenants = useTenants(api);
+  const {
+    tenants,
+    loading: loadingTenants,
+    error: tenantError,
+    retry: retryTenants,
+  } = useTenants(api);
   const [selectedScopes, setSelectedScopes] = useState<Set<SessionScopeKey>>(
     () => initialRoute.scopes,
   );
@@ -2343,10 +3270,12 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [dialogKeys, setDialogKeys] = useState<string[] | null>(null);
+  const [singleDeleteTarget, setSingleDeleteTarget] = useState<SourcedSession | null>(null);
   const [deletion, setDeletion] = useState<SessionDeletion>(null);
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [listUnavailable, setListUnavailable] = useState(false);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const listController = useRef<AbortController | null>(null);
   const streamController = useRef<AbortController | null>(null);
   const currentSessionRef = useRef<SourcedSession | null>(null);
@@ -2355,8 +3284,15 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
   const selectButton = useRef<HTMLButtonElement>(null);
   const focusSelectAfterExit = useRef(false);
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
+  const sessionRowButtons = useRef(new Map<string, HTMLButtonElement>());
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
+
+  useEffect(() => {
+    if (!currentSession || !window.matchMedia?.("(max-width: 760px)").matches) return;
+    const frame = window.requestAnimationFrame(() => detailHeadingRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentSession]);
 
   const tenantOptions = useMemo<SessionFilterOption<SessionScopeKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
@@ -2365,16 +3301,6 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
         Boolean(tenant.kind === "managed" && tenant.name),
       )
       .sort((left, right) => left.name.localeCompare(right.name));
-    if (!managed.some((tenant) => tenant.name === "default")) {
-      managed.push({
-        kind: "managed",
-        name: "default",
-        display_name: "default",
-        home: "",
-        exists: false,
-      });
-      managed.sort((left, right) => left.name.localeCompare(right.name));
-    }
     return [
       ...(host
         ? [
@@ -2387,7 +3313,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
         : []),
       ...managed.map((tenant) => ({
         value: `managed:${tenant.name}` as const,
-        label: tenant.exists ? tenant.display_name : `${tenant.display_name} (not created)`,
+        label: tenant.display_name,
         summaryLabel: tenant.display_name,
         icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
       })),
@@ -2599,6 +3525,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
     setSelectionMode(false);
     setSelectedKeys(new Set());
     setDialogKeys(null);
+    setSingleDeleteTarget(null);
     setFocusAfterDelete(undefined);
     void load();
     return () => {
@@ -2696,6 +3623,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
   }
 
   function closeSessionInspection() {
+    const focusKey = currentSession?.key ?? null;
     clearInspection();
     setRouteSelection(null);
     changePageLocation(
@@ -2703,6 +3631,9 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
       sessionLocation(selectedScopes, selectedAgents),
       onLocationChange,
     );
+    window.requestAnimationFrame(() => {
+      if (focusKey) sessionRowButtons.current.get(focusKey)?.focus();
+    });
   }
 
   async function requestSessionDeletion(source: SessionSource, ids: string[]) {
@@ -2729,6 +3660,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
 
   async function deleteSession(row: SourcedSession) {
     if (
+      operation?.state === "running" ||
       data?.warnings.length ||
       listUnavailable ||
       !data ||
@@ -2756,12 +3688,19 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
       if (wasCurrent && survivor) void openSession(survivor);
       setFocusAfterDelete(survivor ? row.key : null);
     } finally {
+      setSingleDeleteTarget(null);
       finishDeletion();
     }
   }
 
   async function deleteSelectedSessions() {
-    if (!dialogKeys || dialogKeys.length === 0 || !beginDeletion({ kind: "batch" })) return;
+    if (
+      operation?.state === "running" ||
+      !dialogKeys ||
+      dialogKeys.length === 0 ||
+      !beginDeletion({ kind: "batch" })
+    )
+      return;
     const keys = dialogKeys;
     const keySet = new Set(keys);
     const selectedRows = data?.sessions.filter((row) => keySet.has(row.key)) ?? [];
@@ -2814,6 +3753,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
   const sessions = data?.sessions ?? [];
   const allSelected = sessions.length > 0 && sessions.every((row) => selectedKeys.has(row.key));
   const deletionBusy = deletion !== null;
+  const mutationBusy = deletionBusy || operation?.state === "running";
   const dialogSessions = dialogKeys
     ? sessions.filter((session) => dialogKeys.includes(session.key))
     : [];
@@ -2829,9 +3769,22 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
   ].sort((left, right) => left.source.key.localeCompare(right.source.key));
   const batchBusy = deletion?.kind === "batch";
 
+  function retryPageError() {
+    setError(null);
+    if (!listUnavailable && currentSessionRef.current) {
+      void openSession(currentSessionRef.current, false);
+    } else {
+      void load("refresh");
+    }
+  }
+
   return (
     <div className={`${styles.page} ${styles.catalogPage} ${styles.sessionPage}`}>
-      <PageError error={error} />
+      <PageError
+        error={tenantError ?? error}
+        onRetry={tenantError ? retryTenants : error ? retryPageError : undefined}
+      />
+      <MutationUnavailable operation={operation} />
       <div className={`${styles.splitLayout} ${currentSession ? styles.hasSelection : ""}`}>
         <aside className={`${styles.catalog} ${styles.sessionCatalog}`} aria-label="Sessions">
           <div
@@ -2866,7 +3819,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                     type="button"
                     className={styles.sessionDeleteSelected}
                     aria-label="Delete selected Sessions"
-                    disabled={selectedKeys.size === 0 || deletionBusy}
+                    disabled={selectedKeys.size === 0 || mutationBusy}
                     onClick={() => setDialogKeys([...selectedKeys])}
                   >
                     <Trash2 size={14} aria-hidden="true" />
@@ -2879,7 +3832,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                 <div className={styles.sessionFilters}>
                   <SessionMultiSelect
                     className={styles.sessionTenantFilter}
-                    disabled={deletionBusy}
+                    disabled={loadingTenants || deletionBusy}
                     label="Tenant"
                     onCommit={commitScopes}
                     options={tenantOptions}
@@ -2890,10 +3843,10 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                   <SessionMultiSelect
                     className={styles.sessionAgentFilter}
                     disabled={deletionBusy}
-                    label="Agent"
+                    label="Coding Agent"
                     onCommit={commitAgents}
                     options={agentOptions}
-                    pluralLabel="agents"
+                    pluralLabel="Coding Agents"
                     selected={selectedAgents}
                     triggerIcon={
                       selectedAgents.size === 1 ? (
@@ -2905,24 +3858,21 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                   />
                 </div>
                 <div className={styles.sessionHeaderActions}>
-                  <button
-                    ref={refreshButton}
+                  <IconButton
+                    buttonRef={refreshButton}
                     data-dialog-focus-fallback="true"
-                    type="button"
                     className={styles.sessionRefresh}
-                    aria-label={refreshing ? "Refreshing Sessions" : "Refresh Sessions"}
+                    label={refreshing ? "Refreshing Sessions" : "Refresh Sessions"}
                     aria-busy={refreshing}
-                    title={refreshing ? "Refreshing Sessions" : "Refresh Sessions"}
                     disabled={loadingList || refreshing || deletionBusy}
                     onClick={() => void load("refresh")}
                   >
                     <RefreshCw
-                      className={refreshing ? styles.spinning : undefined}
+                      className={refreshing ? "spin" : undefined}
                       size={14}
                       aria-hidden="true"
                     />
-                    Refresh
-                  </button>
+                  </IconButton>
                   <button
                     ref={selectButton}
                     type="button"
@@ -2973,6 +3923,10 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                     .join(" ")}
                 >
                   <button
+                    ref={(element) => {
+                      if (element) sessionRowButtons.current.set(row.key, element);
+                      else sessionRowButtons.current.delete(row.key);
+                    }}
                     type="button"
                     className={styles.sessionRowMain}
                     aria-label={
@@ -2986,7 +3940,7 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                   >
                     <SessionIcon size={16} data-icon="session-record" aria-hidden="true" />
                     <span>
-                      <strong>{title}</strong>
+                      <strong title={title}>{title}</strong>
                       <small className={styles.sessionRowMetadata}>
                         <span>
                           {sessionListScopeLabel(row.source.scopeKey)} · {row.source.agentLabel}
@@ -2995,11 +3949,14 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                       </small>
                     </span>
                     {row.warnings.length > 0 && (
-                      <AlertTriangle
+                      <span
                         className={styles.sessionRowWarning}
-                        size={14}
-                        aria-label="Session has Transcript warnings"
-                      />
+                        role="img"
+                        aria-label={`Session has ${row.warnings.length} Transcript warning${row.warnings.length === 1 ? "" : "s"}`}
+                        title={row.warnings.join("\n")}
+                      >
+                        <AlertTriangle size={14} aria-hidden="true" />
+                      </span>
                     )}
                     {selectionMode && (
                       <span className={styles.sessionSelectionIndicator} aria-hidden="true">
@@ -3022,11 +3979,11 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                           : `Delete Session ${row.display_id} from ${sourceDescription}`
                       }
                       aria-busy={deleting}
-                      disabled={unsafeView || deletionBusy || loadingList}
-                      onClick={() => void deleteSession(row)}
+                      disabled={unsafeView || mutationBusy || loadingList}
+                      onClick={() => setSingleDeleteTarget(row)}
                     >
                       {deleting ? (
-                        <LoaderCircle className={styles.spinning} size={15} aria-hidden="true" />
+                        <LoaderCircle className="spin" size={15} aria-hidden="true" />
                       ) : (
                         <Trash2 size={15} aria-hidden="true" />
                       )}
@@ -3036,11 +3993,12 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
               );
             })}
             {data?.sessions.length === 0 && !loadingList && (
-              <div className={styles.sessionListEmpty}>
-                <SessionIcon size={22} data-icon="session-list-empty" aria-hidden="true" />
-                <strong>No Sessions found</strong>
-                <p>No Sessions were found for the selected Tenants and Coding Agents.</p>
-              </div>
+              <EmptyState
+                variant="list"
+                icon={<SessionIcon size={22} data-icon="session-list-empty" aria-hidden="true" />}
+                title="No Sessions found"
+                description="No Sessions were found for the selected Tenants and Coding Agents."
+              />
             )}
           </div>
         </aside>
@@ -3052,7 +4010,9 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                   <ChevronLeft size={17} />
                 </IconButton>
                 <div>
-                  <h2>{currentSession.title || "Untitled Session"}</h2>
+                  <h2 ref={detailHeadingRef} tabIndex={-1}>
+                    {currentSession.title || "Untitled Session"}
+                  </h2>
                   <span className={styles.sessionDetailSource}>
                     {currentSession.source.scopeLabel} · {currentSession.source.agentLabel} ·{" "}
                     <code>{currentSession.id}</code>
@@ -3076,20 +4036,23 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
                 ))}
                 {loadingPrompts && <Loading />}
                 {!loadingPrompts && prompts.length === 0 && (
-                  <div className={styles.sessionEmptyPane}>
-                    <SessionIcon size={24} aria-hidden="true" />
-                    <h2>No typed prompts</h2>
-                    <p>This Session&apos;s Transcript contains no supported typed user prompts.</p>
-                  </div>
+                  <EmptyState
+                    className={styles.promptEmptyState}
+                    variant="detail"
+                    icon={<SessionIcon size={26} aria-hidden="true" />}
+                    title="No typed prompts"
+                    description="This Session's Transcript contains no supported typed user prompts."
+                  />
                 )}
               </div>
             </>
           ) : (
-            <div className={styles.sessionEmptyPane}>
-              <SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />
-              <h2>Select a Session</h2>
-              <p>Choose a Session to inspect its prompts and Transcript warnings.</p>
-            </div>
+            <EmptyState
+              variant="detail"
+              icon={<SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />}
+              title="Select a Session"
+              description="Choose a Session to inspect its prompts and Transcript warnings."
+            />
           )}
         </section>
       </div>
@@ -3098,18 +4061,30 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
           ...notification,
           actionLabel: undefined,
         }))}
-        paused={dialogKeys !== null}
+        paused={dialogKeys !== null || singleDeleteTarget !== null}
         onAction={() => undefined}
         onDismiss={dismissNotification}
       />
+      {singleDeleteTarget && (
+        <ConfirmDialog
+          title={`Delete Session ${singleDeleteTarget.display_id}?`}
+          message={`This permanently deletes its Transcript from ${singleDeleteTarget.source.scopeLabel} · ${singleDeleteTarget.source.agentLabel}.`}
+          confirmLabel="Delete permanently"
+          busy={deletion?.kind === "record" || operation?.state === "running"}
+          onCancel={() => {
+            if (deletion?.kind !== "record") setSingleDeleteTarget(null);
+          }}
+          onConfirm={() => void deleteSession(singleDeleteTarget)}
+        />
+      )}
       {dialogKeys && (
-        <DestructiveConfirmDialog
+        <ConfirmDialog
           title={`Delete ${dialogKeys.length} selected Session${dialogKeys.length === 1 ? "" : "s"}?`}
           message={`This permanently deletes the Transcripts for the selected Sessions. Sources: ${dialogSources
             .map(({ count, source }) => `${source.scopeLabel} · ${source.agentLabel} (${count})`)
             .join("; ")}.`}
           confirmLabel="Delete permanently"
-          busy={batchBusy}
+          busy={batchBusy || operation?.state === "running"}
           onCancel={() => {
             if (!batchBusy) setDialogKeys(null);
           }}
@@ -3123,23 +4098,57 @@ export function SessionPage({ api, locationVersion = 0, onLocationChange }: Page
 export function OperationPanel({
   api,
   operation,
+  connection = "connected",
   onOperation,
   onDismiss,
+  onExpandedChange,
 }: {
   api: ControlApi;
   operation: Operation;
+  connection?: "connecting" | "connected" | "reconnecting";
   onOperation: (operation: Operation) => void;
   onDismiss: () => void;
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
+  const [expanded, setExpanded] = useState(operation.state !== "succeeded");
+  const [cancelRequested, setCancelRequested] = useState(false);
+  const [panelError, setPanelError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onExpandedChange?.(expanded);
+  }, [expanded, onExpandedChange]);
+
+  useEffect(() => {
+    setCancelRequested(false);
+    setPanelError(null);
+    setExpanded(operation.state !== "succeeded");
+  }, [operation.id, operation.state]);
+
+  useEffect(() => {
+    if (operation.state === "failed" || operation.state === "cancelled") setExpanded(true);
+    else if (operation.state === "succeeded") setExpanded(false);
+  }, [operation.state]);
+
   async function cancel() {
-    await api.post(`/_aibox/api/operations/${encodeURIComponent(operation.id)}/cancel`);
+    if (cancelRequested) return;
+    setCancelRequested(true);
+    setPanelError(null);
+    try {
+      await api.post(`/_aibox/api/operations/${encodeURIComponent(operation.id)}/cancel`);
+    } catch (cause) {
+      setCancelRequested(false);
+      setPanelError(messageOf(cause));
+    }
   }
   return (
-    <section className={styles.operationPanel} aria-label="Management Operation">
+    <section
+      className={`${styles.operationPanel} ${expanded ? styles.operationPanelExpanded : ""}`}
+      aria-label="Management Operation"
+    >
       <header>
         <div>
           {operation.state === "running" ? (
-            <LoaderCircle size={16} />
+            <LoaderCircle className="spin" size={16} />
           ) : operation.state === "succeeded" ? (
             <Check size={16} />
           ) : (
@@ -3147,9 +4156,17 @@ export function OperationPanel({
           )}
           <strong>{operation.kind}</strong>
         </div>
-        <span>{operation.state}</span>
+        <span aria-live="polite">
+          {cancelRequested && operation.state === "running"
+            ? "Cancellation requested"
+            : operation.state}
+        </span>
         {operation.state === "running" && (
-          <IconButton label="Cancel operation" onClick={() => void cancel()}>
+          <IconButton
+            label={cancelRequested ? "Cancellation requested" : "Cancel operation"}
+            disabled={cancelRequested}
+            onClick={() => void cancel()}
+          >
             <CircleStop size={16} />
           </IconButton>
         )}
@@ -3163,16 +4180,46 @@ export function OperationPanel({
         >
           <RefreshCw size={15} />
         </IconButton>
-        <IconButton label="Dismiss operation" onClick={onDismiss}>
-          <X size={15} />
+        <IconButton
+          label={expanded ? "Collapse operation" : "Expand operation"}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
         </IconButton>
+        {operation.state !== "running" && (
+          <IconButton label="Dismiss operation" onClick={onDismiss}>
+            <X size={15} />
+          </IconButton>
+        )}
       </header>
-      <pre>
-        {operation.logs.map((entry) => entry.message).join("\n") ||
-          operation.result ||
-          "Waiting for output"}
-      </pre>
-      {operation.result && <footer>{operation.result}</footer>}
+      {expanded && (
+        <>
+          {operation.first_sequence > 0 && (
+            <div className={styles.operationGap} role="status">
+              Earlier log output was truncated; showing entries from #{operation.first_sequence}.
+            </div>
+          )}
+          <pre>
+            {operation.logs.map((entry) => entry.message).join("\n") ||
+              operation.result ||
+              "Connected · waiting for output"}
+          </pre>
+          {panelError && <div className={styles.operationError}>{panelError}</div>}
+          <footer>
+            <span>
+              {operation.state !== "running"
+                ? "Terminal state"
+                : connection === "connected"
+                  ? "Live updates connected"
+                  : connection === "reconnecting"
+                    ? "Reconnecting to live updates"
+                    : "Connecting to live updates"}
+            </span>
+            {operation.result && <strong>{operation.result}</strong>}
+          </footer>
+        </>
+      )}
     </section>
   );
 }

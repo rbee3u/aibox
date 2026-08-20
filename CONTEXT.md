@@ -5,6 +5,13 @@ Coding Agents while keeping host access and native configuration explicit.
 
 ## Language
 
+### Product identity
+
+**AIBox**:
+The visual product brand used by the Console. The CLI command, filesystem
+paths, repository name, and technical `aibox` identifiers remain lowercase.
+_Avoid_: Aibox, AI Box
+
 ### Execution boundary
 
 **Coding Agent**:
@@ -84,6 +91,11 @@ _Avoid_: Namespace, Target, profile, environment
 **Managed Tenant**:
 An aibox-managed, runnable Tenant with its own Tenant Home.
 _Avoid_: Agent Namespace, managed Target, Linux namespace
+
+**Default Managed Tenant**:
+The protected Managed Tenant named `default`, used when an operation needs a
+Managed Tenant and does not explicitly select another one.
+_Avoid_: Default profile, implicit Tenant, Host Tenant
 
 **Host Tenant**:
 The management-only Tenant backed by the real Host Home.

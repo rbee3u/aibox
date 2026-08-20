@@ -9,17 +9,23 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { moduleIcons } from "../consoleIcons";
 import { elapsedNsMs, resolveRequestedEffective } from "../summary";
 import type { RecordSummary } from "../types";
 import { compactDuration, formatTimestamp, recordUrl } from "../utils";
 import styles from "./RecordList.module.css";
 import { RecordStatus } from "./RecordStatus";
 import { assessmentIssueText, assessmentPresentation } from "./statusPresentation";
+import { EmptyState } from "./EmptyState";
+import { IconButton } from "./IconButton";
+
+const RequestIcon = moduleIcons.requests;
 
 interface RecordListProps {
   records: RecordSummary[];
   total: number;
   page: number;
+  totalPages: number;
   hasPrevious: boolean;
   hasNext: boolean;
   selectionMode: boolean;
@@ -50,6 +56,7 @@ export function RecordList({
   records,
   total,
   page,
+  totalPages,
   hasPrevious,
   hasNext,
   selectionMode,
@@ -133,25 +140,17 @@ export function RecordList({
           {selectionMode ? (
             <span className={styles.selectionCount}>{selected.size} selected</span>
           ) : (
-            <button
-              ref={refreshButton}
+            <IconButton
+              buttonRef={refreshButton}
               data-dialog-focus-fallback="true"
-              type="button"
               className={styles.refreshButton}
               onClick={onRefresh}
               disabled={refreshing || deletionBusy}
-              aria-label={
-                refreshing ? "Refreshing Request Record list" : "Refresh Request Record list"
-              }
+              label={refreshing ? "Refreshing Request Record list" : "Refresh Request Record list"}
               aria-busy={refreshing}
             >
-              <RefreshCw
-                className={refreshing ? styles.refreshing : undefined}
-                size={14}
-                aria-hidden="true"
-              />
-              Refresh
-            </button>
+              <RefreshCw className={refreshing ? "spin" : undefined} size={14} aria-hidden="true" />
+            </IconButton>
           )}
           {selectionMode && (
             <>
@@ -193,11 +192,17 @@ export function RecordList({
         </div>
       </div>
       <div className={styles.records} aria-busy={loading}>
-        {records.length === 0 ? (
-          <div className={styles.empty}>
-            <Inbox size={22} data-icon="request-empty" aria-hidden="true" />
-            <p>No request recorded yet.</p>
+        {loading && records.length === 0 ? (
+          <div className={styles.loadingState} role="status" aria-live="polite">
+            <LoaderCircle className="spin" size={22} aria-hidden="true" />
+            <p>Loading Request Records…</p>
           </div>
+        ) : records.length === 0 ? (
+          <EmptyState
+            variant="list"
+            icon={<Inbox size={22} data-icon="request-empty" aria-hidden="true" />}
+            title="No request recorded yet."
+          />
         ) : (
           records.map((record) => {
             const target = recordUrl(record);
@@ -206,6 +211,7 @@ export function RecordList({
             const model = resolveRequestedEffective(record.protocol?.model) ?? "—";
             const reasoningEffort =
               resolveRequestedEffective(record.protocol?.reasoning_effort) ?? "—";
+            const compactModel = reasoningEffort === "—" ? model : `${model}·${reasoningEffort}`;
             const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
             const ended = formatTimestamp(record.ended_at ?? "");
@@ -251,6 +257,12 @@ export function RecordList({
                   aria-describedby={metadataDescriptionId}
                   onClick={() => (selectionMode ? onToggle(record.id) : onSelect(record.id))}
                 >
+                  <RequestIcon
+                    className={styles.requestIcon}
+                    size={16}
+                    data-icon="request-record"
+                    aria-hidden="true"
+                  />
                   <span className={styles.method}>{record.method}</span>
                   <span className={styles.target} title={target.title}>
                     <strong className={styles.targetHost}>{target.host}</strong>
@@ -265,13 +277,25 @@ export function RecordList({
                   </span>
                   <span className={styles.metadata}>
                     <span className={styles.modelMetadata} title={modelDescription}>
-                      {model} · {reasoningEffort}
+                      {compactModel}
                     </span>
-                    <span className={styles.timing} title={timingDescription}>
-                      {firstToken} / {totalDuration}
-                    </span>
-                    <span className={styles.timestamp} title={`Ended ${ended}`}>
-                      {ended}
+                    <span className={styles.timingMetadata}>
+                      <span className={styles.timing} title={timingDescription}>
+                        {firstToken}/{totalDuration}
+                      </span>
+                      {record.ended_at ? (
+                        <time
+                          className={styles.timestamp}
+                          dateTime={record.ended_at}
+                          title={`Ended ${ended}`}
+                        >
+                          {ended}
+                        </time>
+                      ) : (
+                        <span className={styles.timestamp} title={`Ended ${ended}`}>
+                          {ended}
+                        </span>
+                      )}
                     </span>
                     <span id={metadataDescriptionId} className="srOnly">
                       {metadataDescription}
@@ -308,7 +332,7 @@ export function RecordList({
                       title={active ? undefined : `Delete ${record.method} ${target.label}`}
                     >
                       {deletingRecordId === record.id ? (
-                        <LoaderCircle className={styles.deleting} size={15} aria-hidden="true" />
+                        <LoaderCircle className="spin" size={15} aria-hidden="true" />
                       ) : (
                         <Trash2 size={15} aria-hidden="true" />
                       )}
@@ -329,7 +353,7 @@ export function RecordList({
           <ChevronLeft size={15} aria-hidden="true" /> Previous
         </button>
         <span>
-          Page {page} · {records.length} shown · {total} total
+          Page {page} of {totalPages} · {records.length} shown · {total} total
         </span>
         <button type="button" onClick={onNext} disabled={!hasNext || loading || deletionBusy}>
           Next <ChevronRight size={15} aria-hidden="true" />

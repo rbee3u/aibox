@@ -19,6 +19,7 @@ function replaceExactlyOnce(content, from, to) {
 let html = await readFile(generatedIndex, "utf8");
 html = replaceExactlyOnce(html, "/_aibox/ui/console.js", "/_aibox/ui/app.js");
 html = replaceExactlyOnce(html, "/_aibox/ui/console.css", "/_aibox/ui/app.css");
+assertExactlyOnce(html, "__AIBOX_CSP_NONCE__");
 
 await writeFile(embeddedHtml, html);
 await unlink(generatedIndex);

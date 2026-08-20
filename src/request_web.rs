@@ -34,9 +34,14 @@ const PAGE_SIZE: usize = 50;
 const HTML: &str = include_str!("../assets/console.html");
 const CSS: &str = include_str!("../assets/console.css");
 const JS: &str = include_str!("../assets/console.js");
+const CSP_NONCE_PLACEHOLDER: &str = "__AIBOX_CSP_NONCE__";
 
-pub(crate) async fn index() -> Response<Body> {
-    content(StatusCode::OK, "text/html; charset=utf-8", HTML)
+pub(crate) async fn index(csp_nonce: &str) -> Response<Body> {
+    content(
+        StatusCode::OK,
+        "text/html; charset=utf-8",
+        HTML.replacen(CSP_NONCE_PLACEHOLDER, csp_nonce, 1),
+    )
 }
 
 pub(crate) async fn css() -> Response<Body> {

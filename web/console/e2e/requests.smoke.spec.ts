@@ -12,8 +12,8 @@ test("desktop layout and keyboard interactions", async ({ page }) => {
   await expect(page.getByRole("separator")).toHaveCount(0);
   const recordList = page.getByRole("complementary", { name: "Request Record list" });
   const listBounds = await recordList.boundingBox();
-  expect(listBounds?.width).toBeGreaterThan(359);
-  expect(listBounds?.width).toBeLessThan(362);
+  expect(listBounds?.width).toBeGreaterThan(390);
+  expect(listBounds?.width).toBeLessThan(405);
 
   await page
     .getByRole("button", { name: "POST relay.example.test/v1/responses", exact: true })

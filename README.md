@@ -77,10 +77,11 @@ cleanup behavior.
 
 ## Tenants
 
-The Managed Tenant `default` is initialized by the first Run attempt that passes
-mount validation and finds the image, even if Docker later fails or the Coding
-Agent exits nonzero. Use a different Tenant when work should not share
-credentials, settings, or Sessions:
+`aibox serve` creates or repairs the protected Default Managed Tenant baseline
+before it starts listening. Running without a Service retains the same fallback:
+the first validated Run can initialize `default` before Docker starts, even if
+Docker later fails or the Coding Agent exits nonzero. Use a different Tenant
+when work should not share credentials, settings, or Sessions:
 
 ```sh
 aibox run --tenant work
@@ -93,9 +94,9 @@ Tenant Homes, Named Configs, and Request Records persist under `$HOME/.aibox`.
 aibox because Tenant deletion removes subtrees from it.
 
 A Managed Tenant named `host` is ordinary and runnable. Create, inspect, and
-delete Managed Tenants from the Console's Tenants module. The real host Home is
-the separate Host Tenant. Read [Tenants](docs/tenants.md) before deleting data
-or sharing toolchains.
+delete other Managed Tenants from the Console's Tenants module; `default` is
+protected from deletion. The real host Home is the separate Host Tenant. Read
+[Tenants](docs/tenants.md) before deleting data or sharing toolchains.
 
 ## Components
 

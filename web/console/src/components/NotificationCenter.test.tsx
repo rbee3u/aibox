@@ -14,6 +14,32 @@ const error: NotificationItemData = {
 afterEach(() => vi.useRealTimers());
 
 describe("NotificationCenter", () => {
+  it("dismisses successful actions after four visible seconds", async () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    render(
+      <NotificationCenter
+        notifications={[
+          {
+            id: 2,
+            source: "action",
+            tone: "success",
+            title: "Saved",
+            message: "The Config file was saved.",
+          },
+        ]}
+        paused={false}
+        onAction={vi.fn()}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(3999));
+    expect(onDismiss).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(onDismiss).toHaveBeenCalledWith("action");
+  });
+
   it("announces errors, invokes actions, and dismisses after eight visible seconds", async () => {
     vi.useFakeTimers();
     const onAction = vi.fn();

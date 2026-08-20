@@ -122,6 +122,10 @@ function fakeApi(topologyData: TopologyData = topology) {
   return { api: { get, post } as unknown as ControlApi, get, post };
 }
 
+async function openTopology() {
+  return screen.findByRole("tree", { name: "Tenant resource topology" });
+}
+
 describe("OverviewPage", () => {
   it("shows health, Runtime Image metadata, and both explicit build modes", async () => {
     const { api, post } = fakeApi();
@@ -136,6 +140,8 @@ describe("OverviewPage", () => {
     expect(screen.getByRole("heading", { name: "Resource topology" })).toBeInTheDocument();
     expect(screen.getByText("0123456789ab")).toBeInTheDocument();
     expect(screen.getByText("4.0 MiB")).toBeInTheDocument();
+    expect(screen.getAllByText("Docker")).toHaveLength(1);
+    expect(screen.getAllByText("Runtime Image")).toHaveLength(1);
     expect(screen.queryByRole("heading", { name: "Storage" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Rebuild/)).not.toBeInTheDocument();
 
@@ -150,7 +156,51 @@ describe("OverviewPage", () => {
     expect(onOperation).toHaveBeenCalledTimes(2);
   });
 
-  it("defaults to the primary Codex Config branch and loads Session counts on demand", async () => {
+  it("shows and describes why Runtime Image builds are unavailable", async () => {
+    const get = vi.fn((path: string): Promise<unknown> => {
+      if (path === "/_aibox/api/overview")
+        return Promise.resolve({
+          ...overview,
+          docker: { status: "unavailable" as const, error: "Docker daemon is offline" },
+        });
+      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const api = { get, post: vi.fn() } as unknown as ControlApi;
+
+    render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
+
+    const reason = await screen.findByText("Docker daemon is offline", { selector: "p" });
+    const build = screen.getByRole("button", { name: "Build" });
+    const noCache = screen.getByRole("button", { name: "Build without cache" });
+    expect(build).toBeDisabled();
+    expect(noCache).toBeDisabled();
+    expect(build).toHaveAccessibleDescription(reason.textContent ?? "");
+    expect(noCache).toHaveAccessibleDescription(reason.textContent ?? "");
+  });
+
+  it("routes attention items to the first affected resource", async () => {
+    const { api } = fakeApi();
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <OverviewPage api={api} operation={null} onNavigate={onNavigate} onOperation={vi.fn()} />,
+    );
+
+    const configDetail = await screen.findByText("1 Named Config needs attention.");
+    await user.click(configDetail.closest("button")!);
+
+    expect(onNavigate).toHaveBeenCalledWith(
+      "configs",
+      new URLSearchParams("scope=managed%3Adefault&agent=codex&config=broken"),
+    );
+
+    const requestDetail = screen.getByText("0 errors · 2 warnings");
+    await user.click(requestDetail.closest("button")!);
+    expect(onNavigate).toHaveBeenLastCalledWith("requests", undefined);
+  });
+
+  it("shows the complete structural map and loads Session counts on demand", async () => {
     const { api, get } = fakeApi();
     const onNavigate = vi.fn();
     const user = userEvent.setup();
@@ -158,17 +208,13 @@ describe("OverviewPage", () => {
       <OverviewPage api={api} operation={null} onNavigate={onNavigate} onOperation={vi.fn()} />,
     );
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     expect(within(tree).getByText("daily")).toBeVisible();
     expect(within(tree).getByText("broken")).toBeVisible();
-    expect(within(tree).queryByText("Rust")).not.toBeInTheDocument();
-    expect(within(tree).queryByText("Go")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Expand Components" }));
     expect(within(tree).getByText("Rust")).toBeVisible();
     expect(within(tree).queryByText("Go")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Expand Sessions" }));
+    await user.click(screen.getAllByRole("button", { name: "Expand Sessions" })[0]);
     expect((await within(tree).findAllByText("3 Sessions")).length).toBe(2);
     expect(get).toHaveBeenCalledWith(
       "/_aibox/api/sessions/summary?scope=managed&tenant=default&agent=codex",
@@ -186,7 +232,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     await user.type(screen.getByRole("searchbox", { name: "Filter topology" }), "rust");
     expect(within(tree).getByText("Rust")).toBeVisible();
     const dailyNode = within(tree).getByText("daily").closest("[data-node-id]");
@@ -211,7 +257,7 @@ describe("OverviewPage", () => {
     const { api } = fakeApi();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     expect(tree.querySelector('[data-icon="service"] svg')).toHaveClass("lucide-box");
     expect(tree.querySelector('[data-icon="configs"] svg')).toHaveClass("lucide-file-sliders");
     expect(tree.querySelector('[data-icon="sessions"] svg')).toHaveClass("lucide-messages-square");
@@ -222,7 +268,7 @@ describe("OverviewPage", () => {
     const { api } = fakeApi();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     const nodes = [...tree.querySelectorAll<HTMLElement>("[data-node-id]")];
     const edges = document.querySelectorAll<SVGPathElement>("[data-edge]");
     expect(nodes.length).toBeGreaterThan(6);
@@ -242,11 +288,11 @@ describe("OverviewPage", () => {
     expect(codex.style.top).not.toBe(claude.style.top);
   });
 
-  it("orders Host first while only expanding the default Tenant details", async () => {
+  it("orders Host first and expands every structural Tenant branch", async () => {
     const { api } = fakeApi(topologyWithTenantOrder);
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     const tenants = within(tree)
       .getAllByRole("treeitem")
       .filter((node) => node.getAttribute("aria-level") === "2");
@@ -255,14 +301,14 @@ describe("OverviewPage", () => {
       "tenant:managed:default",
       "tenant:managed:studio",
     ]);
-    expect(tenants[0]).toHaveAttribute("aria-expanded", "false");
+    expect(tenants[0]).toHaveAttribute("aria-expanded", "true");
     expect(tenants[1]).toHaveAttribute("aria-expanded", "true");
-    expect(tenants[2]).toHaveAttribute("aria-expanded", "false");
-    expect(within(tree).getByText("Codex")).toBeVisible();
-    expect(within(tree).getByText("Claude")).toBeVisible();
-    expect(within(tree).getByText("Components")).toBeVisible();
-    expect(within(tree).getByText("Current Config")).toBeVisible();
-    expect(within(tree).getByText("Named Configs")).toBeVisible();
+    expect(tenants[2]).toHaveAttribute("aria-expanded", "true");
+    expect(within(tree).getAllByText("Codex")).toHaveLength(3);
+    expect(within(tree).getAllByText("Claude")).toHaveLength(3);
+    expect(within(tree).getAllByText("Components")).toHaveLength(3);
+    expect(within(tree).getAllByText("Current Config")).toHaveLength(6);
+    expect(within(tree).getAllByText("Named Configs")).toHaveLength(6);
   });
 
   it("zooms in fixed steps, resets to 100%, and fits the topology", async () => {
@@ -270,7 +316,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    await screen.findByRole("tree", { name: "Tenant resource topology" });
+    await openTopology();
     const reset = await screen.findByRole("button", {
       name: /Reset topology zoom to 100%/,
     });
@@ -287,7 +333,7 @@ describe("OverviewPage", () => {
     const { api } = fakeApi();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    await screen.findByRole("tree", { name: "Tenant resource topology" });
+    await openTopology();
     const zoomControls = screen.getByLabelText("Topology zoom controls");
     const viewport = document.querySelector<HTMLElement>("[data-topology-viewport]")!;
     const page = document.querySelector<HTMLElement>("[data-overview-scroll]")!;
@@ -315,7 +361,7 @@ describe("OverviewPage", () => {
     );
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    await screen.findByRole("tree", { name: "Tenant resource topology" });
+    await openTopology();
     const zoom = await screen.findByRole("button", { name: /Reset topology zoom to 100%/ });
     await waitFor(() => expect(zoom).toHaveTextContent("100%"));
     expect(screen.getByRole("button", { name: "Fit topology to width" })).toHaveAttribute(
@@ -329,7 +375,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    await screen.findByRole("tree", { name: "Tenant resource topology" });
+    await openTopology();
     const zoom = await screen.findByRole("button", { name: /Reset topology zoom to 100%/ });
     await waitFor(() => expect(zoom).toHaveTextContent("80%"));
     await user.click(screen.getByRole("button", { name: "Collapse Codex" }));
@@ -349,7 +395,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    await screen.findByRole("tree", { name: "Tenant resource topology" });
+    await openTopology();
     await user.click(screen.getByRole("button", { name: "Show details for broken" }));
     expect(screen.getByRole("tooltip")).toHaveTextContent("auth.json is missing");
     await user.keyboard("{Escape}");
@@ -361,7 +407,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     const daily = tree.querySelector<HTMLElement>(
       '[data-node-id="tenant:managed:default/agent:codex/named-configs/daily"]',
     )!;
@@ -385,7 +431,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     const reset = await screen.findByRole("button", { name: /Reset topology zoom to 100%/ });
     await waitFor(() => expect(reset).toHaveTextContent("80%"));
     await user.click(reset);
@@ -412,7 +458,7 @@ describe("OverviewPage", () => {
     const user = userEvent.setup();
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
-    const tree = await screen.findByRole("tree", { name: "Tenant resource topology" });
+    const tree = await openTopology();
     const reset = await screen.findByRole("button", { name: /Reset topology zoom to 100%/ });
     await waitFor(() => expect(reset).toHaveTextContent("80%"));
     await user.click(reset);

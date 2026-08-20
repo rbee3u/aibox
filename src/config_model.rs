@@ -10,6 +10,7 @@
 
 use crate::agent::{AgentKind, MainConfigField, MainConfigValueKind};
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::str::FromStr;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
@@ -29,6 +30,155 @@ pub(crate) struct ApplicationResult {
     pub(crate) main: Option<String>,
     /// Desired Codex auth file; always `None` for Claude.
     pub(crate) auth: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VisualFieldInput {
+    pub(crate) path: String,
+    pub(crate) included: bool,
+    pub(crate) value: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct VisualFieldState {
+    pub(crate) path: String,
+    pub(crate) label: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) group: &'static str,
+    pub(crate) value_kind: &'static str,
+    pub(crate) suggestions: Vec<&'static str>,
+    pub(crate) sensitive: bool,
+    pub(crate) included: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<Value>,
+}
+
+fn path_string(path: &[&str]) -> String {
+    path.join(".")
+}
+
+/// Return the fixed-field schema and values represented by a native main file.
+pub(crate) fn visual_fields(agent: AgentKind, content: &str) -> Result<Vec<VisualFieldState>> {
+    let object = if content.trim().is_empty() {
+        Map::new()
+    } else {
+        agent
+            .parse_main_config(content)
+            .context("parse Visual Editor source")?
+    };
+    validate_config_main(agent, &object)?;
+    Ok(agent
+        .main_config_fields()
+        .iter()
+        .map(|field| VisualFieldState {
+            path: path_string(field.path),
+            label: field.label,
+            description: field.description,
+            group: field.group,
+            value_kind: match field.value_kind {
+                MainConfigValueKind::String => "string",
+                MainConfigValueKind::Bool => "bool",
+            },
+            suggestions: field.suggestions.to_vec(),
+            sensitive: field.sensitive,
+            included: value_at_path(&object, field.path).is_some(),
+            value: value_at_path(&object, field.path).cloned(),
+        })
+        .collect())
+}
+
+/// Apply Visual Editor values to a native main file while preserving unrelated data.
+pub(crate) fn render_visual_main(
+    agent: AgentKind,
+    original: &str,
+    inputs: &[VisualFieldInput],
+) -> Result<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut values = Map::new();
+    for input in inputs {
+        if !seen.insert(input.path.as_str()) {
+            bail!("duplicate Visual Config Field: {}", input.path);
+        }
+        let field = agent
+            .main_config_fields()
+            .iter()
+            .find(|field| path_string(field.path) == input.path)
+            .with_context(|| format!("unsupported Visual Config Field: {}", input.path))?;
+        if input.included {
+            let value = input
+                .value
+                .clone()
+                .with_context(|| format!("Visual Config Field {} has no value", input.path))?;
+            let valid = match field.value_kind {
+                MainConfigValueKind::String => value.is_string(),
+                MainConfigValueKind::Bool => value.is_boolean(),
+            };
+            if !valid {
+                bail!(
+                    "Visual Config Field {} must be {}",
+                    input.path,
+                    match field.value_kind {
+                        MainConfigValueKind::String => "a string",
+                        MainConfigValueKind::Bool => "a boolean",
+                    }
+                );
+            }
+            values.insert(input.path.clone(), value);
+        }
+    }
+    if seen.len() != agent.main_config_fields().len() {
+        bail!("Visual Editor must provide every fixed Config Field");
+    }
+
+    match agent {
+        AgentKind::Claude => {
+            let mut object = if original.trim().is_empty() {
+                Map::new()
+            } else {
+                agent
+                    .parse_main_config(original)
+                    .context("parse Visual Editor source")?
+            };
+            for field in agent.main_config_fields() {
+                let key = path_string(field.path);
+                match values.get(&key) {
+                    Some(value) => {
+                        set_json_path(&mut object, field.path, value.clone());
+                    }
+                    None => {
+                        remove_json_path(&mut object, field.path);
+                    }
+                }
+            }
+            validate_config_main(agent, &object)?;
+            agent.render_main_config(&Value::Object(object))
+        }
+        AgentKind::Codex => {
+            let mut document = if original.trim().is_empty() {
+                DocumentMut::new()
+            } else {
+                DocumentMut::from_str(original).context("parse Visual Editor source")?
+            };
+            for field in agent.main_config_fields() {
+                let key = path_string(field.path);
+                match values.get(&key) {
+                    Some(value) => {
+                        set_codex_path(&mut document, field.path, value)?;
+                    }
+                    None => {
+                        remove_codex_path(&mut document, field.path);
+                    }
+                }
+            }
+            let rendered = document.to_string();
+            let object = agent
+                .parse_main_config(&rendered)
+                .context("render Visual Editor source")?;
+            validate_config_main(agent, &object)?;
+            Ok(rendered)
+        }
+    }
 }
 
 impl NamedConfigDefinition {

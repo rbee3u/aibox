@@ -1,84 +1,70 @@
-import {
-  ArrowLeftRight,
-  Box,
-  ChevronLeft,
-  CircleAlert,
-  GitFork,
-  LoaderCircle,
-  SunMoon,
-} from "lucide-react";
+import { ArrowLeftRight, ChevronLeft, CircleAlert, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRequestApi, requestWasCancelled } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { EmptyState } from "./components/EmptyState";
 import { NotificationCenter, type NotificationItemData } from "./components/NotificationCenter";
 import { RecordDetail } from "./components/RecordDetail";
 import { RecordList } from "./components/RecordList";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { useRecordInspection, type InspectionFailure } from "./useRecordInspection";
-import { usePersistentTheme, type ThemePreference } from "./usePersistentTheme";
-import { AgentIcon } from "./icons";
 import type { RecordList as RecordListData, RecordSummary, RequestApi } from "./types";
+import type { DetailTab } from "./types";
 import styles from "./RequestsPage.module.css";
 
 interface RequestsPageProps {
   api?: RequestApi;
-  standalone?: boolean;
 }
-type Dialog = { ids: string[] } | null;
+type Dialog = { kind: "batch"; ids: string[] } | { kind: "record"; id: string } | null;
 type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
 
 const LIST_POLL_INTERVAL_MS = 5000;
 const RECORDS_PER_PAGE = 50;
+const DETAIL_TABS: readonly DetailTab[] = ["summary", "request", "response"];
 
-function StandaloneHeader() {
-  const [theme, setTheme] = usePersistentTheme();
-
-  return (
-    <header className={styles.topbar}>
-      <div className={styles.brand}>
-        <span className={styles.mark}>
-          <Box size={23} strokeWidth={2.2} aria-hidden="true" />
-        </span>
-        <div className={styles.brandText} title="AIBox Requests · Inspect your LLM requests">
-          <strong>AIBox Requests</strong>
-          <span className={styles.separator}>·</span>
-          <span className={styles.tagline}>Inspect your LLM requests</span>
-        </div>
-      </div>
-      <nav className={styles.resources} aria-label="Resources">
-        <a href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">
-          <AgentIcon agent="codex" size={14} /> Codex docs
-        </a>
-        <a
-          href="https://code.claude.com/docs/en/overview"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <AgentIcon agent="claude" size={14} /> Claude docs
-        </a>
-        <a href="https://github.com/rbee3u/aibox" target="_blank" rel="noopener noreferrer">
-          <GitFork size={14} data-icon="github" aria-hidden="true" /> GitHub
-        </a>
-        <label className={styles.themeControl}>
-          <SunMoon size={14} aria-hidden="true" />
-          <span className="srOnly">Color theme</span>
-          <select
-            aria-label="Color theme"
-            value={theme}
-            onChange={(event) => setTheme(event.target.value as ThemePreference)}
-          >
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-      </nav>
-    </header>
-  );
+interface RequestsLocation {
+  page: number;
+  record: string | null;
+  tab: DetailTab;
 }
 
-export function RequestsPage({ api: providedApi, standalone = true }: RequestsPageProps) {
+function readRequestsLocation(): RequestsLocation {
+  const params = new URLSearchParams(window.location.search);
+  const requestedPage = params.get("page");
+  const parsedPage = requestedPage && /^\d+$/.test(requestedPage) ? Number(requestedPage) : 1;
+  const page = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const record = params.get("record")?.trim() || null;
+  const requestedTab = params.get("tab");
+  const tab =
+    record && DETAIL_TABS.includes(requestedTab as DetailTab)
+      ? (requestedTab as DetailTab)
+      : "summary";
+  return { page, record, tab };
+}
+
+function requestsLocationSearch(value: RequestsLocation): string {
+  const params = new URLSearchParams();
+  if (value.page > 1) params.set("page", String(value.page));
+  if (value.record) params.set("record", value.record);
+  if (value.record && value.tab !== "summary") params.set("tab", value.tab);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function writeRequestsLocation(value: RequestsLocation, replace = false) {
+  const next = `${window.location.pathname}${requestsLocationSearch(value)}${window.location.hash}`;
+  window.history[replace ? "replaceState" : "pushState"](null, "", next);
+}
+
+function normalizeRequestsLocation(): RequestsLocation {
+  const value = readRequestsLocation();
+  if (window.location.search !== requestsLocationSearch(value)) writeRequestsLocation(value, true);
+  return value;
+}
+
+export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   const api = useMemo(() => providedApi ?? createRequestApi(), [providedApi]);
+  const [initialLocation] = useState(readRequestsLocation);
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
   const [list, setList] = useState<RecordListData>({
@@ -87,12 +73,12 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     deletable_count: 0,
     has_next: false,
   });
-  const [page, setPage] = useState(1);
-  const pageRef = useRef(1);
+  const [page, setPage] = useState(initialLocation.page);
+  const pageRef = useRef(initialLocation.page);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const selectionPages = useRef<Map<string, number>>(new Map());
-  const [loadingList, setLoadingList] = useState(false);
+  const [loadingList, setLoadingList] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [deletion, setDeletion] = useState<Deletion>(null);
@@ -100,14 +86,22 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
   const [focusAfterInspection, setFocusAfterInspection] = useState<string | null | undefined>(
     undefined,
   );
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(initialLocation.record !== null);
+  const routeApplied = useRef(false);
+  const detailBackButton = useRef<HTMLButtonElement>(null);
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
-  const deleting = deletion?.kind === "batch";
+  const initialLoadPending = useRef(true);
   const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
+
+  useEffect(() => {
+    if (window.location.search !== requestsLocationSearch(initialLocation)) {
+      writeRequestsLocation(initialLocation, true);
+    }
+  }, [initialLocation]);
 
   const handleInspectionFailure = useCallback(
     (failure: InspectionFailure) => {
@@ -118,6 +112,11 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
             ? "Couldn’t load Body"
             : "Couldn’t download Body";
       reportFailure("inspection", title, failure.message, failure.retryable !== false);
+      if (failure.kind === "detail" && failure.retryable === false) {
+        setDetailOpen(false);
+        setFocusAfterInspection(null);
+        writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+      }
     },
     [reportFailure],
   );
@@ -127,6 +126,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
   );
   const inspection = useRecordInspection({
     api,
+    initialTab: initialLocation.tab,
     paused: dialogOpen,
     onFailure: handleInspectionFailure,
     onRecovery: handleInspectionRecovery,
@@ -141,6 +141,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     detail,
     download,
     eventTimings,
+    failure: inspectionFailure,
     loadingBody,
     loadingDetail,
     retryFailure: retryInspectionFailure,
@@ -149,10 +150,17 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     tab,
   } = inspection;
 
+  useEffect(() => {
+    if (!detailOpen || !currentId || !window.matchMedia?.("(max-width: 760px)").matches) return;
+    const frame = window.requestAnimationFrame(() => detailBackButton.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentId, detailOpen]);
+
   const openRecord = useCallback(
     (id: string) => {
       setFocusAfterInspection(undefined);
       setDetailOpen(true);
+      writeRequestsLocation({ page: pageRef.current, record: id, tab: "summary" });
       void selectRecord(id);
     },
     [selectRecord],
@@ -162,7 +170,16 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     setFocusAfterInspection(currentId);
     setDetailOpen(false);
     clearCurrentRecord();
+    writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" });
   }, [clearCurrentRecord, currentId]);
+
+  const selectTab = useCallback(
+    (next: DetailTab) => {
+      setTab(next);
+      if (currentId) writeRequestsLocation({ page: pageRef.current, record: currentId, tab: next });
+    },
+    [currentId, setTab],
+  );
 
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
@@ -218,6 +235,15 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     [api, reportFailure, resolveFailure],
   );
 
+  const navigatePage = useCallback(
+    (nextPage: number) => {
+      const target = Math.max(1, nextPage);
+      writeRequestsLocation({ page: target, record: currentId, tab });
+      void loadPage(target);
+    },
+    [currentId, loadPage, tab],
+  );
+
   const refreshWithFallback = useCallback(
     async (targetPage = pageRef.current, background = false) => {
       let candidate = Math.max(1, targetPage);
@@ -225,7 +251,10 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
         const payload = await loadPage(candidate, background);
         if (!payload) return null;
         if (payload.records.length > 0 || candidate === 1) return { page: candidate, payload };
-        candidate -= 1;
+        const lastPage = Math.max(1, Math.ceil(payload.total / RECORDS_PER_PAGE));
+        candidate = Math.min(candidate - 1, lastPage);
+        const route = readRequestsLocation();
+        writeRequestsLocation({ ...route, page: candidate }, true);
       }
     },
     [loadPage],
@@ -248,7 +277,8 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     let disposed = false;
     let timer: number | undefined;
     const poll = async () => {
-      await refreshWithFallback(pageRef.current, true);
+      await refreshWithFallback(pageRef.current, !initialLoadPending.current);
+      initialLoadPending.current = false;
       if (!disposed) timer = window.setTimeout(() => void poll(), LIST_POLL_INTERVAL_MS);
     };
     void poll();
@@ -258,6 +288,34 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [dialogOpen, refreshWithFallback, selectionMode]);
+
+  useEffect(() => {
+    if (routeApplied.current) return;
+    routeApplied.current = true;
+    const route = initialLocation;
+    if (route.record) {
+      void selectRecord(route.record, route.tab);
+    }
+  }, [initialLocation, selectRecord]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const route = normalizeRequestsLocation();
+      if (route.page !== pageRef.current) void loadPage(route.page);
+      if (route.record && route.record !== currentId) {
+        setDetailOpen(true);
+        setTab(route.tab);
+        void selectRecord(route.record);
+      } else if (!route.record && currentId) {
+        setDetailOpen(false);
+        clearCurrentRecord();
+      } else if (route.record && route.tab !== tab) {
+        setTab(route.tab);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [clearCurrentRecord, currentId, loadPage, selectRecord, setTab, tab]);
 
   const selectedIds = [...selected];
 
@@ -295,7 +353,12 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
   }
 
   async function confirmDelete() {
-    if (!dialog || !beginDeletion({ kind: "batch" })) return;
+    if (!dialog) return;
+    if (dialog.kind === "record") {
+      await deleteRecord(dialog.id);
+      return;
+    }
+    if (!beginDeletion({ kind: "batch" })) return;
     resolveFailure("action");
     const targetPage = dialog.ids.reduce(
       (minimum, id) => Math.min(minimum, selectionPages.current.get(id) ?? pageRef.current),
@@ -357,6 +420,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
     } catch (cause) {
       reportFailure("action", "Couldn’t delete record", cause);
     } finally {
+      setDialog(null);
       finishDeletion();
     }
   }
@@ -372,8 +436,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
 
   return (
     <div className={styles.app}>
-      {standalone && <StandaloneHeader />}
-      <main
+      <div
         className={`${styles.main} ${detailOpen && currentId !== null ? styles.detailOpen : ""}`}
       >
         <div className={styles.listColumn}>
@@ -381,6 +444,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
             records={list.records}
             total={list.total}
             page={page}
+            totalPages={Math.max(1, Math.ceil(list.total / RECORDS_PER_PAGE))}
             hasPrevious={page > 1}
             hasNext={list.has_next}
             selectionMode={selectionMode}
@@ -394,14 +458,14 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
             onTogglePage={togglePageSelection}
             onToggle={toggleRecordSelection}
             onSelect={openRecord}
-            onPrevious={() => void loadPage(page - 1)}
-            onNext={() => void loadPage(page + 1)}
+            onPrevious={() => navigatePage(page - 1)}
+            onNext={() => navigatePage(page + 1)}
             loading={loadingList}
             refreshing={refreshing}
             deletableCount={list.deletable_count}
             onRefresh={() => void refreshPage()}
-            onDeleteSelected={() => setDialog({ ids: selectedIds })}
-            onDeleteRecord={(id) => void deleteRecord(id)}
+            onDeleteSelected={() => setDialog({ kind: "batch", ids: selectedIds })}
+            onDeleteRecord={(id) => setDialog({ kind: "record", id })}
             deletingRecordId={deletingRecordId}
             deletionBusy={deletionBusy}
             focusAfterDelete={focusAfterDelete}
@@ -413,6 +477,7 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
         <div className={styles.detailColumn}>
           {currentId && (
             <button
+              ref={detailBackButton}
               type="button"
               className={styles.detailBack}
               aria-label="Back to Request Record list"
@@ -423,10 +488,15 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
             </button>
           )}
           {loadingDetail ? (
-            <section className={styles.emptyDetail}>
-              <LoaderCircle className={styles.loader} size={28} aria-label="Loading" />
-              <p>Loading record…</p>
-            </section>
+            <EmptyState
+              className={styles.emptyDetail}
+              variant="detail"
+              icon={
+                <LoaderCircle className={`${styles.loader} spin`} size={28} aria-label="Loading" />
+              }
+              description="Loading record…"
+              role="status"
+            />
           ) : detail ? (
             <RecordDetail
               key={detail.request.id}
@@ -436,25 +506,37 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
               decodedBodies={decodedBodies}
               eventTimings={eventTimings}
               tab={tab}
-              onTabChange={setTab}
+              onTabChange={selectTab}
               onDownload={(kind) => void download(kind)}
               loadingBody={loadingBody}
             />
           ) : currentId ? (
-            <section className={styles.emptyDetail}>
-              <CircleAlert size={26} aria-hidden="true" />
-              <h1>Record unavailable</h1>
-              <p>Request Record details could not be loaded.</p>
-            </section>
+            <EmptyState
+              className={styles.emptyDetail}
+              variant="detail"
+              icon={<CircleAlert size={26} aria-hidden="true" />}
+              title="Record unavailable"
+              description="Request Record details could not be loaded."
+            >
+              {inspectionFailure?.retryable !== false && (
+                <button type="button" onClick={retryInspectionFailure}>
+                  Retry
+                </button>
+              )}
+            </EmptyState>
           ) : (
-            <section className={styles.emptyDetail}>
-              <ArrowLeftRight size={26} data-icon="request-detail-empty" aria-hidden="true" />
-              <h1>Select a request</h1>
-              <p>Choose a Request Record to inspect its summary and raw data.</p>
-            </section>
+            <EmptyState
+              className={styles.emptyDetail}
+              variant="detail"
+              icon={
+                <ArrowLeftRight size={26} data-icon="request-detail-empty" aria-hidden="true" />
+              }
+              title="Select a Request Record"
+              description="Choose a Request Record to inspect its summary and raw data."
+            />
           )}
         </div>
-      </main>
+      </div>
       <NotificationCenter
         notifications={
           selectionMode
@@ -471,12 +553,16 @@ export function RequestsPage({ api: providedApi, standalone = true }: RequestsPa
       />
       {dialog && (
         <ConfirmDialog
-          title={`Delete ${dialog.ids.length} selected record${dialog.ids.length === 1 ? "" : "s"}?`}
-          message="This permanently deletes the selected raw request and response data."
+          title={
+            dialog.kind === "record"
+              ? "Delete this Request Record?"
+              : `Delete ${dialog.ids.length} selected Request Record${dialog.ids.length === 1 ? "" : "s"}?`
+          }
+          message="This permanently deletes the selected raw Request and Response data."
           confirmLabel="Delete permanently"
           onConfirm={() => void confirmDelete()}
-          onCancel={() => !deleting && setDialog(null)}
-          busy={deleting}
+          onCancel={() => !deletionBusy && setDialog(null)}
+          busy={deletionBusy}
         />
       )}
     </div>

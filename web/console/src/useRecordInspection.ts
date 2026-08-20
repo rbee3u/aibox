@@ -21,6 +21,7 @@ export interface InspectionFailure {
 
 interface UseRecordInspectionOptions {
   api: RequestApi;
+  initialTab?: DetailTab;
   paused: boolean;
   onFailure: (failure: InspectionFailure) => void;
   onRecovery: () => void;
@@ -40,6 +41,7 @@ const EMPTY_DECODED_BODIES: Record<BodyKind, DecodedBodyState> = {
 
 export function useRecordInspection({
   api,
+  initialTab = "summary",
   paused,
   onFailure,
   onRecovery,
@@ -54,7 +56,7 @@ export function useRecordInspection({
   const timingNextSequence = useRef(0);
   const offsets = useRef({ request: 0, response: 0 });
   const decodedLoaded = useRef({ request: false, response: false });
-  const [tab, setTab] = useState<DetailTab>("summary");
+  const [tab, setTab] = useState<DetailTab>(initialTab);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingBody, setLoadingBody] = useState(false);
   const [failure, setFailure] = useState<InspectionFailure | null>(null);
@@ -83,19 +85,22 @@ export function useRecordInspection({
     },
     [onRecovery],
   );
-  const resetRecordData = useCallback(() => {
-    setDetail(null);
-    setBodies(EMPTY_BODIES);
-    setBodyStatus(EMPTY_BODY_STATUS);
-    setDecodedBodies(EMPTY_DECODED_BODIES);
-    setEventTimings(null);
-    timingNextSequence.current = 0;
-    decodedLoaded.current = { request: false, response: false };
-    offsets.current = { request: 0, response: 0 };
-    setTab("summary");
-    setLoadingBody(false);
-    clearFailure();
-  }, [clearFailure]);
+  const resetRecordData = useCallback(
+    (nextTab: DetailTab = "summary") => {
+      setDetail(null);
+      setBodies(EMPTY_BODIES);
+      setBodyStatus(EMPTY_BODY_STATUS);
+      setDecodedBodies(EMPTY_DECODED_BODIES);
+      setEventTimings(null);
+      timingNextSequence.current = 0;
+      decodedLoaded.current = { request: false, response: false };
+      offsets.current = { request: 0, response: 0 };
+      setTab(nextTab);
+      setLoadingBody(false);
+      clearFailure();
+    },
+    [clearFailure],
+  );
   const clearCurrentRecord = useCallback(() => {
     detailController.current?.abort();
     bodyController.current?.abort();
@@ -110,14 +115,14 @@ export function useRecordInspection({
   }, [resetRecordData]);
 
   const selectRecord = useCallback(
-    async (id: string) => {
+    async (id: string, nextTab: DetailTab = "summary") => {
       detailController.current?.abort();
       bodyController.current?.abort();
       const controller = new AbortController();
       detailController.current = controller;
       currentIdRef.current = id;
       setCurrentId(id);
-      resetRecordData();
+      resetRecordData(nextTab);
       setLoadingDetail(true);
       try {
         const record = await api.getRecord(id, controller.signal);

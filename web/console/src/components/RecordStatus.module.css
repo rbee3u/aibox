@@ -1,6 +1,7 @@
 .root,
 .value,
-.phase {
+.phase,
+.compactIssue {
   display: inline-flex;
   align-items: center;
 }
@@ -11,12 +12,12 @@
 }
 .value {
   gap: 4px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   white-space: nowrap;
 }
 .protocol {
   color: var(--muted);
-  font-weight: 400;
+  font-weight: var(--weight-regular);
   white-space: nowrap;
 }
 .success {
@@ -35,8 +36,11 @@
 .phase {
   color: var(--warning);
 }
+.compactIssue {
+  min-width: 0;
+}
 .phase {
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   white-space: nowrap;
   gap: 4px;
 }
@@ -55,14 +59,14 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 7px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .headlineStatus {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   white-space: nowrap;
 }
 .tag {
@@ -73,14 +77,9 @@
   padding: 2px 7px;
   border: 1px solid currentColor;
   border-radius: 4px;
-  font-family:
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: var(--weight-bold);
   line-height: 1.2;
   white-space: nowrap;
   max-width: 100%;

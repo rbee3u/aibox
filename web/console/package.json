@@ -16,7 +16,13 @@
     "check": "prettier --check . && tsc && npm run build && node --check ../../assets/console.js && npm run test && npm run lint"
   },
   "dependencies": {
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.1",
+    "@lezer/highlight": "^1.2.3",
     "@lobehub/icons-static-svg": "^1.94.0",
+    "codemirror": "^6.0.2",
     "lossless-json": "^4.3.0",
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",
@@ -32,6 +38,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "axe-core": "^4.13.0",
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",

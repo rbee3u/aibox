@@ -51,13 +51,6 @@ const primaryRecord = {
   assessment,
 } satisfies RecordSummary;
 
-const recordList = {
-  records: [primaryRecord],
-  total: 1,
-  deletable_count: 1,
-  has_next: false,
-} satisfies RecordList;
-
 const detail = {
   request: {
     id: primaryRecord.id,
@@ -128,7 +121,20 @@ const detail = {
   timeline_end_at_ns: "500000000",
 } satisfies RecordDetail;
 
-export async function mockRequests(page: Page) {
+export async function mockRequests(
+  page: Page,
+  {
+    total = 1,
+    hasNext = false,
+    sessionId = null,
+  }: { total?: number; hasNext?: boolean; sessionId?: string | null } = {},
+) {
+  const recordList = {
+    records: [primaryRecord],
+    total,
+    deletable_count: 1,
+    has_next: hasNext,
+  } satisfies RecordList;
   await page.route("**/_aibox/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/_aibox/api/bootstrap") {
@@ -149,7 +155,12 @@ export async function mockRequests(page: Page) {
     const path = new URL(route.request().url()).pathname;
     if (path === "/_aibox/requests/api/records") return route.fulfill({ json: recordList });
     if (path === `/_aibox/requests/api/records/${primaryRecord.id}`) {
-      return route.fulfill({ json: detail });
+      return route.fulfill({
+        json: {
+          ...detail,
+          summary: { ...detail.summary, coding_agent_session_id: sessionId },
+        },
+      });
     }
     if (path.endsWith("/request-body") || path.endsWith("/request-body-decoded")) {
       return fulfillBody(route, requestBody);

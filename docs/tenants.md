@@ -7,9 +7,17 @@ or select the Host Tenant.
 ## Tenant Identity
 
 A **Managed Tenant** is an aibox-managed, runnable identity with a Tenant Home.
-The first validated Run may initialize it before Docker starts, even when Docker
-or the Coding Agent later exits nonzero. A Managed Tenant named `host` is
-ordinary and runnable.
+The **Default Managed Tenant** is the protected Managed Tenant named `default`.
+After taking the Service Lock, `aibox serve` creates or repairs its Tenant Home
+baseline and fails before listening if the baseline cannot be established
+safely. A validated Run can still initialize a missing Managed Tenant when no
+Service has done so, even when Docker or the Coding Agent later exits nonzero. A
+Managed Tenant named `host` is ordinary and runnable.
+
+The Default Managed Tenant cannot be selected for deletion. An explicit delete
+request for `default` is rejected, and deleting all Managed Tenants preserves
+`default`. If an external process removes it, aibox does not watch for that
+change; the next Service startup repairs the baseline.
 
 The **Host Tenant** is a management-only view backed by the real Host Home. It
 is selected by the Console for host-side Config, Session, and statusline work.

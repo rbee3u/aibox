@@ -9,7 +9,6 @@
   color: var(--ink);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
-  animation: dialogIn var(--transition-base);
 }
 
 .dialog::backdrop {
@@ -32,11 +31,18 @@
   background: var(--danger-soft);
 }
 
+.primaryIcon {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .content h2 {
   margin: 14px 0 7px;
   color: var(--ink);
-  font-size: 17px;
-  letter-spacing: -0.015em;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-md);
 }
 
 .content p {
@@ -44,6 +50,14 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.confirmation {
+  display: grid;
+  gap: 7px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .actions {
@@ -73,9 +87,18 @@
   background: var(--danger-strong);
 }
 
-@keyframes dialogIn {
-  from {
-    opacity: 0;
-    transform: translateY(5px) scale(0.985);
-  }
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-color: var(--accent);
+  color: white;
+  background: var(--accent);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  color: white;
+  background: var(--accent-strong);
 }

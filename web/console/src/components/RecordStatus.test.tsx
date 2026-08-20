@@ -135,6 +135,7 @@ describe("RecordStatus", () => {
     const errorMarker = screen.getByRole("img", {
       name: /Record error: Server error.*currently overloaded/,
     });
+    expect(screen.queryByText("Server error")).not.toBeInTheDocument();
     expect(errorMarker).not.toHaveAttribute("title");
 
     fireEvent.pointerEnter(errorMarker);
@@ -156,6 +157,7 @@ describe("RecordStatus", () => {
     const warningMarker = screen.getByRole("img", {
       name: /Record warning: Client disconnected/,
     });
+    expect(screen.queryByText("Client disconnected")).not.toBeInTheDocument();
     expect(within(showTooltip(warningMarker)).getByText("Warning")).toBeInTheDocument();
 
     fireEvent.scroll(window);
@@ -183,6 +185,35 @@ describe("RecordStatus", () => {
     expect(tooltip).toHaveTextContent(disconnectWarning.primary!.message);
 
     fireEvent.pointerLeave(warningTag);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("opens headline diagnostics with focus or touch and closes them with Escape", () => {
+    render(
+      <RecordHeadlineStatus response={null} state="completed" assessment={disconnectWarning} />,
+    );
+    const trigger = screen.getByRole("button", { name: /Warning: Client disconnected/ });
+
+    fireEvent.focus(trigger);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+  });
+
+  it("opens compact diagnostics on touch-style click and closes outside", () => {
+    render(<RecordStatus status={200} state="completed" assessment={disconnectWarning} />);
+    const trigger = screen.getByRole("img", { name: /Client disconnected/ });
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);
+
+    fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 

@@ -5,7 +5,11 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-height: 24px;
+  padding: 0;
+  border-color: transparent;
   border-radius: var(--radius-sm);
+  background: transparent;
   transition:
     color var(--transition-fast),
     background-color var(--transition-fast);
@@ -22,6 +26,9 @@
 .indicator.warning:hover {
   background: var(--warning-soft);
 }
+.indicator:focus-visible {
+  outline-offset: 1px;
+}
 .tooltip {
   position: fixed;
   z-index: 80;
@@ -33,7 +40,7 @@
   color: var(--ink-secondary);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
   pointer-events: none;
@@ -47,7 +54,7 @@
 }
 .tooltipTitle {
   color: var(--ink);
-  font-weight: 750;
+  font-weight: var(--weight-bold);
 }
 .tooltipMessage {
   margin-top: 3px;

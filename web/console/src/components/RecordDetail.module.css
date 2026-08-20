@@ -21,13 +21,13 @@
   min-width: 0;
   align-items: baseline;
   gap: 9px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .method {
   flex: 0 0 auto;
   color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: var(--weight-bold);
 }
 .url {
   display: inline-flex;
@@ -37,7 +37,7 @@
   overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.5;
 }
 .url strong {
@@ -50,7 +50,7 @@
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 400;
+  font-weight: var(--weight-regular);
 }
 .tabs {
   display: flex;
@@ -83,6 +83,40 @@
   scrollbar-gutter: stable;
   padding: 18px 24px 32px;
 }
+
+@container (max-width: 520px) {
+  .header {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
+    padding-right: 14px;
+  }
+  .requestOverview {
+    align-items: flex-start;
+  }
+  .url {
+    display: block;
+    min-width: 0;
+    line-height: 1.35;
+  }
+  .url strong,
+  .url > span {
+    display: inline;
+  }
+  .headline {
+    justify-content: flex-start;
+  }
+  .tabs {
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+  .tabs button {
+    flex: 0 0 auto;
+  }
+  .tabPanel {
+    padding: 14px 14px 26px;
+  }
+}
 .summary {
   display: grid;
   gap: 22px;
@@ -92,7 +126,7 @@
 .noResponse h2 {
   margin: 0;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 .modelSummary {
   padding: 14px 16px 16px;
@@ -117,12 +151,12 @@
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-sans);
 }
 .modelValue {
   color: var(--ink);
   font-size: 17px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   line-height: 1.35;
 }
 .modelSeparator,
@@ -131,7 +165,7 @@
 }
 .modelEffort {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   line-height: 1.35;
 }
 .modeBadge {
@@ -144,11 +178,7 @@
   padding: 3px 8px;
   background: var(--accent-soft);
   color: var(--accent);
-  font:
-    700 10px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--weight-bold) var(--text-xs) / 1 var(--font-mono);
 }
 .sessionMeta {
   margin: 10px 0 0;
@@ -162,7 +192,7 @@
 }
 .sessionFact dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .sessionFact dd {
   display: flex;
@@ -175,11 +205,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font:
-    500 11px/1.5 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--weight-medium) var(--text-xs) / 1.5 var(--font-mono);
 }
 .copySession {
   display: inline-grid;
@@ -214,8 +240,8 @@
 }
 .metric dt {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 .metric dd {
@@ -228,11 +254,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font:
-    700 15px/1.35 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--weight-bold) 15px/1.35 var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 .timingMetrics {
@@ -253,7 +275,7 @@
 }
 .timingMetrics .metric:last-child .metricValue {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .timeline {
   display: grid;
@@ -269,15 +291,15 @@
 }
 .timelineLabel,
 .timelineValue {
-  font-size: 11px;
+  font-size: 12px;
 }
 .timelineLabel {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .timelineValue {
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -327,7 +349,7 @@
 .usageHeading {
   margin: 0;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 .tokenUsageGrid {
   display: grid;
@@ -390,8 +412,8 @@
 .tokenCacheDetail dt {
   min-width: 0;
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 .tokenInputPrimary dd,
@@ -400,14 +422,14 @@
 .tokenReasoning dd,
 .tokenCacheDetail dd {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 .tokenInputPrimary dd {
   color: var(--ink);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   line-height: 1.35;
 }
 .tokenCacheBreakdown {
@@ -429,13 +451,13 @@
   background: var(--surface-inset);
 }
 .tokenCacheDetail dt {
-  font-size: 9px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
 }
 .tokenCacheDetail dd {
   color: var(--ink-secondary);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   line-height: 1.3;
 }
 .tokenTotal {
@@ -447,7 +469,7 @@
 .tokenTotal dd {
   color: var(--ink-secondary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 .tokenOutput {
@@ -472,7 +494,7 @@
   overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   line-height: 1.35;
 }
 .tokenReasoning {
@@ -486,12 +508,12 @@
   background: var(--surface-inset);
 }
 .tokenReasoning dt {
-  font-size: 9px;
+  font-size: 12px;
 }
 .tokenReasoning dd {
   color: var(--ink-secondary);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: var(--weight-bold);
   line-height: 1.3;
 }
 .usageMessage {
@@ -521,8 +543,8 @@
   gap: 6px;
   margin: 0 0 6px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: var(--weight-bold);
 }
 .diagnosticGroup h3 span {
   display: inline-grid;
@@ -531,7 +553,7 @@
   place-items: center;
   border-radius: 999px;
   background: var(--surface-inset);
-  font-size: 10px;
+  font-size: 12px;
 }
 .diagnosticList {
   display: grid;
@@ -557,16 +579,16 @@
   align-items: baseline;
   gap: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .diagnosticMeta strong {
   color: var(--ink);
-  font-size: 11px;
+  font-size: 12px;
 }
 .diagnosticItem p {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -591,7 +613,7 @@
 }
 .sectionTitle h2 span {
   color: var(--muted);
-  font-weight: 400;
+  font-weight: var(--weight-regular);
 }
 .bodyActions {
   display: flex;
@@ -621,7 +643,7 @@
   padding: 0 9px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .viewToggle button + button {
   border-left: 1px solid var(--line);
@@ -629,17 +651,13 @@
 .viewToggle .activeView {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
 .headers {
   width: 100%;
   margin-bottom: 14px;
   border-collapse: collapse;
-  font:
-    12px ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) var(--font-mono);
 }
 .headers td {
   padding: 7px 8px;
@@ -680,7 +698,7 @@
   padding: 7px 10px;
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
 }
 .bodyNotice button {
@@ -689,7 +707,7 @@
   border-color: var(--warning-line);
   background: var(--surface-raised);
   color: var(--warning);
-  font-size: 11px;
+  font-size: 12px;
 }
 .encodedLabel {
   position: relative;
@@ -700,11 +718,7 @@
   padding: 3px 6px;
   background: var(--code-border);
   color: var(--code-muted);
-  font:
-    10px/1.4 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) / 1.4 var(--font-mono);
 }
 .encodedLabel + .body {
   padding-top: 38px;
@@ -717,11 +731,7 @@
   border: 1px solid var(--code-border);
   background: var(--code-bg);
   color: var(--code-text);
-  font:
-    12px/1.65 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) / 1.65 var(--font-mono);
 }
 .jsonNode {
   min-width: max-content;
@@ -800,7 +810,7 @@
 .jsonStringToggle {
   padding: 1px 4px;
   color: var(--code-muted);
-  font-size: 10px;
+  font-size: 12px;
   text-decoration: underline;
 }
 .eventList {
@@ -837,21 +847,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font:
-    700 11px/1.4 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--weight-bold) var(--text-xs) / 1.4 var(--font-mono);
 }
 .eventSequence,
 .eventSecondary,
 .eventTime {
   color: var(--muted);
-  font:
-    10px/1.4 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) / 1.4 var(--font-mono);
 }
 .eventSecondary {
   overflow: hidden;
@@ -884,11 +886,7 @@
 .eventBody pre {
   margin: 0;
   color: var(--code-text);
-  font:
-    12px/1.55 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) / 1.55 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -897,7 +895,7 @@
   margin: 0;
   padding: 14px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 .partialEvent {
@@ -909,11 +907,7 @@
   max-height: 55vh;
   padding: 14px;
   overflow: auto;
-  font:
-    12px/1.55 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  font: var(--text-xs) / 1.55 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -943,17 +937,6 @@
 .loading {
   flex: 0 0 auto;
   color: var(--accent);
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .loading {
-    animation: none;
-  }
 }
 @container (max-width: 560px) {
   .header {

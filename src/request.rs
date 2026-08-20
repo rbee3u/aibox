@@ -73,7 +73,7 @@ fn request_viewer_url(listen: SocketAddr) -> String {
 #[cfg(test)]
 fn router(state: AppState) -> Router {
     let request_viewer = Router::new()
-        .route("/", get(request_web::index))
+        .route("/", get(request_viewer_index))
         .route("/_aibox/requests/app.css", get(request_web::css))
         .route("/_aibox/requests/app.js", get(request_web::js))
         .route(
@@ -113,6 +113,11 @@ fn router(state: AppState) -> Router {
         .merge(request_viewer)
         .fallback(proxy_fallback)
         .with_state(state)
+}
+
+#[cfg(test)]
+async fn request_viewer_index() -> axum::response::Response {
+    request_web::index("test-csp-nonce").await
 }
 
 #[cfg(test)]
@@ -177,7 +182,9 @@ mod tests {
             if path == "/" {
                 let html = String::from_utf8(body.to_vec()).unwrap();
                 assert!(!html.contains("__AIBOX_CSRF__"));
+                assert!(!html.contains("__AIBOX_CSP_NONCE__"));
                 assert!(!html.contains("aibox-csrf"));
+                assert!(html.contains(r#"<meta name="aibox-csp-nonce" content="test-csp-nonce""#));
                 assert!(html.contains("/_aibox/ui/app.css"));
                 assert!(html.contains("/_aibox/ui/app.js"));
             }

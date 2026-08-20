@@ -13,6 +13,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// Collection containing all managed Tenant Homes.
 pub const TENANTS_DIR: &str = "tenants";
+/// Name of the protected Managed Tenant used when a Run omits `--tenant`.
+pub const DEFAULT_TENANT_NAME: &str = "default";
 /// Storage key used for the Host Tenant Named Config catalog outside valid names.
 pub const HOST_STORAGE_KEY: &str = "__host";
 const CREATING_PREFIX: &str = "$creating-";
@@ -304,6 +306,9 @@ pub fn delete_tenants(root: &Path, tenants: &[String], all: bool) -> Result<()> 
     if !all && tenants.is_empty() {
         bail!("provide at least one Tenant name or use --all");
     }
+    if !all && tenants.iter().any(|name| name == DEFAULT_TENANT_NAME) {
+        bail!("Default Managed Tenant 'default' is protected and cannot be deleted");
+    }
     let targets = if all {
         let mut targets = list_tenants(root)?;
         // An interrupted create/delete leaves `$creating-`/`$deleting-`
@@ -315,6 +320,7 @@ pub fn delete_tenants(root: &Path, tenants: &[String], all: bool) -> Result<()> 
                 targets.push(name);
             }
         }
+        targets.retain(|name| name != DEFAULT_TENANT_NAME);
         targets.sort();
         targets
     } else {
@@ -994,6 +1000,29 @@ mod tests {
                 .unwrap()
                 .contains(&"work".to_string())
         );
+    }
+
+    #[test]
+    fn default_managed_tenant_is_protected_from_explicit_and_all_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [DEFAULT_TENANT_NAME, "host", "work"] {
+            ManagedTenant::resolve(root.path(), name)
+                .unwrap()
+                .ensure_initialized()
+                .unwrap();
+        }
+
+        let error = delete_tenants(root.path(), &[DEFAULT_TENANT_NAME.to_string()], false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("protected"), "{error}");
+
+        delete_tenants(root.path(), &["host".to_string()], false).unwrap();
+        assert!(!root.path().join("tenants/host").exists());
+
+        delete_tenants(root.path(), &[], true).unwrap();
+        assert!(root.path().join("tenants/default").is_dir());
+        assert!(!root.path().join("tenants/work").exists());
     }
 
     #[test]

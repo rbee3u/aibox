@@ -1,14 +1,29 @@
 import {
+  ArrowLeftRight,
   Box,
   Boxes,
   Container,
-  FileClock,
   FileCode2,
   FileCog,
+  FileSliders,
   House,
+  LayoutDashboard,
+  MessagesSquare,
+  UsersRound,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+
+export type ModuleId = "overview" | "tenants" | "configs" | "sessions" | "requests";
+
+/** Canonical icon vocabulary shared by navigation, topology, lists, and detail views. */
+export const moduleIcons: Record<ModuleId, LucideIcon> = {
+  overview: LayoutDashboard,
+  tenants: UsersRound,
+  configs: FileSliders,
+  sessions: MessagesSquare,
+  requests: ArrowLeftRight,
+};
 
 export type ResourceIcon =
   | "service"
@@ -26,7 +41,7 @@ export const resourceIcons: Record<ResourceIcon, LucideIcon> = {
   managedTenant: Container,
   currentConfig: FileCog,
   namedConfig: FileCode2,
-  session: FileClock,
+  session: MessagesSquare,
   components: Boxes,
   component: Wrench,
 };

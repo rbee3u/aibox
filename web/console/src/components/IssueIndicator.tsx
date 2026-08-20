@@ -1,7 +1,7 @@
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import styles from "./IssueIndicator.module.css";
 
 const TOOLTIP_DELAY_MS = 150;
@@ -22,8 +22,8 @@ export interface IssueTooltipProps {
   message: string;
   className: string;
   children: ReactNode;
-  role?: "img";
   ariaLabel?: string;
+  interactive?: boolean;
 }
 
 export function IssueIndicator({
@@ -44,8 +44,8 @@ export function IssueIndicator({
       label={label}
       message={message}
       className={`${styles.indicator} ${styles[tone]}`}
-      role="img"
       ariaLabel={ariaLabel}
+      interactive={false}
     >
       <IssueIcon size={13} strokeWidth={2.2} aria-hidden="true" />
     </IssueTooltip>
@@ -58,13 +58,14 @@ export function IssueTooltip({
   message,
   className,
   children,
-  role,
   ariaLabel,
+  interactive = true,
 }: IssueTooltipProps) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const openTimer = useRef<number | null>(null);
   const tooltipId = useId();
+  const descriptionId = useId();
   const [pending, setPending] = useState(false);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
@@ -93,6 +94,12 @@ export function IssueTooltip({
     }, TOOLTIP_DELAY_MS);
   }
 
+  const openImmediately = useCallback(() => {
+    clearOpenTimer();
+    setPending(false);
+    setOpen(true);
+  }, [clearOpenTimer]);
+
   useEffect(() => clearOpenTimer, [clearOpenTimer]);
 
   useEffect(() => {
@@ -104,6 +111,30 @@ export function IssueTooltip({
       window.removeEventListener("resize", close);
     };
   }, [close, open, pending]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      close();
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [close, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (triggerRef.current?.contains(target) || tooltipRef.current?.contains(target)) return;
+      close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [close, open]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !tooltipRef.current) return;
@@ -132,16 +163,52 @@ export function IssueTooltip({
 
   return (
     <>
-      <span
-        ref={triggerRef}
-        className={className}
-        role={role}
-        aria-label={ariaLabel}
-        aria-describedby={open ? tooltipId : undefined}
-        onPointerEnter={scheduleOpen}
-        onPointerLeave={close}
-      >
-        {children}
+      {interactive ? (
+        <button
+          type="button"
+          ref={triggerRef as RefObject<HTMLButtonElement>}
+          className={className}
+          aria-label={ariaLabel ?? `${toneLabel}: ${label}`}
+          aria-describedby={open ? tooltipId : descriptionId}
+          aria-expanded={open}
+          onPointerEnter={scheduleOpen}
+          onPointerLeave={() => {
+            if (document.activeElement !== triggerRef.current) close();
+          }}
+          onFocus={openImmediately}
+          onBlur={close}
+          onClick={openImmediately}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            close();
+            event.currentTarget.focus();
+          }}
+        >
+          {children}
+        </button>
+      ) : (
+        <span
+          ref={triggerRef}
+          className={className}
+          role="img"
+          aria-label={ariaLabel ?? `${toneLabel}: ${label}`}
+          aria-describedby={open ? tooltipId : descriptionId}
+          onPointerEnter={scheduleOpen}
+          onPointerLeave={(event) => {
+            if (event.pointerType !== "touch") close();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openImmediately();
+          }}
+        >
+          {children}
+        </span>
+      )}
+      <span id={descriptionId} className="srOnly">
+        {toneLabel}: {label}. {message}
       </span>
       {open &&
         createPortal(

@@ -21,7 +21,8 @@ interface NotificationCenterProps {
   onDismiss: (source: NotificationItemData["source"]) => void;
 }
 
-const DISPLAY_MS = 8000;
+const SUCCESS_DISPLAY_MS = 4000;
+const DEFAULT_DISPLAY_MS = 8000;
 
 export function NotificationCenter({
   notifications,
@@ -50,15 +51,17 @@ export function NotificationCenter({
 
   return (
     <section className={styles.center} aria-label="Notifications">
-      {[...notifications].reverse().map((notification) => (
-        <NotificationItem
-          key={notification.source}
-          notification={notification}
-          paused={paused || !pageVisible || !windowFocused}
-          onAction={onAction}
-          onDismiss={onDismiss}
-        />
-      ))}
+      {[...notifications]
+        .sort((left, right) => right.id - left.id)
+        .map((notification) => (
+          <NotificationItem
+            key={notification.source}
+            notification={notification}
+            paused={paused || !pageVisible || !windowFocused}
+            onAction={onAction}
+            onDismiss={onDismiss}
+          />
+        ))}
     </section>
   );
 }
@@ -72,7 +75,8 @@ interface NotificationItemProps {
 
 function NotificationItem({ notification, paused, onAction, onDismiss }: NotificationItemProps) {
   const [interacting, setInteracting] = useState(false);
-  const remaining = useRef(DISPLAY_MS);
+  const displayMs = notification.tone === "success" ? SUCCESS_DISPLAY_MS : DEFAULT_DISPLAY_MS;
+  const remaining = useRef(displayMs);
   const startedAt = useRef(0);
   const dismiss = useCallback(
     () => onDismiss(notification.source),
@@ -80,8 +84,8 @@ function NotificationItem({ notification, paused, onAction, onDismiss }: Notific
   );
 
   useEffect(() => {
-    remaining.current = DISPLAY_MS;
-  }, [notification.id]);
+    remaining.current = displayMs;
+  }, [displayMs, notification.id]);
 
   useEffect(() => {
     if (paused || interacting) return;

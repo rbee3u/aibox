@@ -1,12 +1,16 @@
-import { AlertTriangle, Trash2 } from "lucide-react";
-import { useEffect, useRef } from "react";
-import type { KeyboardEvent } from "react";
+import { AlertTriangle, LoaderCircle, Trash2 } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { Dialog } from "./Dialog";
 import styles from "./ConfirmDialog.module.css";
 
 interface ConfirmDialogProps {
   title: string;
-  message: string;
+  message?: string;
+  description?: ReactNode;
+  confirmation?: string;
   confirmLabel: string;
+  variant?: "danger" | "primary";
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
@@ -15,114 +19,64 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({
   title,
   message,
+  description,
+  confirmation,
   confirmLabel,
+  variant = "danger",
   onConfirm,
   onCancel,
   busy = false,
 }: ConfirmDialogProps) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const confirmButton = useRef<HTMLButtonElement>(null);
-  const cancelButton = useRef<HTMLButtonElement>(null);
-  const restoreFocus = useRef<HTMLElement | null>(null);
-  const focusCaptured = useRef(false);
-
-  useEffect(() => {
-    const element = dialog.current;
-    if (!focusCaptured.current) {
-      restoreFocus.current =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      focusCaptured.current = true;
-    }
-    if (element) {
-      if (typeof element.showModal === "function") element.showModal();
-      else element.setAttribute("open", "");
-    }
-    confirmButton.current?.focus();
-    return () => {
-      if (element?.open) {
-        if (typeof element.close === "function") element.close();
-        else element.removeAttribute("open");
-      }
-      const target = restoreFocus.current;
-      window.setTimeout(() => {
-        if (element?.open) return;
-        if (target?.isConnected) target.focus();
-        else document.querySelector<HTMLElement>('[data-dialog-focus-fallback="true"]')?.focus();
-      });
-    };
-  }, []);
-
-  function cancelDialog() {
-    if (busy) return;
-    const element = dialog.current;
-    if (element?.open && typeof element.close === "function") element.close();
-    onCancel();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelDialog();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const first = cancelButton.current;
-    const last = confirmButton.current;
-    if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
+  const titleId = useId();
+  const [typed, setTyped] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const enabled = !confirmation || typed === confirmation;
 
   return (
-    <dialog
-      ref={dialog}
+    <Dialog
       className={styles.dialog}
-      aria-labelledby="confirm-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        cancelDialog();
-      }}
-      onKeyDown={handleKeyDown}
-      onClick={(event) => {
-        if (busy || event.target !== event.currentTarget) return;
-        const bounds = event.currentTarget.getBoundingClientRect();
-        if (
-          event.clientX < bounds.left ||
-          event.clientX > bounds.right ||
-          event.clientY < bounds.top ||
-          event.clientY > bounds.bottom
-        ) {
-          cancelDialog();
-        }
-      }}
+      ariaLabelledBy={titleId}
+      busy={busy}
+      initialFocusRef={confirmation ? inputRef : cancelRef}
+      onCancel={onCancel}
     >
       <section className={styles.content}>
-        <div className={styles.icon}>
+        <div className={`${styles.icon} ${variant === "primary" ? styles.primaryIcon : ""}`}>
           <AlertTriangle size={20} aria-hidden="true" />
         </div>
-        <h2 id="confirm-title">{title}</h2>
-        <p>{message}</p>
+        <h2 id={titleId}>{title}</h2>
+        {message && <p>{message}</p>}
+        {description}
+        {confirmation && (
+          <label className={styles.confirmation}>
+            Type <code>{confirmation}</code> to confirm
+            <input
+              ref={inputRef}
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+          </label>
+        )}
         <div className={styles.actions}>
-          <button ref={cancelButton} type="button" onClick={cancelDialog} disabled={busy}>
+          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>
             Cancel
           </button>
           <button
-            ref={confirmButton}
             type="button"
-            className={styles.danger}
+            className={variant === "danger" ? styles.danger : styles.primary}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={!enabled || busy}
           >
-            <Trash2 size={15} aria-hidden="true" />
-            {busy ? "Deleting…" : confirmLabel}
+            {busy ? (
+              <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            ) : variant === "danger" ? (
+              <Trash2 size={15} aria-hidden="true" />
+            ) : null}
+            {busy ? (variant === "danger" ? "Deleting…" : `${confirmLabel}…`) : confirmLabel}
           </button>
         </div>
       </section>
-    </dialog>
+    </Dialog>
   );
 }

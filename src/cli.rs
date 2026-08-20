@@ -262,7 +262,9 @@ pub struct RunArgs {
 impl RunArgs {
     /// Selected Managed Tenant, defaulting to `default`.
     pub fn tenant_name(&self) -> &str {
-        self.tenant.as_deref().unwrap_or("default")
+        self.tenant
+            .as_deref()
+            .unwrap_or(crate::tenant::DEFAULT_TENANT_NAME)
     }
 }
 

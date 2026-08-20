@@ -44,13 +44,13 @@
 .brand strong {
   flex: 0 0 auto;
   font-size: 14px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .separator,
 .tagline {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .tagline {
@@ -86,8 +86,8 @@
   gap: 5px;
   border-radius: var(--radius-sm);
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
@@ -120,15 +120,15 @@
   padding: 4px 24px 4px 7px;
   color: var(--ink-secondary);
   background-color: var(--surface);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   cursor: pointer;
 }
 
 .main {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: clamp(340px, 34%, 560px) minmax(0, 1fr);
+  grid-template-columns: clamp(360px, 31vw, 460px) minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   border-bottom: 1px solid var(--line);
@@ -175,45 +175,17 @@
 }
 
 .emptyDetail {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  place-content: center;
-  justify-items: center;
-  padding: 28px;
-  color: var(--muted);
-  text-align: center;
-  background:
-    linear-gradient(var(--surface) 0 0) padding-box,
-    radial-gradient(circle at center, var(--accent-soft), transparent 48%) border-box;
+  background: var(--surface);
 }
 
-.emptyDetail h1 {
-  margin: 12px 0 4px;
-  color: var(--ink);
-  font-size: 18px;
-  letter-spacing: -0.015em;
-}
-
-.emptyDetail p {
-  max-width: 340px;
-  margin: 0;
-  font-size: 12px;
-}
-
-.emptyDetail > svg:not(.loader) {
+.emptyDetail button {
+  margin-top: 14px;
   color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .loader {
   color: var(--accent);
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @container requests-page (max-width: 760px) {

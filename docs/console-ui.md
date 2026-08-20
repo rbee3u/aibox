@@ -96,9 +96,13 @@ without sockets.
 
 ## Overview and Management Navigation
 
-Overview is an operational view with three full-width bands. Key facts combine
-Service health, Tenant and Host availability, Config and Component health,
-Requests, version, listen address, and the aibox Root. Runtime reports Docker
+Overview is an operational resource map. Key facts combine Service health,
+Managed Tenant count, Host Tenant availability, Config and Component health,
+Requests, version, listen address, and the aibox Root. The Host Tenant is
+reported separately as a console-only view and is never included in the
+Managed Tenant count. Needs attention appears immediately below the key facts;
+the complete structural Resource topology follows it, with Runtime below the
+map. Runtime reports Docker
 availability and exact local Runtime Image status (`built`, `missing`, or
 `unknown`) with its reference, short ID, creation time, and size. Its explicit
 actions are **Build** and **Build without cache**.
@@ -106,7 +110,8 @@ actions are **Build** and **Build without cache**.
 Resource topology is Tenant-centered: each Managed or Host Tenant contains its
 Codex and Claude resources, while Components are Tenant-owned siblings of the
 Coding Agents. Coding Agent branches expose Current Config presence, every
-Named Config, and an on-demand Session summary. Requests and Runtime are global
+Named Config, and a Sessions branch whose Transcript discovery remains on
+demand. Requests and Runtime are global
 and therefore never appear in the Tenant tree.
 
 The topology is a left-to-right node-and-edge canvas with separate node-body
@@ -117,14 +122,18 @@ the available width. The topology never converts vertical wheel input into
 horizontal movement.
 
 Desktop initializes with the whole graph fitted to the viewport, while narrow
-layouts retain 100% scale. Zoom is bounded to 50%-150% in 10% steps, with Fit
+layouts retain 100% scale. Zoom is bounded to 65%-150% in 10% steps, with Fit
 and 100% reset controls in the sticky topology toolbar. Fit mode follows layout
 and viewport width changes; manual zoom remains stable through later topology
 changes. Expansion and zoom compensate the relevant scroll positions to keep
 the operated or active node anchored. Tenant roots are ordered with the Host
 Tenant first, `default` second, and remaining Managed Tenants by display name.
-Only `default` opens initially, including its Codex Named Config leaves; other
-Tenant roots remain collapsed. Search preserves the graph layout, expands
+Service startup normally guarantees that the protected Default Managed Tenant
+exists; Config and Session selectors never synthesize missing Tenant rows.
+Every Tenant, Coding Agent, Named Config, and installed Component branch opens
+initially so the map explains the complete resource structure. Expanding a
+Sessions branch is still the explicit trigger for Transcript discovery. Search
+preserves the graph layout, expands
 matching paths, highlights matches, and dims unrelated nodes. Needs attention
 instead prunes and reflows the graph to warning and error paths. Hover or
 keyboard focus traces a path back to the Service root, and diagnostic details
@@ -143,6 +152,55 @@ optional `file`; Sessions use repeated `scope` and `agent`, plus
 Config file edits require confirmation before in-app navigation, history
 navigation, or page unload can discard them.
 
+The Tenants, Configs, Sessions, and Requests catalogs share one visual rhythm:
+48-pixel toolbars, aligned leading icons, 14-pixel semibold primary text,
+12-pixel secondary text, quiet destructive actions, and the same hover,
+selection, and focus treatment. Request and Tenant rows have a 64-pixel minimum
+height, while the single-line Config rows use 56 pixels. Session rows also start
+at 64 pixels, but a prompt title may occupy two lines before it is truncated;
+only those rows grow to accommodate the second line, and the complete title
+remains available from the row title. Compact list-empty states and larger
+detail-empty states use shared typography and spacing without changing each
+module's domain-specific copy.
+
+Console typography follows interface role before raw data type. Navigation,
+headings, controls, explanatory copy, catalog titles, and catalog metadata use
+the shared system sans-serif stack. Technical facts use the shared system
+monospace stack: HTTP methods, detail URLs, paths, identifiers, Config file
+names, timestamps, durations, code, raw Bodies, Transcripts, and logs. Catalog
+metadata has a 12-pixel sans-serif baseline; only its timestamp and duration
+fragments switch to monospace with tabular numerals. Page-level section and
+dialog headings use 16-pixel semibold text, while nested Request detail section
+headings remain deliberately smaller and bolder. Non-code interface text does
+not fall below 12 pixels. Specialized editor, JSON tree, Body, Transcript, and
+log line heights remain local because their reading modes differ.
+
+Named Config files open in the Visual editor when the Control API supplies a
+visual field model; Raw remains the explicit advanced view. Current Config
+files always open in Raw, with Visual available only as an optional view when
+supported. The editor header keeps Scope, Coding Agent, Config, and File visible
+as separate context fields. **Apply to Current Config** is a one-shot projection
+of fixed Config Fields, never an Active Config association. Confirmation,
+success feedback, Last applied, and Config Drift use that same language and
+retain the existing per-file commit and no-rollback semantics.
+
+Requests uses `page` for its one-based page number, `record` for the selected
+Request Record ID, and `tab` for `summary`, `request`, or `response`. Invalid
+values are replaced with the canonical default URL. If a selected Request
+Record no longer exists, the Console returns to the list, removes `record` and
+`tab`, and leaves a dismissible failure notice.
+
+Request Record pages contain 50 rows and intentionally have no filter query.
+Rows use the shared 16-pixel Requests icon before method, target, HTTP status,
+and an optional Record Assessment icon. The target is the primary text. Compact
+metadata starts under the method with `Model·reasoning effort`, omitting the
+suffix when reasoning effort is unavailable. This flexible label elides from
+the end before the fixed-width `First Token/total timing` and timestamp group
+on the right; a wider gap separates timing from the timestamp. At 430 pixels
+and below, the right-hand group moves intact to a second metadata line and stays
+right-aligned. Pagination shows the current and total page counts and restores
+a valid page and focus target after deletion.
+
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-record polling. The Summary is
 the default detail tab, and request/response bodies load only for the visible
@@ -157,10 +215,15 @@ until that source succeeds. List, detail, Body, and download failures offer a
 scoped retry; destructive actions require confirmation again. Decoding and SSE
 timing degradation remain local to the affected Body view.
 
+The latest Management Operation remains visible across modules in the bottom
+task dock. Starting a new Operation or receiving a new failure expands it;
+polling does not reopen a dock the user collapsed. Expanded output reserves
+workspace space and scrolls independently.
+
 ## Record Assessment and Diagnostics
 
 Request Outcome, HTTP response status, Provider Error, and diagnostic warnings
-remain independent evidence. The backend derives one Record Assessment for
+remain independent evidence. The aibox Service derives one Record Assessment for
 consistent display; the browser never reclassifies a Record from `outcome`,
 status, or Body content. [Request Proxy](sandbox.md#request-proxy) is the
 canonical reference for which evidence produces Active, OK, Warning, or Error.

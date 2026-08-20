@@ -48,6 +48,7 @@ fn config_file_reads_and_saves_use_revisions_and_native_validation() {
         "settings.json",
         &before.revision,
         br#"{"env":{"ANTHROPIC_AUTH_TOKEN":"token"}}"#,
+        None,
     )
     .unwrap();
     assert!(
@@ -63,6 +64,7 @@ fn config_file_reads_and_saves_use_revisions_and_native_validation() {
         "settings.json",
         &before.revision,
         b"{}",
+        None,
     );
     assert!(stale.is_err());
 }
@@ -122,11 +124,59 @@ fn current_config_can_be_initialized_and_preserves_arbitrary_bytes() {
         "settings.json",
         &before.revision,
         b"not json\0bytes",
+        None,
     )
     .unwrap();
     assert_eq!(after.content, b"not json\0bytes");
     let inspection = inspect_current_config(&selected).unwrap();
     assert_eq!(inspection.present_files, 1);
+}
+
+#[test]
+fn raw_edit_can_create_a_missing_main_file_in_a_safe_incomplete_named_config() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    selected.ensure_named_config_catalog().unwrap();
+    ensure_named_config_directory(&selected, "partial").unwrap();
+
+    let before = read_config_file(&selected, Some("partial"), false, "config.toml").unwrap();
+    assert!(!before.exists);
+    assert!(before.content.is_empty());
+    assert!(visual_field_states(&selected, "partial", "").is_err());
+
+    let after = save_config_file(
+        &selected,
+        Some("partial"),
+        false,
+        "config.toml",
+        &before.revision,
+        b"model = \"custom-model\"\n",
+        None,
+    )
+    .unwrap();
+    assert!(after.exists);
+    assert_eq!(
+        fs::read_to_string(selected.named_config_file("partial", "config.toml")).unwrap(),
+        "model = \"custom-model\"\n"
+    );
+}
+
+#[test]
+fn revealing_an_incomplete_named_config_still_rejects_unknown_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Codex);
+    selected.ensure_named_config_catalog().unwrap();
+    ensure_named_config_directory(&selected, "partial").unwrap();
+    fs::write(
+        selected.named_config_dir("partial").join("unexpected"),
+        b"unsafe",
+    )
+    .unwrap();
+
+    let error = read_config_file(&selected, Some("partial"), false, "config.toml")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unknown entry"), "{error}");
 }
 
 #[test]

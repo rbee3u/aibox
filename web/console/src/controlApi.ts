@@ -137,6 +137,20 @@ export interface ConfigFileData {
   exists: boolean;
   revision: string;
   content_base64: string;
+  visual?: ConfigVisualField[];
+  visual_error?: string;
+}
+
+export interface ConfigVisualField {
+  path: string;
+  label: string;
+  description: string;
+  group: string;
+  value_kind: "string" | "bool";
+  suggestions: string[];
+  sensitive: boolean;
+  included: boolean;
+  value?: string | boolean;
 }
 
 export interface SessionRow {

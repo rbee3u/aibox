@@ -279,7 +279,13 @@ mod tests {
             .to_string();
         assert!(error.contains("already running"), "{error}");
 
-        manager.cancel(&started.id).unwrap();
+        // Cancellation delegates to the process-global Docker run registry.
+        // Serialize that call with Docker's registry tests so this otherwise
+        // container-free test cannot signal one of their fixture runs.
+        {
+            let _run_lock = crate::docker::run_registry_test_lock();
+            manager.cancel(&started.id).unwrap();
+        }
         let finished = wait_until_finished(&manager).await;
         assert_eq!(finished.state, OperationState::Cancelled);
         assert!(

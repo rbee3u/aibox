@@ -12,6 +12,7 @@ use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
+use base64::Engine as _;
 use fs2::FileExt as _;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::fs;
@@ -43,6 +44,19 @@ pub(crate) struct ServiceState {
 pub(crate) struct PendingAuthPropagation {
     pub(crate) id: String,
     pub(crate) plan: config::AuthPropagationPlan,
+}
+
+#[derive(Clone)]
+pub(crate) struct ConsoleCspNonce(String);
+
+impl ConsoleCspNonce {
+    fn new() -> Self {
+        Self(base64::engine::general_purpose::STANDARD_NO_PAD.encode(Uuid::new_v4().as_bytes()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl FromRef<ServiceState> for RequestState {
@@ -88,6 +102,7 @@ async fn serve(
     image: String,
 ) -> Result<i32> {
     let _lock = acquire_service_lock(&root)?;
+    ensure_default_managed_tenant(&root)?;
     let shutdown = CancellationToken::new();
     let request = RequestState::new_with_console(
         &root,
@@ -169,6 +184,12 @@ async fn serve(
     }
 }
 
+fn ensure_default_managed_tenant(root: &Path) -> Result<()> {
+    tenant::ManagedTenant::resolve(root, tenant::DEFAULT_TENANT_NAME)?
+        .ensure_initialized()
+        .context("create or repair Default Managed Tenant")
+}
+
 fn router(state: ServiceState) -> Router {
     let protected = Router::new()
         .route("/", get(root_redirect))
@@ -243,7 +264,7 @@ async fn proxy_fallback(State(state): State<ServiceState>, request: Request) -> 
 
 async fn management_guard(
     State(state): State<ServiceState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response<Body> {
     let peer = request
@@ -287,15 +308,19 @@ async fn management_guard(
             return plain_error(StatusCode::FORBIDDEN, "invalid CSRF token");
         }
     }
+    let csp_nonce = ConsoleCspNonce::new();
+    request.extensions_mut().insert(csp_nonce.clone());
     let mut response = next.run(request).await;
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-        ),
+        HeaderValue::from_str(&format!(
+            "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'nonce-{}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            csp_nonce.as_str()
+        ))
+        .expect("generated CSP nonce produces a valid header"),
     );
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -500,6 +525,99 @@ mod tests {
     }
 
     #[test]
+    fn service_preparation_creates_and_repairs_the_default_managed_tenant() {
+        let root = tempfile::tempdir().unwrap();
+
+        ensure_default_managed_tenant(root.path()).unwrap();
+        let home = root.path().join("tenants/default");
+        assert!(home.join(".gitconfig").is_file());
+        assert!(home.join(".codex").is_dir());
+        assert!(home.join(".claude").is_dir());
+
+        fs::write(home.join("preserved"), b"user state").unwrap();
+        fs::write(home.join(".codex/config.toml"), b"model = \"preserved\"\n").unwrap();
+        fs::create_dir(home.join(".codex/sessions")).unwrap();
+        fs::write(
+            home.join(".codex/sessions/transcript.jsonl"),
+            b"session state",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(home.join("preserved"), fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        fs::remove_dir(home.join(".claude")).unwrap();
+        ensure_default_managed_tenant(root.path()).unwrap();
+
+        assert_eq!(fs::read(home.join("preserved")).unwrap(), b"user state");
+        assert_eq!(
+            fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
+            "model = \"preserved\"\n"
+        );
+        assert_eq!(
+            fs::read(home.join(".codex/sessions/transcript.jsonl")).unwrap(),
+            b"session state"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(home.join("preserved"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o640
+            );
+        }
+        assert!(home.join(".claude").is_dir());
+    }
+
+    #[test]
+    fn service_preparation_rejects_an_unsafe_default_managed_tenant() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("tenants")).unwrap();
+        fs::write(root.path().join("tenants/default"), b"not a directory").unwrap();
+
+        let error = ensure_default_managed_tenant(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Default Managed Tenant"), "{error}");
+    }
+
+    #[test]
+    fn service_preparation_rejects_an_unsafe_default_agent_state() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_default_managed_tenant(root.path()).unwrap();
+        let codex = root.path().join("tenants/default/.codex");
+        fs::remove_dir(&codex).unwrap();
+        fs::write(&codex, b"not a directory").unwrap();
+
+        let error = ensure_default_managed_tenant(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Default Managed Tenant"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_preparation_rejects_a_symlinked_default_managed_tenant() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("tenants")).unwrap();
+        symlink(outside.path(), root.path().join("tenants/default")).unwrap();
+
+        let error = ensure_default_managed_tenant(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Default Managed Tenant"), "{error}");
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+
+    #[test]
     fn loopback_hosts_accept_names_ipv4_and_bracketed_ipv6_only() {
         for accepted in [
             "localhost",
@@ -584,6 +702,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn console_page_authorizes_its_code_mirror_styles_with_a_fresh_nonce() {
+        let root = tempfile::tempdir().unwrap();
+        let app = router(test_state(root.path()));
+
+        let load_page = || {
+            app.clone()
+                .oneshot(request(Method::GET, "/_aibox/ui/configs", "127.0.0.1:5000"))
+        };
+        let first = load_page().await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_policy = first
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let first_body = first.into_body().collect().await.unwrap().to_bytes();
+        let first_body = std::str::from_utf8(&first_body).unwrap();
+        let prefix = r#"<meta name="aibox-csp-nonce" content=""#;
+        let first_nonce = first_body
+            .split_once(prefix)
+            .and_then(|(_, suffix)| suffix.split_once('"'))
+            .map(|(nonce, _)| nonce)
+            .unwrap();
+
+        assert!(!first_nonce.is_empty());
+        assert!(first_policy.contains(&format!("style-src 'self' 'nonce-{first_nonce}'")));
+        assert!(!first_policy.contains("'unsafe-inline'"));
+        assert!(!first_body.contains("__AIBOX_CSP_NONCE__"));
+
+        let second = load_page().await.unwrap();
+        let second_body = second.into_body().collect().await.unwrap().to_bytes();
+        let second_body = std::str::from_utf8(&second_body).unwrap();
+        let second_nonce = second_body
+            .split_once(prefix)
+            .and_then(|(_, suffix)| suffix.split_once('"'))
+            .map(|(nonce, _)| nonce)
+            .unwrap();
+        assert_ne!(first_nonce, second_nonce);
+    }
+
+    #[tokio::test]
     async fn operation_events_stream_ends_when_service_shuts_down() {
         let root = tempfile::tempdir().unwrap();
         let state = test_state(root.path());
@@ -650,6 +811,52 @@ mod tests {
             serde_json::from_slice::<Value>(&body).unwrap()["created"],
             "work"
         );
+    }
+
+    #[tokio::test]
+    async fn control_api_protects_the_default_managed_tenant_from_explicit_and_all_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["default", "work"] {
+            crate::tenant::ManagedTenant::resolve(root.path(), name)
+                .unwrap()
+                .ensure_initialized()
+                .unwrap();
+        }
+        let app = router(test_state(root.path()));
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/_aibox/api/tenants/delete")
+            .header(header::HOST, "127.0.0.1:9923")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ORIGIN, "http://127.0.0.1:9923")
+            .header("x-aibox-csrf", "test-csrf")
+            .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
+            .body(Body::from(
+                r#"{"names":["default"],"all":false,"confirmation":"default"}"#,
+            ))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(root.path().join("tenants/default").is_dir());
+
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/_aibox/api/tenants/delete")
+            .header(header::HOST, "127.0.0.1:9923")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ORIGIN, "http://127.0.0.1:9923")
+            .header("x-aibox-csrf", "test-csrf")
+            .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
+            .body(Body::from(
+                r#"{"names":[],"all":true,"confirmation":"delete all tenants"}"#,
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(root.path().join("tenants/default").is_dir());
+        assert!(!root.path().join("tenants/work").exists());
     }
 
     #[tokio::test]

@@ -2,9 +2,10 @@
 
 use crate::agent::AgentKind;
 use crate::component::{self, ComponentKind, ComponentSpec, ComponentStatus};
+use crate::config_model::VisualFieldInput;
 use crate::request_assessment::effective_assessment;
 use crate::request_store::AssessmentLevel;
-use crate::service::{PendingAuthPropagation, ServiceState};
+use crate::service::{ConsoleCspNonce, PendingAuthPropagation, ServiceState};
 use crate::tenant::{self, ManagedTenant, Tenant};
 use crate::{config, docker, request_web, session};
 use anyhow::{Context, Result};
@@ -12,7 +13,7 @@ use async_stream::stream;
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderValue, Response, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
@@ -48,6 +49,7 @@ pub(crate) fn router() -> Router<ServiceState> {
         .route("/_aibox/api/configs/create", post(create_config))
         .route("/_aibox/api/configs/reveal", post(reveal_config_file))
         .route("/_aibox/api/configs/save", post(save_config_file))
+        .route("/_aibox/api/configs/diagnose", post(diagnose_config_file))
         .route("/_aibox/api/configs/apply", post(apply_config))
         .route("/_aibox/api/configs/delete", post(delete_configs))
         .route(
@@ -68,8 +70,8 @@ pub(crate) fn router() -> Router<ServiceState> {
         .route("/_aibox/api/operations/{id}/cancel", post(cancel_operation))
 }
 
-async fn index() -> Response<Body> {
-    request_web::index().await
+async fn index(Extension(csp_nonce): Extension<ConsoleCspNonce>) -> Response<Body> {
+    request_web::index(csp_nonce.as_str()).await
 }
 
 #[derive(Serialize)]
@@ -411,6 +413,16 @@ async fn delete_tenants(
     State(state): State<ServiceState>,
     Json(request): Json<DeleteSelection>,
 ) -> Response<Body> {
+    if request
+        .names
+        .iter()
+        .any(|name| name == tenant::DEFAULT_TENANT_NAME)
+    {
+        return api_error(
+            StatusCode::CONFLICT,
+            "Default Managed Tenant is protected and cannot be deleted",
+        );
+    }
     if request.all && request.confirmation != "delete all tenants" {
         return api_error(StatusCode::BAD_REQUEST, "confirmation does not match");
     }
@@ -718,6 +730,10 @@ struct ConfigFileResponse {
     exists: bool,
     revision: String,
     content_base64: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual: Option<Vec<config::VisualFieldState>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_error: Option<String>,
 }
 
 async fn reveal_config_file(
@@ -735,7 +751,35 @@ async fn reveal_config_file(
             request.current,
             &request.file,
         )?;
-        Ok(config_file_response(snapshot))
+        let visual = if !request.current && request.file == selected.agent.main_config_file() {
+            let text = std::str::from_utf8(&snapshot.content).ok();
+            match text {
+                Some(text) => match config::visual_field_states(
+                    &selected,
+                    request.config.as_deref().unwrap_or_default(),
+                    text,
+                ) {
+                    Ok(fields) => ConfigVisualResult {
+                        fields: Some(fields),
+                        error: None,
+                    },
+                    Err(error) => ConfigVisualResult {
+                        fields: None,
+                        error: Some(format!("{error:#}")),
+                    },
+                },
+                None => ConfigVisualResult {
+                    fields: None,
+                    error: Some("configuration is not valid UTF-8".to_string()),
+                },
+            }
+        } else {
+            ConfigVisualResult {
+                fields: None,
+                error: None,
+            }
+        };
+        Ok(config_file_response(snapshot, visual))
     })
     .await
 }
@@ -746,6 +790,8 @@ struct SaveConfigFileRequest {
     selection: ConfigFileRequest,
     revision: String,
     content_base64: String,
+    #[serde(default)]
+    visual: Option<Vec<VisualFieldInput>>,
 }
 
 async fn save_config_file(
@@ -771,8 +817,146 @@ async fn save_config_file(
             &request.selection.file,
             &request.revision,
             &content,
+            request.visual.as_deref(),
         )?;
-        Ok(config_file_response(snapshot))
+        let visual = if !request.selection.current
+            && request.selection.file == selected.agent.main_config_file()
+        {
+            let text = std::str::from_utf8(&snapshot.content).ok();
+            text.and_then(|text| {
+                config::visual_field_states(
+                    &selected,
+                    request.selection.config.as_deref().unwrap_or_default(),
+                    text,
+                )
+                .ok()
+            })
+            .map(|fields| ConfigVisualResult {
+                fields: Some(fields),
+                error: None,
+            })
+            .unwrap_or(ConfigVisualResult {
+                fields: None,
+                error: None,
+            })
+        } else {
+            ConfigVisualResult {
+                fields: None,
+                error: None,
+            }
+        };
+        Ok(config_file_response(snapshot, visual))
+    })
+    .await
+}
+
+#[derive(Default)]
+struct ConfigVisualResult {
+    fields: Option<Vec<config::VisualFieldState>>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DiagnoseConfigRequest {
+    #[serde(flatten)]
+    selection: ConfigFileRequest,
+    content_base64: String,
+}
+
+#[derive(Serialize)]
+struct ConfigDiagnostic {
+    severity: &'static str,
+    message: String,
+    line: usize,
+    column: usize,
+}
+
+#[derive(Serialize)]
+struct DiagnoseConfigResponse {
+    diagnostics: Vec<ConfigDiagnostic>,
+}
+
+fn diagnostic_position(error: &anyhow::Error, source: &str) -> (usize, usize) {
+    if let Some(json) = error.downcast_ref::<serde_json::Error>() {
+        return (json.line(), json.column());
+    }
+    if let Some(toml) = error.downcast_ref::<toml_edit::TomlError>()
+        && let Some(span) = toml.span()
+    {
+        let offset = span.start.min(source.len());
+        let line = source[..offset]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1;
+        let column = source[..offset]
+            .rsplit('\n')
+            .next()
+            .map(|line| line.chars().count() + 1)
+            .unwrap_or(1);
+        return (line, column);
+    }
+    (1, 1)
+}
+
+async fn diagnose_config_file(
+    State(state): State<ServiceState>,
+    Json(request): Json<DiagnoseConfigRequest>,
+) -> Response<Body> {
+    let selected = match resolve_agent(&state, &request.selection.scope, request.selection.agent) {
+        Ok(selected) => selected,
+        Err(error) => return result_error(error),
+    };
+    let content =
+        match base64::engine::general_purpose::STANDARD.decode(request.content_base64.as_bytes()) {
+            Ok(content) => content,
+            Err(error) => {
+                return api_error(StatusCode::BAD_REQUEST, &format!("invalid base64: {error}"));
+            }
+        };
+    blocking(move || {
+        let _ = config::read_config_file(
+            &selected,
+            request.selection.config.as_deref(),
+            request.selection.current,
+            &request.selection.file,
+        )?;
+        let mut diagnostics = Vec::new();
+        match std::str::from_utf8(&content) {
+            Ok(text) => {
+                let result = if request.selection.current {
+                    if request.selection.file == selected.agent.main_config_file() {
+                        selected.agent.parse_main_config(text).map(|_| ())
+                    } else {
+                        serde_json::from_str::<Value>(text)
+                            .context("parse Current Config auth.json")
+                            .map(|_| ())
+                    }
+                } else {
+                    crate::config_model::NamedConfigDefinition::validate_file(
+                        selected.agent,
+                        &request.selection.file,
+                        text,
+                    )
+                };
+                if let Err(error) = result {
+                    let (line, column) = diagnostic_position(&error, text);
+                    diagnostics.push(ConfigDiagnostic {
+                        severity: "error",
+                        message: format!("{error:#}"),
+                        line,
+                        column,
+                    });
+                }
+            }
+            Err(error) => diagnostics.push(ConfigDiagnostic {
+                severity: "error",
+                message: format!("configuration is not valid UTF-8: {error}"),
+                line: 1,
+                column: 1,
+            }),
+        }
+        Ok(DiagnoseConfigResponse { diagnostics })
     })
     .await
 }
@@ -1087,12 +1271,17 @@ fn resolve_agent(
     Ok(resolve_tenant(state, scope)?.for_agent(agent))
 }
 
-fn config_file_response(snapshot: config::ConfigFileSnapshot) -> ConfigFileResponse {
+fn config_file_response(
+    snapshot: config::ConfigFileSnapshot,
+    visual: ConfigVisualResult,
+) -> ConfigFileResponse {
     ConfigFileResponse {
         file: snapshot.file,
         exists: snapshot.exists,
         revision: snapshot.revision,
         content_base64: base64::engine::general_purpose::STANDARD.encode(snapshot.content),
+        visual: visual.fields,
+        visual_error: visual.error,
     }
 }
 

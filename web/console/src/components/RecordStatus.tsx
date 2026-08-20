@@ -44,12 +44,14 @@ export function RecordStatus({ status, state, assessment }: RecordStatusProps) {
 
 function CompactIssue({ issue }: { issue: AssessmentPresentation }) {
   return (
-    <IssueIndicator
-      tone={issue.tone}
-      label={issue.label}
-      message={issue.message}
-      ariaLabel={assessmentIssueText(issue)}
-    />
+    <span className={styles.compactIssue}>
+      <IssueIndicator
+        tone={issue.tone}
+        label={issue.label}
+        message={issue.message}
+        ariaLabel={assessmentIssueText(issue)}
+      />
+    </span>
   );
 }
 
