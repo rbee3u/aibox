@@ -8,7 +8,7 @@ test("sidebar utilities adapt across desktop and mobile layouts", async ({ page 
 
   const sidebar = page.getByRole("complementary", { name: "Console navigation" });
   await expect(sidebar).toBeVisible();
-  await expect(page.getByRole("link", { name: "GitHub" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "GitHub repo" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Codex docs" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Claude docs" })).toBeVisible();
   await expect(page.getByText("vtest")).toBeVisible();
@@ -19,7 +19,10 @@ test("sidebar utilities adapt across desktop and mobile layouts", async ({ page 
 
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "GitHub" })).toHaveAttribute("title", "GitHub");
+  await expect(page.getByRole("link", { name: "GitHub repo" })).toHaveAttribute(
+    "title",
+    "GitHub repo",
+  );
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("aibox-console-sidebar-collapsed")))
     .toBe("true");

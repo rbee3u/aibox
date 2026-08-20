@@ -8,6 +8,8 @@ import type {
   ConfigVisualField,
   Operation,
   SessionListData,
+  SessionDetailMeta,
+  SessionDetailStats,
   SessionRow,
   TenantRow,
 } from "./controlApi";
@@ -114,11 +116,51 @@ function list(sessions: SessionRow[], warnings: string[] = []): SessionListData 
 function fakeApi({
   sessions = () => list([firstSession, secondSession]),
   post = vi.fn().mockResolvedValue({ deleted: 1 }),
-  streamSession = vi.fn().mockResolvedValue({ id: firstSession.id, warnings: [] }),
+  streamSessionDetail = vi.fn().mockImplementation(
+    (
+      _path: string,
+      handlers: {
+        onComplete: (
+          stats: {
+            start_ts: string;
+            last_event_ts: string;
+            observed_duration_ms: number;
+            message_count: number;
+            tool_count: number;
+            entry_count: number;
+            malformed_count: number;
+            unsupported_count: number;
+            hidden_internal_count: number;
+            file_size: number;
+            snapshot: string;
+          },
+          warnings: string[],
+        ) => void;
+      },
+    ) => {
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 0,
+          tool_count: 0,
+          entry_count: 0,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 0,
+          snapshot: "0:0",
+        },
+        [],
+      );
+      return Promise.resolve();
+    },
+  ),
 }: {
   sessions?: (path: string, signal?: AbortSignal) => Promise<SessionListData> | SessionListData;
   post?: ReturnType<typeof vi.fn>;
-  streamSession?: ReturnType<typeof vi.fn>;
+  streamSessionDetail?: ReturnType<typeof vi.fn>;
 } = {}) {
   const get = vi.fn((path: string, signal?: AbortSignal) => {
     if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
@@ -129,9 +171,9 @@ function fakeApi({
     bootstrap: { version: "test", csrf_token: "token" },
     get,
     post,
-    streamSession,
+    streamSessionDetail,
   } as unknown as ControlApi;
-  return { api, get, post, streamSession };
+  return { api, get, post, streamSessionDetail };
 }
 
 function sessionQuery(path: string): URLSearchParams {
@@ -243,7 +285,7 @@ describe("TenantPage", () => {
         .parentElement,
     ).toHaveClass(styles.tenantRow);
 
-    const layout = document.querySelector(`.${styles.tenantLayout}`);
+    const layout = document.querySelector(`.${styles.splitLayout}`);
     expect(layout).not.toHaveClass(styles.hasSelection);
   });
 
@@ -1421,7 +1463,7 @@ describe("SessionPage", () => {
       "",
       `/_aibox/ui/sessions?scope=managed%3Adefault&scope=host&agent=codex&agent=claude&session_scope=host&session_agent=claude&session=${firstSession.id}`,
     );
-    const { api, get, streamSession } = fakeApi({
+    const { api, get, streamSessionDetail } = fakeApi({
       sessions: () => list([firstSession]),
     });
 
@@ -1436,11 +1478,205 @@ describe("SessionPage", () => {
       String(path).startsWith("/_aibox/api/sessions?"),
     );
     expect(sessionCalls).toHaveLength(4);
-    expect(streamSession).toHaveBeenCalledWith(
-      `/_aibox/api/sessions/prompts?scope=host&agent=claude&id=${firstSession.id}`,
-      expect.any(Function),
+    expect(streamSessionDetail).toHaveBeenCalledWith(
+      `/_aibox/api/sessions/detail?scope=host&agent=claude&id=${firstSession.id}`,
+      expect.any(Object),
       expect.any(AbortSignal),
     );
+  });
+
+  it("restores the Details tab and keeps Session deletion in the catalog", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/_aibox/ui/sessions?scope=managed%3Adefault&agent=codex&session_scope=managed%3Adefault&session_agent=codex&session=${firstSession.id}&tab=details`,
+    );
+    const { api } = fakeApi({ sessions: () => list([firstSession]) });
+
+    render(<SessionPage api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "First prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Session" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", {
+        name: "Delete Session 111111111111 from Tenant default · Codex",
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("keeps user messages separately and groups adjacent activity while preserving order", async () => {
+    const streamSessionDetail = vi.fn(
+      (_path: string, handlers: Parameters<ControlApi["streamSessionDetail"]>[1]) => {
+        const meta: SessionDetailMeta = {
+          id: firstSession.id,
+          title: firstSession.title,
+          start_ts: firstSession.start_ts,
+          transcript_path: ".codex/session.jsonl",
+        };
+        const stats: SessionDetailStats = {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 1200,
+          message_count: 2,
+          tool_count: 0,
+          entry_count: 4,
+          malformed_count: 0,
+          unsupported_count: 2,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        };
+        handlers.onMeta(meta);
+        handlers.onMessage({
+          entry_ids: ["message-1"],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text: "Please inspect this.",
+        });
+        handlers.onEvidence({
+          entry_id: "evidence-1",
+          line: 2,
+          timestamp: firstSession.start_ts,
+          native_type: "response_item",
+          role: null,
+          content_types: [],
+          status: "unsupported",
+          preview: "first evidence",
+        });
+        handlers.onEvidence({
+          entry_id: "evidence-2",
+          line: 3,
+          timestamp: firstSession.start_ts,
+          native_type: "world_state",
+          role: null,
+          content_types: [],
+          status: "filtered",
+          preview: "second evidence",
+        });
+        handlers.onMessage({
+          entry_ids: ["message-2"],
+          role: "assistant",
+          timestamp: firstSession.start_ts,
+          text: "## Done",
+        });
+        handlers.onComplete(stats, ["encountered 2 unsupported Transcript Entry projection(s)"]);
+      },
+    );
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    const userMessage = (await screen.findAllByRole("article")).find((article) =>
+      article.textContent?.includes("Please inspect this."),
+    );
+    expect(userMessage).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Jump to message 1/ })).toHaveLength(2);
+    const agentHeading = screen.getByRole("heading", { name: "Done" });
+    expect(agentHeading).toBeInTheDocument();
+    expect(agentHeading.closest("article")?.className).not.toContain("undefined");
+    expect(screen.getByText("2 items · response_item, world_state")).toBeInTheDocument();
+    expect(
+      screen.getByText("Some transcript events could not be interpreted."),
+    ).toBeInTheDocument();
+  });
+
+  it("creates one navigation anchor for each user message", async () => {
+    const streamSessionDetail = vi.fn(
+      (_path: string, handlers: Parameters<ControlApi["streamSessionDetail"]>[1]) => {
+        handlers.onMessage({
+          entry_ids: ["user-1"],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text: "First request",
+        });
+        handlers.onMessage({
+          entry_ids: ["assistant-1"],
+          role: "assistant",
+          timestamp: firstSession.start_ts,
+          text: "First answer",
+        });
+        handlers.onMessage({
+          entry_ids: ["user-2"],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text: "Second request",
+        });
+        handlers.onMessage({
+          entry_ids: ["assistant-2"],
+          role: "assistant",
+          timestamp: firstSession.start_ts,
+          text: "Second answer",
+        });
+        handlers.onComplete(
+          {
+            start_ts: firstSession.start_ts,
+            last_event_ts: firstSession.start_ts,
+            observed_duration_ms: 1200,
+            message_count: 4,
+            tool_count: 0,
+            entry_count: 4,
+            malformed_count: 0,
+            unsupported_count: 0,
+            hidden_internal_count: 0,
+            file_size: 128,
+            snapshot: "128:1",
+          },
+          [],
+        );
+      },
+    );
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+
+    const userArticles = screen
+      .getAllByRole("article")
+      .filter((article) => article.className.includes(styles.sessionMessageUser));
+    expect(userArticles).toHaveLength(2);
+    expect(userArticles[0]).toHaveTextContent("First request");
+    expect(userArticles[1]).toHaveTextContent("Second request");
+    expect(
+      screen.getAllByRole("button", { name: /Jump to message 1: First request/ }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /Jump to message 2: Second request/ }),
+    ).toHaveLength(2);
+
+    await user.click(screen.getAllByRole("button", { name: /Jump to message 2/ })[0]);
+    expect(
+      screen
+        .getAllByRole("button", { name: /Jump to message 2/ })
+        .every((button) => button.getAttribute("aria-current") === "location"),
+    ).toBe(true);
+  });
+
+  it("reports an incomplete Transcript as a diagnostic", async () => {
+    const streamSessionDetail = vi.fn().mockRejectedValue(new Error("truncated Transcript"));
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(await screen.findByText("Partial transcript")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Details/ }));
+
+    expect(
+      screen.getByText(
+        "Transcript detail did not finish loading. Displayed content may be incomplete.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No transcript diagnostics.")).not.toBeInTheDocument();
   });
 
   it("defaults to compact single-select Tenant and Agent menus", async () => {
@@ -1486,13 +1722,18 @@ describe("SessionPage", () => {
     );
     expect(within(session).getByTitle("First prompt").tagName).toBe("STRONG");
     const metadata = session.querySelector("small");
-    expect(metadata).toHaveTextContent("default · Codex");
+    expect(metadata).toHaveTextContent("default Codex");
     const sessionTime = within(metadata!).getByText("2026-08-17 17:00:00");
     expect(sessionTime.tagName).toBe("TIME");
     expect(sessionTime).toHaveAttribute("datetime", firstSession.start_ts);
-    expect(metadata?.textContent).not.toContain("Codex · 2026");
+    expect(metadata?.textContent).not.toContain("Codex 2026");
     expect(session).not.toHaveTextContent("Tenant");
     expect(session).not.toHaveTextContent(firstSession.display_id);
+    expect(
+      screen.getByRole("button", {
+        name: "Delete Session 111111111111 from Tenant default · Codex",
+      }),
+    ).toHaveAttribute("title", "Delete Session 111111111111 from Tenant default Codex");
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toHaveAttribute(
       "title",
       "Refresh Sessions",
@@ -1534,7 +1775,7 @@ describe("SessionPage", () => {
     const titleElement = within(session).getByTitle(title);
     expect(titleElement.tagName).toBe("STRONG");
     expect(titleElement).toHaveTextContent(title);
-    expect(titleElement.parentElement?.children).toHaveLength(2);
+    expect(titleElement.parentElement?.children).toHaveLength(3);
   });
 
   it("stages multiple values, cancels drafts, and can return to one value", async () => {
@@ -1697,25 +1938,25 @@ describe("SessionPage", () => {
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toBeEnabled();
   });
 
-  it("confirms one Session deletion, aborts its prompt stream, and restores list focus", async () => {
+  it("confirms one Session deletion, aborts its detail stream, and restores list focus", async () => {
     let rows = [firstSession, secondSession];
     const deletion = deferred<{ deleted: number }>();
-    let promptSignal: AbortSignal | undefined;
+    let detailSignal: AbortSignal | undefined;
     const post = vi.fn(() => deletion.promise);
-    const streamSession = vi.fn((_path: string, _onPrompt: unknown, signal?: AbortSignal) => {
-      promptSignal = signal;
+    const streamSessionDetail = vi.fn((_path: string, _handlers: unknown, signal?: AbortSignal) => {
+      detailSignal = signal;
       return new Promise((_resolve, reject) => {
         signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       });
     });
-    const { api } = fakeApi({ sessions: () => list(rows), post, streamSession });
+    const { api } = fakeApi({ sessions: () => list(rows), post, streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
 
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(promptSignal).toBeDefined();
+    expect(detailSignal).toBeDefined();
     await user.click(
       screen.getByRole("button", {
         name: "Delete Session 111111111111 from Tenant default · Codex",
@@ -1723,9 +1964,12 @@ describe("SessionPage", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "Delete Session 111111111111?" });
-    expect(promptSignal?.aborted).toBe(false);
+    expect(dialog).toHaveTextContent(
+      "This permanently deletes its Transcript from Tenant default Codex.",
+    );
+    expect(detailSignal?.aborted).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
-    expect(promptSignal?.aborted).toBe(true);
+    expect(detailSignal?.aborted).toBe(true);
     expect(
       screen.getByRole("button", {
         name: "Deleting Session 111111111111 from Tenant default · Codex",
@@ -1794,7 +2038,7 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
 
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
-    expect(dialog).toHaveTextContent("Sources: Tenant default · Codex (2)");
+    expect(dialog).toHaveTextContent("Sources: Tenant default Codex (2)");
     rows = [thirdSession];
     await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
 
@@ -1879,20 +2123,20 @@ describe("SessionPage", () => {
     const hostSession = await screen.findByRole("button", {
       name: "First prompt, Host Tenant · Codex",
     });
-    expect(hostSession.querySelector("small")).toHaveTextContent("Host Tenant · Codex");
+    expect(hostSession.querySelector("small")).toHaveTextContent("Host Tenant Codex");
     expect(within(hostSession).getByText("2026-08-17 17:00:00").tagName).toBe("TIME");
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("Sources: Host Tenant · Codex (2)");
+    expect(dialog).toHaveTextContent("Sources: Host Tenant Codex (2)");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(post).not.toHaveBeenCalled();
   });
 
   it("aggregates every selected Tenant and Coding Agent with stable source identities", async () => {
-    const streamSession = vi.fn().mockResolvedValue({ id: firstSession.id, warnings: [] });
+    const streamSessionDetail = vi.fn().mockResolvedValue(undefined);
     const { api, get } = fakeApi({
       sessions: (path) => {
         const query = sessionQuery(path);
@@ -1912,7 +2156,7 @@ describe("SessionPage", () => {
           },
         ]);
       },
-      streamSession,
+      streamSessionDetail,
     });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
@@ -1943,7 +2187,7 @@ describe("SessionPage", () => {
     expect(
       screen.getByRole("button", { name: "default claude, Tenant default · Claude" }),
     ).toBeInTheDocument();
-    expect(newest.querySelector("small")).toHaveTextContent("work · Claude");
+    expect(within(newest.querySelector("small")!).getByText("work Claude")).toBeInTheDocument();
     expect(within(newest).getByText("2026-08-17 18:00:00").tagName).toBe("TIME");
     expect(newest).not.toHaveTextContent(firstSession.display_id);
     expect(get).toHaveBeenCalledWith(
@@ -1956,15 +2200,15 @@ describe("SessionPage", () => {
     );
 
     await user.click(newest);
-    expect(streamSession).toHaveBeenCalledWith(
+    expect(streamSessionDetail).toHaveBeenCalledWith(
       expect.stringMatching(/tenant=work.*agent=claude|agent=claude.*tenant=work/),
-      expect.any(Function),
+      expect.any(Object),
       expect.any(AbortSignal),
     );
     expect(
       screen
-        .getAllByText(/Tenant work · Claude ·/)
-        .some((element) => element.textContent?.includes(firstSession.id)),
+        .getAllByText(/work Claude/)
+        .some((element) => element.textContent?.includes("work Claude")),
     ).toBe(true);
   });
 
@@ -1985,7 +2229,7 @@ describe("SessionPage", () => {
     await user.click(within(filterMenu).getByRole("checkbox", { name: "work" }));
     await user.click(within(filterMenu).getByRole("button", { name: "Apply" }));
 
-    expect(await screen.findByText("Tenant work · Codex: permission denied")).toBeInTheDocument();
+    expect(await screen.findByText("Tenant work Codex: permission denied")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "First prompt, Tenant default · Codex" }),
     ).toBeInTheDocument();
@@ -2030,8 +2274,8 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
 
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
-    expect(dialog).toHaveTextContent("Tenant default · Codex (1)");
-    expect(dialog).toHaveTextContent("Tenant work · Codex (1)");
+    expect(dialog).toHaveTextContent("Tenant default Codex (1)");
+    expect(dialog).toHaveTextContent("Tenant work Codex (1)");
     await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
     expect(post).toHaveBeenCalledTimes(1);
 
@@ -2069,7 +2313,7 @@ describe("SessionPage", () => {
         .closest('[data-empty-state="detail"]'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Choose a Session to inspect its prompts and Transcript warnings."),
+      screen.getByText("Choose a Session to inspect its conversation and Transcript evidence."),
     ).toBeInTheDocument();
     firstRender.unmount();
 
@@ -2079,14 +2323,18 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(await screen.findByRole("heading", { name: "No typed prompts" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "No readable conversation" }),
+    ).toBeInTheDocument();
     expect(
       screen
-        .getByRole("heading", { name: "No typed prompts" })
+        .getByRole("heading", { name: "No readable conversation" })
         .closest('[data-empty-state="detail"]'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("This Session's Transcript contains no supported typed user prompts."),
+      screen.getByText(
+        "This Transcript contains no supported user or Agent messages. Transcript events remain available below when present.",
+      ),
     ).toBeInTheDocument();
   });
 });

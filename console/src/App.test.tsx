@@ -43,7 +43,7 @@ describe("Console App", () => {
     await screen.findByRole("region", { name: "Service status" });
     const resources = screen.getByRole("navigation", { name: "Resources" });
     const expected = [
-      ["GitHub", "https://github.com/rbee3u/aibox", "github"],
+      ["GitHub repo", "https://github.com/rbee3u/aibox", "github"],
       ["Codex docs", "https://developers.openai.com/codex/cli", "codex"],
       ["Claude docs", "https://code.claude.com/docs/en/overview", "claude"],
     ];
@@ -92,7 +92,10 @@ describe("Console App", () => {
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute("title", "GitHub");
+    expect(screen.getByRole("link", { name: "GitHub repo" })).toHaveAttribute(
+      "title",
+      "GitHub repo",
+    );
     await waitFor(() =>
       expect(window.localStorage.getItem("aibox-console-sidebar-collapsed")).toBe("true"),
     );

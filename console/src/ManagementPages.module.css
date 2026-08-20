@@ -236,16 +236,7 @@
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-columns: clamp(320px, 28vw, 400px) minmax(0, 1fr);
-}
-
-.tenantLayout {
-  grid-template-columns: clamp(320px, 28vw, 400px) minmax(0, 1fr);
-}
-
-.sessionPage > .splitLayout {
-  height: 100%;
-  grid-template-columns: clamp(320px, 28vw, 400px) minmax(0, 1fr);
+  grid-template-columns: var(--catalog-panel-width) minmax(0, 1fr);
 }
 
 .catalog,
@@ -766,15 +757,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.sessionRowPreview {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .sessionRowMain strong {
   display: -webkit-box;
   overflow: hidden;
   font-size: var(--catalog-row-primary-size);
   font-weight: var(--weight-semibold);
   line-height: var(--catalog-row-primary-line-height);
-  white-space: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .sessionRowMain small {
@@ -920,11 +926,42 @@
 .detailHeader,
 .editorHeader {
   min-height: 66px;
-  padding: 10px 16px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
 }
 .detailHeader > [data-icon-button]:first-child {
   display: none;
+}
+
+.sessionDetailActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.sessionDetailStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+}
+
+.sessionStatusWarning {
+  color: var(--warning);
+}
+
+.sessionDetailHeading {
+  min-width: 0;
+}
+
+.sessionDetailHeading h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sessionDetailSource {
@@ -942,6 +979,351 @@
   display: inline;
   font-family: var(--font-mono);
 }
+
+.sessionTabs {
+  display: flex;
+  min-height: 42px;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.sessionTabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 4px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+}
+
+.sessionTabs button + button {
+  margin-left: 14px;
+}
+
+.sessionTabs button:hover {
+  border-color: transparent;
+  color: var(--accent);
+  background: transparent;
+}
+
+.sessionTabActive {
+  color: var(--accent) !important;
+}
+
+.sessionTabActive::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: var(--accent);
+  content: "";
+}
+
+.sessionTabIssue {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 10px;
+}
+
+.sessionConversationScroll,
+.sessionDetailsScroll {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+.sessionConversationScroll {
+  background: var(--bg-canvas);
+}
+
+.sessionConversationLayout {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: 48px minmax(0, 1fr);
+  background: var(--bg-canvas);
+}
+
+.sessionConversationMain {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.sessionConversationRail {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  justify-content: center;
+  overflow: auto;
+  border-right: 1px solid var(--line-soft);
+  background: var(--bg-canvas);
+}
+
+.sessionConversationRail .sessionConversationNavItems {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 28px 0;
+}
+
+.sessionConversationRail .sessionConversationNavItems::before {
+  position: absolute;
+  top: 34px;
+  bottom: 34px;
+  left: 50%;
+  width: 1px;
+  background: var(--line-strong);
+  content: "";
+}
+
+.sessionConversationRail button,
+.sessionConversationMobileNav button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  padding: 4px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.sessionConversationRail button {
+  width: 48px;
+  height: 30px;
+}
+
+.sessionConversationRail button:hover,
+.sessionConversationRail button:focus-visible,
+.sessionConversationMobileNav button:hover,
+.sessionConversationMobileNav button:focus-visible {
+  border-color: transparent;
+  color: var(--accent);
+  background: transparent;
+}
+
+.sessionConversationNavDot {
+  position: relative;
+  display: grid;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--bg-canvas);
+}
+
+.sessionConversationNavDot span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sessionConversationNavActive .sessionConversationNavDot {
+  width: 16px;
+  height: 16px;
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sessionConversationNavActive .sessionConversationNavDot span {
+  width: 6px;
+  height: 6px;
+}
+
+.sessionConversationNavIndex,
+.sessionConversationNavLabel {
+  display: none;
+}
+
+.sessionConversationMobileNav {
+  display: none;
+}
+
+.sessionConversationContent,
+.sessionDetailsContent {
+  width: min(100%, 920px);
+  margin: 0 auto;
+}
+
+.sessionConversationContent {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 30px 32px 64px;
+}
+
+.sessionDetailsContent {
+  padding: 26px 24px 42px;
+}
+
+.sessionDetailsSection + .sessionDetailsSection {
+  margin-top: 30px;
+}
+
+.sessionDetailsSection h3 {
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: var(--weight-bold);
+}
+
+.sessionDetailsSectionHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sessionDetailsSectionHeading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sessionDetailsGrid,
+.sessionDiagnosticsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--line);
+}
+
+.sessionDetailsGrid > div,
+.sessionDiagnosticsGrid > div {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.sessionDetailsGrid dt,
+.sessionDiagnosticsGrid dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+}
+
+.sessionDetailsGrid dd,
+.sessionDiagnosticsGrid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+  font-size: 12px;
+}
+
+.sessionDetailsGrid dd time,
+.sessionDetailsGrid dd > code,
+.sessionDiagnosticsGrid dd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionCopyValue {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.sessionCopyValue code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionCopyAction {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  flex-basis: 24px;
+  border-color: transparent;
+  color: var(--muted);
+  opacity: 0.3;
+}
+
+.sessionCopyValue:hover .sessionCopyAction,
+.sessionCopyAction:focus-visible {
+  opacity: 1;
+}
+
+.sessionDiagnosticWarnings {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sessionDiagnosticWarnings p {
+  margin: 0;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 12px;
+}
+
+.sessionConversationWarning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  text-align: left;
+  font-size: 12px;
+}
+
+.sessionConversationWarning span:nth-of-type(2) {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.jumpLatest {
+  position: sticky;
+  right: 20px;
+  bottom: 18px;
+  display: grid;
+  margin: -50px 20px 18px auto;
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
 .sectionHeading {
   padding: 14px 16px 8px;
 }
@@ -954,8 +1336,7 @@
   font-size: 12px;
 }
 
-.tableList,
-.promptList {
+.tableList {
   min-height: 0;
   overflow: auto;
 }
@@ -1082,7 +1463,7 @@
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-columns: clamp(340px, 34%, 560px) minmax(0, 1fr);
+  grid-template-columns: var(--catalog-panel-width) minmax(0, 1fr);
 }
 .configCatalog {
   display: grid;
@@ -1370,7 +1751,7 @@
 .configEditorHeader h2 {
   min-width: 0;
   margin: 0;
-  padding: 0 16px;
+  padding: 0 24px;
   overflow: hidden;
   font: var(--weight-semibold) var(--text-xs) / 1.5 var(--font-mono);
   text-overflow: ellipsis;
@@ -1394,7 +1775,7 @@
   min-height: 38px;
   align-items: end;
   gap: 2px;
-  padding: 5px 10px 0;
+  padding: 5px 24px 0;
   border-bottom: 1px solid var(--line);
   background: var(--bg-shell);
 }
@@ -1635,37 +2016,216 @@
   gap: 6px;
 }
 
-.promptList {
-  padding: 12px 16px 24px;
-  background: var(--bg-canvas);
+.sessionMessage {
+  width: min(100%, 900px);
+  max-width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
-.promptList article {
-  margin-bottom: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+
+.sessionMessageAssistant {
+  align-self: flex-start;
 }
-.promptList article header {
+
+.sessionMessageUser {
+  width: min(100%, 720px);
+  align-self: flex-end;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 14px;
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-sm);
+}
+
+.sessionMessage header,
+.sessionActivity summary,
+.sessionEvidence summary,
+.sessionEvidenceGroup summary,
+.sessionActivityGroup summary {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
+  padding: 0 0 5px;
+  border-bottom: 0;
   color: var(--muted);
   font-size: 12px;
 }
-.promptList article header time {
+
+.sessionMessageUser header {
+  padding: 10px 15px 0;
+}
+
+.sessionMessage > :last-child {
+  padding: 0;
+}
+
+.sessionMessageUser > :last-child {
+  padding: 7px 15px 14px;
+}
+
+.sessionMessage header span {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionMessage header time {
+  cursor: help;
+}
+
+.sessionMessage header time,
+.sessionActivity summary time,
+.sessionEvidence summary time {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.promptList pre {
+
+.sessionActivity pre,
+.sessionEvidence pre {
   margin: 0;
-  padding: 12px;
+  padding: 13px 14px;
   overflow: auto;
-  color: var(--code-text);
-  font: var(--text-xs) / 1.55 var(--font-mono);
+  color: var(--ink);
+  font: 13px / 1.65 var(--font-sans);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.sessionActivity,
+.sessionEvidence,
+.sessionEvidenceGroup,
+.sessionActivityGroup {
+  width: min(100%, 760px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.sessionActivityGroup {
+  width: min(100%, 900px);
+  align-self: flex-start;
+  background: var(--surface-inset);
+}
+
+.sessionActivity summary,
+.sessionEvidence summary,
+.sessionEvidenceGroup summary,
+.sessionActivityGroup summary {
+  border-bottom: 0;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.sessionActivityGroup > summary {
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.sessionActivityGroup > summary span:first-of-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sessionActivityGroup > summary span:first-of-type svg:last-child {
+  color: var(--warning);
+}
+
+.sessionActivity summary span:first-of-type,
+.sessionEvidence summary span:first-of-type,
+.sessionEvidenceGroup summary span:first-of-type,
+.sessionActivityGroup summary span:first-of-type {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionActivity summary span:nth-of-type(2),
+.sessionEvidence summary span:nth-of-type(2),
+.sessionEvidenceGroup summary span:nth-of-type(2),
+.sessionActivityGroup summary span:nth-of-type(2) {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sessionActivity[open] summary,
+.sessionEvidence[open] summary,
+.sessionEvidenceGroup[open] summary,
+.sessionActivityGroup[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.sessionActivity pre,
+.sessionEvidence pre,
+.sessionEvidenceRaw pre {
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sessionEvidenceRaw {
+  border-top: 1px solid var(--line);
+}
+
+.sessionEvidenceRaw button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 9px 12px 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.sessionActivity p,
+.sessionEvidence p {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sessionEvidenceError {
+  color: var(--danger) !important;
+}
+
+.sessionEvidenceGroup {
+  background: var(--surface-raised);
+}
+
+.sessionActivityGroupItems,
+.sessionEvidenceGroupItems {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.sessionActivityGroupItems {
+  background: var(--surface);
+}
+
+.sessionEvidenceGroupItems .sessionEvidence {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.sessionActivityGroupItems .sessionActivity,
+.sessionActivityGroupItems .sessionEvidence {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.sessionEvidenceGroupItems .sessionEvidence summary {
+  padding: 7px 9px;
+}
+
+.sessionActivityGroupItems .sessionActivity summary,
+.sessionActivityGroupItems .sessionEvidence summary {
+  padding: 7px 9px;
 }
 
 .dialog {
@@ -1701,7 +2261,7 @@
   grid-template-columns: repeat(4, minmax(90px, auto));
   align-items: center;
   gap: 6px 18px;
-  padding: 7px 12px 2px;
+  padding: 7px 24px 2px;
 }
 .contextFacts > span {
   display: grid;
@@ -1752,6 +2312,7 @@
   font-size: var(--text-xs);
 }
 .sensitiveContext {
+  padding: 0 24px 3px;
   color: var(--warning);
   font-size: var(--text-xs);
 }
@@ -2014,6 +2575,113 @@
   }
   .detailHeader > [data-icon-button]:first-child {
     display: inline-grid;
+  }
+  .sessionDetailHeader {
+    position: relative;
+    min-height: 66px;
+    padding: 10px 14px;
+  }
+  .sessionDetailHeader .sessionDetailStatus {
+    display: none;
+  }
+  .sessionDetailHeader .sessionDetailHeading {
+    padding-right: 30px;
+  }
+  .sessionDetailHeader .sessionDetailSource {
+    max-width: calc(100vw - 112px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sessionTabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0 14px;
+  }
+  .sessionConversationLayout {
+    display: flex;
+    flex-direction: column;
+  }
+  .sessionConversationRail {
+    display: none;
+  }
+  .sessionConversationMobileNav {
+    display: block;
+    flex: 0 0 auto;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg-canvas);
+    scrollbar-width: thin;
+  }
+  .sessionConversationMobileNav .sessionConversationNavItems {
+    display: flex;
+    width: max-content;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .sessionConversationMobileNav button {
+    display: flex;
+    max-width: 180px;
+    min-height: 34px;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 5px 10px 5px 7px;
+    background: var(--surface);
+  }
+  .sessionConversationMobileNav button:hover,
+  .sessionConversationMobileNav button:focus-visible,
+  .sessionConversationMobileNav .sessionConversationNavActive {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .sessionConversationMobileNav .sessionConversationNavDot {
+    width: 10px;
+    height: 10px;
+    flex: 0 0 auto;
+    background: var(--surface);
+  }
+  .sessionConversationMobileNav .sessionConversationNavActive .sessionConversationNavDot {
+    width: 12px;
+    height: 12px;
+    box-shadow: none;
+  }
+  .sessionConversationNavIndex {
+    display: inline;
+    color: var(--muted);
+    font: 11px / 1 var(--font-mono);
+  }
+  .sessionConversationNavLabel {
+    display: block;
+    overflow: hidden;
+    color: var(--ink-secondary);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sessionConversationContent,
+  .sessionDetailsContent {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .sessionConversationContent {
+    gap: 18px;
+    padding-top: 20px;
+  }
+  .sessionMessageUser {
+    width: min(92%, 720px);
+  }
+  .sessionDetailsGrid,
+  .sessionDiagnosticsGrid {
+    grid-template-columns: 1fr;
+  }
+  .sessionConversationWarning {
+    align-items: flex-start;
+  }
+  .sessionConversationWarning span:nth-of-type(2) {
+    white-space: nowrap;
   }
   .configEditorHeader > [data-icon-button]:first-child {
     display: inline-grid;

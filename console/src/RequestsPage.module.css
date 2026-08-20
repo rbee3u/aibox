@@ -128,7 +128,7 @@
 .main {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: clamp(360px, 31vw, 460px) minmax(0, 1fr);
+  grid-template-columns: var(--catalog-panel-width) minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   border-bottom: 1px solid var(--line);

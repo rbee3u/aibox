@@ -8,12 +8,16 @@ use crate::agent::AgentKind;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 // Transcripts stream line by line, but a container-written JSONL record still
 // needs a bound before it is buffered for parsing.
@@ -451,12 +455,12 @@ pub(crate) fn ts_of(value: &Value) -> String {
         .to_string()
 }
 
-/// Classification of one parsed transcript record for the typed-prompt view.
+/// Classification of one parsed transcript record for list titles and parser tests.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum PromptRecord {
     /// A prompt that the user actually typed.
     Typed(String),
-    /// A readable typed prompt whose record also contains unsupported content.
+    /// A readable user record whose content also contains unsupported parts.
     TypedWithUnsupported(String),
     /// A recognized non-prompt record, including injected and tool records.
     NotTyped,
@@ -508,20 +512,199 @@ impl TranscriptDiagnostics {
 
 /// One Session's list-row data.
 ///
-/// Every Transcript yields a summary, so Sessions with no typed prompt remain
+/// Every Transcript yields a summary, so Sessions with no readable message remain
 /// visible and deletable.
 pub(crate) struct SessionSummary {
     /// Full session id (the row shows the final UUID group for canonical UUIDs).
     pub id: String,
     /// Session start timestamp (ISO-8601), or empty if none was found.
     pub start_ts: String,
-    /// The agent-generated title when available, otherwise the first typed
-    /// prompt, or empty for a tool/injected-only session.
+    /// The agent-generated title when available, otherwise the first readable
+    /// user message, or empty for a tool/injected-only session.
     pub title: String,
+    pub latest_message: String,
+    pub message_count: usize,
+    pub tool_count: usize,
+    pub native_facts: SessionNativeFacts,
     diagnostics: TranscriptDiagnostics,
 }
 
-/// One typed prompt from a session, for `get`.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct ConversationMessage {
+    pub(crate) entry_ids: Vec<String>,
+    pub(crate) role: String,
+    pub(crate) timestamp: String,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct ToolActivity {
+    pub(crate) entry_ids: Vec<String>,
+    pub(crate) call_id: Option<String>,
+    pub(crate) timestamp: String,
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) summary: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct TranscriptEvidenceSummary {
+    pub(crate) entry_id: String,
+    pub(crate) line: u64,
+    pub(crate) timestamp: String,
+    pub(crate) native_type: String,
+    pub(crate) role: Option<String>,
+    pub(crate) content_types: Vec<String>,
+    pub(crate) status: String,
+    pub(crate) preview: String,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub(crate) struct SessionDetailStats {
+    pub(crate) start_ts: String,
+    pub(crate) last_event_ts: String,
+    pub(crate) observed_duration_ms: Option<i64>,
+    pub(crate) message_count: usize,
+    pub(crate) tool_count: usize,
+    pub(crate) entry_count: usize,
+    pub(crate) malformed_count: usize,
+    pub(crate) unsupported_count: usize,
+    pub(crate) hidden_internal_count: usize,
+    pub(crate) file_size: u64,
+    pub(crate) snapshot: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct SessionDetailMeta {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) start_ts: String,
+    pub(crate) transcript_path: String,
+    pub(crate) cwd: Option<String>,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) cli_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SessionNativeFacts {
+    pub(crate) cwd: Option<String>,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) cli_version: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum DetailRecord {
+    Message(ConversationMessage),
+    Tool(ToolActivity),
+    Evidence(TranscriptEvidenceSummary),
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct TranscriptEvidence {
+    pub(crate) entry_id: String,
+    pub(crate) encoding: String,
+    pub(crate) content: String,
+    pub(crate) snapshot: String,
+}
+
+pub(crate) fn bounded_preview(value: &str) -> String {
+    const MAX: usize = 240;
+    let safe = terminal_safe(value);
+    safe.chars().take(MAX).collect()
+}
+
+fn content_types(value: &Value) -> Vec<String> {
+    value
+        .pointer("/message/content")
+        .or_else(|| value.pointer("/payload/content"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("type").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn role_of(value: &Value) -> Option<String> {
+    value
+        .pointer("/message/role")
+        .or_else(|| value.pointer("/payload/role"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn text_at(value: &Value, pointer: &str) -> Option<String> {
+    match value.pointer(pointer) {
+        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+        Some(Value::Array(items)) => {
+            let parts = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn evidence_for(
+    value: &Value,
+    entry_id: &str,
+    line: u64,
+    status: &str,
+) -> TranscriptEvidenceSummary {
+    TranscriptEvidenceSummary {
+        entry_id: entry_id.to_string(),
+        line,
+        timestamp: ts_of(value),
+        native_type: value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        role: role_of(value),
+        content_types: content_types(value),
+        status: status.to_string(),
+        preview: text_at(value, "/message/content")
+            .or_else(|| text_at(value, "/payload/content"))
+            .or_else(|| {
+                value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .map(|text| bounded_preview(&text))
+            .unwrap_or_default(),
+    }
+}
+
+fn snapshot_for_metadata(metadata: &fs::Metadata) -> String {
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    format!("{}:{modified}", metadata.len())
+}
+
+fn observed_duration_ms(start: &str, end: &str) -> Option<i64> {
+    let start = OffsetDateTime::parse(start, &Rfc3339).ok()?;
+    let end = OffsetDateTime::parse(end, &Rfc3339).ok()?;
+    let duration = end - start;
+    (duration.is_positive() || duration.is_zero()).then(|| duration.whole_milliseconds() as i64)
+}
+
+fn detail_entry_id(line: u64) -> String {
+    format!("line-{line}")
+}
+
+/// Test-only compatibility projection for backend parser tests.
+#[cfg(test)]
 #[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct Prompt {
     /// The turn's timestamp (ISO-8601), or empty.
@@ -537,6 +720,9 @@ pub(crate) struct SessionListRow {
     pub(crate) display_id: String,
     pub(crate) start_ts: String,
     pub(crate) title: String,
+    pub(crate) latest_message: String,
+    pub(crate) message_count: usize,
+    pub(crate) tool_count: usize,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -590,12 +776,25 @@ pub(crate) trait SessionBackend {
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
 
-    /// Classify one line for the typed-prompt view, filtering injected/wrapper
+    /// Classify one line for the list title and compatibility parser, filtering injected/wrapper
     /// turns while distinguishing recognized non-prompts from unsupported
     /// user-like records. This is the heart of the divergence: Claude keys off
     /// `promptSource:typed`, Codex off a wrapper-filtered `response_item` user
     /// message.
     fn prompt_record(&self, value: &Value) -> PromptRecord;
+
+    /// Project one native Transcript Entry into the Console's shared detail
+    /// vocabulary. Coding Agent formats intentionally keep this mapping local.
+    fn detail_records(&self, value: &Value, entry_id: &str, line: u64) -> Vec<DetailRecord> {
+        vec![DetailRecord::Evidence(evidence_for(
+            value,
+            entry_id,
+            line,
+            "unsupported",
+        ))]
+    }
+
+    fn native_facts(&self, _value: &Value, _facts: &mut SessionNativeFacts) {}
 
     /// The session start timestamp from one parsed line; the first `Some` is
     /// retained. Claude answers for any line bearing a non-empty top-level
@@ -609,15 +808,15 @@ pub(crate) trait SessionBackend {
     }
 
     /// A `list` row title candidate from one parsed line. The *last* non-empty
-    /// candidate wins; a session with none falls back to its first typed
-    /// prompt. Default: no candidates (Codex has no ai-title); Claude overrides
+    /// candidate wins; a session with none falls back to its first readable
+    /// user message. Default: no candidates (Codex has no ai-title); Claude overrides
     /// to surface `ai-title` lines.
     fn title_of(&self, _value: &Value) -> Option<String> {
         None
     }
 
     /// Summarize one transcript for `list`. Every transcript summarizes — a
-    /// session with no typed prompt just gets an empty title (unless a backend's
+    /// session with no readable message just gets an empty title (unless a backend's
     /// `title_of` finds something else, like Claude's `ai-title`), so tool/
     /// injected-only shells still list and can be cleared. One streaming pass
     /// with O(1) state; the Coding Agent-specific answers come from the methods
@@ -628,6 +827,10 @@ pub(crate) trait SessionBackend {
         let mut fallback_start_ts: Option<String> = None;
         let mut first_typed: Option<String> = None;
         let mut title: Option<String> = None;
+        let mut latest_message = String::new();
+        let mut message_count = 0;
+        let mut tool_count = 0;
+        let mut native_facts = SessionNativeFacts::default();
         let mut diagnostics = TranscriptDiagnostics::default();
         diagnostics.malformed_lines = try_for_each_json_line(home, path, |value| {
             if start_ts.is_none() {
@@ -645,12 +848,27 @@ pub(crate) trait SessionBackend {
             {
                 title = Some(candidate);
             }
+            self.native_facts(value, &mut native_facts);
+            for record in self.detail_records(value, "summary", 0) {
+                match record {
+                    DetailRecord::Message(message) => {
+                        latest_message = message.text;
+                        message_count += 1;
+                    }
+                    DetailRecord::Tool(tool) if tool.status == "started" => tool_count += 1,
+                    DetailRecord::Tool(_) | DetailRecord::Evidence(_) => {}
+                }
+            }
             Ok(true)
         })?;
         Ok(SessionSummary {
             id: self.id_of(path),
             start_ts: start_ts.or(fallback_start_ts).unwrap_or_default(),
             title: title.or(first_typed).unwrap_or_default(),
+            latest_message,
+            message_count,
+            tool_count,
+            native_facts,
             diagnostics,
         })
     }
@@ -665,10 +883,7 @@ pub(crate) trait SessionBackend {
         self.summarize_in(&home, path)
     }
 
-    /// Collect every typed prompt in one transcript, in order.
-    ///
-    /// Call [`Self::for_each_prompt_in`] when prompts should be processed with
-    /// bounded memory, as the CLI `get` path does.
+    /// Collect typed user records for parser tests.
     #[cfg(test)]
     fn prompts_in(&self, home: &Path, path: &Path) -> Result<Vec<Prompt>> {
         let mut out = Vec::new();
@@ -679,9 +894,8 @@ pub(crate) trait SessionBackend {
         Ok(out)
     }
 
-    /// Visit typed prompts in order without retaining the full transcript's
-    /// prompt text. Returning `false` stops the read cleanly, which lets CLI
-    /// output stop immediately after a downstream pipe closes.
+    /// Visit typed user records for parser tests.
+    #[cfg(test)]
     fn for_each_prompt_in(
         &self,
         home: &Path,
@@ -826,6 +1040,9 @@ pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<Ses
                     id: summary.id,
                     start_ts: summary.start_ts,
                     title: list_title(&summary.title),
+                    latest_message: list_title(&summary.latest_message),
+                    message_count: summary.message_count,
+                    tool_count: summary.tool_count,
                     warnings: row_warnings,
                 });
             }
@@ -839,6 +1056,20 @@ pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<Ses
         warnings,
         partial,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn detail_records_for_test(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    query: &str,
+) -> Result<Vec<DetailRecord>> {
+    let mut records = Vec::new();
+    stream_detail_data(backend, home, query, &mut |_| Ok(true), &mut |record| {
+        records.push(record);
+        Ok(true)
+    })?;
+    Ok(records)
 }
 
 /// Count safely discoverable Transcripts without opening or parsing them.
@@ -859,29 +1090,221 @@ pub(crate) fn discovery_summary(
     })
 }
 
-pub(crate) fn stream_prompt_data(
+fn detail_file_path(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
+    resolve(backend, home, query)
+}
+
+fn detail_meta(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    path: &Path,
+    id: &str,
+) -> Result<SessionDetailMeta> {
+    let summary = backend.summarize_in(home, path)?;
+    Ok(SessionDetailMeta {
+        id: id.to_string(),
+        title: summary.title,
+        start_ts: summary.start_ts,
+        transcript_path: path
+            .strip_prefix(home)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string(),
+        cwd: summary.native_facts.cwd,
+        model_provider: summary.native_facts.model_provider,
+        cli_version: summary.native_facts.cli_version,
+    })
+}
+
+pub(crate) fn stream_detail_data(
     backend: &dyn SessionBackend,
     home: &Path,
     query: &str,
-    visit: &mut dyn FnMut(Prompt) -> Result<bool>,
-) -> Result<(String, Vec<String>)> {
-    let path = resolve(backend, home, query)?;
+    begin: &mut dyn FnMut(&SessionDetailMeta) -> Result<bool>,
+    visit: &mut dyn FnMut(DetailRecord) -> Result<bool>,
+) -> Result<(SessionDetailMeta, SessionDetailStats, Vec<String>)> {
+    let path = detail_file_path(backend, home, query)?;
     let id = backend.id_of(&path);
-    let (_, diagnostics) = backend.for_each_prompt_in(home, &path, visit)?;
+    let meta = detail_meta(backend, home, &path, &id)?;
+    if !begin(&meta)? {
+        return Ok((meta, SessionDetailStats::default(), Vec::new()));
+    }
+    let file = open_session_transcript(home, &path)?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("inspect session transcript {}", safe_path(&path)))?;
+    let snapshot = snapshot_for_metadata(&metadata);
+    let file_size = metadata.len();
+    let mut stats = SessionDetailStats {
+        start_ts: meta.start_ts.clone(),
+        file_size,
+        snapshot,
+        ..SessionDetailStats::default()
+    };
     let mut warnings = Vec::new();
-    if diagnostics.malformed_lines != 0 {
+    let mut reader = io::BufReader::new(file);
+    let mut line = Vec::new();
+    let mut line_number = 0_u64;
+    let mut pending_tools = HashMap::<String, ToolActivity>::new();
+    loop {
+        line.clear();
+        let read = (&mut reader)
+            .take(MAX_TRANSCRIPT_LINE_BYTES.saturating_add(2))
+            .read_until(b'\n', &mut line)
+            .with_context(|| format!("read session transcript {}", safe_path(&path)))?;
+        if read == 0 {
+            break;
+        }
+        line_number += 1;
+        let record_id = detail_entry_id(line_number);
+        let record = line.strip_suffix(b"\n").unwrap_or(&line);
+        let record = record.strip_suffix(b"\r").unwrap_or(record);
+        if record.len() as u64 > MAX_TRANSCRIPT_LINE_BYTES {
+            bail!(
+                "session transcript line {} exceeds the {} byte limit: {}",
+                line_number,
+                MAX_TRANSCRIPT_LINE_BYTES,
+                safe_path(&path)
+            );
+        }
+        stats.entry_count += 1;
+        let value = match serde_json::from_slice::<Value>(record) {
+            Ok(value) => value,
+            Err(error) => {
+                stats.malformed_count += 1;
+                warnings.push(format!("line {line_number}: malformed JSONL ({error})"));
+                if !visit(DetailRecord::Evidence(TranscriptEvidenceSummary {
+                    entry_id: record_id,
+                    line: line_number,
+                    timestamp: String::new(),
+                    native_type: "malformed".to_string(),
+                    role: None,
+                    content_types: Vec::new(),
+                    status: "malformed".to_string(),
+                    preview: bounded_preview(&String::from_utf8_lossy(record)),
+                }))? {
+                    return Ok((meta, stats, warnings));
+                }
+                continue;
+            }
+        };
+        let timestamp = ts_of(&value);
+        if !timestamp.is_empty() {
+            stats.last_event_ts = timestamp;
+        }
+        for projected in backend.detail_records(&value, &record_id, line_number) {
+            if let DetailRecord::Tool(tool) = &projected
+                && let Some(call_id) = &tool.call_id
+            {
+                if tool.status == "started" {
+                    pending_tools.insert(call_id.clone(), tool.clone());
+                } else {
+                    pending_tools.remove(call_id);
+                }
+            }
+            match &projected {
+                DetailRecord::Message(_) => stats.message_count += 1,
+                DetailRecord::Tool(tool) if tool.status == "started" => stats.tool_count += 1,
+                DetailRecord::Tool(_) => {}
+                DetailRecord::Evidence(evidence) => {
+                    if evidence.status == "hidden_internal" {
+                        stats.hidden_internal_count += 1;
+                    } else if evidence.status == "unsupported" {
+                        stats.unsupported_count += 1;
+                    }
+                }
+            }
+            if !visit(projected)? {
+                return Ok((meta, stats, warnings));
+            }
+        }
+    }
+    for mut tool in pending_tools.into_values() {
+        tool.status = "incomplete".to_string();
+        if !visit(DetailRecord::Tool(tool))? {
+            return Ok((meta, stats, warnings));
+        }
+    }
+    if stats.unsupported_count != 0 {
         warnings.push(format!(
-            "skipped {} malformed JSONL record(s)",
-            diagnostics.malformed_lines
+            "encountered {} unsupported Transcript Entry projection(s)",
+            stats.unsupported_count
         ));
     }
-    if diagnostics.unsupported_user_records != 0 {
-        warnings.push(format!(
-            "skipped {} malformed or unsupported user-like record(s)",
-            diagnostics.unsupported_user_records
-        ));
+    stats.observed_duration_ms = observed_duration_ms(&stats.start_ts, &stats.last_event_ts);
+    Ok((meta, stats, warnings))
+}
+
+pub(crate) fn read_evidence(
+    backend: &dyn SessionBackend,
+    home: &Path,
+    query: &str,
+    entry: &str,
+    snapshot: &str,
+) -> Result<TranscriptEvidence> {
+    let path = detail_file_path(backend, home, query)?;
+    let file = open_session_transcript(home, &path)?;
+    let current_snapshot = snapshot_for_metadata(
+        &file
+            .metadata()
+            .with_context(|| format!("inspect session transcript {}", safe_path(&path)))?,
+    );
+    if current_snapshot != snapshot {
+        bail!("Session Transcript changed since it was inspected; refresh the detail view")
     }
-    Ok((id, warnings))
+    let line_number = entry
+        .strip_prefix("line-")
+        .and_then(|value| value.parse::<u64>().ok())
+        .with_context(|| format!("invalid Transcript Entry id: {entry}"))?;
+    let mut reader = io::BufReader::new(file);
+    let mut raw = Vec::new();
+    let mut current_line = 0_u64;
+    loop {
+        raw.clear();
+        let read = (&mut reader)
+            .take(MAX_TRANSCRIPT_LINE_BYTES.saturating_add(2))
+            .read_until(b'\n', &mut raw)
+            .with_context(|| format!("read Transcript Entry {entry}"))?;
+        if read == 0 {
+            break;
+        }
+        current_line += 1;
+        if current_line != line_number {
+            continue;
+        }
+        let record = raw.strip_suffix(b"\n").unwrap_or(&raw);
+        let record = record.strip_suffix(b"\r").unwrap_or(record);
+        if record.len() as u64 > MAX_TRANSCRIPT_LINE_BYTES {
+            bail!(
+                "Transcript Entry exceeds the {} byte limit",
+                MAX_TRANSCRIPT_LINE_BYTES
+            );
+        }
+        let (encoding, content) = match std::str::from_utf8(record) {
+            Ok(value) => ("utf-8".to_string(), value.to_string()),
+            Err(_) => (
+                "base64".to_string(),
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, record),
+            ),
+        };
+        if let Ok(value) = serde_json::from_slice::<Value>(record)
+            && backend
+                .detail_records(&value, entry, line_number)
+                .iter()
+                .any(|item| {
+                    matches!(item, DetailRecord::Evidence(evidence) if evidence.status == "hidden_internal")
+                })
+        {
+            bail!("internal reasoning is not available as Transcript evidence");
+        }
+        return Ok(TranscriptEvidence {
+            entry_id: entry.to_string(),
+            encoding,
+            content,
+            snapshot: current_snapshot,
+        });
+    }
+    bail!("Transcript Entry does not exist: {entry}")
 }
 
 pub(crate) fn delete_sessions(
@@ -913,7 +1336,7 @@ fn delete_targets(
 
     if all {
         // Match `list`: bulk deletion includes tool/injected-only transcripts
-        // that have no typed prompt.
+        // that have no readable message.
         let mut targets = backend.files(home)?;
         targets.sort_by_key(|path| backend.id_of(path));
         return Ok(targets);

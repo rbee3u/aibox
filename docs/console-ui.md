@@ -155,13 +155,60 @@ navigation, or page unload can discard them.
 The Tenants, Configs, Sessions, and Requests catalogs share one visual rhythm:
 48-pixel toolbars, aligned leading icons, 14-pixel semibold primary text,
 12-pixel secondary text, quiet destructive actions, and the same hover,
-selection, and focus treatment. Request and Tenant rows have a 64-pixel minimum
-height, while the single-line Config rows use 56 pixels. Session rows also start
-at 64 pixels, but a prompt title may occupy two lines before it is truncated;
-only those rows grow to accommodate the second line, and the complete title
-remains available from the row title. Compact list-empty states and larger
-detail-empty states use shared typography and spacing without changing each
-module's domain-specific copy.
+selection, and focus treatment. Their desktop split views use the same
+responsive catalog width, and each selected detail starts with the same pale
+shell surface and divider while retaining its module-specific structure.
+Request and Tenant rows have a 64-pixel minimum height, while the single-line
+Config rows use 56 pixels. Session rows also start at 64 pixels, but a
+Conversation Message preview may occupy two lines before it is truncated; only those rows grow to
+accommodate the second line, and the complete title remains available from the
+row title. Session source labels place the Tenant and Coding Agent together with
+a space; detail adds the Session ID after the same compact source. Compact
+list-empty states and larger detail-empty states use shared typography and
+spacing without changing each module's domain-specific copy.
+
+The Sessions detail is a compact header with a sticky `Conversation`/`Details`
+tab bar over independently scrolling content. The header contains the Session
+title, Tenant and Coding Agent source, started time, compact message/tool
+counts, observed duration, exceptional reading state, back, and refresh. Session
+deletion remains in the Sessions catalog and batch-selection flow; the detail
+view has no duplicate destructive action. The selected tab is shareable URL
+state through `tab=conversation|details`, defaulting to Conversation.
+
+Conversation is a centered reading stream with a compact user-message navigator.
+On desktop the navigator is a vertical rail beside the stream; each point maps
+to one user Conversation Message, follows the current scroll position, and uses
+that message's first readable line as its accessible label. Narrow screens use
+the same anchors in a horizontally scrollable strip above the conversation.
+
+User Conversation Messages remain separate, render as right-aligned plain-text
+bubbles, and preserve line breaks. Agent Conversation Messages form the wider
+left reading stream and render safe GFM Markdown with raw HTML disabled, secure
+external links, and copy controls for fenced code. Adjacent Agent messages may
+merge only when no secondary Transcript record separates them. Message
+timestamps stay compact and expose the complete timestamp through their title.
+
+Consecutive Tool Activity and Transcript Evidence entries remain in native order
+but appear as one collapsed `Agent activity` disclosure. Its summary reports the
+item count, bounded activity labels, and whether diagnostics are present;
+expansion reveals the individual safe summaries and on-demand evidence controls.
+Reasoning and thinking show a hidden-internal diagnostic state but never expose
+their raw text. Activity disclosures reset to collapsed whenever the Session is
+reloaded.
+
+Details contains separate Session and Diagnostics sections. Session facts include
+Tenant, Coding Agent, Session ID, relative Transcript path, started/last-event
+times, duration, file size, and only the available working directory, model
+provider, and CLI version. Diagnostics show non-zero parser counts and warnings;
+normal Sessions say `No transcript diagnostics.`. A warning in Conversation is a
+single link to Details rather than an inline list. The NDJSON detail stream
+renders frames as they arrive; manual refresh retains the old content until a
+new stream succeeds. Missing-readable-message, tool-only, evidence-only, and
+partial Transcript states have explicit copy. Long Conversations open at the
+beginning and provide a jump-to-latest control after scrolling away from the
+end. On narrow screens the Sessions module keeps its list/detail single-page
+switch, the detail view becomes full width with its back control retained, and
+the desktop message rail becomes the horizontal message navigator.
 
 Console typography follows interface role before raw data type. Navigation,
 headings, controls, explanatory copy, catalog titles, and catalog metadata use
@@ -193,9 +240,9 @@ Record no longer exists, the Console returns to the list, removes `record` and
 Request Record pages contain 50 rows and intentionally have no filter query.
 Rows use the shared 16-pixel Requests icon before method, target, HTTP status,
 and an optional Record Assessment icon. The target is the primary text. Compact
-metadata starts under the method with `Model·reasoning effort`, omitting the
+metadata starts under the method with `Model reasoning effort`, omitting the
 suffix when reasoning effort is unavailable. This flexible label elides from
-the end before the fixed-width `First Token/total timing` and timestamp group
+the end before the fixed-width `First Token / total timing` and timestamp group
 on the right; a wider gap separates timing from the timestamp. At 430 pixels
 and below, the right-hand group moves intact to a second metadata line and stays
 right-aligned. Pagination shows the current and total page counts and restores
@@ -349,11 +396,11 @@ is named `Response stream` rather than implying that every byte is model
 output.
 
 The detail Summary presents Model and Token Usage in one pale hierarchy card.
-The effective-or-requested model is the primary value, followed by a weaker
-reasoning effort and a `Streaming` or `Non-streaming` badge when those facts are
-available. Session ID remains on its own secondary row with an inline copy
-control. A missing model says `Not reported`, or `Detecting…` while active;
-missing optional qualifiers are omitted.
+The effective-or-requested model is the primary value, followed after a space by
+a weaker reasoning effort. A `Streaming` or `Non-streaming` badge follows when
+that fact is available. Session ID remains on its own secondary row with an
+inline copy control. A missing model says `Not reported`, or `Detecting…` while
+active; missing optional qualifiers are omitted.
 
 Token Usage follows the provider billing categories in one responsive table.
 Its wider input block places three categories side by side, with a weaker Total

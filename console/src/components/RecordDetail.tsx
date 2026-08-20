@@ -171,9 +171,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
             <span className={styles.modelValue}>{model}</span>
             {reasoningEffort && (
               <>
-                <span className={styles.modelSeparator} aria-hidden="true">
-                  ·
-                </span>
+                {" "}
                 <span className={styles.modelEffort}>{reasoningEffort}</span>
               </>
             )}

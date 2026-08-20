@@ -164,6 +164,30 @@ _Avoid_: Run, Transcript
 The Coding Agent's native persistent record of one Session.
 _Avoid_: Session, prompt history
 
+**Conversation Message**:
+A user input or Coding Agent reply that is readable as part of a Session's
+primary conversation. It is a view of a Transcript, not a replacement for the
+native record. The historical typed Prompt projection is only one possible
+source of a Conversation Message and is not the complete content of a Session.
+_Avoid_: Prompt, Transcript Entry, Run
+
+**Tool Activity**:
+A tool invocation or result observed in a Transcript and shown as supporting
+evidence alongside Conversation Messages.
+_Avoid_: Conversation Message, Request Record, Run
+
+**Transcript Evidence**:
+A diagnostic view of a Transcript Entry that is neither a Conversation Message
+nor Tool Activity. It preserves observable context without turning diagnostic
+or internal records into conversation content.
+_Avoid_: Conversation Message, Tool Activity, raw Transcript
+
+**Transcript Entry**:
+One native record in a Coding Agent Transcript, including readable messages,
+Tool Activity, injected context, internal reasoning, malformed records, and
+other diagnostic evidence.
+_Avoid_: Prompt, Request Record, log line
+
 ### Request diagnostics
 
 **Request Proxy**:

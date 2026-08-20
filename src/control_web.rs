@@ -62,7 +62,8 @@ pub(crate) fn router() -> Router<ServiceState> {
         )
         .route("/_aibox/api/sessions", get(list_sessions))
         .route("/_aibox/api/sessions/summary", get(session_summary))
-        .route("/_aibox/api/sessions/prompts", get(session_prompts))
+        .route("/_aibox/api/sessions/detail", get(session_detail))
+        .route("/_aibox/api/sessions/evidence", get(session_evidence))
         .route("/_aibox/api/sessions/delete", post(delete_sessions))
         .route("/_aibox/api/operations/current", get(current_operation))
         .route("/_aibox/api/operations/events", get(operation_events))
@@ -1052,7 +1053,7 @@ struct SessionDetailQuery {
     id: String,
 }
 
-async fn session_prompts(
+async fn session_detail(
     State(state): State<ServiceState>,
     Query(query): Query<SessionDetailQuery>,
 ) -> Response<Body> {
@@ -1069,14 +1070,29 @@ async fn session_prompts(
     let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(8);
     tokio::task::spawn_blocking(move || {
         let backend = session::backend_for(agent);
-        let result = session::stream_prompt_data(backend.as_ref(), &home, &id, &mut |prompt| {
-            send_ndjson(&sender, &json!({"type": "prompt", "prompt": prompt}))
-        });
+        let result = session::stream_detail_data(
+            backend.as_ref(),
+            &home,
+            &id,
+            &mut |meta| send_ndjson(&sender, &json!({"type": "meta", "meta": meta})),
+            &mut |record| match record {
+                session::DetailRecord::Message(message) => {
+                    send_ndjson(&sender, &json!({"type": "message", "message": message}))
+                }
+                session::DetailRecord::Tool(tool) => send_ndjson(
+                    &sender,
+                    &json!({"type": "tool_activity", "tool_activity": tool}),
+                ),
+                session::DetailRecord::Evidence(evidence) => {
+                    send_ndjson(&sender, &json!({"type": "evidence", "evidence": evidence}))
+                }
+            },
+        );
         match result {
-            Ok((resolved_id, warnings)) => {
+            Ok((_meta, stats, warnings)) => {
                 let _ = send_ndjson(
                     &sender,
-                    &json!({"type": "complete", "id": resolved_id, "warnings": warnings}),
+                    &json!({"type": "complete", "stats": stats, "warnings": warnings}),
                 );
             }
             Err(error) => {
@@ -1094,6 +1110,44 @@ async fn session_prompts(
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
     );
     response
+}
+
+#[derive(Deserialize)]
+struct SessionEvidenceQuery {
+    #[serde(flatten)]
+    selection: AgentScopeQuery,
+    id: String,
+    entry: String,
+    snapshot: String,
+}
+
+async fn session_evidence(
+    State(state): State<ServiceState>,
+    Query(query): Query<SessionEvidenceQuery>,
+) -> Response<Body> {
+    let tenant = match resolve_tenant(&state, &query.selection.scope) {
+        Ok(tenant) => tenant,
+        Err(error) => return result_error(error),
+    };
+    if let Err(error) = tenant.validate_session_home() {
+        return result_error(error);
+    }
+    let home = tenant.home_dir().to_path_buf();
+    let result = blocking(move || {
+        let backend = session::backend_for(query.selection.agent);
+        session::read_evidence(
+            backend.as_ref(),
+            &home,
+            &query.id,
+            &query.entry,
+            &query.snapshot,
+        )
+    })
+    .await;
+    match result {
+        response if response.status().is_success() => response,
+        response => response,
+    }
 }
 
 fn send_ndjson(sender: &tokio::sync::mpsc::Sender<Bytes>, value: &Value) -> Result<bool> {

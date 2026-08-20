@@ -16,7 +16,10 @@
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
 
-use crate::session::{self, PromptRecord, SessionBackend};
+use crate::session::{
+    self, ConversationMessage, DetailRecord, PromptRecord, SessionBackend, SessionNativeFacts,
+    ToolActivity, bounded_preview, evidence_for, ts_of,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -134,6 +137,147 @@ impl SessionBackend for Codex {
         user_turn_record(value)
     }
 
+    fn detail_records(&self, value: &Value, entry_id: &str, line: u64) -> Vec<DetailRecord> {
+        let kind = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let payload = value.get("payload").unwrap_or(value);
+        let payload_kind = payload.get("type").and_then(Value::as_str).unwrap_or(kind);
+        let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
+
+        if kind == "response_item"
+            && role == "user"
+            && let record @ (PromptRecord::Typed(_) | PromptRecord::TypedWithUnsupported(_)) =
+                user_turn_record(value)
+        {
+            let unsupported = matches!(record, PromptRecord::TypedWithUnsupported(_));
+            let text = match record {
+                PromptRecord::Typed(text) | PromptRecord::TypedWithUnsupported(text) => text,
+                PromptRecord::NotTyped | PromptRecord::UnsupportedUserLike => unreachable!(),
+            };
+            let mut output = vec![DetailRecord::Message(ConversationMessage {
+                entry_ids: vec![entry_id.to_string()],
+                role: "user".to_string(),
+                timestamp: ts_of(value),
+                text,
+            })];
+            if unsupported {
+                output.push(DetailRecord::Evidence(evidence_for(
+                    value,
+                    entry_id,
+                    line,
+                    "unsupported",
+                )));
+            }
+            return output;
+        }
+
+        if (kind == "response_item" && role == "assistant")
+            || payload_kind == "agent_message"
+            || (payload_kind == "message" && role == "assistant")
+        {
+            let (text, unsupported) = assistant_text(payload);
+            if !text.is_empty() {
+                let mut output = vec![DetailRecord::Message(ConversationMessage {
+                    entry_ids: vec![entry_id.to_string()],
+                    role: "assistant".to_string(),
+                    timestamp: ts_of(value),
+                    text,
+                })];
+                if unsupported {
+                    output.push(DetailRecord::Evidence(evidence_for(
+                        value,
+                        entry_id,
+                        line,
+                        "unsupported",
+                    )));
+                }
+                return output;
+            }
+        }
+
+        if matches!(payload_kind, "function_call" | "custom_tool_call") {
+            return vec![DetailRecord::Tool(ToolActivity {
+                entry_ids: vec![entry_id.to_string()],
+                call_id: payload
+                    .get("call_id")
+                    .or_else(|| payload.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                timestamp: ts_of(value),
+                name: payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Tool")
+                    .to_string(),
+                status: "started".to_string(),
+                summary: payload
+                    .get("arguments")
+                    .or_else(|| payload.get("input"))
+                    .map(|input| bounded_preview(&input.to_string()))
+                    .unwrap_or_default(),
+            })];
+        }
+        if matches!(
+            payload_kind,
+            "function_call_output" | "custom_tool_call_output"
+        ) {
+            return vec![DetailRecord::Tool(ToolActivity {
+                entry_ids: vec![entry_id.to_string()],
+                call_id: payload
+                    .get("call_id")
+                    .or_else(|| payload.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                timestamp: ts_of(value),
+                name: "Tool result".to_string(),
+                status: if payload.get("is_error").and_then(Value::as_bool) == Some(true)
+                    || payload.get("error").is_some()
+                {
+                    "failed".to_string()
+                } else {
+                    "completed".to_string()
+                },
+                summary: payload
+                    .get("output")
+                    .or_else(|| payload.get("content"))
+                    .map(|output| bounded_preview(&output.to_string()))
+                    .unwrap_or_default(),
+            })];
+        }
+        let status = if payload_kind == "reasoning" || kind == "reasoning" {
+            "hidden_internal"
+        } else if kind == "response_item" && matches!(role, "user" | "assistant") {
+            "unsupported"
+        } else {
+            "filtered"
+        };
+        vec![DetailRecord::Evidence(evidence_for(
+            value, entry_id, line, status,
+        ))]
+    }
+
+    fn native_facts(&self, value: &Value, facts: &mut SessionNativeFacts) {
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            return;
+        }
+        if let Some(payload) = value.get("payload") {
+            facts.cwd = payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            facts.model_provider = payload
+                .get("model_provider")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            facts.cli_version = payload
+                .get("cli_version")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+
     /// The `session_meta` carries the session start timestamp. Look for it by
     /// type rather than line position, so a corrupt or skipped first line
     /// cannot make a later event timestamp look like the session start.
@@ -158,6 +302,42 @@ impl SessionBackend for Codex {
         let timestamp = session::ts_of(value);
         (!timestamp.is_empty()).then_some(timestamp)
     }
+}
+
+fn assistant_text(value: &Value) -> (String, bool) {
+    for key in ["content", "text", "message"] {
+        let Some(content) = value.get(key) else {
+            continue;
+        };
+        match content {
+            Value::String(text) if !text.is_empty() => return (text.clone(), false),
+            Value::Array(items) => {
+                let unsupported = items.iter().any(|item| {
+                    !matches!(
+                        item.get("type").and_then(Value::as_str),
+                        Some("text" | "output_text")
+                    )
+                });
+                let text = items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.get("type").and_then(Value::as_str),
+                            Some("text" | "output_text")
+                        )
+                    })
+                    .filter_map(|item| item.get("text").and_then(Value::as_str))
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    return (text, unsupported);
+                }
+            }
+            _ => {}
+        }
+    }
+    (String::new(), false)
 }
 
 fn trailing_uuid(stem: &str) -> Option<&str> {

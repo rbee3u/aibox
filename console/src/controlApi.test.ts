@@ -30,28 +30,41 @@ describe("Control API client", () => {
     expect(init?.body).toBe('{"name":"work"}');
   });
 
-  it("streams prompt records and returns terminal warnings", async () => {
+  it("streams Session detail frames across chunk boundaries", async () => {
     const encoded = new TextEncoder().encode(
-      '{"type":"prompt","prompt":{"timestamp":"now","text":"hello"}}\n' +
-        '{"type":"complete","id":"session-1","warnings":["partial"]}\n',
+      '{"type":"meta","meta":{"id":"session-1","title":"Hello","start_ts":"now","transcript_path":".codex/x.jsonl"}}\n' +
+        '{"type":"message","message":{"entry_ids":["line-1"],"role":"user","timestamp":"now","text":"hello"}}\n' +
+        '{"type":"complete","stats":{"start_ts":"now","last_event_ts":"later","message_count":1,"tool_count":0,"entry_count":1,"malformed_count":0,"unsupported_count":0,"hidden_internal_count":0,"file_size":10,"snapshot":"10:1"},"warnings":[]}\n',
     );
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         new ReadableStream({
           start(controller) {
-            controller.enqueue(encoded.subarray(0, 17));
-            controller.enqueue(encoded.subarray(17));
+            controller.enqueue(encoded.subarray(0, 41));
+            controller.enqueue(encoded.subarray(41));
             controller.close();
           },
         }),
       ),
     );
     const api = new ControlApi({ version: "1", csrf_token: "token" }, fetchMock);
-    const prompts: string[] = [];
+    const messages: string[] = [];
+    let meta = "";
+    let complete = 0;
+    await api.streamSessionDetail("/_aibox/api/sessions/detail", {
+      onMeta: (value) => {
+        meta = value.id;
+      },
+      onMessage: (value) => messages.push(value.text),
+      onTool: () => undefined,
+      onEvidence: () => undefined,
+      onComplete: () => {
+        complete += 1;
+      },
+    });
 
-    const complete = await api.streamSession("/sessions", (prompt) => prompts.push(prompt.text));
-
-    expect(prompts).toEqual(["hello"]);
-    expect(complete).toEqual({ id: "session-1", warnings: ["partial"] });
+    expect(meta).toBe("session-1");
+    expect(messages).toEqual(["hello"]);
+    expect(complete).toBe(1);
   });
 });

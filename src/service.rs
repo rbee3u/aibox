@@ -912,6 +912,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_detail_and_evidence_routes_stream_and_validate_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        crate::tenant::ManagedTenant::resolve(root.path(), "work")
+            .unwrap()
+            .ensure_initialized()
+            .unwrap();
+        let id = "44444444-4444-4444-4444-444444444444";
+        let transcript = crate::testutil::write_jsonl(
+            root.path(),
+            &format!("tenants/work/.codex/sessions/2026/08/20/rollout-detail-{id}.jsonl"),
+            &[
+                r#"{"timestamp":"2026-08-20T09:00:00Z","type":"session_meta","payload":{"timestamp":"2026-08-20T09:00:00Z"}}"#,
+                r#"{"timestamp":"2026-08-20T09:00:01Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+                r#"{"timestamp":"2026-08-20T09:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"hi"}}"#,
+            ],
+        );
+        let app = router(test_state(root.path()));
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!(
+                    "/_aibox/api/sessions/detail?scope=managed&tenant=work&agent=codex&id={id}"
+                ),
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/x-ndjson; charset=utf-8"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let frames = body
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(frames[0]["type"], "meta");
+        assert!(
+            frames
+                .iter()
+                .any(|frame| { frame["type"] == "message" && frame["message"]["role"] == "user" })
+        );
+        assert!(frames.iter().any(|frame| {
+            frame["type"] == "message" && frame["message"]["role"] == "assistant"
+        }));
+        let complete = frames
+            .iter()
+            .find(|frame| frame["type"] == "complete")
+            .unwrap();
+        let snapshot = complete["stats"]["snapshot"].as_str().unwrap();
+
+        let evidence = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!(
+                    "/_aibox/api/sessions/evidence?scope=managed&tenant=work&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
+                ),
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(evidence.status(), StatusCode::OK);
+        let evidence = evidence.into_body().collect().await.unwrap().to_bytes();
+        let evidence = serde_json::from_slice::<Value>(&evidence).unwrap();
+        assert_eq!(evidence["entry_id"], "line-2");
+        assert!(evidence["content"].as_str().unwrap().contains("hello"));
+
+        fs::write(&transcript, b"changed\n").unwrap();
+        let stale = app
+            .oneshot(request(
+                Method::GET,
+                &format!(
+                    "/_aibox/api/sessions/evidence?scope=managed&tenant=work&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
+                ),
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
     async fn session_delete_api_stays_within_the_selected_tenant_and_agent() {
         let root = tempfile::tempdir().unwrap();
         for name in ["work", "other"] {

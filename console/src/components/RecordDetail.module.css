@@ -159,7 +159,6 @@
   font-weight: var(--weight-bold);
   line-height: 1.35;
 }
-.modelSeparator,
 .modelEffort {
   color: var(--muted);
 }

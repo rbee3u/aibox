@@ -193,8 +193,8 @@ describe("Requests page", () => {
     const requestIcon = completedRow.querySelector('[data-icon="request-record"]');
     expect(requestIcon).toHaveClass("lucide-arrow-left-right");
     expect(requestIcon).toHaveAttribute("aria-hidden", "true");
-    expect(completedModel).toHaveTextContent("gpt-5.6-sol·high");
-    expect(completedTiming).toHaveTextContent("900ms/1s");
+    expect(completedModel).toHaveTextContent("gpt-5.6-sol high");
+    expect(completedTiming).toHaveTextContent("900ms / 1s");
     expect(completedTiming.parentElement).toContainElement(completedEnded);
     const completedTarget = within(completedRow).getByTitle(
       "https://api.example.test/v1/responses?stream=true",
@@ -211,7 +211,7 @@ describe("Requests page", () => {
     });
     expect(within(activeRow).getByTitle("Ended —")).toHaveTextContent("—");
     expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
-      "—/500ms",
+      "— / 500ms",
     );
   });
 
@@ -324,7 +324,7 @@ describe("Requests page", () => {
     });
     expect(
       within(effectiveRow).getByTitle("Model effective-model; Reasoning effort xhigh"),
-    ).toHaveTextContent("effective-model·xhigh");
+    ).toHaveTextContent("effective-model xhigh");
     expect(within(effectiveRow).getByTitle(/^Ended /)).toHaveAttribute(
       "datetime",
       effective.ended_at,
@@ -335,9 +335,9 @@ describe("Requests page", () => {
       name: "POST api.example.test/requested",
     });
     expect(within(requestedRow).getByTitle("Model —; Reasoning effort medium")).toHaveTextContent(
-      "—·medium",
+      "— medium",
     );
-    expect(within(requestedRow).getByTitle("First token —; Duration —")).toHaveTextContent("—/—");
+    expect(within(requestedRow).getByTitle("First token —; Duration —")).toHaveTextContent("— / —");
 
     const legacyRow = screen.getByRole("button", { name: "POST api.example.test/legacy" });
     expect(within(legacyRow).getByTitle("Model —; Reasoning effort —")).toHaveTextContent(/^—$/);
@@ -354,7 +354,7 @@ describe("Requests page", () => {
     });
     expect(
       within(longTimingRow).getByTitle("First token 17m34s; Duration 28m55s"),
-    ).toHaveTextContent("17m34s/28m55s");
+    ).toHaveTextContent("17m34s / 28m55s");
   });
 
   it("includes a list issue in the record row's accessible description", async () => {

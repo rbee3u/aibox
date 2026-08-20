@@ -131,14 +131,16 @@ Host Tenant risks, file modes, and partial-write behavior.
 
 ## Sessions
 
-Session browsing in the Console is host-side, streams typed prompts, and does
-not start Docker.
+Session browsing in the Console is host-side, progressively streams a
+Conversation Message/Tool Activity projection, and does not start Docker.
 
 Canonical UUIDs are listed by their final 12 characters; `get` and `delete`
 accept a full Session id or unique suffix. Session deletion requires explicit
 ids or `--all` and is irreversible.
-Session discovery and the typed-prompt view are best-effort, but destructive
-operations refuse an incomplete filesystem view. See
+Session discovery and the Transcript projection are best-effort, but
+destructive operations refuse an incomplete filesystem view. The detail view
+preserves diagnostic Transcript Evidence, hides internal reasoning, and reads
+full native entries only on demand. See
 [Sessions](docs/tenants.md#sessions) for parsing warnings and traversal safety.
 
 ## Extra Mounts

@@ -2,8 +2,10 @@
 
 import {
   AlertTriangle,
+  ArrowDown,
   Box,
   Check,
+  Clipboard,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
@@ -17,6 +19,7 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import { basicSetup } from "codemirror";
@@ -30,24 +33,29 @@ import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/
 import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { tags } from "@lezer/highlight";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, UIEvent } from "react";
 import { ControlApi, decodeBase64, encodeBase64, scopeBody, scopeQuery } from "./controlApi";
 import type {
   Agent,
   ApplicationStatus,
+  ConversationMessage,
   ComponentRow,
   ConfigCatalogEntry,
   ConfigFileData,
   ConfigVisualField,
   ConfigListData,
   Operation,
-  Prompt,
   PropagationPreview,
   PropagationReport,
   PropagationOutcome,
   Scope,
   SessionListData,
+  SessionDetailMeta,
+  SessionDetailStats,
   SessionRow,
+  ToolActivity,
+  TranscriptEvidence,
+  TranscriptEvidenceSummary,
   TenantRow,
 } from "./controlApi";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -56,9 +64,11 @@ import { EmptyState } from "./components/EmptyState";
 import { IconButton } from "./components/IconButton";
 import { IssueIndicator, type IssueTone } from "./components/IssueIndicator";
 import { NotificationCenter } from "./components/NotificationCenter";
+import { SessionMessageContent } from "./components/SessionMessageContent";
+import { useClipboardFeedback } from "./useClipboardFeedback";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { AgentIcon } from "./icons";
-import { formatTimestamp } from "./utils";
+import { bytes, duration, formatTimestamp } from "./utils";
 import { resourceIcons, type ModuleId } from "./consoleIcons";
 import styles from "./ManagementPages.module.css";
 
@@ -524,9 +534,7 @@ export function TenantPage({
     <div className={`${styles.page} ${styles.catalogPage}`}>
       <PageError error={error} onRetry={() => void retryTenantPage()} />
       <MutationUnavailable operation={operation} />
-      <div
-        className={`${styles.splitLayout} ${styles.tenantLayout} ${detailOpen ? styles.hasSelection : ""}`}
-      >
+      <div className={`${styles.splitLayout} ${detailOpen ? styles.hasSelection : ""}`}>
         <aside className={styles.tenantCatalog} aria-label="Tenants">
           <div className={styles.sessionToolbar}>
             {selectionMode ? (
@@ -2849,12 +2857,351 @@ interface AggregatedSessionData {
   partial: boolean;
 }
 
+type SessionTimelineItem =
+  | { kind: "message"; value: ConversationMessage }
+  | { kind: "activity"; value: SessionActivityItem[] };
+
+type SessionActivityItem =
+  { kind: "tool"; value: ToolActivity } | { kind: "evidence"; value: TranscriptEvidenceSummary };
+
+function sessionItemKey(item: SessionTimelineItem): string {
+  if (item.kind === "message") return `message:${item.value.entry_ids.join(",")}`;
+  return `activity:${item.value
+    .map((entry) =>
+      entry.kind === "tool"
+        ? `tool:${entry.value.entry_ids.join(",")}:${entry.value.status}`
+        : `evidence:${entry.value.entry_id}`,
+    )
+    .join(",")}`;
+}
+
+function appendActivityItem(
+  current: SessionTimelineItem[],
+  entry: SessionActivityItem,
+): SessionTimelineItem[] {
+  const last = current.at(-1);
+  if (entry.kind === "tool" && entry.value.status !== "started" && entry.value.call_id) {
+    for (let cursor = current.length - 1; cursor >= 0; cursor -= 1) {
+      const item = current[cursor];
+      if (item.kind !== "activity") continue;
+      const entryIndex = item.value.findIndex(
+        (candidate) => candidate.kind === "tool" && candidate.value.call_id === entry.value.call_id,
+      );
+      if (entryIndex < 0) continue;
+      const nextActivity = [...item.value];
+      const existing = nextActivity[entryIndex];
+      if (existing.kind === "tool") {
+        nextActivity[entryIndex] = {
+          kind: "tool",
+          value: {
+            ...existing.value,
+            entry_ids: [...existing.value.entry_ids, ...entry.value.entry_ids],
+            status: entry.value.status,
+            summary: entry.value.summary || existing.value.summary,
+          },
+        };
+      }
+      const next = [...current];
+      next[cursor] = { kind: "activity", value: nextActivity };
+      return next;
+    }
+  }
+  if (last?.kind === "activity") {
+    return [...current.slice(0, -1), { kind: "activity", value: [...last.value, entry] }];
+  }
+  return [...current, { kind: "activity", value: [entry] }];
+}
+
+function appendConversationMessage(
+  current: SessionTimelineItem[],
+  message: ConversationMessage,
+): SessionTimelineItem[] {
+  const last = current.at(-1);
+  if (message.role === "assistant" && last?.kind === "message" && last.value.role === "assistant") {
+    return [
+      ...current.slice(0, -1),
+      {
+        kind: "message",
+        value: {
+          ...last.value,
+          entry_ids: [...last.value.entry_ids, ...message.entry_ids],
+          timestamp: message.timestamp || last.value.timestamp,
+          text: `${last.value.text}\n\n${message.text}`,
+        },
+      },
+    ];
+  }
+  return [...current, { kind: "message", value: message }];
+}
+
+function messageNavigationLabel(text: string): string {
+  const firstLine = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const value = firstLine || text.trim() || "Untitled message";
+  return value.length > 96 ? `${value.slice(0, 93)}…` : value;
+}
+
+function messageAnchorId(message: ConversationMessage): string {
+  return `session-message-${message.entry_ids[0]?.replace(/[^a-zA-Z0-9_-]/g, "-") || "unknown"}`;
+}
+
+function activitySummary(entries: SessionActivityItem[]): {
+  count: number;
+  labels: string[];
+  hasIssue: boolean;
+} {
+  const labels = [
+    ...new Set(
+      entries
+        .map((entry) => (entry.kind === "tool" ? entry.value.name : entry.value.native_type))
+        .filter(Boolean),
+    ),
+  ];
+  const hasIssue = entries.some((entry) => {
+    if (entry.kind === "tool") {
+      return !["started", "completed"].includes(entry.value.status);
+    }
+    return ["malformed", "unsupported", "hidden_internal"].includes(entry.value.status);
+  });
+  return { count: entries.length, labels, hasIssue };
+}
+
+function SessionEvidenceDisclosure({
+  api,
+  entryId,
+  label,
+  meta,
+  preview,
+  session,
+  snapshot,
+  status,
+}: {
+  api: ControlApi;
+  entryId: string;
+  label: ReactNode;
+  meta: string;
+  preview: string;
+  session: SourcedSession;
+  snapshot?: string;
+  status: string;
+}) {
+  const [evidence, setEvidence] = useState<TranscriptEvidence | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const hidden = status === "hidden_internal";
+
+  async function loadEvidence() {
+    if (evidence || loading || hidden || !snapshot) return;
+    setLoading(true);
+    setError(null);
+    const query = scopeQuery(session.source.scope);
+    query.set("agent", session.source.agent);
+    query.set("id", session.id);
+    query.set("entry", entryId);
+    query.set("snapshot", snapshot);
+    try {
+      setEvidence(await api.loadSessionEvidence(`/_aibox/api/sessions/evidence?${query}`));
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <details
+      className={status === "tool" ? styles.sessionActivity : styles.sessionEvidence}
+      onToggle={(event) => {
+        if (event.currentTarget.open) void loadEvidence();
+      }}
+    >
+      <summary>
+        <span>{label}</span>
+        <span>{meta}</span>
+      </summary>
+      {preview && <pre>{preview}</pre>}
+      {hidden && <p>Internal reasoning is intentionally hidden.</p>}
+      {!hidden && !snapshot && (
+        <p>Full evidence is available after the Transcript finishes loading.</p>
+      )}
+      {loading && <p>Loading Transcript Entry…</p>}
+      {error && <p className={styles.sessionEvidenceError}>{error}</p>}
+      {evidence && (
+        <div className={styles.sessionEvidenceRaw}>
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(evidence.content)}
+          >
+            <Clipboard size={13} aria-hidden="true" /> Copy {evidence.encoding}
+          </button>
+          <pre>{evidence.content}</pre>
+        </div>
+      )}
+    </details>
+  );
+}
+
+function SessionActivityGroup({
+  api,
+  entries,
+  session,
+  snapshot,
+}: {
+  api: ControlApi;
+  entries: SessionActivityItem[];
+  session: SourcedSession;
+  snapshot?: string;
+}) {
+  const summary = activitySummary(entries);
+  const activityLabels =
+    summary.labels.length > 0
+      ? `${summary.labels.slice(0, 3).join(", ")}${summary.labels.length > 3 ? ` +${summary.labels.length - 3}` : ""}`
+      : "Transcript events";
+  return (
+    <details className={styles.sessionActivityGroup}>
+      <summary>
+        <span>
+          <Wrench size={13} aria-hidden="true" /> Agent activity
+          {summary.hasIssue && <AlertTriangle size={13} aria-label="Activity has diagnostics" />}
+        </span>
+        <span>
+          {summary.count} {summary.count === 1 ? "item" : "items"} · {activityLabels}
+        </span>
+      </summary>
+      <div className={styles.sessionActivityGroupItems}>
+        {entries.map((entry) =>
+          entry.kind === "tool" ? (
+            <SessionEvidenceDisclosure
+              key={`tool:${entry.value.entry_ids.join(",")}`}
+              api={api}
+              entryId={entry.value.entry_ids[0]}
+              label={
+                <>
+                  <Wrench size={13} aria-hidden="true" /> {entry.value.name}
+                </>
+              }
+              meta={
+                ["started", "completed"].includes(entry.value.status)
+                  ? compactMessageTimestamp(entry.value.timestamp, session.start_ts)
+                  : entry.value.status
+              }
+              preview={entry.value.summary}
+              session={session}
+              snapshot={snapshot}
+              status="tool"
+            />
+          ) : (
+            <SessionEvidenceDisclosure
+              key={entry.value.entry_id}
+              api={api}
+              entryId={entry.value.entry_id}
+              label={entry.value.native_type}
+              meta={`${entry.value.status} · ${compactMessageTimestamp(entry.value.timestamp, session.start_ts)}`}
+              preview={entry.value.preview}
+              session={session}
+              snapshot={snapshot}
+              status={entry.value.status}
+            />
+          ),
+        )}
+      </div>
+    </details>
+  );
+}
+
+function SessionConversationNav({
+  messages,
+  activeEntryId,
+  mobile = false,
+  onSelect,
+}: {
+  messages: ConversationMessage[];
+  activeEntryId: string | null;
+  mobile?: boolean;
+  onSelect: (entryId: string) => void;
+}) {
+  if (messages.length === 0) return null;
+  return (
+    <nav
+      className={mobile ? styles.sessionConversationMobileNav : styles.sessionConversationRail}
+      aria-label="Conversation messages"
+    >
+      <div className={styles.sessionConversationNavItems}>
+        {messages.map((message, index) => {
+          const entryId = message.entry_ids[0] ?? `message-${index}`;
+          const label = messageNavigationLabel(message.text);
+          return (
+            <button
+              key={entryId}
+              type="button"
+              className={
+                activeEntryId === entryId ? styles.sessionConversationNavActive : undefined
+              }
+              aria-current={activeEntryId === entryId ? "location" : undefined}
+              aria-label={`Jump to message ${index + 1}: ${label}`}
+              title={label}
+              onClick={() => onSelect(entryId)}
+            >
+              <span className={styles.sessionConversationNavDot} aria-hidden="true">
+                <span />
+              </span>
+              <span className={styles.sessionConversationNavIndex}>{index + 1}</span>
+              <span className={styles.sessionConversationNavLabel}>{label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+function SessionCopyValue({ label, value }: { label: string; value: string }) {
+  const [copied, copy] = useClipboardFeedback();
+  return (
+    <span className={styles.sessionCopyValue}>
+      <code>{value}</code>
+      <IconButton
+        className={styles.sessionCopyAction}
+        label={copied ? `${label} copied` : `Copy ${label}`}
+        onClick={() => void copy(value, true)}
+      >
+        {copied ? (
+          <Check size={13} aria-hidden="true" />
+        ) : (
+          <Clipboard size={13} aria-hidden="true" />
+        )}
+      </IconButton>
+    </span>
+  );
+}
+
+function compactMessageTimestamp(value: string, sessionStart: string): string {
+  const formatted = formatTimestamp(value);
+  if (formatted === "—") return formatted;
+  const start = formatTimestamp(sessionStart);
+  const [date, time] = formatted.split(" ");
+  const [startDate] = start.split(" ");
+  return date === startDate ? time : formatted;
+}
+
+function messageCountLabel(count: number): string {
+  return `${count} message${count === 1 ? "" : "s"}`;
+}
+
+function toolCountLabel(count: number): string {
+  return `${count} tool${count === 1 ? "" : "s"}`;
+}
+
 interface SessionFilterOption<T extends string> {
   value: T;
   label: string;
   summaryLabel?: string;
   icon: ReactNode;
 }
+
+type SessionTab = "conversation" | "details";
 
 type SessionDeletion = { kind: "record"; key: string } | { kind: "batch" } | null;
 
@@ -2879,6 +3226,18 @@ function sessionListScopeLabel(key: SessionScopeKey): string {
   return key === "host" ? "Host Tenant" : key.slice(8);
 }
 
+function visibleSessionSource(source: SessionSource): string {
+  return `${source.scopeLabel} ${source.agentLabel}`;
+}
+
+function visibleSessionListSource(source: SessionSource): string {
+  return `${sessionListScopeLabel(source.scopeKey)} ${source.agentLabel}`;
+}
+
+function accessibleSessionSource(source: SessionSource): string {
+  return `${source.scopeLabel} · ${source.agentLabel}`;
+}
+
 function sessionSource(scopeKey: SessionScopeKey, agent: Agent): SessionSource {
   return {
     key: JSON.stringify([scopeKey, agent]),
@@ -2900,6 +3259,7 @@ interface SessionRouteState {
   scopes: Set<SessionScopeKey>;
   agents: Set<Agent>;
   selection: SessionRouteSelection | null;
+  tab: SessionTab;
 }
 
 function readSessionRoute(): SessionRouteState {
@@ -2925,13 +3285,15 @@ function readSessionRoute(): SessionRouteState {
     selectedScope && (selectedAgent === "codex" || selectedAgent === "claude") && id
       ? { scopeKey: selectedScope, agent: selectedAgent, id }
       : null;
-  return { scopes, agents, selection };
+  const tab = query.get("tab") === "details" ? "details" : "conversation";
+  return { scopes, agents, selection, tab };
 }
 
 function sessionLocation(
   scopes: ReadonlySet<SessionScopeKey>,
   agents: ReadonlySet<Agent>,
   selection?: SessionRouteSelection | null,
+  tab: SessionTab = "conversation",
 ): URLSearchParams {
   const query = new URLSearchParams();
   for (const scope of [...scopes].sort()) query.append("scope", scope);
@@ -2942,6 +3304,7 @@ function sessionLocation(
     query.set("session_scope", selection.scopeKey);
     query.set("session_agent", selection.agent);
     query.set("session", selection.id);
+    if (tab === "details") query.set("tab", tab);
   }
   return query;
 }
@@ -3260,11 +3623,14 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
   const [routeSelection, setRouteSelection] = useState<SessionRouteSelection | null>(
     initialRoute.selection,
   );
+  const [sessionTab, setSessionTab] = useState<SessionTab>(initialRoute.tab);
   const [data, setData] = useState<AggregatedSessionData | null>(null);
   const [currentSession, setCurrentSession] = useState<SourcedSession | null>(null);
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [promptWarnings, setPromptWarnings] = useState<string[]>([]);
-  const [loadingPrompts, setLoadingPrompts] = useState(false);
+  const [timeline, setTimeline] = useState<SessionTimelineItem[]>([]);
+  const [detailMeta, setDetailMeta] = useState<SessionDetailMeta | null>(null);
+  const [detailStats, setDetailStats] = useState<SessionDetailStats | null>(null);
+  const [detailWarnings, setDetailWarnings] = useState<string[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -3275,7 +3641,12 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [listUnavailable, setListUnavailable] = useState(false);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const [activeUserMessage, setActiveUserMessage] = useState<string | null>(null);
+  const [detailRevision, setDetailRevision] = useState(0);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const conversationScrollRef = useRef<HTMLDivElement>(null);
+  const userMessageRefs = useRef(new Map<string, HTMLElement>());
   const listController = useRef<AbortController | null>(null);
   const streamController = useRef<AbortController | null>(null);
   const currentSessionRef = useRef<SourcedSession | null>(null);
@@ -3288,11 +3659,79 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
 
+  function updateSessionTab(next: SessionTab) {
+    setSessionTab(next);
+    const selection = currentSession
+      ? {
+          scopeKey: currentSession.source.scopeKey,
+          agent: currentSession.source.agent,
+          id: currentSession.id,
+        }
+      : routeSelection;
+    changePageLocation(
+      "sessions",
+      sessionLocation(selectedScopes, selectedAgents, selection, next),
+      onLocationChange,
+    );
+  }
+
+  function onConversationScroll(event: UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    setShowJumpLatest(element.scrollHeight - element.scrollTop - element.clientHeight > 160);
+    const threshold = element.scrollTop + Math.min(element.clientHeight * 0.28, 180);
+    let active: string | null = null;
+    for (const [entryId, message] of userMessageRefs.current) {
+      if (message.offsetTop <= threshold) active = entryId;
+      else break;
+    }
+    if (active) setActiveUserMessage(active);
+  }
+
+  function jumpToLatest() {
+    const element = conversationScrollRef.current;
+    if (!element) return;
+    if (typeof element.scrollTo === "function") {
+      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    } else {
+      element.scrollTop = element.scrollHeight;
+    }
+    setShowJumpLatest(false);
+  }
+
+  function jumpToUserMessage(entryId: string) {
+    const container = conversationScrollRef.current;
+    const message = userMessageRefs.current.get(entryId);
+    if (!container || !message) return;
+    const top = Math.max(0, message.offsetTop - 24);
+    if (typeof container.scrollTo === "function") {
+      container.scrollTo({ top, behavior: "smooth" });
+    } else {
+      container.scrollTop = top;
+    }
+    setActiveUserMessage(entryId);
+  }
+
   useEffect(() => {
     if (!currentSession || !window.matchMedia?.("(max-width: 760px)").matches) return;
     const frame = window.requestAnimationFrame(() => detailHeadingRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [currentSession]);
+
+  const currentSessionKey = currentSession?.key;
+
+  useEffect(() => {
+    if (!currentSessionKey) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = conversationScrollRef.current;
+      if (element && typeof element.scrollTo === "function") {
+        element.scrollTo({ top: 0, behavior: "auto" });
+      } else if (element) {
+        element.scrollTop = 0;
+      }
+      setShowJumpLatest(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentSessionKey]);
 
   const tenantOptions = useMemo<SessionFilterOption<SessionScopeKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
@@ -3339,30 +3778,42 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     );
   }, [selectedAgents, selectedScopes]);
 
-  const abortPromptStream = useCallback(() => {
+  const abortDetailStream = useCallback(() => {
     streamController.current?.abort();
     streamController.current = null;
-    setLoadingPrompts(false);
+    setLoadingDetail(false);
   }, []);
 
   const clearInspection = useCallback(() => {
-    abortPromptStream();
+    abortDetailStream();
     currentSessionRef.current = null;
     setCurrentSession(null);
-    setPrompts([]);
-    setPromptWarnings([]);
-  }, [abortPromptStream]);
+    setTimeline([]);
+    setDetailMeta(null);
+    setDetailStats(null);
+    setDetailWarnings([]);
+    setActiveUserMessage(null);
+    userMessageRefs.current.clear();
+  }, [abortDetailStream]);
 
   const openSession = useCallback(
-    async (row: SourcedSession, updateLocation = true) => {
-      abortPromptStream();
+    async (row: SourcedSession, updateLocation = true, preserveContent = false) => {
+      abortDetailStream();
       const controller = new AbortController();
       streamController.current = controller;
       currentSessionRef.current = row;
       setCurrentSession(row);
-      setPrompts([]);
-      setPromptWarnings([]);
-      setLoadingPrompts(true);
+      setDetailRevision((current) => current + 1);
+      setActiveUserMessage(null);
+      userMessageRefs.current.clear();
+      if (!preserveContent) {
+        setTimeline([]);
+        setDetailMeta(null);
+        setDetailStats(null);
+        setDetailWarnings([]);
+      }
+      setError(null);
+      setLoadingDetail(true);
       if (updateLocation) {
         const nextSelection = {
           scopeKey: row.source.scopeKey,
@@ -3372,34 +3823,71 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
         setRouteSelection(nextSelection);
         changePageLocation(
           "sessions",
-          sessionLocation(selectedScopes, selectedAgents, nextSelection),
+          sessionLocation(selectedScopes, selectedAgents, nextSelection, sessionTab),
           onLocationChange,
         );
       }
+      let nextTimeline: SessionTimelineItem[] = [];
+      let nextMeta: SessionDetailMeta | null = null;
+      let nextStats: SessionDetailStats | null = null;
+      let nextWarnings: string[] = [];
       const query = scopeQuery(row.source.scope);
       query.set("agent", row.source.agent);
       query.set("id", row.id);
       try {
-        const result = await api.streamSession(
-          `/_aibox/api/sessions/prompts?${query}`,
-          (prompt) => setPrompts((current) => [...current, prompt]),
+        await api.streamSessionDetail(
+          `/_aibox/api/sessions/detail?${query}`,
+          {
+            onMeta: (meta) => {
+              if (preserveContent) nextMeta = meta;
+              else setDetailMeta(meta);
+            },
+            onMessage: (message) => {
+              if (preserveContent) nextTimeline = appendConversationMessage(nextTimeline, message);
+              else setTimeline((current) => appendConversationMessage(current, message));
+            },
+            onTool: (tool) => {
+              const entry: SessionActivityItem = { kind: "tool", value: tool };
+              if (preserveContent) nextTimeline = appendActivityItem(nextTimeline, entry);
+              else setTimeline((current) => appendActivityItem(current, entry));
+            },
+            onEvidence: (evidence) => {
+              const entry: SessionActivityItem = { kind: "evidence", value: evidence };
+              if (preserveContent) nextTimeline = appendActivityItem(nextTimeline, entry);
+              else setTimeline((current) => appendActivityItem(current, entry));
+            },
+            onComplete: (stats, warnings) => {
+              if (preserveContent) {
+                nextStats = stats;
+                nextWarnings = warnings;
+              } else {
+                setDetailStats(stats);
+                setDetailWarnings(warnings);
+              }
+            },
+          },
           controller.signal,
         );
-        if (streamController.current === controller) setPromptWarnings(result.warnings);
+        if (preserveContent && streamController.current === controller) {
+          setTimeline(nextTimeline);
+          setDetailMeta(nextMeta);
+          setDetailStats(nextStats);
+          setDetailWarnings(nextWarnings);
+        }
       } catch (cause) {
         if (!sessionRequestCancelled(cause, controller.signal)) {
           setError(
-            `Couldn’t load Session from ${row.source.scopeLabel} · ${row.source.agentLabel}: ${messageOf(cause)}`,
+            `Couldn’t load Session from ${visibleSessionSource(row.source)}: ${messageOf(cause)}`,
           );
         }
       } finally {
         if (streamController.current === controller) {
           streamController.current = null;
-          setLoadingPrompts(false);
+          setLoadingDetail(false);
         }
       }
     },
-    [abortPromptStream, api, onLocationChange, selectedAgents, selectedScopes],
+    [abortDetailStream, api, onLocationChange, selectedAgents, selectedScopes, sessionTab],
   );
 
   useEffect(() => {
@@ -3411,6 +3899,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     setSelectedScopes(route.scopes);
     setSelectedAgents(route.agents);
     setRouteSelection(route.selection);
+    setSessionTab(route.tab);
   }, [clearInspection, locationVersion]);
 
   const load = useCallback(
@@ -3449,10 +3938,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
         );
         if (successes.length === 0 && failures.length > 0) {
           const failureText = failures
-            .map(
-              ({ cause, source }) =>
-                `${source.scopeLabel} · ${source.agentLabel}: ${messageOf(cause)}`,
-            )
+            .map(({ cause, source }) => `${visibleSessionSource(source)}: ${messageOf(cause)}`)
             .join("; ");
           setListUnavailable(true);
           setError(`Couldn’t load Sessions: ${failureText}`);
@@ -3466,13 +3952,10 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
 
         const warnings = [
           ...failures.map(
-            ({ cause, source }) =>
-              `${source.scopeLabel} · ${source.agentLabel}: ${messageOf(cause)}`,
+            ({ cause, source }) => `${visibleSessionSource(source)}: ${messageOf(cause)}`,
           ),
           ...successes.flatMap(({ result, source }) =>
-            result.warnings.map(
-              (warning) => `${source.scopeLabel} · ${source.agentLabel}: ${warning}`,
-            ),
+            result.warnings.map((warning) => `${visibleSessionSource(source)}: ${warning}`),
           ),
         ];
         const sessions = successes
@@ -3530,9 +4013,9 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     void load();
     return () => {
       listController.current?.abort();
-      abortPromptStream();
+      abortDetailStream();
     };
-  }, [abortPromptStream, clearInspection, load]);
+  }, [abortDetailStream, clearInspection, load]);
 
   useEffect(() => {
     if (!routeSelection || !data || loadingList) return;
@@ -3669,7 +4152,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       return;
     const originRows = data.sessions;
     const wasCurrent = currentSessionRef.current?.key === row.key;
-    if (wasCurrent) abortPromptStream();
+    if (wasCurrent) abortDetailStream();
     resolveFailure("action");
     try {
       await requestSessionDeletion(row.source, [row.id]);
@@ -3722,7 +4205,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       try {
         await requestSessionDeletion(source, ids);
       } catch (cause) {
-        failures.push(`${source.scopeLabel} · ${source.agentLabel}: ${messageOf(cause)}`);
+        failures.push(`${visibleSessionSource(source)}: ${messageOf(cause)}`);
       }
     }
     setDialogKeys(null);
@@ -3768,6 +4251,34 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       .values(),
   ].sort((left, right) => left.source.key.localeCompare(right.source.key));
   const batchBusy = deletion?.kind === "batch";
+  const sessionWarnings = currentSession
+    ? [...new Set([...currentSession.warnings, ...detailWarnings])]
+    : [];
+  const transcriptIsPartial = Boolean(currentSession && !loadingDetail && !detailStats);
+  const transcriptHasDiagnostics =
+    transcriptIsPartial ||
+    sessionWarnings.length > 0 ||
+    (detailStats?.malformed_count ?? 0) > 0 ||
+    (detailStats?.unsupported_count ?? 0) > 0 ||
+    (detailStats?.hidden_internal_count ?? 0) > 0;
+  const userMessages = useMemo(
+    () =>
+      timeline.flatMap((item) =>
+        item.kind === "message" && item.value.role === "user" ? [item.value] : [],
+      ),
+    [timeline],
+  );
+
+  useEffect(() => {
+    const first = userMessages[0]?.entry_ids[0] ?? null;
+    if (!first) {
+      setActiveUserMessage(null);
+      return;
+    }
+    setActiveUserMessage((current) =>
+      current && userMessages.some((message) => message.entry_ids[0] === current) ? current : first,
+    );
+  }, [userMessages]);
 
   function retryPageError() {
     setError(null);
@@ -3909,7 +4420,8 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
               const selectedForDeletion = selectedKeys.has(row.key);
               const deleting = deletion?.kind === "record" && deletion.key === row.key;
               const title = row.title || "Untitled Session";
-              const sourceDescription = `${row.source.scopeLabel} · ${row.source.agentLabel}`;
+              const visibleSourceDescription = visibleSessionSource(row.source);
+              const accessibleSourceDescription = accessibleSessionSource(row.source);
               return (
                 <div
                   key={row.key}
@@ -3931,8 +4443,8 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                     className={styles.sessionRowMain}
                     aria-label={
                       selectionMode
-                        ? `${selectedForDeletion ? "Deselect" : "Select"} ${title}, ${sourceDescription}`
-                        : `${title}, ${sourceDescription}`
+                        ? `${selectedForDeletion ? "Deselect" : "Select"} ${title}, ${accessibleSourceDescription}`
+                        : `${title}, ${accessibleSourceDescription}`
                     }
                     aria-pressed={selectionMode ? selectedForDeletion : undefined}
                     disabled={deletionBusy || loadingList}
@@ -3942,10 +4454,11 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                     <span>
                       <strong title={title}>{title}</strong>
                       <small className={styles.sessionRowMetadata}>
-                        <span>
-                          {sessionListScopeLabel(row.source.scopeKey)} · {row.source.agentLabel}
-                        </span>
+                        <span>{visibleSessionListSource(row.source)}</span>
                         <time dateTime={row.start_ts}>{formatTimestamp(row.start_ts)}</time>
+                      </small>
+                      <small className={styles.sessionRowPreview} title={row.latest_message ?? ""}>
+                        {row.latest_message || "No readable conversation content"}
                       </small>
                     </span>
                     {row.warnings.length > 0 && (
@@ -3972,11 +4485,11 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                       }}
                       type="button"
                       className={styles.sessionDelete}
-                      title={`Delete Session ${row.display_id} from ${sourceDescription}`}
+                      title={`Delete Session ${row.display_id} from ${visibleSourceDescription}`}
                       aria-label={
                         deleting
-                          ? `Deleting Session ${row.display_id} from ${sourceDescription}`
-                          : `Delete Session ${row.display_id} from ${sourceDescription}`
+                          ? `Deleting Session ${row.display_id} from ${accessibleSourceDescription}`
+                          : `Delete Session ${row.display_id} from ${accessibleSourceDescription}`
                       }
                       aria-busy={deleting}
                       disabled={unsafeView || mutationBusy || loadingList}
@@ -4005,53 +4518,334 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
         <section className={styles.detailPane}>
           {currentSession ? (
             <>
-              <div className={styles.detailHeader}>
+              <header className={`${styles.detailHeader} ${styles.sessionDetailHeader}`}>
                 <IconButton label="Back to Sessions" onClick={closeSessionInspection}>
                   <ChevronLeft size={17} />
                 </IconButton>
-                <div>
+                <div className={styles.sessionDetailHeading}>
                   <h2 ref={detailHeadingRef} tabIndex={-1}>
                     {currentSession.title || "Untitled Session"}
                   </h2>
                   <span className={styles.sessionDetailSource}>
-                    {currentSession.source.scopeLabel} · {currentSession.source.agentLabel} ·{" "}
-                    <code>{currentSession.id}</code>
+                    {visibleSessionListSource(currentSession.source)} ·{" "}
+                    <time dateTime={currentSession.start_ts}>
+                      {formatTimestamp(currentSession.start_ts)}
+                    </time>{" "}
+                    · {duration(detailStats?.observed_duration_ms)} ·{" "}
+                    {messageCountLabel(
+                      detailStats?.message_count ?? currentSession.message_count ?? 0,
+                    )}{" "}
+                    · {toolCountLabel(detailStats?.tool_count ?? currentSession.tool_count ?? 0)}
                   </span>
                 </div>
-              </div>
-              {[...currentSession.warnings, ...promptWarnings].map((warning) => (
-                <div className={styles.inlineWarning} key={warning}>
-                  {warning}
+                <div className={styles.sessionDetailActions}>
+                  {loadingDetail && (
+                    <span className={styles.sessionDetailStatus} role="status">
+                      Reading Transcript…
+                    </span>
+                  )}
+                  {!loadingDetail && !detailStats && (
+                    <span
+                      className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}
+                    >
+                      Partial transcript
+                    </span>
+                  )}
+                  {!loadingDetail && detailStats && sessionWarnings.length > 0 && (
+                    <span
+                      className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}
+                    >
+                      <AlertTriangle size={13} aria-hidden="true" /> Transcript warning
+                    </span>
+                  )}
+                  <IconButton
+                    label="Refresh Session detail"
+                    disabled={deletionBusy}
+                    onClick={() => void openSession(currentSession, false, true)}
+                  >
+                    <RefreshCw className={loadingDetail ? "spin" : undefined} size={15} />
+                  </IconButton>
                 </div>
-              ))}
-              <div className={styles.promptList}>
-                {prompts.map((prompt, index) => (
-                  <article key={`${index}:${prompt.timestamp}`}>
-                    <header>
-                      <span>Prompt {index + 1}</span>
-                      <time>{prompt.timestamp}</time>
-                    </header>
-                    <pre>{prompt.text}</pre>
-                  </article>
-                ))}
-                {loadingPrompts && <Loading />}
-                {!loadingPrompts && prompts.length === 0 && (
-                  <EmptyState
-                    className={styles.promptEmptyState}
-                    variant="detail"
-                    icon={<SessionIcon size={26} aria-hidden="true" />}
-                    title="No typed prompts"
-                    description="This Session's Transcript contains no supported typed user prompts."
+              </header>
+              <nav className={styles.sessionTabs} aria-label="Session views">
+                <button
+                  type="button"
+                  className={sessionTab === "conversation" ? styles.sessionTabActive : undefined}
+                  aria-current={sessionTab === "conversation" ? "page" : undefined}
+                  onClick={() => updateSessionTab("conversation")}
+                >
+                  Conversation
+                </button>
+                <button
+                  type="button"
+                  className={sessionTab === "details" ? styles.sessionTabActive : undefined}
+                  aria-current={sessionTab === "details" ? "page" : undefined}
+                  onClick={() => updateSessionTab("details")}
+                >
+                  Details
+                  {transcriptHasDiagnostics && (
+                    <span
+                      className={styles.sessionTabIssue}
+                      aria-label="Transcript diagnostics"
+                      title="Transcript diagnostics"
+                    >
+                      <AlertTriangle size={11} aria-hidden="true" />
+                    </span>
+                  )}
+                </button>
+              </nav>
+              {sessionTab === "details" ? (
+                <div className={styles.sessionDetailsScroll}>
+                  <div className={styles.sessionDetailsContent}>
+                    <section className={styles.sessionDetailsSection}>
+                      <h3>Session</h3>
+                      <dl className={styles.sessionDetailsGrid}>
+                        <div>
+                          <dt>Tenant</dt>
+                          <dd>{sessionListScopeLabel(currentSession.source.scopeKey)}</dd>
+                        </div>
+                        <div>
+                          <dt>Coding Agent</dt>
+                          <dd>{currentSession.source.agentLabel}</dd>
+                        </div>
+                        <div>
+                          <dt>Session ID</dt>
+                          <dd>
+                            <SessionCopyValue
+                              label="Session ID"
+                              value={detailMeta?.id ?? currentSession.id}
+                            />
+                          </dd>
+                        </div>
+                        {detailMeta?.transcript_path && (
+                          <div>
+                            <dt>Transcript</dt>
+                            <dd>
+                              <SessionCopyValue
+                                label="Transcript path"
+                                value={detailMeta.transcript_path}
+                              />
+                            </dd>
+                          </div>
+                        )}
+                        {detailMeta?.cwd && (
+                          <div>
+                            <dt>Working directory</dt>
+                            <dd>
+                              <SessionCopyValue label="Working directory" value={detailMeta.cwd} />
+                            </dd>
+                          </div>
+                        )}
+                        <div>
+                          <dt>Started</dt>
+                          <dd>
+                            <time dateTime={detailStats?.start_ts ?? currentSession.start_ts}>
+                              {formatTimestamp(detailStats?.start_ts ?? currentSession.start_ts)}
+                            </time>
+                          </dd>
+                        </div>
+                        {detailStats?.last_event_ts && (
+                          <div>
+                            <dt>Last event</dt>
+                            <dd>
+                              <time dateTime={detailStats.last_event_ts}>
+                                {formatTimestamp(detailStats.last_event_ts)}
+                              </time>
+                            </dd>
+                          </div>
+                        )}
+                        {detailStats && (
+                          <div>
+                            <dt>Duration</dt>
+                            <dd>{duration(detailStats.observed_duration_ms)}</dd>
+                          </div>
+                        )}
+                        {detailStats && (
+                          <div>
+                            <dt>Transcript size</dt>
+                            <dd>{bytes(detailStats.file_size)}</dd>
+                          </div>
+                        )}
+                        {detailMeta?.model_provider && (
+                          <div>
+                            <dt>Model provider</dt>
+                            <dd>{detailMeta.model_provider}</dd>
+                          </div>
+                        )}
+                        {detailMeta?.cli_version && (
+                          <div>
+                            <dt>CLI version</dt>
+                            <dd>{detailMeta.cli_version}</dd>
+                          </div>
+                        )}
+                      </dl>
+                    </section>
+                    <section className={styles.sessionDetailsSection}>
+                      <div className={styles.sessionDetailsSectionHeading}>
+                        <h3>Diagnostics</h3>
+                        {loadingDetail ? (
+                          <span>Reading Transcript…</span>
+                        ) : (
+                          !transcriptHasDiagnostics && <span>No transcript diagnostics.</span>
+                        )}
+                      </div>
+                      {detailStats && transcriptHasDiagnostics && (
+                        <dl className={styles.sessionDiagnosticsGrid}>
+                          <div>
+                            <dt>Transcript entries</dt>
+                            <dd>{detailStats.entry_count}</dd>
+                          </div>
+                          {detailStats.malformed_count > 0 && (
+                            <div>
+                              <dt>Malformed</dt>
+                              <dd>{detailStats.malformed_count}</dd>
+                            </div>
+                          )}
+                          {detailStats.unsupported_count > 0 && (
+                            <div>
+                              <dt>Unsupported</dt>
+                              <dd>{detailStats.unsupported_count}</dd>
+                            </div>
+                          )}
+                          {detailStats.hidden_internal_count > 0 && (
+                            <div>
+                              <dt>Hidden internal</dt>
+                              <dd>{detailStats.hidden_internal_count}</dd>
+                            </div>
+                          )}
+                        </dl>
+                      )}
+                      {sessionWarnings.length > 0 && (
+                        <div className={styles.sessionDiagnosticWarnings}>
+                          {sessionWarnings.map((warning) => (
+                            <p key={warning}>{warning}</p>
+                          ))}
+                        </div>
+                      )}
+                      {transcriptIsPartial && (
+                        <div className={styles.sessionDiagnosticWarnings}>
+                          <p>
+                            Transcript detail did not finish loading. Displayed content may be
+                            incomplete.
+                          </p>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </div>
+              ) : (
+                <div className={styles.sessionConversationLayout}>
+                  <SessionConversationNav
+                    messages={userMessages}
+                    activeEntryId={activeUserMessage}
+                    onSelect={jumpToUserMessage}
                   />
-                )}
-              </div>
+                  <div className={styles.sessionConversationMain}>
+                    <SessionConversationNav
+                      messages={userMessages}
+                      activeEntryId={activeUserMessage}
+                      mobile
+                      onSelect={jumpToUserMessage}
+                    />
+                    <div
+                      ref={conversationScrollRef}
+                      className={styles.sessionConversationScroll}
+                      onScroll={onConversationScroll}
+                    >
+                      <div key={detailRevision} className={styles.sessionConversationContent}>
+                        {sessionWarnings.length > 0 && (
+                          <button
+                            type="button"
+                            className={styles.sessionConversationWarning}
+                            onClick={() => updateSessionTab("details")}
+                          >
+                            <AlertTriangle size={14} aria-hidden="true" />
+                            <span>Some transcript events could not be interpreted.</span>
+                            <span>View Details</span>
+                          </button>
+                        )}
+                        {timeline.map((item) => {
+                          if (item.kind === "message") {
+                            const label =
+                              item.value.role === "user" ? "You" : currentSession.source.agentLabel;
+                            const timestamp = compactMessageTimestamp(
+                              item.value.timestamp,
+                              currentSession.start_ts,
+                            );
+                            return (
+                              <article
+                                key={sessionItemKey(item)}
+                                id={
+                                  item.value.role === "user"
+                                    ? messageAnchorId(item.value)
+                                    : undefined
+                                }
+                                ref={(element) => {
+                                  if (item.value.role !== "user") return;
+                                  const entryId = item.value.entry_ids[0];
+                                  if (!entryId) return;
+                                  if (element) userMessageRefs.current.set(entryId, element);
+                                  else userMessageRefs.current.delete(entryId);
+                                }}
+                                className={`${styles.sessionMessage} ${item.value.role === "user" ? styles.sessionMessageUser : styles.sessionMessageAssistant}`}
+                              >
+                                <header>
+                                  <span>{label}</span>
+                                  <time
+                                    dateTime={item.value.timestamp}
+                                    title={formatTimestamp(item.value.timestamp)}
+                                  >
+                                    {timestamp}
+                                  </time>
+                                </header>
+                                <SessionMessageContent
+                                  role={item.value.role}
+                                  text={item.value.text}
+                                />
+                              </article>
+                            );
+                          }
+                          return (
+                            <SessionActivityGroup
+                              key={sessionItemKey(item)}
+                              api={api}
+                              entries={item.value}
+                              session={currentSession}
+                              snapshot={detailStats?.snapshot}
+                            />
+                          );
+                        })}
+                        {loadingDetail && <Loading />}
+                        {!loadingDetail && timeline.length === 0 && (
+                          <EmptyState
+                            className={styles.promptEmptyState}
+                            variant="detail"
+                            icon={<SessionIcon size={26} aria-hidden="true" />}
+                            title="No readable conversation"
+                            description="This Transcript contains no supported user or Agent messages. Transcript events remain available below when present."
+                          />
+                        )}
+                      </div>
+                      {showJumpLatest && (
+                        <IconButton
+                          className={styles.jumpLatest}
+                          label="Jump to latest"
+                          onClick={jumpToLatest}
+                        >
+                          <ArrowDown size={16} aria-hidden="true" />
+                        </IconButton>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <EmptyState
               variant="detail"
               icon={<SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />}
               title="Select a Session"
-              description="Choose a Session to inspect its prompts and Transcript warnings."
+              description="Choose a Session to inspect its conversation and Transcript evidence."
             />
           )}
         </section>
@@ -4068,7 +4862,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       {singleDeleteTarget && (
         <ConfirmDialog
           title={`Delete Session ${singleDeleteTarget.display_id}?`}
-          message={`This permanently deletes its Transcript from ${singleDeleteTarget.source.scopeLabel} · ${singleDeleteTarget.source.agentLabel}.`}
+          message={`This permanently deletes its Transcript from ${visibleSessionSource(singleDeleteTarget.source)}.`}
           confirmLabel="Delete permanently"
           busy={deletion?.kind === "record" || operation?.state === "running"}
           onCancel={() => {
@@ -4081,7 +4875,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
         <ConfirmDialog
           title={`Delete ${dialogKeys.length} selected Session${dialogKeys.length === 1 ? "" : "s"}?`}
           message={`This permanently deletes the Transcripts for the selected Sessions. Sources: ${dialogSources
-            .map(({ count, source }) => `${source.scopeLabel} · ${source.agentLabel} (${count})`)
+            .map(({ count, source }) => `${visibleSessionSource(source)} (${count})`)
             .join("; ")}.`}
           confirmLabel="Delete permanently"
           busy={batchBusy || operation?.state === "running"}

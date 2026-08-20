@@ -41,7 +41,7 @@ const resources = [
     href: "https://github.com/rbee3u/aibox",
     source: githubIcon,
     name: "github",
-    label: "GitHub",
+    label: "GitHub repo",
   },
   {
     href: "https://developers.openai.com/codex/cli",

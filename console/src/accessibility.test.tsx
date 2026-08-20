@@ -93,7 +93,7 @@ function controlApi(): ControlApi {
       }
       return Promise.reject(new Error(`Unexpected Control API mutation: ${path}`));
     }),
-    streamSession: vi.fn(),
+    streamSessionDetail: vi.fn(),
   } as unknown as ControlApi;
 }
 

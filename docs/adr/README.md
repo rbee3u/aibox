@@ -33,3 +33,6 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   records diagnostic application provenance without reconciliation.
 - [0014: Fixed Runtime Image](0014-fixed-runtime-image.md) keeps every Run,
   build, and toolchain installer on `aibox:latest`.
+- [0016: Session conversation projection](0016-session-conversation-projection.md)
+  separates readable conversation, Tool Activity, and on-demand Transcript
+  Evidence while preserving native order and diagnostic boundaries.

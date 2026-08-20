@@ -12,7 +12,10 @@
 //!
 //! The session id is just the transcript filename without `.jsonl`.
 
-use crate::session::{PromptRecord, SessionBackend};
+use crate::session::{
+    ConversationMessage, DetailRecord, PromptRecord, SessionBackend, SessionNativeFacts,
+    ToolActivity, bounded_preview, evidence_for, ts_of,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -53,6 +56,179 @@ impl SessionBackend for Claude {
             }
             None => PromptRecord::UnsupportedUserLike,
         }
+    }
+
+    fn detail_records(&self, value: &Value, entry_id: &str, line: u64) -> Vec<DetailRecord> {
+        let kind = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let role = value
+            .pointer("/message/role")
+            .and_then(Value::as_str)
+            .or(match kind {
+                "user" => Some("user"),
+                "assistant" => Some("assistant"),
+                _ => None,
+            })
+            .unwrap_or("");
+        let mut unsupported_content = false;
+        let user_text = if role == "user" {
+            match self.prompt_record(value) {
+                PromptRecord::Typed(text) => Some(text),
+                PromptRecord::TypedWithUnsupported(text) => {
+                    unsupported_content = true;
+                    Some(text)
+                }
+                PromptRecord::NotTyped | PromptRecord::UnsupportedUserLike => None,
+            }
+        } else {
+            None
+        };
+        let Some(content) = value.pointer("/message/content") else {
+            return vec![DetailRecord::Evidence(evidence_for(
+                value,
+                entry_id,
+                line,
+                if kind == "thinking" || kind == "reasoning" {
+                    "hidden_internal"
+                } else {
+                    "filtered"
+                },
+            ))];
+        };
+        let items = match content {
+            Value::String(text) if !text.is_empty() && role == "assistant" => {
+                return vec![DetailRecord::Message(ConversationMessage {
+                    entry_ids: vec![entry_id.to_string()],
+                    role: "assistant".to_string(),
+                    timestamp: ts_of(value),
+                    text: text.clone(),
+                })];
+            }
+            Value::String(_) if user_text.is_some() => {
+                return vec![DetailRecord::Message(ConversationMessage {
+                    entry_ids: vec![entry_id.to_string()],
+                    role: "user".to_string(),
+                    timestamp: ts_of(value),
+                    text: user_text.unwrap_or_default(),
+                })];
+            }
+            Value::Array(items) => items,
+            _ => {
+                return vec![DetailRecord::Evidence(evidence_for(
+                    value,
+                    entry_id,
+                    line,
+                    "unsupported",
+                ))];
+            }
+        };
+        let mut output = Vec::new();
+        let mut text_parts = Vec::new();
+        let mut hidden_internal = false;
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("text" | "output_text") if role == "assistant" => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str)
+                        && !text.is_empty()
+                    {
+                        text_parts.push(text.to_string());
+                    }
+                }
+                Some("tool_use") => {
+                    output.push(DetailRecord::Tool(ToolActivity {
+                        entry_ids: vec![entry_id.to_string()],
+                        call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+                        timestamp: ts_of(value),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Tool")
+                            .to_string(),
+                        status: "started".to_string(),
+                        summary: item
+                            .get("input")
+                            .map(|input| bounded_preview(&input.to_string()))
+                            .unwrap_or_default(),
+                    }));
+                }
+                Some("tool_result") => {
+                    output.push(DetailRecord::Tool(ToolActivity {
+                        entry_ids: vec![entry_id.to_string()],
+                        call_id: item
+                            .get("tool_use_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        timestamp: ts_of(value),
+                        name: "Tool result".to_string(),
+                        status: if item.get("is_error").and_then(Value::as_bool) == Some(true) {
+                            "failed".to_string()
+                        } else {
+                            "completed".to_string()
+                        },
+                        summary: item
+                            .get("content")
+                            .map(|content| bounded_preview(&content.to_string()))
+                            .unwrap_or_default(),
+                    }));
+                }
+                Some("thinking" | "reasoning") => hidden_internal = true,
+                Some("image" | "document") => {}
+                _ => unsupported_content = true,
+            }
+        }
+        let message_text = if role == "user" {
+            user_text
+        } else {
+            Some(text_parts.join("\n"))
+        };
+        if let Some(text) = message_text.filter(|text| !text.is_empty()) {
+            output.insert(
+                0,
+                DetailRecord::Message(ConversationMessage {
+                    entry_ids: vec![entry_id.to_string()],
+                    role: role.to_string(),
+                    timestamp: ts_of(value),
+                    text,
+                }),
+            );
+        }
+        if hidden_internal {
+            output.push(DetailRecord::Evidence(evidence_for(
+                value,
+                entry_id,
+                line,
+                "hidden_internal",
+            )));
+        }
+        if unsupported_content {
+            output.push(DetailRecord::Evidence(evidence_for(
+                value,
+                entry_id,
+                line,
+                "unsupported",
+            )));
+        }
+        if output.is_empty() {
+            output.push(DetailRecord::Evidence(evidence_for(
+                value,
+                entry_id,
+                line,
+                if hidden_internal || kind == "thinking" || kind == "reasoning" {
+                    "hidden_internal"
+                } else if kind == "user" || kind == "assistant" {
+                    "unsupported"
+                } else {
+                    "filtered"
+                },
+            )));
+        }
+        output
+    }
+
+    fn native_facts(&self, value: &Value, _facts: &mut SessionNativeFacts) {
+        let _ = value;
     }
 
     /// Any line bearing a non-empty top-level `timestamp` is a candidate; the

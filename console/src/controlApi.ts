@@ -158,6 +158,9 @@ export interface SessionRow {
   display_id: string;
   start_ts: string;
   title: string;
+  latest_message?: string;
+  message_count?: number;
+  tool_count?: number;
   warnings: string[];
 }
 
@@ -167,9 +170,62 @@ export interface SessionListData {
   partial: boolean;
 }
 
-export interface Prompt {
+export interface ConversationMessage {
+  entry_ids: string[];
+  role: "user" | "assistant";
   timestamp: string;
   text: string;
+}
+
+export interface ToolActivity {
+  entry_ids: string[];
+  call_id?: string | null;
+  timestamp: string;
+  name: string;
+  status: "started" | "completed" | "failed" | "incomplete" | "unknown";
+  summary: string;
+}
+
+export interface TranscriptEvidenceSummary {
+  entry_id: string;
+  line: number;
+  timestamp: string;
+  native_type: string;
+  role?: string | null;
+  content_types: string[];
+  status: string;
+  preview: string;
+}
+
+export interface SessionDetailMeta {
+  id: string;
+  title: string;
+  start_ts: string;
+  transcript_path: string;
+  cwd?: string | null;
+  model_provider?: string | null;
+  cli_version?: string | null;
+}
+
+export interface SessionDetailStats {
+  start_ts: string;
+  last_event_ts: string;
+  message_count: number;
+  tool_count: number;
+  entry_count: number;
+  malformed_count: number;
+  unsupported_count: number;
+  hidden_internal_count: number;
+  observed_duration_ms?: number | null;
+  file_size: number;
+  snapshot: string;
+}
+
+export interface TranscriptEvidence {
+  entry_id: string;
+  encoding: "utf-8" | "base64";
+  content: string;
+  snapshot: string;
 }
 
 export interface PropagationOutcome {
@@ -248,11 +304,17 @@ export class ControlApi {
     return (await response.json()) as T;
   }
 
-  async streamSession(
+  async streamSessionDetail(
     path: string,
-    onPrompt: (prompt: Prompt) => void,
+    handlers: {
+      onMessage: (message: ConversationMessage) => void;
+      onTool: (tool: ToolActivity) => void;
+      onEvidence: (evidence: TranscriptEvidenceSummary) => void;
+      onMeta: (meta: SessionDetailMeta) => void;
+      onComplete: (stats: SessionDetailStats, warnings: string[]) => void;
+    },
     signal?: AbortSignal,
-  ): Promise<{ id: string; warnings: string[] }> {
+  ): Promise<void> {
     const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
     if (!response.ok || !response.body) {
       throw new ApiError(await errorMessage(response), response.status);
@@ -260,7 +322,7 @@ export class ControlApi {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let pending = "";
-    let complete: { id: string; warnings: string[] } | null = null;
+    let complete = false;
     while (true) {
       const chunk = await reader.read();
       pending += decoder.decode(chunk.value, { stream: !chunk.done });
@@ -269,19 +331,31 @@ export class ControlApi {
       for (const line of lines) {
         if (!line) continue;
         const record = JSON.parse(line) as
-          | { type: "prompt"; prompt: Prompt }
-          | { type: "complete"; id: string; warnings: string[] }
+          | { type: "message"; message: ConversationMessage }
+          | { type: "tool_activity"; tool_activity: ToolActivity }
+          | { type: "evidence"; evidence: TranscriptEvidenceSummary }
+          | { type: "meta"; meta: SessionDetailMeta }
+          | { type: "complete"; stats: SessionDetailStats; warnings: string[] }
           | { type: "error"; error: string };
-        if (record.type === "prompt") onPrompt(record.prompt);
+        if (record.type === "message") handlers.onMessage(record.message);
+        if (record.type === "tool_activity") handlers.onTool(record.tool_activity);
+        if (record.type === "evidence") handlers.onEvidence(record.evidence);
+        if (record.type === "meta") handlers.onMeta(record.meta);
         if (record.type === "complete") {
-          complete = { id: record.id, warnings: record.warnings };
+          complete = true;
+          handlers.onComplete(record.stats, record.warnings);
         }
         if (record.type === "error") throw new Error(record.error);
       }
       if (chunk.done) break;
     }
-    if (!complete) throw new Error("Session stream ended before completion");
-    return complete;
+    if (!complete) throw new Error("Session detail stream ended before completion");
+  }
+
+  async loadSessionEvidence(path: string, signal?: AbortSignal): Promise<TranscriptEvidence> {
+    const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
+    if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+    return (await response.json()) as TranscriptEvidence;
   }
 }
 

@@ -211,7 +211,7 @@ export function RecordList({
             const model = resolveRequestedEffective(record.protocol?.model) ?? "—";
             const reasoningEffort =
               resolveRequestedEffective(record.protocol?.reasoning_effort) ?? "—";
-            const compactModel = reasoningEffort === "—" ? model : `${model}·${reasoningEffort}`;
+            const compactModel = reasoningEffort === "—" ? model : `${model} ${reasoningEffort}`;
             const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
             const ended = formatTimestamp(record.ended_at ?? "");
@@ -281,7 +281,7 @@ export function RecordList({
                     </span>
                     <span className={styles.timingMetadata}>
                       <span className={styles.timing} title={timingDescription}>
-                        {firstToken}/{totalDuration}
+                        {firstToken} / {totalDuration}
                       </span>
                       {record.ended_at ? (
                         <time

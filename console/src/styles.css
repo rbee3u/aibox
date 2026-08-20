@@ -64,6 +64,7 @@
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --control-sm: 32px;
   --control-md: 36px;
+  --catalog-panel-width: clamp(360px, 31vw, 460px);
   --catalog-toolbar-min-height: 48px;
   --catalog-toolbar-padding: 7px 10px 7px 14px;
   --catalog-divider-min-height: 42px;

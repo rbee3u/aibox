@@ -64,9 +64,35 @@ are shown in full. A full id or unique suffix selects one Transcript; duplicate
 or ambiguous suffixes are rejected.
 
 List rows use the newest timestamp first and show a native title when available,
-otherwise the first recognized typed prompt. Transcripts with no typed prompt
-remain visible and are included in bulk deletion. Prompt streaming is bounded
-and does not load a complete Transcript into memory.
+otherwise the first readable Conversation Message. Each row also exposes the
+newest readable message preview, Tenant and Coding Agent source, start time, and
+a quiet warning indicator when parsing was partial. Transcripts with no readable
+conversation remain visible and are included in bulk deletion.
+
+Session detail is a progressive NDJSON projection of the native Transcript. It
+keeps Conversation Messages in native order, places user messages on the right
+and Coding Agent replies on the left. Consecutive Tool Activity and Transcript
+Evidence stay at their original position but are visually grouped into one
+collapsed activity disclosure. The Console reads a single evidence entry on
+demand only after the user expands it and rechecks the Transcript snapshot; a
+changed snapshot requires refreshing the detail view.
+
+Claude typed or external user content becomes a user Conversation Message,
+Coding Agent reply text becomes an assistant Conversation Message, and
+`tool_use`/`tool_result` become
+Tool Activity. Codex wrapper-filtered user content, assistant `message` or
+`agent_message`, function calls, and custom tool calls use the same projection.
+Reasoning and thinking are counted as hidden internal diagnostics and their
+raw text is never exposed. Unknown, injected, system, unsupported, and
+malformed entries remain visible as diagnostic evidence or warnings without
+being presented as conversation text. Message bodies are plain text and keep
+their line breaks.
+
+The detail header shows Tenant, Coding Agent, start and last-event times,
+observed duration, message/tool counts, warnings, and expandable Transcript
+facts such as the full id, relative path, file size, working directory, model
+provider, CLI version, and parsing counts. Refresh is manual; it does not tail
+the file or move the scroll position automatically.
 
 Malformed JSONL and unsupported user-like records produce warnings and make the
 list or detail operation nonzero without hiding otherwise readable rows.

@@ -12,6 +12,7 @@ import {
 } from "../test/fixtures";
 import type { RecordDetail as RecordDetailData, TokenUsage } from "../types";
 import { RecordDetail } from "./RecordDetail";
+import styles from "./RecordDetail.module.css";
 
 type RecordDetailProps = ComponentProps<typeof RecordDetail>;
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
@@ -268,8 +269,9 @@ describe("RecordDetail", () => {
 
     const modelSummary = screen.getByRole("region", { name: "Model" });
     expect(within(modelSummary).getByTitle("Model effective-model")).toHaveTextContent(
-      "effective-model·high",
+      "effective-model high",
     );
+    expect(within(modelSummary).getByText("high")).toHaveClass(styles.modelEffort);
     expect(within(modelSummary).getByText("Non-streaming")).toBeInTheDocument();
     expect(screen.queryByText("requested-model")).not.toBeInTheDocument();
     const timingSection = screen.getByRole("region", { name: "Timing" });
