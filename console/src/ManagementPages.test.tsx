@@ -242,7 +242,11 @@ describe("TenantPage", () => {
   });
 
   it("restores a Tenant and selected Component from the shareable URL", async () => {
-    window.history.replaceState(null, "", "/_aibox/ui/tenants?scope=managed%3Awork&component=rust");
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/tenants?tenant=managed%3Awork&component=rust",
+    );
     const { api, get } = tenantApi({
       components: [
         {
@@ -260,7 +264,7 @@ describe("TenantPage", () => {
     expect(await screen.findByRole("heading", { name: "work" })).toBeInTheDocument();
     const rust = await screen.findByText("Rust toolchain");
     expect(rust.closest("button")).toHaveAttribute("aria-pressed", "true");
-    expect(get).toHaveBeenCalledWith("/_aibox/api/components?scope=managed&tenant=work");
+    expect(get).toHaveBeenCalledWith("/_aibox/api/components?tenant=managed%3Awork");
   });
 
   it("groups Host and Managed Tenants and shows home paths", async () => {
@@ -478,8 +482,7 @@ describe("TenantPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Remove Component" }));
 
     expect(post).toHaveBeenCalledWith("/_aibox/api/components/remove", {
-      scope: "managed",
-      tenant: "default",
+      tenant: "managed:default",
       component: "codex-statusline",
       version: null,
     });
@@ -487,13 +490,19 @@ describe("TenantPage", () => {
 });
 
 describe("ConfigPage", () => {
-  function configFile(file: string, content: string, visual?: ConfigVisualField[]): ConfigFileData {
+  function configFile(
+    file: string,
+    content: string,
+    visual?: ConfigVisualField[],
+    visualProvider?: ConfigFileData["visual_provider"],
+  ): ConfigFileData {
     return {
       file,
       exists: true,
       revision: `${file}-revision`,
       content_base64: btoa(content),
       ...(visual ? { visual } : {}),
+      ...(visualProvider ? { visual_provider: visualProvider } : {}),
     };
   }
 
@@ -516,8 +525,12 @@ describe("ConfigPage", () => {
           ? "Permissions"
           : "Endpoint & credentials",
       value_kind: valueKind as "string" | "bool",
-      suggestions: [],
+      enum_values: [],
       sensitive: path === "env.ANTHROPIC_AUTH_TOKEN",
+      required:
+        path === "env.ANTHROPIC_BASE_URL" ||
+        path === "env.ANTHROPIC_AUTH_TOKEN" ||
+        path === "permissions.defaultMode",
       included: true,
       value,
     }));
@@ -534,7 +547,7 @@ describe("ConfigPage", () => {
     } satisfies ConfigListData;
     const get = vi.fn((path: string) => {
       if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
-      if (path === "/_aibox/api/configs?scope=managed&tenant=default&agent=codex") {
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex") {
         catalogAttempts += 1;
         return catalogAttempts === 1
           ? Promise.reject(new Error("catalog unavailable"))
@@ -565,6 +578,152 @@ describe("ConfigPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps a missing Managed Tenant empty without synthesizing a selector option", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Amissing&agent=codex&current=1",
+    );
+    const catalog = {
+      named_configs: [],
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Amissing&agent=codex")
+        return Promise.resolve(catalog);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string, body: { file?: string }) => {
+      if (path === "/_aibox/api/configs/reveal")
+        return Promise.resolve({
+          ...configFile(body.file ?? "config.toml", ""),
+          exists: false,
+        });
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+
+    render(<ConfigPage api={{ get, post } as unknown as ControlApi} />);
+
+    expect(await screen.findByText("No Named Configs found.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Current Config" })).not.toBeInTheDocument();
+    expect(screen.getByText("Managed Tenant not found")).toBeInTheDocument();
+    expect(screen.getByText("The selected Managed Tenant does not exist.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Tenant: missing" })).not.toBeInTheDocument();
+    const tenantFilter = screen.getByRole("button", { name: "Tenant: Not found" });
+    await userEvent.setup().click(tenantFilter);
+    expect(screen.queryByRole("option", { name: "missing" })).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("option", { name: "default" }));
+    expect(await screen.findByRole("button", { name: "Tenant: default" })).toBeInTheDocument();
+    expect(screen.queryByText("Managed Tenant not found")).not.toBeInTheDocument();
+  });
+
+  it("replaces a stale Named Config route before revealing Config files", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=missing&file=config.toml",
+    );
+    const catalog = {
+      named_configs: [],
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn(
+      (path: string, body: { current?: boolean; config?: string | null; file?: string }) => {
+        if (path === "/_aibox/api/configs/reveal") {
+          expect(body.current).toBe(true);
+          expect(body.config).toBeNull();
+          return Promise.resolve(configFile(body.file ?? "config.toml", ""));
+        }
+        return Promise.reject(new Error(`Unexpected POST ${path}`));
+      },
+    );
+    const onLocationChange = vi.fn((_module: string, query: URLSearchParams, replace = false) => {
+      window.history[replace ? "replaceState" : "pushState"](
+        null,
+        "",
+        `/_aibox/ui/configs?${query}`,
+      );
+    });
+
+    render(
+      <ConfigPage
+        api={{ get, post } as unknown as ControlApi}
+        onLocationChange={onLocationChange}
+      />,
+    );
+
+    expect(await screen.findByText("No Named Configs found.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(window.location.href).toContain(
+        "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex",
+      ),
+    );
+    expect(window.location.search).toBe("?tenant=managed%3Adefault&agent=codex");
+    expect(screen.queryByText("Named Config missing")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onLocationChange).toHaveBeenCalledWith("configs", expect.any(URLSearchParams), true);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  });
+
+  it("retries a failed Config file reveal from the page error", async () => {
+    const catalog = {
+      named_configs: [],
+      configs: [],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    let revealAttempts = 0;
+    const post = vi.fn((path: string) => {
+      if (path === "/_aibox/api/configs/reveal") {
+        revealAttempts += 1;
+        return revealAttempts === 1
+          ? Promise.reject(new Error("file unavailable"))
+          : Promise.resolve(configFile("config.toml", "retried content"));
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+
+    render(<ConfigPage api={{ get, post } as unknown as ControlApi} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("file unavailable");
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "retried content",
+    );
+    expect(post.mock.calls.filter(([path]) => path === "/_aibox/api/configs/reveal")).toHaveLength(
+      2,
+    );
+    expect(screen.queryByText("file unavailable")).not.toBeInTheDocument();
+  });
+
   it("keeps Config browsing available but blocks writes during a Management Operation", async () => {
     const catalog = {
       named_configs: ["team"],
@@ -575,7 +734,7 @@ describe("ConfigPage", () => {
     } satisfies ConfigListData;
     const get = vi.fn((path: string) => {
       if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
-      if (path === "/_aibox/api/configs?scope=managed&tenant=default&agent=codex")
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
         return Promise.resolve(catalog);
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
@@ -601,7 +760,7 @@ describe("ConfigPage", () => {
     window.history.replaceState(
       null,
       "",
-      "/_aibox/ui/configs?scope=host&agent=claude&config=team&file=settings.json",
+      "/_aibox/ui/configs?tenant=host&agent=claude&config=team&file=settings.json",
     );
     const visual = claudeVisualFields();
     const catalog = {
@@ -625,7 +784,7 @@ describe("ConfigPage", () => {
     });
     const get = vi.fn((path: string) => {
       if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
-      if (path === "/_aibox/api/configs?scope=host&agent=claude") return Promise.resolve(catalog);
+      if (path === "/_aibox/api/configs?tenant=host&agent=claude") return Promise.resolve(catalog);
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
     const post = vi.fn<(path: string, body: Record<string, unknown>) => Promise<ConfigFileData>>(
@@ -648,9 +807,16 @@ describe("ConfigPage", () => {
     );
     const token = screen.getByLabelText("Anthropic auth token", { selector: "input" });
     expect(token).toHaveAttribute("type", "password");
+    expect(screen.queryByText("env.ANTHROPIC_AUTH_TOKEN")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Include Anthropic base URL" })).toBeNull();
+    expect(screen.getByLabelText("Anthropic base URL")).toHaveAttribute("required");
     await user.click(screen.getByRole("button", { name: "Show Anthropic auth token" }));
     expect(token).toHaveAttribute("type", "text");
-    await user.click(screen.getByRole("checkbox", { name: "Include Anthropic base URL" }));
+    await user.click(screen.getByRole("checkbox", { name: "Include Default Haiku model" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Skip dangerous mode prompt value" }),
+      "__default",
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
@@ -659,11 +825,216 @@ describe("ConfigPage", () => {
     const saveCall = post.mock.calls.find(([path]) => path === "/_aibox/api/configs/save");
     expect(saveCall?.[1].visual).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: "env.ANTHROPIC_BASE_URL", included: false }),
+        expect.objectContaining({
+          path: "env.ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          included: false,
+        }),
+        expect.objectContaining({
+          path: "skipDangerousModePermissionPrompt",
+          included: false,
+        }),
       ]),
     );
     await user.click(screen.getByRole("button", { name: "Raw" }));
     expect(screen.getByRole("textbox", { name: "settings.json content" })).toHaveValue(content);
+    await user.click(screen.getByRole("button", { name: "team" }));
+    expect(screen.getByRole("button", { name: "Visual" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses closed enums, Default omission, unsupported preservation, and help tooltips", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=team&file=config.toml",
+    );
+    const visual = [
+      {
+        path: "approval_policy",
+        label: "Approval policy",
+        description: "Controls when Codex pauses before executing commands.",
+        group: "Execution & permissions",
+        value_kind: "string",
+        enum_values: ["untrusted", "on-request", "never"],
+        sensitive: false,
+        required: true,
+        included: true,
+        value: "future-policy",
+      },
+      {
+        path: "sandbox_mode",
+        label: "Sandbox mode",
+        description: "Filesystem and network access policy for command execution.",
+        group: "Execution & permissions",
+        value_kind: "string",
+        enum_values: ["read-only", "workspace-write", "danger-full-access"],
+        sensitive: false,
+        required: true,
+        included: true,
+        value: "workspace-write",
+      },
+      {
+        path: "model_reasoning_effort",
+        label: "Model reasoning effort",
+        description: "Reasoning effort for supported models.",
+        group: "Model & reasoning",
+        value_kind: "string",
+        enum_values: ["minimal", "low", "medium", "high", "xhigh"],
+        sensitive: false,
+        included: false,
+      },
+      {
+        path: "model",
+        label: "Model",
+        description: "Model selected for Codex sessions.",
+        group: "Model & reasoning",
+        value_kind: "string",
+        enum_values: [],
+        sensitive: false,
+        required: true,
+        included: true,
+        value: "gpt",
+      },
+    ] satisfies ConfigVisualField[];
+    const catalog = {
+      named_configs: ["team"],
+      configs: [{ name: "team", state: "ready" }],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string) => {
+      if (path === "/_aibox/api/configs/reveal")
+        return Promise.resolve(configFile("config.toml", "", visual));
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+
+    render(<ConfigPage api={{ get, post } as unknown as ControlApi} />);
+
+    const approval = await screen.findByRole("combobox", { name: "Approval policy value" });
+    expect(approval).toHaveValue("future-policy");
+    expect(
+      within(approval).getByRole("option", { name: "Unsupported: future-policy" }),
+    ).toBeTruthy();
+    expect(within(approval).queryByRole("option", { name: "Custom" })).toBeNull();
+    expect(within(approval).queryByRole("option", { name: "Select a value" })).toBeNull();
+    expect(screen.queryByText("approval_policy")).not.toBeInTheDocument();
+
+    const reasoning = screen.getByRole("combobox", { name: "Model reasoning effort value" });
+    expect(reasoning).toHaveValue("__default");
+    expect(within(reasoning).getByRole("option", { name: "Default" })).toBeTruthy();
+
+    screen.getByRole("button", { name: "Help for Approval policy" }).focus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Controls when Codex pauses before executing commands.",
+    );
+  });
+
+  it("saves only the accepted Custom provider input fields", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=team&file=config.toml",
+    );
+    const catalog = {
+      named_configs: ["team"],
+      configs: [{ name: "team", state: "ready" }],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const visualProvider = {
+      included: true,
+      name: "custom",
+      base_url: "https://example.com/v1",
+      request_proxy_route: true,
+      proxy_routed: false,
+    } satisfies NonNullable<ConfigFileData["visual_provider"]>;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn<(path: string, body: Record<string, unknown>) => Promise<ConfigFileData>>(
+      (path) => {
+        if (path === "/_aibox/api/configs/reveal")
+          return Promise.resolve(configFile("config.toml", "", [], visualProvider));
+        if (path === "/_aibox/api/configs/save")
+          return Promise.resolve(configFile("config.toml", "", [], visualProvider));
+        return Promise.reject(new Error(`Unexpected POST ${path}`));
+      },
+    );
+    const user = userEvent.setup();
+
+    render(<ConfigPage api={{ get, post } as unknown as ControlApi} />);
+
+    const providerName = await screen.findByRole("textbox", { name: "Custom provider name" });
+    await user.clear(providerName);
+    await user.type(providerName, "custom-v2");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/_aibox/api/configs/save", expect.anything()),
+    );
+    const saveCall = post.mock.calls.find(([path]) => path === "/_aibox/api/configs/save");
+    expect(saveCall?.[1].visual_provider).toEqual({
+      included: true,
+      name: "custom-v2",
+      base_url: "https://example.com/v1",
+      proxy_routed: false,
+    });
+    expect(saveCall?.[1].visual_provider).not.toHaveProperty("request_proxy_route");
+  });
+
+  it("does not mark a routed Host provider dirty when it is first revealed", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=host&agent=codex&config=team&file=config.toml",
+    );
+    const catalog = {
+      named_configs: ["team"],
+      configs: [{ name: "team", state: "ready" }],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const visualProvider = {
+      included: true,
+      name: "custom",
+      base_url: "http://127.0.0.1:9923/https://example.com/v1",
+      request_proxy_route: true,
+      proxy_routed: false,
+    } satisfies NonNullable<ConfigFileData["visual_provider"]>;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=host&agent=codex") return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string) => {
+      if (path === "/_aibox/api/configs/reveal")
+        return Promise.resolve(configFile("config.toml", "", [], visualProvider));
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const onDirtyChange = vi.fn();
+    const api = {
+      bootstrap: { version: "test", csrf_token: "token", listen: "127.0.0.1:9923" },
+      get,
+      post,
+    } as unknown as ControlApi;
+
+    render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
+
+    await screen.findByRole("textbox", { name: "Custom provider base URL" });
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
   });
 
   it("shows non-UTF-8 Current Config as read-only downloadable bytes", async () => {
@@ -704,11 +1075,11 @@ describe("ConfigPage", () => {
     expect(screen.queryByRole("dialog", { name: "Unsaved changes" })).not.toBeInTheDocument();
   });
 
-  it("restores scope, Agent, Named Config, and file while reporting dirty edits", async () => {
+  it("restores Tenant, Agent, Named Config, and file while reporting dirty edits", async () => {
     window.history.replaceState(
       null,
       "",
-      "/_aibox/ui/configs?scope=host&agent=claude&config=team&file=settings.json",
+      "/_aibox/ui/configs?tenant=host&agent=claude&config=team&file=settings.json",
     );
     const catalog = {
       named_configs: ["team"],
@@ -719,7 +1090,7 @@ describe("ConfigPage", () => {
     } satisfies ConfigListData;
     const get = vi.fn((path: string) => {
       if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
-      if (path === "/_aibox/api/configs?scope=host&agent=claude") {
+      if (path === "/_aibox/api/configs?tenant=host&agent=claude") {
         return Promise.resolve(catalog);
       }
       return Promise.reject(new Error(`Unexpected GET ${path}`));
@@ -743,7 +1114,7 @@ describe("ConfigPage", () => {
     await user.type(editor, "changed");
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
     expect(post).toHaveBeenCalledWith("/_aibox/api/configs/reveal", {
-      scope: "host",
+      tenant: "host",
       agent: "claude",
       current: false,
       config: "team",
@@ -789,7 +1160,7 @@ describe("ConfigPage", () => {
               group: "Runtime",
               value_kind: "string",
               sensitive: false,
-              suggestions: [],
+              enum_values: [],
               included: true,
               value: "openai",
             },
@@ -868,8 +1239,11 @@ describe("ConfigPage", () => {
     );
     expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Config editing context")).toHaveTextContent(
-      "ScopedefaultAgentCodexConfigCurrent ConfigFileconfig.toml",
+      "TenantdefaultAgentCodexConfigCurrent ConfigFileconfig.toml",
     );
+    const fileContext = document.querySelector<HTMLElement>(`.${styles.contextFile}`);
+    expect(fileContext).toHaveTextContent("config.toml + auth.json");
+    expect(fileContext).toHaveAttribute("title", "config.toml + auth.json");
 
     await user.click(screen.getByRole("button", { name: "Select Configs" }));
     const protectedCurrent = screen.getByRole("button", {
@@ -934,8 +1308,7 @@ describe("ConfigPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Delete Config" }));
 
     expect(post).toHaveBeenCalledWith("/_aibox/api/configs/delete", {
-      scope: "managed",
-      tenant: "default",
+      tenant: "managed:default",
       agent: "codex",
       configs: ["custom"],
       all: false,
@@ -1051,13 +1424,64 @@ describe("ConfigPage", () => {
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/_aibox/api/configs/apply", {
-        scope: "host",
+        tenant: "host",
         agent: "codex",
         config: "custom",
       }),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
       "one-time projection; it is not an Active Config",
+    );
+  });
+
+  it("reloads an open Current Config editor after Config Application", async () => {
+    const catalog = {
+      named_configs: ["custom"],
+      configs: [{ name: "custom", state: "ready" }],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    let applied = false;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path.startsWith("/_aibox/api/configs?")) return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn((path: string, body: { file?: string }) => {
+      if (path === "/_aibox/api/configs/reveal") {
+        return Promise.resolve(
+          configFile(body.file ?? "config.toml", applied ? "applied content" : "old content"),
+        );
+      }
+      if (path === "/_aibox/api/configs/apply") {
+        applied = true;
+        return Promise.resolve({});
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const api = {
+      bootstrap: { version: "test", csrf_token: "token" },
+      get,
+      post,
+    } as unknown as ControlApi;
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "old content",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Apply Named Config custom to Current Config" }),
+    );
+    await user.click(
+      within(
+        screen.getByRole("dialog", { name: "Apply Named Config custom to Current Config?" }),
+      ).getByRole("button", { name: "Apply to Current Config" }),
+    );
+
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "applied content",
     );
   });
 
@@ -1111,7 +1535,7 @@ describe("ConfigPage", () => {
           configs: [],
           files: agent === "claude" ? ["settings.json"] : ["config.toml", "auth.json"],
           application: { last_application: null, drift: "untracked" },
-          credential_propagation_available: query.get("scope") === "host" && agent === "codex",
+          credential_propagation_available: query.get("tenant") === "host" && agent === "codex",
         } satisfies ConfigListData);
       }
       return Promise.reject(new Error(`Unexpected GET ${path}`));
@@ -1276,8 +1700,7 @@ describe("ConfigPage", () => {
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/_aibox/api/configs/create", {
-        scope: "managed",
-        tenant: "default",
+        tenant: "managed:default",
         agent: "codex",
         config: "new-config",
       }),
@@ -1343,7 +1766,7 @@ describe("ConfigPage", () => {
     expect(screen.queryByRole("button", { name: "first" })).not.toBeInTheDocument();
   });
 
-  it("guards file and Config switches when automatically revealed content is dirty", async () => {
+  it("keeps Codex files visible together and saves every dirty file before switching", async () => {
     const catalog = {
       named_configs: ["other"],
       configs: [{ name: "other", state: "ready" }],
@@ -1386,36 +1809,91 @@ describe("ConfigPage", () => {
     expect(editor).toHaveValue("current:config.toml");
     await user.clear(editor);
     await user.type(editor, "changed main");
-    await user.click(screen.getByRole("tab", { name: "auth.json" }));
-
-    let dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("tab", { name: "config.toml" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-
-    await user.click(screen.getByRole("tab", { name: "auth.json" }));
-    dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
-    await user.click(within(dialog).getByRole("button", { name: "Discard and continue" }));
     const authEditor = await screen.findByRole("textbox", { name: "auth.json content" });
     expect(authEditor).toHaveValue("current:auth.json");
 
     await user.clear(authEditor);
     await user.type(authEditor, "changed auth");
     await user.click(screen.getByRole("button", { name: "other" }));
-    dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
+    const dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
     await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith(
         "/_aibox/api/configs/save",
-        expect.objectContaining({ current: true, file: "auth.json" }),
+        expect.objectContaining({ current: true, file: "config.toml" }),
       ),
+    );
+    expect(post).toHaveBeenCalledWith(
+      "/_aibox/api/configs/save",
+      expect.objectContaining({ current: true, file: "auth.json" }),
+    );
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "other:config.toml",
     );
     expect(await screen.findByRole("textbox", { name: "auth.json content" })).toHaveValue(
       "other:auth.json",
     );
+  });
+
+  it("does not carry saved feedback into the Config selected after Save and continue", async () => {
+    const catalog = {
+      named_configs: ["other"],
+      configs: [{ name: "other", state: "ready" }],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path.startsWith("/_aibox/api/configs?")) return Promise.resolve(catalog);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+    const post = vi.fn(
+      (
+        path: string,
+        body: { file: string; current?: boolean; config?: string; content_base64?: string },
+      ) => {
+        if (path === "/_aibox/api/configs/reveal") {
+          const owner = body.current ? "current" : body.config;
+          return Promise.resolve({
+            ...configFile(body.file, `${owner}:${body.file}`),
+            exists: !body.current,
+          });
+        }
+        if (path === "/_aibox/api/configs/save") {
+          return Promise.resolve({
+            ...configFile(body.file, "saved"),
+            content_base64: body.content_base64,
+          });
+        }
+        return Promise.reject(new Error(`Unexpected POST ${path}`));
+      },
+    );
+    const api = {
+      bootstrap: { version: "test", csrf_token: "token" },
+      get,
+      post,
+    } as unknown as ControlApi;
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "other" }));
+    const editor = await screen.findByRole("textbox", { name: "config.toml content" });
+    expect(editor).toHaveValue("other:config.toml");
+    await user.clear(editor);
+    await user.type(editor, "changed named Config");
+    await user.click(screen.getByRole("button", { name: "Current Config" }));
+    const dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
+    await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
+
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "current:config.toml",
+    );
+    expect(screen.getByRole("region", { name: "config.toml editor" })).toHaveTextContent(
+      "New file",
+    );
+    expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
   });
 });
 
@@ -1461,7 +1939,7 @@ describe("SessionPage", () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/sessions?scope=managed%3Adefault&scope=host&agent=codex&agent=claude&session_scope=host&session_agent=claude&session=${firstSession.id}`,
+      `/_aibox/ui/sessions?tenant=managed%3Adefault&tenant=host&agent=codex&agent=claude&session_tenant=host&session_agent=claude&session=${firstSession.id}`,
     );
     const { api, get, streamSessionDetail } = fakeApi({
       sessions: () => list([firstSession]),
@@ -1479,7 +1957,7 @@ describe("SessionPage", () => {
     );
     expect(sessionCalls).toHaveLength(4);
     expect(streamSessionDetail).toHaveBeenCalledWith(
-      `/_aibox/api/sessions/detail?scope=host&agent=claude&id=${firstSession.id}`,
+      `/_aibox/api/sessions/detail?tenant=host&agent=claude&id=${firstSession.id}`,
       expect.any(Object),
       expect.any(AbortSignal),
     );
@@ -1489,7 +1967,7 @@ describe("SessionPage", () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/sessions?scope=managed%3Adefault&agent=codex&session_scope=managed%3Adefault&session_agent=codex&session=${firstSession.id}&tab=details`,
+      `/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex&session_tenant=managed%3Adefault&session_agent=codex&session=${firstSession.id}&tab=details`,
     );
     const { api } = fakeApi({ sessions: () => list([firstSession]) });
 
@@ -1499,11 +1977,38 @@ describe("SessionPage", () => {
     expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("heading", { name: "Session" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(screen.getByText("0ms", { exact: true })).toBeInTheDocument();
     expect(
       screen.getAllByRole("button", {
         name: "Delete Session 111111111111 from Tenant default · Codex",
       }),
     ).toHaveLength(1);
+  });
+
+  it("does not navigate when clicking the already active Session view", async () => {
+    const { api } = fakeApi({ sessions: () => list([firstSession]) });
+    const onLocationChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SessionPage api={api} onLocationChange={onLocationChange} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(await screen.findByRole("button", { name: "Conversation" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    onLocationChange.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
+    expect(onLocationChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(onLocationChange).toHaveBeenCalledTimes(1);
+    onLocationChange.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(onLocationChange).not.toHaveBeenCalled();
   });
 
   it("keeps user messages separately and groups adjacent activity while preserving order", async () => {
@@ -1571,6 +2076,7 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
+    expect(screen.getByText(/· 1s · 2 messages · 0 tools/)).toBeInTheDocument();
     const userMessage = (await screen.findAllByRole("article")).find((article) =>
       article.textContent?.includes("Please inspect this."),
     );
@@ -1759,6 +2265,31 @@ describe("SessionPage", () => {
     expect(screen.getByRole("button", { name: "Coding Agent: Claude" })).toHaveTextContent(
       "Claude",
     );
+  });
+
+  it("reports a missing Managed Tenant in the Session selector", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/sessions?tenant=managed%3Amissing&agent=codex",
+    );
+    const { api } = fakeApi({ sessions: () => list([]) });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+
+    const tenantTrigger = await screen.findByRole("button", { name: "Tenant: Not found" });
+    expect(
+      screen.getByText("No Sessions were found for the selected Tenants and Coding Agents."),
+    ).toBeInTheDocument();
+
+    await user.click(tenantTrigger);
+    const tenantMenu = screen.getByRole("dialog", { name: "Tenant" });
+    for (const name of ["Host Tenant", "default", "work"]) {
+      expect(within(tenantMenu).getByRole("option", { name })).toHaveAttribute(
+        "aria-selected",
+        "false",
+      );
+    }
   });
 
   it("keeps a complete long Session title in the two-line summary", async () => {
@@ -1977,8 +2508,7 @@ describe("SessionPage", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toBeDisabled();
     expect(post).toHaveBeenCalledWith("/_aibox/api/sessions/delete", {
-      scope: "managed",
-      tenant: "default",
+      tenant: "managed:default",
       agent: "codex",
       ids: [firstSession.id],
       all: false,
@@ -2044,8 +2574,7 @@ describe("SessionPage", () => {
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/_aibox/api/sessions/delete", {
-        scope: "managed",
-        tenant: "default",
+        tenant: "managed:default",
         agent: "codex",
         ids: [firstSession.id, secondSession.id],
         all: false,
@@ -2140,7 +2669,9 @@ describe("SessionPage", () => {
     const { api, get } = fakeApi({
       sessions: (path) => {
         const query = sessionQuery(path);
-        const tenant = query.get("tenant") ?? "host";
+        const tenantSelection = query.get("tenant") ?? "host";
+        const tenant =
+          tenantSelection === "host" ? "host" : tenantSelection.replace(/^managed:/, "");
         const agent = query.get("agent") ?? "codex";
         const offsets: Record<string, string> = {
           "default:codex": "2026-08-17T09:00:00Z",
@@ -2191,7 +2722,7 @@ describe("SessionPage", () => {
     expect(within(newest).getByText("2026-08-17 18:00:00").tagName).toBe("TIME");
     expect(newest).not.toHaveTextContent(firstSession.display_id);
     expect(get).toHaveBeenCalledWith(
-      expect.stringContaining("tenant=work"),
+      expect.stringContaining("tenant=managed%3Awork"),
       expect.any(AbortSignal),
     );
     expect(get).toHaveBeenCalledWith(
@@ -2201,7 +2732,9 @@ describe("SessionPage", () => {
 
     await user.click(newest);
     expect(streamSessionDetail).toHaveBeenCalledWith(
-      expect.stringMatching(/tenant=work.*agent=claude|agent=claude.*tenant=work/),
+      expect.stringMatching(
+        /tenant=managed%3Awork.*agent=claude|agent=claude.*tenant=managed%3Awork/,
+      ),
       expect.any(Object),
       expect.any(AbortSignal),
     );
@@ -2215,7 +2748,8 @@ describe("SessionPage", () => {
   it("keeps readable sources but disables deletion when one source cannot be listed", async () => {
     const { api } = fakeApi({
       sessions: (path) => {
-        if (sessionQuery(path).get("tenant") === "work") throw new Error("permission denied");
+        if (sessionQuery(path).get("tenant") === "managed:work")
+          throw new Error("permission denied");
         return list([firstSession]);
       },
     });
@@ -2246,7 +2780,7 @@ describe("SessionPage", () => {
     const workRows = [secondSession];
     const defaultDeletion = deferred<{ deleted: number }>();
     const post = vi.fn((_path: string, body: { tenant?: string }) => {
-      if (body.tenant === "default") {
+      if (body.tenant === "managed:default") {
         return defaultDeletion.promise.then((result) => {
           defaultRows = [];
           return result;
@@ -2256,7 +2790,7 @@ describe("SessionPage", () => {
     });
     const { api } = fakeApi({
       sessions: (path) =>
-        list(sessionQuery(path).get("tenant") === "work" ? workRows : defaultRows),
+        list(sessionQuery(path).get("tenant") === "managed:work" ? workRows : defaultRows),
       post,
     });
     const user = userEvent.setup();
@@ -2291,8 +2825,8 @@ describe("SessionPage", () => {
     expect(
       screen.queryByRole("button", { name: "Select First prompt, Tenant default · Codex" }),
     ).not.toBeInTheDocument();
-    expect(post.mock.calls[0][1]).toMatchObject({ tenant: "default", agent: "codex" });
-    expect(post.mock.calls[1][1]).toMatchObject({ tenant: "work", agent: "codex" });
+    expect(post.mock.calls[0][1]).toMatchObject({ tenant: "managed:default", agent: "codex" });
+    expect(post.mock.calls[1][1]).toMatchObject({ tenant: "managed:work", agent: "codex" });
   });
 
   it("uses two-level copy for list, detail, and empty Transcript states", async () => {

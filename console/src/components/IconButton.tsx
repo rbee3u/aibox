@@ -1,4 +1,6 @@
-import type { ButtonHTMLAttributes, ReactNode, RefObject } from "react";
+import { Tooltip } from "antd";
+import type { ComponentProps, ReactNode, RefObject } from "react";
+import { ActionButton } from "./ActionButton";
 import styles from "./IconButton.module.css";
 
 export function IconButton({
@@ -7,22 +9,25 @@ export function IconButton({
   className,
   buttonRef,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+}: Omit<ComponentProps<typeof ActionButton>, "children" | "htmlType" | "tone"> & {
   label: string;
   children: ReactNode;
   buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
-    <button
-      ref={buttonRef}
-      className={`${styles.button} ${className ?? ""}`}
-      data-icon-button
-      type="button"
-      title={label}
-      aria-label={label}
-      {...props}
-    >
-      {children}
-    </button>
+    <Tooltip title={label} mouseEnterDelay={0.45}>
+      <ActionButton
+        ref={buttonRef}
+        className={`${styles.button} ${className ?? ""}`}
+        data-icon-button="true"
+        htmlType="button"
+        tone="quiet"
+        title={label}
+        aria-label={label}
+        {...props}
+      >
+        {children}
+      </ActionButton>
+    </Tooltip>
   );
 }

@@ -1,7 +1,9 @@
 import { AlertTriangle, LoaderCircle, Trash2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { ActionButton } from "./ActionButton";
 import { Dialog } from "./Dialog";
+import { TextInput } from "./FormControls";
 import styles from "./ConfirmDialog.module.css";
 
 interface ConfirmDialogProps {
@@ -51,7 +53,7 @@ export function ConfirmDialog({
         {confirmation && (
           <label className={styles.confirmation}>
             Type <code>{confirmation}</code> to confirm
-            <input
+            <TextInput
               ref={inputRef}
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
@@ -59,12 +61,12 @@ export function ConfirmDialog({
           </label>
         )}
         <div className={styles.actions}>
-          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>
+          <ActionButton ref={cancelRef} onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
-          <button
-            type="button"
+          </ActionButton>
+          <ActionButton
             className={variant === "danger" ? styles.danger : styles.primary}
+            tone={variant === "danger" ? "danger" : "primary"}
             onClick={onConfirm}
             disabled={!enabled || busy}
           >
@@ -74,7 +76,7 @@ export function ConfirmDialog({
               <Trash2 size={15} aria-hidden="true" />
             ) : null}
             {busy ? (variant === "danger" ? "Deleting…" : `${confirmLabel}…`) : confirmLabel}
-          </button>
+          </ActionButton>
         </div>
       </section>
     </Dialog>

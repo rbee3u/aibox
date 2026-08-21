@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ControlApi } from "./controlApi";
-import type { OverviewData, TopologyData } from "./controlApi";
+import type { ConfigListData, OverviewData, TenantRow, TopologyData } from "./controlApi";
 import { recordList } from "./test/fixtures";
 
 const overview = {
@@ -133,6 +133,12 @@ describe("Console App", () => {
       "aria-checked",
       "false",
     );
+    for (const option of ["System", "Light", "Dark"]) {
+      expect(within(menu).getByRole("menuitemradio", { name: option })).toHaveAttribute(
+        "class",
+        expect.stringContaining("themeOption"),
+      );
+    }
 
     await user.keyboard("{ArrowDown}{Enter}");
 
@@ -173,6 +179,45 @@ describe("Console App", () => {
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
   });
 
+  it("confirms before leaving a dirty Current Config editor", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&current=1&file=config.toml",
+    );
+    mockConfigControlApi();
+    const user = userEvent.setup();
+    render(<App />);
+
+    const editor = await screen.findByRole("textbox", { name: "config.toml content" });
+    await user.type(editor, "changed");
+    await waitFor(() => expect(editor).toHaveValue('model = "test"\nchanged'));
+
+    await user.click(screen.getByRole("link", { name: /Overview/ }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Discard unsaved Config changes?",
+    });
+    expect(dialog).toHaveTextContent("Your unsaved Config changes will be lost if you continue.");
+    expect(window.location.pathname).toBe("/_aibox/ui/configs");
+    expect(editor).toHaveValue('model = "test"\nchanged');
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved Config changes?" })).toBeNull();
+    expect(window.location.pathname).toBe("/_aibox/ui/configs");
+    expect(screen.getByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      'model = "test"\nchanged',
+    );
+
+    await user.click(screen.getByRole("link", { name: /Overview/ }));
+    await user.click(
+      within(
+        await screen.findByRole("dialog", { name: "Discard unsaved Config changes?" }),
+      ).getByRole("button", { name: "Discard and continue" }),
+    );
+    await screen.findByRole("region", { name: "Service status" });
+    expect(window.location.pathname).toBe("/_aibox/ui/overview");
+  });
+
   it("treats mobile navigation as an inert focus-managed drawer", async () => {
     vi.stubGlobal(
       "matchMedia",
@@ -197,6 +242,16 @@ describe("Console App", () => {
     expect(navigation).toHaveProperty("inert", false);
     await waitFor(() => expect(screen.getByRole("link", { name: /Overview/ })).toHaveFocus());
 
+    const themeTrigger = within(navigation).getByRole("button", { name: "Color theme: System" });
+    await user.click(themeTrigger);
+    expect(screen.getByRole("menuitemradio", { name: "System" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Color theme" })).not.toBeInTheDocument();
+    expect(navigation).not.toHaveAttribute("aria-hidden");
+    expect(navigation).toHaveProperty("inert", false);
+    expect(themeTrigger).toHaveFocus();
+
     await user.keyboard("{Escape}");
     expect(navigation).toHaveAttribute("aria-hidden", "true");
     expect(navigation).toHaveProperty("inert", true);
@@ -211,6 +266,55 @@ function mockControlApi() {
       if (path === "/_aibox/api/operations/current") return Promise.resolve({ operation: null });
       if (path === "/_aibox/api/overview") return Promise.resolve(overview);
       if (path === "/_aibox/api/topology") return Promise.resolve(topology);
+      return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
+    }),
+  } as unknown as ControlApi;
+  vi.spyOn(ControlApi, "connect").mockResolvedValue(api);
+  vi.stubGlobal(
+    "EventSource",
+    class {
+      addEventListener() {}
+      close() {}
+    },
+  );
+}
+
+function mockConfigControlApi() {
+  const tenants = [
+    {
+      kind: "managed",
+      name: "default",
+      display_name: "default",
+      home: "/tmp/aibox/tenants/default",
+      exists: true,
+    },
+  ] satisfies TenantRow[];
+  const catalog = {
+    named_configs: [],
+    configs: [],
+    files: ["config.toml", "auth.json"],
+    application: { last_application: null, drift: "untracked" },
+    credential_propagation_available: false,
+  } satisfies ConfigListData;
+  const api = {
+    bootstrap: { version: "1.2.3", csrf_token: "token" },
+    get: vi.fn((path: string) => {
+      if (path === "/_aibox/api/operations/current") return Promise.resolve({ operation: null });
+      if (path === "/_aibox/api/tenants") return Promise.resolve(tenants);
+      if (path === "/_aibox/api/configs?tenant=managed%3Adefault&agent=codex")
+        return Promise.resolve(catalog);
+      if (path === "/_aibox/api/overview") return Promise.resolve(overview);
+      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
+      return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
+    }),
+    post: vi.fn((path: string) => {
+      if (path === "/_aibox/api/configs/reveal")
+        return Promise.resolve({
+          file: "config.toml",
+          exists: true,
+          revision: "config.toml-revision",
+          content_base64: btoa('model = "test"\n'),
+        });
       return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
     }),
   } as unknown as ControlApi;

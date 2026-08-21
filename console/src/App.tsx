@@ -6,6 +6,8 @@ import { OverviewPage, type ConsoleNavigate } from "./OverviewPage";
 import { RequestsPage } from "./RequestsPage";
 import { ControlApi } from "./controlApi";
 import type { Operation } from "./controlApi";
+import { IconButton } from "./components/IconButton";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { readPreference, storePreference } from "./preferences";
 import { SidebarUtilities } from "./SidebarUtilities";
 import { usePersistentTheme } from "./usePersistentTheme";
@@ -55,6 +57,7 @@ export function App() {
   const [operationDismissed, setOperationDismissed] = useState<string | null>(null);
   const [operationExpanded, setOperationExpanded] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [locationVersion, setLocationVersion] = useState(0);
   const configDirty = useRef(false);
   const acceptedLocation = useRef(currentLocation());
@@ -149,6 +152,7 @@ export function App() {
       (sidebar.querySelector<HTMLElement>('[aria-current="page"]') ?? focusable()[0])?.focus(),
     );
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeMobileNavigation();
@@ -188,11 +192,26 @@ export function App() {
   );
 
   const navigate: ConsoleNavigate = (module, query) => {
-    if (configDirty.current && !confirmDiscardedConfig()) return;
+    const suffix = query?.toString();
+    const next = `/_aibox/ui/${module}${suffix ? `?${suffix}` : ""}`;
+    if (configDirty.current) {
+      setPendingNavigation(next);
+      return;
+    }
     commitLocation(module, query);
     setActive(module);
     if (mobileLayout) closeMobileNavigation();
   };
+
+  const continuePendingNavigation = useCallback(() => {
+    if (!pendingNavigation) return;
+    window.history.pushState(null, "", pendingNavigation);
+    acceptedLocation.current = pendingNavigation;
+    setActive(moduleFromPath());
+    setLocationVersion((value) => value + 1);
+    setPendingNavigation(null);
+    if (mobileLayout) closeMobileNavigation();
+  }, [closeMobileNavigation, mobileLayout, pendingNavigation]);
 
   const updatePageLocation = useCallback(
     (module: ModuleId, query: URLSearchParams, replace = false) => {
@@ -215,6 +234,7 @@ export function App() {
 
   return (
     <div
+      data-aibox-shell="true"
       className={`${styles.app} ${collapsed ? styles.collapsed : ""} ${
         visibleOperation && operationExpanded ? styles.operationExpanded : ""
       }`}
@@ -285,17 +305,16 @@ export function App() {
       )}
       <div className={styles.workspace}>
         <header className={styles.topbar}>
-          <button
-            ref={menuButtonRef}
+          <IconButton
+            buttonRef={menuButtonRef}
             className={styles.menuButton}
-            type="button"
-            aria-label="Open navigation"
+            label="Open navigation"
             aria-controls="console-navigation"
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={18} />
-          </button>
+          </IconButton>
           <div className={styles.pageTitle}>
             <h1>{activeModule.label}</h1>
             <span>·</span>
@@ -359,6 +378,16 @@ export function App() {
           onOperation={recordOperation}
           onDismiss={() => setOperationDismissed(visibleOperation.id)}
           onExpandedChange={setOperationExpanded}
+        />
+      )}
+      {pendingNavigation && (
+        <ConfirmDialog
+          title="Discard unsaved Config changes?"
+          message="Your unsaved Config changes will be lost if you continue."
+          confirmLabel="Discard and continue"
+          variant="primary"
+          onCancel={() => setPendingNavigation(null)}
+          onConfirm={continuePendingNavigation}
         />
       )}
     </div>

@@ -33,6 +33,13 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   records diagnostic application provenance without reconciliation.
 - [0014: Fixed Runtime Image](0014-fixed-runtime-image.md) keeps every Run,
   build, and toolchain installer on `aibox:latest`.
+- [0015: Named-only Visual Config Editing](0015-visual-and-raw-config-editors.md)
+  keeps Visual editing on fixed Config Fields while preserving native Raw data.
 - [0016: Session conversation projection](0016-session-conversation-projection.md)
   separates readable conversation, Tool Activity, and on-demand Transcript
   Evidence while preserving native order and diagnostic boundaries.
+- [0017: Single-value Tenant selection](0017-single-value-tenant-selection.md)
+  distinguishes Host and Managed Tenants without a second identity term.
+- [0018: AIBox-owned Console visual system](0018-console-visual-system.md) uses
+  Ant Design for shared interaction primitives without surrendering domain layout
+  or visual identity.

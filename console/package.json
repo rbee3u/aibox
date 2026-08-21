@@ -8,7 +8,7 @@
   },
   "scripts": {
     "format": "prettier --write .",
-    "build": "vite build && node scripts/publish-assets.mjs",
+    "build": "vite build && node scripts/check-bundle-budget.mjs && node scripts/publish-assets.mjs",
     "test": "vitest run",
     "test:chrome": "playwright test --project=desktop-chrome",
     "test:browsers": "playwright test --project=desktop-firefox --project=desktop-webkit",
@@ -22,6 +22,7 @@
     "@codemirror/search": "^6.7.1",
     "@lezer/highlight": "^1.2.3",
     "@lobehub/icons-static-svg": "^1.94.0",
+    "antd": "^6.6.1",
     "codemirror": "^6.0.2",
     "lossless-json": "^4.3.0",
     "lucide-react": "^1.28.0",

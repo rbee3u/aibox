@@ -102,3 +102,7 @@
   color: white;
   background: var(--accent-strong);
 }
+
+.actions :global(.aibox-btn) {
+  min-width: 90px;
+}

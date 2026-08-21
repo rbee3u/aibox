@@ -86,7 +86,7 @@ _Avoid_: Install prefix, Tenant Home
 A persistent identity that scopes Coding Agent state, Named Configs, Tenant
 Components, and Sessions. Every Tenant is either a Managed Tenant or the Host
 Tenant.
-_Avoid_: Namespace, Target, profile, environment
+_Avoid_: Scope, Namespace, Target, profile, environment
 
 **Managed Tenant**:
 An aibox-managed, runnable Tenant with its own Tenant Home.
@@ -128,8 +128,27 @@ _Avoid_: Agent Profile, Saved Config, Config Template, preset
 
 **Config Field**:
 One fixed logical unit in a Named Config schema: a native setting, a credential
-value, or the complete Codex credential object.
+value, or the complete Codex credential object. Unknown native fields are
+observed as warnings and remain native data; they are not Config Fields.
 _Avoid_: Owned path, managed slot
+
+**Visual Config Option**:
+A user-facing control in the Visual Editor that projects to one or more Config
+Fields without exposing their native paths.
+_Avoid_: Visual field, native setting
+
+**Custom Provider**:
+The optional fixed Codex provider aggregate in a Named Config. When present it
+selects `custom` and contains a nonempty name, base URL, and OpenAI-auth
+requirement; when absent the Coding Agent uses its official OpenAI default.
+_Avoid_: Provider Field, arbitrary provider
+
+**Request Proxy Route**:
+The optional local URL prefix that sends a Coding Agent's provider traffic
+through the global Request Proxy. Its hostname represents the destination
+scope: loopback for the Host Tenant and Docker's host gateway for a Managed
+Tenant.
+_Avoid_: Proxy setting, endpoint override
 
 **Config Application**:
 An explicit one-time projection of a Named Config into Current Config. A

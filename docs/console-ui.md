@@ -94,6 +94,44 @@ Protocol Summary and Record Assessment, and normalized Diagnostics groups.
 Components receive an API interface so tests can use deterministic fakes
 without sockets.
 
+## Visual System
+
+AIBox semantic tokens in `src/themeTokens.ts` are the source of truth for
+Console color, surface, border, status, focus, code, and shadow roles. Both
+light and dark token sets are complete and tested for parity and primary text
+contrast. The default `system` theme follows `prefers-color-scheme`; explicit
+light or dark choices are persisted, and the resolved theme is applied before
+React renders to avoid a theme flash.
+
+Ant Design 6 is the shared interaction foundation, not the Console's visual
+identity. `src/ConsoleProvider.tsx` maps AIBox tokens into a deeply themed
+provider, while the thin components in `src/components/ActionButton.tsx` and
+`src/components/FormControls.tsx` keep application call sites consistent.
+Prefer those shared primitives for ordinary actions, text inputs, text areas,
+and checkboxes. Native selects remain deliberate where preserving browser
+keyboard and automation behavior is more valuable than replacing the DOM.
+
+CSS Modules continue to own domain layout and presentation. Do not replace the
+Overview topology, resource catalogs, Session conversation, CodeMirror,
+diagnostics, custom filter/listbox behavior, or other domain structures with a
+generic Card, Table, Tree, or Select solely for visual consistency. The native
+`Dialog` also remains the modal container because its focus trap, Escape,
+focus-restoration behavior, and tests are established; shared Ant Design-backed
+actions and inputs may be used inside it. Lucide remains the interface icon
+system. Do not add external fonts, CDN assets, or a second competing token
+source.
+
+Ant Design-generated styles receive the request-scoped nonce from the
+`aibox-csp-nonce` meta element, so new provider or overlay integration must
+continue to work under the embedded Console Content Security Policy. The
+frontend tests cover semantic tokens, system-theme changes, CSP propagation,
+shared-control contracts, and axe accessibility without requiring screenshots.
+
+The production JavaScript bundle is checked after every Console build. Its
+gzip size may grow by at most 250 KiB (256,000 bytes) from the pre-Ant Design
+baseline of 365,536 bytes; `scripts/check-bundle-budget.mjs` enforces the
+621,536-byte maximum before generated assets are published.
+
 ## Overview and Management Navigation
 
 Overview is an operational resource map. Key facts combine Service health,
@@ -145,10 +183,10 @@ changes only on its explicit refresh. Expanding Sessions performs discovery
 only and does not parse Transcript content. Topology expansion, filters, zoom,
 and viewport position are deliberately not persisted.
 
-Management selections are shareable URL state. Tenants use `scope` and optional
-`component`; Configs use `scope`, `agent`, either `current=1` or `config`, and
-optional `file`; Sessions use repeated `scope` and `agent`, plus
-`session_scope`, `session_agent`, and `session` for the selected Session. Dirty
+Management selections are shareable URL state. Tenants use `tenant` and optional
+`component`; Configs use `tenant`, `agent`, either `current=1` or `config`, and
+optional `file`; Sessions use repeated `tenant` and `agent`, plus
+`session_tenant`, `session_agent`, and `session` for the selected Session. Dirty
 Config file edits require confirmation before in-app navigation, history
 navigation, or page unload can discard them.
 
@@ -223,13 +261,18 @@ not fall below 12 pixels. Specialized editor, JSON tree, Body, Transcript, and
 log line heights remain local because their reading modes differ.
 
 Named Config files open in the Visual editor when the Control API supplies a
-visual field model; Raw remains the explicit advanced view. Current Config
-files always open in Raw, with Visual available only as an optional view when
-supported. The editor header keeps Scope, Coding Agent, Config, and File visible
-as separate context fields. **Apply to Current Config** is a one-shot projection
-of fixed Config Fields, never an Active Config association. Confirmation,
-success feedback, Last applied, and Config Drift use that same language and
-retain the existing per-file commit and no-rollback semantics.
+Visual Config Option model; Raw remains the explicit advanced view. Visual uses
+compact desktop label-and-control rows that stack on narrow screens. Native
+paths stay in Raw, descriptions use hover-and-focus help tooltips, and required
+Options use an accessible `*`. Closed enum controls use declared native values;
+optional enums and booleans expose **Default** to omit their Config Field.
+Current Config files always open in Raw, with Visual available only as an
+optional view when supported. The editor header keeps Tenant, Coding Agent,
+Config, and File visible as separate context fields. **Apply to Current Config**
+is a one-shot projection of fixed Config Fields, never an Active Config
+association. Confirmation, success feedback, Last applied, and Config Drift use
+that same language and retain the existing per-file commit and no-rollback
+semantics.
 
 Requests uses `page` for its one-based page number, `record` for the selected
 Request Record ID, and `tab` for `summary`, `request`, or `response`. Invalid

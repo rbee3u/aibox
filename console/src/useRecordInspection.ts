@@ -168,8 +168,8 @@ export function useRecordInspection({
     if (paused || !resumeDetailAfterPause.current) return;
     const id = currentIdRef.current;
     resumeDetailAfterPause.current = false;
-    if (id) void selectRecord(id);
-  }, [paused, selectRecord]);
+    if (id) void selectRecord(id, tab);
+  }, [paused, selectRecord, tab]);
 
   const clearRecordIfCurrent = useCallback(
     (id: string) => {
@@ -424,13 +424,13 @@ export function useRecordInspection({
     clearFailure();
     if (current.kind === "detail") {
       const id = currentIdRef.current;
-      if (id) void selectRecord(id);
+      if (id) void selectRecord(id, tab);
     } else if (current.kind === "body") {
       setBodyRetry((value) => value + 1);
     } else if (current.bodyKind) {
       void download(current.bodyKind);
     }
-  }, [clearFailure, download, failure, selectRecord]);
+  }, [clearFailure, download, failure, selectRecord, tab]);
 
   const selectTab = useCallback(
     (value: DetailTab) => {

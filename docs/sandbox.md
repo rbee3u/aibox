@@ -146,13 +146,7 @@ Origin, and the startup CSRF token.
 
 Docker Desktop provides `host.docker.internal`. aibox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
-`0.0.0.0`. Codex's built-in OpenAI provider can use:
-
-```toml
-openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
-```
-
-A custom provider uses the same complete-upstream encoding in its provider
+`0.0.0.0`. A custom provider uses the complete-upstream encoding in its provider
 table:
 
 ```toml

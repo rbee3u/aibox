@@ -174,27 +174,20 @@ Point a model provider at the proxy by placing its complete upstream base URL
 after the local address. In Configs, select the Tenant and Codex Current Config,
 then edit `config.toml`.
 
-For Codex's built-in OpenAI provider inside an aibox container, remove any
-custom `model_provider` selection and set:
+For a custom Codex provider in Current Config:
 
 ```toml
-openai_base_url = "http://host.docker.internal:9923/https://api.openai.com/v1"
-```
+model_provider = "custom"
 
-For a custom Codex provider:
-
-```toml
-model_provider = "hezubus"
-
-[model_providers.hezubus]
+[model_providers.custom]
 name = "hezubus"
 base_url = "http://host.docker.internal:9923/https://hezubus.ai/v1"
 wire_api = "responses"
 ```
 
-That provider block is native Current Config, not the fixed Named Config
-schema: arbitrary provider names and `wire_api` cannot be stored verbatim in a
-Named Config.
+The Visual Configs editor can add the Request Proxy Route prefix while showing
+only the upstream URL. Raw Current Config can still use arbitrary provider
+names and `wire_api`; these values are outside the fixed Named Config schema.
 
 For Claude, select its Current Config and set the native base URL:
 

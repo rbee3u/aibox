@@ -30,12 +30,13 @@ import {
 import {
   ControlApi,
   formatBytes,
-  scopeQuery,
+  tenantQuery,
+  tenantSelectionValue,
   type Agent,
   type ComponentRow,
   type Operation,
   type OverviewData,
-  type Scope,
+  type TenantSelection,
   type SessionSummaryData,
   type TopologyAgent,
   type TopologyData,
@@ -43,6 +44,8 @@ import {
 } from "./controlApi";
 import { AgentIcon } from "./icons";
 import { IconButton } from "./components/IconButton";
+import { ActionButton } from "./components/ActionButton";
+import { TextInput } from "./components/FormControls";
 import { moduleIcons, resourceIcons, type ModuleId } from "./consoleIcons";
 import { formatTimestamp } from "./utils";
 import styles from "./OverviewPage.module.css";
@@ -102,7 +105,7 @@ interface AttentionItem {
 }
 
 interface SessionRequest {
-  scope: Scope;
+  tenant: TenantSelection;
   agent: Agent;
 }
 
@@ -306,7 +309,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
       const controller = new AbortController();
       sessionRequests.current.set(id, controller);
       setSessionLoads((current) => ({ ...current, [id]: { state: "loading" } }));
-      const params = scopeQuery(request.scope);
+      const params = tenantQuery(request.tenant);
       params.set("agent", request.agent);
       try {
         const data = await api.get<SessionSummaryData>(
@@ -446,7 +449,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
         label: "Host Tenant",
         detail: "The Host Home is unavailable.",
         tone: "warning",
-        target: { module: "tenants", query: new URLSearchParams("scope=host") },
+        target: { module: "tenants", query: new URLSearchParams("tenant=host") },
       });
     if (health?.configAttention)
       items.push({
@@ -465,7 +468,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
     if (overview?.requests.error || overview?.requests.warning)
       items.push({
         label: "Request Records",
-        detail: `${overview.requests.error} errors · ${overview.requests.warning} warnings`,
+        detail: requestAttentionDetail(overview),
         tone: overview.requests.error ? "error" : "warning",
         target: { module: "requests" },
       });
@@ -621,7 +624,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             value={overview ? (overview.host_available ? "Available" : "Unavailable") : "—"}
             detail="Console-only view of the Host Home"
             tone={overview?.host_available === false ? "warning" : "neutral"}
-            onClick={() => onNavigate("tenants", new URLSearchParams("scope=host"))}
+            onClick={() => onNavigate("tenants", new URLSearchParams("tenant=host"))}
           />
           <Fact
             icon={<ConfigsModuleIcon size={18} />}
@@ -741,7 +744,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
             <label className={styles.searchField}>
               <Search size={15} aria-hidden="true" />
               <span className={styles.srOnly}>Filter topology</span>
-              <input
+              <TextInput
                 type="search"
                 placeholder="Filter resources"
                 value={query}
@@ -899,18 +902,17 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
                 <LoaderCircle className="spin" size={14} /> {operation.kind}
               </span>
             )}
-            <button
+            <ActionButton
               className={styles.primaryButton}
-              type="button"
+              tone="primary"
               disabled={buildDisabled}
               aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
               title={buildUnavailableReason ?? "Build Runtime Image using Docker cache"}
               onClick={() => void build(false)}
             >
               <Hammer size={15} /> Build
-            </button>
-            <button
-              type="button"
+            </ActionButton>
+            <ActionButton
               disabled={buildDisabled}
               aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
               title={
@@ -920,7 +922,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
               onClick={() => void build(true)}
             >
               <RefreshCw size={15} /> Build without cache
-            </button>
+            </ActionButton>
           </div>
         </div>
         {buildUnavailableReason && (
@@ -1607,36 +1609,36 @@ function buildTopologyTree(
   };
 }
 
-function tenantNode(tenant: TopologyTenant, sessions: Record<string, SessionLoad>): TopologyNode {
-  const id = tenantId(tenant);
-  const scope = tenantScope(tenant);
+function tenantNode(row: TopologyTenant, sessions: Record<string, SessionLoad>): TopologyNode {
+  const id = tenantId(row);
+  const tenant = tenantSelection(row);
   const agents = (["codex", "claude"] as const)
-    .map((agent) => tenant.agents.find((entry) => entry.agent === agent))
+    .map((agent) => row.agents.find((entry) => entry.agent === agent))
     .filter((agent): agent is TopologyAgent => Boolean(agent))
-    .map((agent) => agentNode(id, scope, agent, sessions));
-  const components = componentNode(id, scope, tenant.components.entries, tenant.components.error);
+    .map((agent) => agentNode(id, tenant, agent, sessions));
+  const components = componentNode(id, tenant, row.components.entries, row.components.error);
   const children = [...agents, components];
   return {
     id,
     parentId: "service",
-    label: tenant.display_name,
-    detail: tenant.home,
-    title: tenant.home,
-    icon: tenant.kind === "host" ? "host" : "tenant",
-    tone: tenant.exists ? maxTone(children.map((child) => child.tone)) : "warning",
-    target: { module: "tenants", query: scopeLocation(scope) },
+    label: row.display_name,
+    detail: row.home,
+    title: row.home,
+    icon: row.kind === "host" ? "host" : "tenant",
+    tone: row.exists ? maxTone(children.map((child) => child.tone)) : "warning",
+    target: { module: "tenants", query: tenantLocation(tenant) },
     children,
   };
 }
 
 function agentNode(
   tenantIdValue: string,
-  scope: Scope,
+  tenant: TenantSelection,
   agent: TopologyAgent,
   sessions: Record<string, SessionLoad>,
 ): TopologyNode {
   const id = `${tenantIdValue}/agent:${agent.agent}`;
-  const configParams = scopeLocation(scope);
+  const configParams = tenantLocation(tenant);
   configParams.set("agent", agent.agent);
   configParams.set("current", "1");
   const currentTone: Tone = agent.current_config.error ? "error" : "neutral";
@@ -1655,7 +1657,7 @@ function agentNode(
   };
   const namedId = `${id}/named-configs`;
   const namedChildren = agent.named_configs.entries.map((entry) => {
-    const params = scopeLocation(scope);
+    const params = tenantLocation(tenant);
     params.set("agent", agent.agent);
     params.set("config", entry.name);
     const last = agent.application.last_application?.applied === entry.name;
@@ -1676,7 +1678,7 @@ function agentNode(
       children: [],
     };
   });
-  const namedParams = scopeLocation(scope);
+  const namedParams = tenantLocation(tenant);
   namedParams.set("agent", agent.agent);
   const named: TopologyNode = {
     id: namedId,
@@ -1694,7 +1696,7 @@ function agentNode(
   const sessionId = `${id}/sessions`;
   const sessionLoad = sessions[sessionId];
   const sessionParams = new URLSearchParams();
-  sessionParams.append("scope", scopeLocationValue(scope));
+  sessionParams.append("tenant", tenantSelectionValue(tenant));
   sessionParams.append("agent", agent.agent);
   const sessionChildren: TopologyNode[] = sessionLoad
     ? [sessionSummaryNode(sessionId, sessionLoad)]
@@ -1710,7 +1712,7 @@ function agentNode(
     icon: "sessions",
     tone: sessionTone,
     target: { module: "sessions", query: sessionParams },
-    sessionRequest: { scope, agent: agent.agent },
+    sessionRequest: { tenant, agent: agent.agent },
     children: sessionChildren,
   };
   const children = [current, named, sessionNode];
@@ -1732,14 +1734,14 @@ function agentNode(
 
 function componentNode(
   tenantIdValue: string,
-  scope: Scope,
+  tenant: TenantSelection,
   entries: ComponentRow[],
   error?: string,
 ): TopologyNode {
   const id = `${tenantIdValue}/components`;
   const visible = entries.filter((entry) => entry.status !== "not-installed" || entry.error);
   const children = visible.map((entry) => {
-    const params = scopeLocation(scope);
+    const params = tenantLocation(tenant);
     params.set("component", entry.kind);
     return {
       id: `${id}/${entry.kind}`,
@@ -1754,7 +1756,7 @@ function componentNode(
     };
   });
   const installed = entries.filter((entry) => entry.status === "installed").length;
-  const params = scopeLocation(scope);
+  const params = tenantLocation(tenant);
   return {
     id,
     parentId: tenantIdValue,
@@ -1804,7 +1806,7 @@ function sessionSummaryNode(parentId: string, load: SessionLoad): TopologyNode {
   };
 }
 
-function attentionScope(tenant: TopologyTenant): string {
+function attentionTenant(tenant: TopologyTenant): string {
   return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
 }
 
@@ -1814,7 +1816,7 @@ function configAttentionTarget(
   config?: string,
 ): NavigationTarget {
   const query = new URLSearchParams();
-  query.set("scope", attentionScope(tenant));
+  query.set("tenant", attentionTenant(tenant));
   query.set("agent", agent.agent);
   if (config) query.set("config", config);
   else query.set("current", "1");
@@ -1843,7 +1845,7 @@ function firstConfigAttentionTarget(data: TopologyData): NavigationTarget {
 function firstComponentAttentionTarget(data: TopologyData): NavigationTarget {
   for (const tenant of orderTenants(data.tenants)) {
     const query = new URLSearchParams();
-    query.set("scope", attentionScope(tenant));
+    query.set("tenant", attentionTenant(tenant));
     const entry = tenant.components.entries.find(
       (candidate) =>
         candidate.error || ["modified", "incomplete", "unmanaged"].includes(candidate.status ?? ""),
@@ -1915,16 +1917,12 @@ function tenantId(tenant: TopologyTenant): string {
   return tenant.kind === "host" ? "tenant:host" : `tenant:managed:${tenant.name}`;
 }
 
-function tenantScope(tenant: TopologyTenant): Scope {
-  return tenant.kind === "host" ? { scope: "host" } : { scope: "managed", tenant: tenant.name! };
+function tenantSelection(tenant: TopologyTenant): TenantSelection {
+  return tenant.kind === "host" ? { kind: "host" } : { kind: "managed", name: tenant.name! };
 }
 
-function scopeLocation(scope: Scope): URLSearchParams {
-  return new URLSearchParams({ scope: scopeLocationValue(scope) });
-}
-
-function scopeLocationValue(scope: Scope): string {
-  return scope.scope === "host" ? "host" : `managed:${scope.tenant}`;
+function tenantLocation(tenant: TenantSelection): URLSearchParams {
+  return new URLSearchParams({ tenant: tenantSelectionValue(tenant) });
 }
 
 function structuralIds(data: TopologyData): Set<string> {
@@ -2095,6 +2093,12 @@ function requestDetail(data: OverviewData): string {
     formatBytes(data.requests.bytes),
   ].filter(Boolean);
   return states.join(" · ");
+}
+
+function requestAttentionDetail(data: OverviewData): string {
+  const errorLabel = `${data.requests.error} error${data.requests.error === 1 ? "" : "s"}`;
+  const warningLabel = `${data.requests.warning} warning${data.requests.warning === 1 ? "" : "s"}`;
+  return `${errorLabel} · ${warningLabel}`;
 }
 
 function imageTone(status?: OverviewData["runtime_image"]["status"]): Tone {

@@ -69,6 +69,138 @@ export async function mockConfigs(page: Page) {
   });
 }
 
+const codexVisualFields = [
+  {
+    path: "approval_policy",
+    label: "Approval policy",
+    description: "Controls when Codex pauses before executing commands.",
+    group: "Execution & permissions",
+    value_kind: "string",
+    enum_values: ["untrusted", "on-request", "never"],
+    sensitive: false,
+    required: true,
+    included: true,
+    value: "never",
+  },
+  {
+    path: "sandbox_mode",
+    label: "Sandbox mode",
+    description: "Filesystem and network access policy for command execution.",
+    group: "Execution & permissions",
+    value_kind: "string",
+    enum_values: ["read-only", "workspace-write", "danger-full-access"],
+    sensitive: false,
+    required: true,
+    included: true,
+    value: "danger-full-access",
+  },
+  {
+    path: "model_reasoning_effort",
+    label: "Model reasoning effort",
+    description: "Reasoning effort for supported models.",
+    group: "Model & reasoning",
+    value_kind: "string",
+    enum_values: ["minimal", "low", "medium", "high", "xhigh"],
+    sensitive: false,
+    included: false,
+  },
+  {
+    path: "plan_mode_reasoning_effort",
+    label: "Plan mode reasoning effort",
+    description: "Reasoning effort override used in Plan mode.",
+    group: "Model & reasoning",
+    value_kind: "string",
+    enum_values: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    sensitive: false,
+    included: true,
+    value: "high",
+  },
+  {
+    path: "model",
+    label: "Model",
+    description: "Model selected for Codex sessions.",
+    group: "Model & reasoning",
+    value_kind: "string",
+    enum_values: [],
+    sensitive: false,
+    required: true,
+    included: true,
+    value: "gpt-5.6-sol",
+  },
+] satisfies ConfigVisualField[];
+
+export async function mockCodexVisual(page: Page) {
+  const content = [
+    'approval_policy = "never"',
+    'sandbox_mode = "danger-full-access"',
+    'plan_mode_reasoning_effort = "high"',
+    'model = "gpt-5.6-sol"',
+    "",
+  ].join("\n");
+  await page.route("**/_aibox/api/**", (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/_aibox/api/bootstrap") {
+      return route.fulfill({ json: { version: "test", csrf_token: "test-token" } });
+    }
+    if (path === "/_aibox/api/operations/current") {
+      return route.fulfill({ json: { operation: null, gap: false } });
+    }
+    if (path === "/_aibox/api/operations/events") {
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: 'event: operation\ndata: {"operation":null}\n\n',
+      });
+    }
+    if (path === "/_aibox/api/tenants") {
+      return route.fulfill({
+        json: [
+          {
+            kind: "managed",
+            name: "default",
+            display_name: "default",
+            home: "/tenants/default/home",
+            exists: true,
+          },
+        ],
+      });
+    }
+    if (path === "/_aibox/api/configs" && request.method() === "GET") {
+      return route.fulfill({
+        json: {
+          named_configs: ["team"],
+          configs: [{ name: "team", state: "ready" }],
+          files: ["config.toml"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: false,
+        },
+      });
+    }
+    if (path === "/_aibox/api/configs/reveal") {
+      return route.fulfill({
+        json: {
+          file: "config.toml",
+          exists: true,
+          revision: "config-revision",
+          content_base64: btoa(content),
+          visual: codexVisualFields,
+          visual_provider: {
+            included: false,
+            name: "custom",
+            base_url: "https://example.com/v1",
+            request_proxy_route: true,
+            proxy_routed: false,
+          },
+        },
+      });
+    }
+    if (path === "/_aibox/api/configs/diagnose") {
+      return route.fulfill({ json: { diagnostics: [] } });
+    }
+    throw new Error("Unexpected Codex Visual API request: " + request.method() + " " + path);
+  });
+}
+
 const settingsContent = JSON.stringify(
   {
     env: {
@@ -89,7 +221,7 @@ const visualFields = [
     description: "Endpoint used by Claude.",
     group: "Endpoint & credentials",
     value_kind: "string",
-    suggestions: [],
+    enum_values: [],
     sensitive: false,
     included: true,
     value: "https://api.example.test",
@@ -100,7 +232,7 @@ const visualFields = [
     description: "Credential sent to the Anthropic endpoint.",
     group: "Endpoint & credentials",
     value_kind: "string",
-    suggestions: [],
+    enum_values: [],
     sensitive: true,
     included: true,
     value: "test-token-not-a-secret",
@@ -111,7 +243,7 @@ const visualFields = [
     description: "Native Claude permission mode.",
     group: "Permissions",
     value_kind: "string",
-    suggestions: ["bypassPermissions"],
+    enum_values: ["bypassPermissions"],
     sensitive: false,
     included: true,
     value: "bypassPermissions",
@@ -122,7 +254,7 @@ const visualFields = [
     description: "Skip Claude's dangerous mode confirmation.",
     group: "Permissions",
     value_kind: "bool",
-    suggestions: [],
+    enum_values: [],
     sensitive: false,
     included: true,
     value: true,

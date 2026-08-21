@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FocusEvent } from "react";
+import { ActionButton } from "./ActionButton";
 import styles from "./NotificationCenter.module.css";
 
 export type NotificationTone = "error" | "success" | "info";
@@ -123,18 +124,18 @@ function NotificationItem({ notification, paused, onAction, onDismiss }: Notific
         <span>{notification.message}</span>
       </div>
       {notification.actionLabel && (
-        <button className={styles.action} type="button" onClick={() => onAction(notification)}>
+        <ActionButton className={styles.action} tone="quiet" onClick={() => onAction(notification)}>
           {notification.actionLabel}
-        </button>
+        </ActionButton>
       )}
-      <button
+      <ActionButton
         className={styles.dismiss}
-        type="button"
+        tone="quiet"
         aria-label="Dismiss message"
         onClick={dismiss}
       >
         <X size={15} aria-hidden="true" />
-      </button>
+      </ActionButton>
     </article>
   );
 }

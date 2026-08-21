@@ -1,9 +1,10 @@
 export type Agent = "codex" | "claude";
-export type Scope = { scope: "host" } | { scope: "managed"; tenant: string };
+export type TenantSelection = { kind: "host" } | { kind: "managed"; name: string };
 
 export interface Bootstrap {
   version: string;
   csrf_token: string;
+  listen?: string;
 }
 
 export interface OperationLog {
@@ -111,6 +112,7 @@ export interface ConfigCatalogEntry {
   name: string;
   state: "ready" | "incomplete" | "invalid";
   detail?: string;
+  warnings?: string[];
 }
 
 export interface LastApplication {
@@ -138,7 +140,33 @@ export interface ConfigFileData {
   revision: string;
   content_base64: string;
   visual?: ConfigVisualField[];
+  visual_provider?: ConfigVisualProvider;
   visual_error?: string;
+  warnings?: string[];
+  auth?: ConfigAuthData;
+  linked_file?: ConfigLinkedFileData;
+}
+
+export interface ConfigLinkedFileData {
+  file: string;
+  exists: boolean;
+  revision: string;
+  content_base64: string;
+}
+
+export interface ConfigVisualProvider {
+  included: boolean;
+  name: string;
+  base_url: string;
+  request_proxy_route: boolean;
+  proxy_routed?: boolean;
+}
+
+export interface ConfigAuthData {
+  mode: "chatgpt" | "api-key";
+  api_key: string | null;
+  extra_fields: boolean;
+  warnings: string[];
 }
 
 export interface ConfigVisualField {
@@ -147,10 +175,13 @@ export interface ConfigVisualField {
   description: string;
   group: string;
   value_kind: "string" | "bool";
-  suggestions: string[];
+  enum_values: string[];
   sensitive: boolean;
+  required?: boolean;
+  request_proxy_route?: boolean;
   included: boolean;
   value?: string | boolean;
+  proxy_routed?: boolean;
 }
 
 export interface SessionRow {
@@ -359,14 +390,16 @@ export class ControlApi {
   }
 }
 
-export function scopeQuery(scope: Scope): URLSearchParams {
-  return new URLSearchParams(
-    scope.scope === "host" ? { scope: "host" } : { scope: "managed", tenant: scope.tenant },
-  );
+export function tenantSelectionValue(tenant: TenantSelection): string {
+  return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
 }
 
-export function scopeBody(scope: Scope): Record<string, string> {
-  return scope.scope === "host" ? { scope: "host" } : { scope: "managed", tenant: scope.tenant };
+export function tenantQuery(tenant: TenantSelection): URLSearchParams {
+  return new URLSearchParams({ tenant: tenantSelectionValue(tenant) });
+}
+
+export function tenantBody(tenant: TenantSelection): Record<string, string> {
+  return { tenant: tenantSelectionValue(tenant) };
 }
 
 export function decodeBase64(value: string): Uint8Array {

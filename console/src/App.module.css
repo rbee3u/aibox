@@ -105,6 +105,11 @@
   background: transparent;
   text-align: left;
   text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .moduleNav a:hover {
@@ -262,6 +267,7 @@
   width: 100%;
   min-height: 34px;
   align-items: center;
+  justify-content: flex-start;
   gap: 9px;
   padding: 6px 8px;
   border-color: transparent;
@@ -300,6 +306,18 @@
   border-bottom: 1px solid var(--line);
   background: var(--bg-shell);
   box-shadow: var(--shadow-sm);
+}
+
+:global(.aibox-btn) {
+  font-family: var(--font-sans);
+  box-shadow: none;
+}
+
+:global(.aibox-dropdown-menu),
+:global(.aibox-select-dropdown),
+:global(.aibox-picker-dropdown) {
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-md);
 }
 
 .pageTitle {

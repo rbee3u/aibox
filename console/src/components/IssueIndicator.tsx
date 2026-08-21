@@ -1,4 +1,4 @@
-import { CircleAlert, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleHelp, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode, RefObject } from "react";
@@ -10,6 +10,7 @@ const VIEWPORT_MARGIN_PX = 8;
 const TOOLTIP_MAX_WIDTH_PX = 320;
 
 export type IssueTone = "error" | "warning";
+type TooltipTone = IssueTone | "help";
 
 interface TooltipPosition {
   left: number;
@@ -17,13 +18,27 @@ interface TooltipPosition {
 }
 
 export interface IssueTooltipProps {
-  tone: IssueTone;
+  tone: TooltipTone;
   label: string;
   message: string;
   className: string;
   children: ReactNode;
   ariaLabel?: string;
   interactive?: boolean;
+}
+
+export function HelpTooltip({ label, message }: { label: string; message: string }) {
+  return (
+    <IssueTooltip
+      tone="help"
+      label={label}
+      message={message}
+      className={`${styles.indicator} ${styles.help}`}
+      ariaLabel={`Help for ${label}`}
+    >
+      <CircleHelp size={14} strokeWidth={2} aria-hidden="true" />
+    </IssueTooltip>
+  );
 }
 
 export function IssueIndicator({
@@ -69,7 +84,7 @@ export function IssueTooltip({
   const [pending, setPending] = useState(false);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
-  const toneLabel = tone === "error" ? "Error" : "Warning";
+  const toneLabel = tone === "error" ? "Error" : tone === "warning" ? "Warning" : "Help";
 
   const clearOpenTimer = useCallback(() => {
     if (openTimer.current === null) return;

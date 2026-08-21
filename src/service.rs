@@ -699,6 +699,9 @@ mod tests {
                 .headers()
                 .contains_key(header::CONTENT_SECURITY_POLICY)
         );
+        let body = bootstrap.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["listen"], "127.0.0.1:9923");
     }
 
     #[tokio::test]
@@ -896,7 +899,7 @@ mod tests {
         let summary = app
             .oneshot(request(
                 Method::GET,
-                "/_aibox/api/sessions/summary?scope=host&agent=codex",
+                "/_aibox/api/sessions/summary?tenant=host&agent=codex",
                 "127.0.0.1:5000",
             ))
             .await
@@ -909,6 +912,68 @@ mod tests {
         );
         assert!(!host_codex.exists());
         assert!(!host_claude.exists());
+    }
+
+    #[tokio::test]
+    async fn missing_managed_config_scope_is_an_empty_read_only_view() {
+        let root = tempfile::tempdir().unwrap();
+        let app = router(test_state(root.path()));
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/configs?tenant=managed%3Amissing&agent=codex",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::json!({
+                "named_configs": [],
+                "configs": [],
+                "files": ["config.toml", "auth.json"],
+                "application": {
+                    "last_application": null,
+                    "drift": "untracked"
+                },
+                "credential_propagation_available": false
+            })
+        );
+        assert!(!root.path().join("tenants/missing").exists());
+
+        for file in ["config.toml", "auth.json"] {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri("/_aibox/api/configs/reveal")
+                .header(header::HOST, "127.0.0.1:9923")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ORIGIN, "http://127.0.0.1:9923")
+                .header("x-aibox-csrf", "test-csrf")
+                .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
+                .body(Body::from(
+                    serde_json::json!({
+                        "tenant": "managed:missing",
+                        "agent": "codex",
+                        "current": true,
+                        "config": null,
+                        "file": file
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{file}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["file"], file);
+            assert_eq!(body["exists"], false);
+        }
+        assert!(!root.path().join("tenants/missing").exists());
     }
 
     #[tokio::test]
@@ -933,9 +998,7 @@ mod tests {
             .clone()
             .oneshot(request(
                 Method::GET,
-                &format!(
-                    "/_aibox/api/sessions/detail?scope=managed&tenant=work&agent=codex&id={id}"
-                ),
+                &format!("/_aibox/api/sessions/detail?tenant=managed%3Awork&agent=codex&id={id}"),
                 "127.0.0.1:5000",
             ))
             .await
@@ -972,7 +1035,7 @@ mod tests {
             .oneshot(request(
                 Method::GET,
                 &format!(
-                    "/_aibox/api/sessions/evidence?scope=managed&tenant=work&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
+                    "/_aibox/api/sessions/evidence?tenant=managed%3Awork&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
                 ),
                 "127.0.0.1:5000",
             ))
@@ -989,7 +1052,7 @@ mod tests {
             .oneshot(request(
                 Method::GET,
                 &format!(
-                    "/_aibox/api/sessions/evidence?scope=managed&tenant=work&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
+                    "/_aibox/api/sessions/evidence?tenant=managed%3Awork&agent=codex&id={id}&entry=line-2&snapshot={snapshot}"
                 ),
                 "127.0.0.1:5000",
             ))
@@ -1016,7 +1079,7 @@ mod tests {
             ),
             &[r#"{"timestamp":"2026-08-17T10:00:00Z","type":"session_meta"}"#],
         );
-        let same_scope_unselected = crate::testutil::write_jsonl(
+        let same_tenant_unselected = crate::testutil::write_jsonl(
             root.path(),
             &format!("tenants/work/.codex/sessions/2026/08/17/rollout-kept-{kept_id}.jsonl"),
             &[r#"{"timestamp":"2026-08-17T09:00:00Z","type":"session_meta"}"#],
@@ -1032,8 +1095,7 @@ mod tests {
             &[r#"{"timestamp":"2026-08-17T07:00:00Z"}"#],
         );
         let body = serde_json::json!({
-            "scope": "managed",
-            "tenant": "work",
+            "tenant": "managed:work",
             "agent": "codex",
             "ids": [selected_id],
             "all": false,
@@ -1063,7 +1125,7 @@ mod tests {
             serde_json::json!({"deleted": 1})
         );
         assert!(!selected.exists());
-        assert!(same_scope_unselected.exists());
+        assert!(same_tenant_unselected.exists());
         assert!(other_tenant.exists());
         assert!(other_agent.exists());
     }

@@ -34,21 +34,23 @@ import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { tags } from "@lezer/highlight";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, UIEvent } from "react";
-import { ControlApi, decodeBase64, encodeBase64, scopeBody, scopeQuery } from "./controlApi";
+import { ControlApi, decodeBase64, encodeBase64, tenantBody, tenantQuery } from "./controlApi";
 import type {
   Agent,
   ApplicationStatus,
   ConversationMessage,
   ComponentRow,
+  ConfigAuthData,
   ConfigCatalogEntry,
   ConfigFileData,
   ConfigVisualField,
+  ConfigVisualProvider,
   ConfigListData,
   Operation,
   PropagationPreview,
   PropagationReport,
   PropagationOutcome,
-  Scope,
+  TenantSelection,
   SessionListData,
   SessionDetailMeta,
   SessionDetailStats,
@@ -59,16 +61,18 @@ import type {
   TenantRow,
 } from "./controlApi";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { ActionButton } from "./components/ActionButton";
 import { Dialog } from "./components/Dialog";
 import { EmptyState } from "./components/EmptyState";
+import { NativeSelect, TextArea, TextInput, Toggle } from "./components/FormControls";
 import { IconButton } from "./components/IconButton";
-import { IssueIndicator, type IssueTone } from "./components/IssueIndicator";
+import { HelpTooltip, IssueIndicator, type IssueTone } from "./components/IssueIndicator";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { SessionMessageContent } from "./components/SessionMessageContent";
 import { useClipboardFeedback } from "./useClipboardFeedback";
 import { useFailureNotifications } from "./useFailureNotifications";
 import { AgentIcon } from "./icons";
-import { bytes, duration, formatTimestamp } from "./utils";
+import { bytes, compactDuration, formatTimestamp } from "./utils";
 import { resourceIcons, type ModuleId } from "./consoleIcons";
 import styles from "./ManagementPages.module.css";
 
@@ -138,8 +142,8 @@ function MutationUnavailable({ operation }: { operation?: Operation | null }) {
   );
 }
 
-function tenantScope(row: TenantRow): Scope {
-  return row.kind === "host" ? { scope: "host" } : { scope: "managed", tenant: row.name! };
+function tenantSelection(row: TenantRow): TenantSelection {
+  return row.kind === "host" ? { kind: "host" } : { kind: "managed", name: row.name! };
 }
 
 type TenantKey = "host" | `managed:${string}`;
@@ -252,7 +256,7 @@ function changePageLocation(
 
 function tenantLocation(key: TenantKey | null, component?: string | null): URLSearchParams {
   const query = new URLSearchParams();
-  if (key) query.set("scope", key);
+  if (key) query.set("tenant", key);
   if (key && component) query.set("component", component);
   return query;
 }
@@ -273,7 +277,7 @@ export function TenantPage({
 }: PageProps) {
   const [initialRoute] = useState(pageSearch);
   const observedLocationVersion = useRef(locationVersion);
-  const initialKey = tenantKeyFromParam(initialRoute.get("scope"));
+  const initialKey = tenantKeyFromParam(initialRoute.get("tenant"));
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(initialKey);
   const [selectedComponent, setSelectedComponent] = useState<string | null>(
@@ -326,7 +330,7 @@ export function TenantPage({
     if (observedLocationVersion.current === locationVersion) return;
     observedLocationVersion.current = locationVersion;
     const query = pageSearch();
-    const key = tenantKeyFromParam(query.get("scope"));
+    const key = tenantKeyFromParam(query.get("tenant"));
     setSelectedKey(key);
     setSelectedComponent(key ? query.get("component") : null);
     setDetailOpen(key !== null);
@@ -380,7 +384,7 @@ export function TenantPage({
       return;
     }
     try {
-      const query = scopeQuery(tenantScope(selected));
+      const query = tenantQuery(tenantSelection(selected));
       const rows = await api.get<ComponentRow[]>(`/_aibox/api/components?${query}`);
       setComponents(rows);
       if (selectedComponent && !rows.some((row) => row.kind === selectedComponent)) {
@@ -517,7 +521,7 @@ export function TenantPage({
     try {
       const path = install ? "install" : "remove";
       const result = await api.post<Operation | object>(`/_aibox/api/components/${path}`, {
-        ...scopeBody(tenantScope(selected)),
+        ...tenantBody(tenantSelection(selected)),
         component: row.kind,
         version: versions[row.kind] || null,
       });
@@ -799,7 +803,7 @@ export function TenantPage({
                         </span>
                       </button>
                       {supportsVersion && (
-                        <input
+                        <TextInput
                           aria-label={`${label} version`}
                           placeholder="stable"
                           value={versions[row.kind] ?? ""}
@@ -875,7 +879,7 @@ export function TenantPage({
             <h2 id={createTitleId}>Create Managed Tenant</h2>
             <label>
               Name
-              <input
+              <TextInput
                 autoFocus
                 aria-label="Tenant name"
                 value={newName}
@@ -901,9 +905,10 @@ export function TenantPage({
               <button type="button" onClick={() => setCreateOpen(false)} disabled={busy}>
                 Cancel
               </button>
-              <button
+              <ActionButton
                 className={styles.primaryButton}
-                type="submit"
+                htmlType="submit"
+                tone="primary"
                 disabled={!createNameValid || mutationBusy}
               >
                 {busy ? (
@@ -912,7 +917,7 @@ export function TenantPage({
                   <Plus size={14} />
                 )}
                 {busy ? "Creating…" : "Create"}
-              </button>
+              </ActionButton>
             </div>
           </form>
         </Dialog>
@@ -1020,23 +1025,23 @@ function useTenants(api: ControlApi) {
 }
 
 type ConfigSelection = { current: true; config?: never } | { current: false; config: string };
-type ConfigScopeKey = "host" | `managed:${string}`;
+type ConfigTenantKey = "host" | `managed:${string}`;
 type ConfigDeleteTarget = { names: string[] };
 type ConfigApplyTarget = { name: string };
 type ConfigPendingAction = { run: () => void | Promise<void> };
 
 const CONFIG_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-function configScopeKey(scope: Scope): ConfigScopeKey {
-  return scope.scope === "host" ? "host" : `managed:${scope.tenant}`;
+function configTenantKey(tenant: TenantSelection): ConfigTenantKey {
+  return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
 }
 
-function scopeFromConfigKey(key: ConfigScopeKey): Scope {
-  return key === "host" ? { scope: "host" } : { scope: "managed", tenant: key.slice(8) };
+function tenantSelectionFromConfigKey(key: ConfigTenantKey): TenantSelection {
+  return key === "host" ? { kind: "host" } : { kind: "managed", name: key.slice(8) };
 }
 
 interface ConfigRouteState {
-  scope: Scope;
+  tenant: TenantSelection;
   agent: Agent;
   selection: ConfigSelection;
   file: string | null;
@@ -1045,13 +1050,13 @@ interface ConfigRouteState {
 
 function readConfigRoute(): ConfigRouteState {
   const query = pageSearch();
-  const scopeKey = tenantKeyFromParam(query.get("scope")) ?? "managed:default";
+  const tenantKey = tenantKeyFromParam(query.get("tenant")) ?? "managed:default";
   const agent = query.get("agent") === "claude" ? "claude" : "codex";
   const config = query.get("config");
   const current = query.get("current") === "1";
   const detailOpen = current || (config !== null && CONFIG_NAME_PATTERN.test(config));
   return {
-    scope: scopeFromConfigKey(scopeKey),
+    tenant: tenantSelectionFromConfigKey(tenantKey),
     agent,
     selection:
       !current && config && CONFIG_NAME_PATTERN.test(config)
@@ -1063,13 +1068,13 @@ function readConfigRoute(): ConfigRouteState {
 }
 
 function configLocation(
-  scope: Scope,
+  tenant: TenantSelection,
   agent: Agent,
   selection: ConfigSelection | null,
   file?: string | null,
 ): URLSearchParams {
   const query = new URLSearchParams();
-  query.set("scope", configScopeKey(scope));
+  query.set("tenant", configTenantKey(tenant));
   query.set("agent", agent);
   if (selection?.current) query.set("current", "1");
   else if (selection) query.set("config", selection.config);
@@ -1084,8 +1089,12 @@ interface ConfigIssuePresentation {
   accessibleLabel: string;
 }
 
-type ConfigVisualFieldInput = Pick<ConfigVisualField, "path" | "included"> & {
-  value?: string | boolean;
+type ConfigFileController = {
+  dirty: boolean;
+  canSave: boolean;
+  save: () => Promise<boolean>;
+  restore: () => void;
+  reload: () => void;
 };
 
 function configIssuePresentation(entry: ConfigCatalogEntry): ConfigIssuePresentation | null {
@@ -1107,8 +1116,19 @@ function configIssuePresentation(entry: ConfigCatalogEntry): ConfigIssuePresenta
   };
 }
 
-function configIssueDescriptionId(scope: Scope, agent: Agent, name: string): string {
-  return `config-issue-${configScopeKey(scope).replace(":", "-")}-${agent}-${name}`;
+function configWarningPresentation(entry: ConfigCatalogEntry): ConfigIssuePresentation | null {
+  if (entry.state !== "ready" || !entry.warnings?.length) return null;
+  const message = entry.warnings.join(" ");
+  return {
+    tone: "warning",
+    label: "Config warnings",
+    message,
+    accessibleLabel: `Config warning: ${message}`,
+  };
+}
+
+function configIssueDescriptionId(tenant: TenantSelection, agent: Agent, name: string): string {
+  return `config-issue-${configTenantKey(tenant).replace(":", "-")}-${agent}-${name}`;
 }
 
 function propagationGroup(
@@ -1128,12 +1148,89 @@ function propagationDetail(outcome: PropagationOutcome): string | null {
   return [outcome.reason, ...timestamps].filter(Boolean).join(" · ") || null;
 }
 
+function requestProxyRoute(tenant: TenantSelection, listen: string | undefined): string | null {
+  const port = listen?.match(/:(\d+)$/)?.[1];
+  if (!port || port === "0") return null;
+  return tenant.kind === "host"
+    ? `http://127.0.0.1:${port}/`
+    : `http://host.docker.internal:${port}/`;
+}
+
+function splitRequestProxyValue(
+  value: string,
+  route: string | null,
+): {
+  upstream: string;
+  routed: boolean;
+} {
+  if (!value || !route) return { upstream: value, routed: false };
+  const knownRoute = /^https?:\/\/(?:127\.0\.0\.1|host\.docker\.internal):(\d+)\//i;
+  const match = value.match(knownRoute);
+  if (!match || match[1] === "0") return { upstream: value, routed: false };
+  return { upstream: value.slice(match[0].length), routed: true };
+}
+
+function comparableProvider(
+  provider: ConfigVisualProvider | undefined,
+): Pick<ConfigVisualProvider, "included" | "name" | "base_url"> | null {
+  if (!provider) return null;
+  return {
+    included: provider.included,
+    name: provider.name,
+    base_url: provider.base_url,
+  };
+}
+
+function proxyValueIsValid(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function VisualOptionLabel({
+  id,
+  label,
+  description,
+  required,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  required: boolean;
+}) {
+  return (
+    <div className={styles.visualOptionLabel}>
+      <label htmlFor={id}>{label}</label>
+      <HelpTooltip label={label} message={description} />
+      {required && (
+        <>
+          <span className={styles.requiredMarker} aria-hidden="true">
+            *
+          </span>
+          <span className="srOnly">required</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function VisualConfigFields({
   fields,
+  provider,
   onChange,
+  onProviderChange,
+  tenant,
+  listen,
 }: {
   fields: ConfigVisualField[];
+  provider?: ConfigVisualProvider;
   onChange: (path: string, update: Partial<ConfigVisualField>) => void;
+  onProviderChange?: (update: Partial<ConfigVisualProvider>) => void;
+  tenant?: TenantSelection;
+  listen?: string;
 }) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
   const groups = useMemo(() => {
@@ -1142,126 +1239,885 @@ function VisualConfigFields({
       grouped.set(field.group, [...(grouped.get(field.group) ?? []), field]);
     return [...grouped.entries()];
   }, [fields]);
+  const customProviderSelected = Boolean(provider?.included);
   return (
     <div className={styles.visualEditor}>
       {groups.map(([group, groupFields]) => (
         <section className={styles.visualGroup} key={group}>
           <header>
             <h3>{group}</h3>
-            <span>Include fields only when this Named Config should project them.</span>
           </header>
-          <div className={styles.visualFieldGrid}>
+          <div className={styles.visualFieldList}>
             {groupFields.map((field) => {
-              const value = field.value ?? (field.value_kind === "bool" ? false : "");
-              const fieldId = `config-field-${field.path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-              const descriptionId = `${fieldId}-description`;
+              const rawValue = field.value ?? (field.value_kind === "bool" ? false : "");
+              const fieldId = `config-option-${field.path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
               const isRevealed = revealed.has(field.path);
-              const hasSuggestions = field.suggestions.length > 0;
-              const isCustom =
-                hasSuggestions && typeof value === "string" && !field.suggestions.includes(value);
+              const proxyRoute = field.request_proxy_route
+                ? requestProxyRoute(tenant ?? { kind: "managed", name: "default" }, listen)
+                : null;
+              const split =
+                field.request_proxy_route && typeof rawValue === "string"
+                  ? splitRequestProxyValue(rawValue, proxyRoute)
+                  : { upstream: rawValue, routed: Boolean(field.proxy_routed) };
+              const value = split.upstream;
+              const routed = Boolean(field.proxy_routed) || split.routed;
+              const hasEnumValues = field.enum_values.length > 0;
+              const customProviderField = field.path.startsWith("model_providers.custom.");
+              const required =
+                Boolean(field.required) || (customProviderSelected && customProviderField);
+              const included = field.included || (customProviderSelected && customProviderField);
+              const unsupportedValue =
+                hasEnumValues &&
+                included &&
+                typeof value === "string" &&
+                !field.enum_values.includes(value)
+                  ? value
+                  : null;
               return (
-                <article
-                  className={styles.visualField}
-                  key={field.path}
-                  role="group"
-                  aria-labelledby={fieldId}
-                  aria-describedby={descriptionId}
-                >
-                  <div className={styles.visualFieldHeader}>
-                    <label>
-                      <input
-                        type="checkbox"
+                <article className={styles.visualField} key={field.path} role="group">
+                  <div className={styles.visualFieldMeta}>
+                    <VisualOptionLabel
+                      id={fieldId}
+                      label={field.label}
+                      description={field.description}
+                      required={required}
+                    />
+                    {!required && !hasEnumValues && field.value_kind === "string" && (
+                      <Toggle
+                        className={styles.visualInclude}
                         aria-label={`Include ${field.label}`}
-                        checked={field.included}
-                        onChange={(event) =>
-                          onChange(field.path, { included: event.target.checked })
+                        checked={included}
+                        onCheckedChange={(checked) =>
+                          onChange(field.path, {
+                            included: checked,
+                            ...(field.request_proxy_route && !checked
+                              ? { proxy_routed: false, value: split.upstream }
+                              : {}),
+                          })
                         }
-                      />
-                      <span>
-                        <strong id={fieldId}>{field.label}</strong>
-                        <code>{field.path}</code>
-                      </span>
-                    </label>
+                      >
+                        Include
+                      </Toggle>
+                    )}
                   </div>
-                  <p id={descriptionId}>{field.description}</p>
-                  {field.value_kind === "bool" ? (
-                    <label className={styles.visualValueControl}>
-                      <input
-                        type="checkbox"
+                  <div className={styles.visualFieldControl}>
+                    {field.value_kind === "bool" ? (
+                      <NativeSelect
+                        id={fieldId}
                         aria-label={`${field.label} value`}
-                        aria-describedby={descriptionId}
-                        checked={Boolean(value)}
-                        disabled={!field.included}
-                        onChange={(event) => onChange(field.path, { value: event.target.checked })}
-                      />
-                      <span>{value ? "Enabled" : "Disabled"}</span>
-                    </label>
-                  ) : hasSuggestions ? (
-                    <>
-                      <select
-                        aria-label={`${field.label} value`}
-                        aria-describedby={descriptionId}
-                        disabled={!field.included}
-                        value={isCustom ? "__custom" : String(value)}
+                        required={required}
+                        aria-required={required}
+                        value={!included ? "__default" : String(Boolean(value))}
                         onChange={(event) => {
-                          if (event.target.value === "__custom")
-                            onChange(field.path, { value: "" });
-                          else onChange(field.path, { value: event.target.value });
+                          if (event.target.value === "__default") {
+                            onChange(field.path, { included: false, value: undefined });
+                            return;
+                          }
+                          onChange(field.path, {
+                            included: true,
+                            value: event.target.value === "true",
+                          });
                         }}
                       >
-                        <option value="">Select a value</option>
-                        {field.suggestions.map((suggestion) => (
-                          <option key={suggestion} value={suggestion}>
-                            {suggestion}
+                        {!required && <option value="__default">Default</option>}
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                      </NativeSelect>
+                    ) : hasEnumValues ? (
+                      <NativeSelect
+                        id={fieldId}
+                        aria-label={`${field.label} value`}
+                        required={required}
+                        aria-required={required}
+                        value={!included ? "__default" : String(value)}
+                        onChange={(event) => {
+                          if (event.target.value === "__default") {
+                            onChange(field.path, { included: false, value: undefined });
+                            return;
+                          }
+                          onChange(field.path, { included: true, value: event.target.value });
+                        }}
+                      >
+                        {!required && <option value="__default">Default</option>}
+                        {unsupportedValue !== null && (
+                          <option value={unsupportedValue}>Unsupported: {unsupportedValue}</option>
+                        )}
+                        {field.enum_values.map((enumValue) => (
+                          <option key={enumValue} value={enumValue}>
+                            {enumValue}
                           </option>
                         ))}
-                        <option value="__custom">Custom</option>
-                      </select>
-                      {(isCustom || value === "") && (
-                        <input
-                          className={styles.visualCustomInput}
-                          disabled={!field.included}
+                      </NativeSelect>
+                    ) : (
+                      <div className={styles.visualTextControl}>
+                        <TextInput
+                          id={fieldId}
+                          type={field.sensitive && !isRevealed ? "password" : "text"}
+                          disabled={!included}
                           value={String(value)}
-                          onChange={(event) => onChange(field.path, { value: event.target.value })}
-                          aria-label={`${field.label} custom value`}
-                          aria-describedby={descriptionId}
+                          required={required}
+                          aria-required={required}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            onChange(field.path, {
+                              value: routed && proxyRoute ? `${proxyRoute}${nextValue}` : nextValue,
+                              ...(field.request_proxy_route ? { proxy_routed: routed } : {}),
+                            });
+                          }}
+                          aria-label={field.label}
                         />
-                      )}
-                    </>
-                  ) : (
-                    <div className={styles.visualTextControl}>
-                      <input
-                        type={field.sensitive && !isRevealed ? "password" : "text"}
-                        disabled={!field.included}
-                        value={String(value)}
-                        onChange={(event) => onChange(field.path, { value: event.target.value })}
-                        aria-label={field.label}
-                        aria-describedby={descriptionId}
-                      />
-                      {field.sensitive && (
-                        <IconButton
-                          label={isRevealed ? `Hide ${field.label}` : `Show ${field.label}`}
-                          onClick={() =>
-                            setRevealed((current) => {
-                              const next = new Set(current);
-                              if (next.has(field.path)) next.delete(field.path);
-                              else next.add(field.path);
-                              return next;
-                            })
-                          }
-                        >
-                          {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </IconButton>
-                      )}
-                    </div>
-                  )}
+                        {field.sensitive && (
+                          <IconButton
+                            label={isRevealed ? `Hide ${field.label}` : `Show ${field.label}`}
+                            onClick={() =>
+                              setRevealed((current) => {
+                                const next = new Set(current);
+                                if (next.has(field.path)) next.delete(field.path);
+                                else next.add(field.path);
+                                return next;
+                              })
+                            }
+                          >
+                            {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </IconButton>
+                        )}
+                        {field.request_proxy_route && (
+                          <Toggle
+                            className={styles.proxyToggle}
+                            aria-label={`Route ${field.label} through Request Proxy`}
+                            checked={routed}
+                            disabled={!included || !proxyRoute || !proxyValueIsValid(String(value))}
+                            onCheckedChange={(checked) => {
+                              if (!checked) {
+                                onChange(field.path, {
+                                  value: String(value),
+                                  proxy_routed: false,
+                                });
+                                return;
+                              }
+                              if (!proxyValueIsValid(String(value))) return;
+                              onChange(field.path, {
+                                value: `${proxyRoute}${String(value)}`,
+                                proxy_routed: true,
+                              });
+                            }}
+                          >
+                            Proxy
+                          </Toggle>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </article>
               );
             })}
           </div>
         </section>
       ))}
+      {provider && onProviderChange && (
+        <section className={styles.visualGroup}>
+          <header>
+            <h3>Custom provider</h3>
+          </header>
+          <div className={styles.providerEditor}>
+            <div className={styles.visualField}>
+              <div className={styles.visualFieldMeta}>
+                <VisualOptionLabel
+                  id="config-option-custom-provider"
+                  label="Use Custom provider"
+                  description="Use the fixed custom provider instead of Codex's official OpenAI default."
+                  required={false}
+                />
+              </div>
+              <Toggle
+                id="config-option-custom-provider"
+                className={`${styles.visualInclude} ${styles.visualFieldControl}`}
+                aria-label="Use Custom provider"
+                checked={provider.included}
+                onCheckedChange={(checked) =>
+                  onProviderChange({
+                    included: checked,
+                    ...(checked
+                      ? {
+                          name: provider.name || "custom",
+                          base_url: provider.base_url || "https://example.com/v1",
+                        }
+                      : {}),
+                  })
+                }
+              >
+                {provider.included ? "Enabled" : "Disabled"}
+              </Toggle>
+            </div>
+            {provider.included && (
+              <>
+                <div className={styles.visualField}>
+                  <div className={styles.visualFieldMeta}>
+                    <VisualOptionLabel
+                      id="config-option-custom-provider-name"
+                      label="Name"
+                      description="Display name for the fixed custom provider."
+                      required
+                    />
+                  </div>
+                  <div className={styles.visualFieldControl}>
+                    <TextInput
+                      id="config-option-custom-provider-name"
+                      value={provider.name}
+                      onChange={(event) => onProviderChange({ name: event.target.value })}
+                      aria-label="Custom provider name"
+                      required
+                      aria-required="true"
+                    />
+                  </div>
+                </div>
+                <div className={styles.visualField}>
+                  <div className={styles.visualFieldMeta}>
+                    <VisualOptionLabel
+                      id="config-option-custom-provider-base-url"
+                      label="Base URL"
+                      description="API base URL for the fixed custom provider."
+                      required
+                    />
+                  </div>
+                  <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
+                    <TextInput
+                      id="config-option-custom-provider-base-url"
+                      value={(() => {
+                        const route = requestProxyRoute(
+                          tenant ?? { kind: "managed", name: "default" },
+                          listen,
+                        );
+                        return splitRequestProxyValue(provider.base_url, route).upstream;
+                      })()}
+                      onChange={(event) => {
+                        const route = requestProxyRoute(
+                          tenant ?? { kind: "managed", name: "default" },
+                          listen,
+                        );
+                        const routed = provider.proxy_routed && route;
+                        onProviderChange({
+                          base_url: routed ? `${route}${event.target.value}` : event.target.value,
+                          proxy_routed: Boolean(routed),
+                        });
+                      }}
+                      aria-label="Custom provider base URL"
+                      required
+                      aria-required="true"
+                    />
+                    {(() => {
+                      const route = requestProxyRoute(
+                        tenant ?? { kind: "managed", name: "default" },
+                        listen,
+                      );
+                      const upstream = splitRequestProxyValue(provider.base_url, route).upstream;
+                      const routed =
+                        Boolean(provider.proxy_routed) ||
+                        splitRequestProxyValue(provider.base_url, route).routed;
+                      return (
+                        <Toggle
+                          className={styles.proxyToggle}
+                          aria-label="Route Custom provider through Request Proxy"
+                          checked={routed}
+                          disabled={!route || !proxyValueIsValid(upstream)}
+                          onCheckedChange={(checked) =>
+                            onProviderChange({
+                              base_url: checked ? `${route}${upstream}` : upstream,
+                              proxy_routed: checked,
+                            })
+                          }
+                        >
+                          Proxy
+                        </Toggle>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+      )}
     </div>
+  );
+}
+
+function ConfigFilePane({
+  api,
+  tenant,
+  agent,
+  selection,
+  file,
+  mode,
+  operationBusy,
+  onControllerChange,
+  onError,
+  onRevealRetryChange,
+  onSaved,
+  onBeforeSave,
+  onLinkedFileSaved,
+  onVisualAvailable,
+  onRequestRaw,
+}: {
+  api: ControlApi;
+  tenant: TenantSelection;
+  agent: Agent;
+  selection: ConfigSelection;
+  file: string;
+  mode: "visual" | "raw";
+  operationBusy: boolean;
+  onControllerChange: (file: string, controller: ConfigFileController | null) => void;
+  onError: (message: string | null) => void;
+  onRevealRetryChange: (file: string, retry: (() => void) | null) => void;
+  onSaved: () => void;
+  onBeforeSave?: (customProvider: boolean) => boolean;
+  onLinkedFileSaved?: (file: string) => void;
+  onVisualAvailable?: (available: boolean) => void;
+  onRequestRaw: () => void;
+}) {
+  const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
+  const [editor, setEditor] = useState("");
+  const [visualFields, setVisualFields] = useState<ConfigVisualField[] | null>(null);
+  const [visualProvider, setVisualProvider] = useState<ConfigVisualProvider | null>(null);
+  const [, setVisualError] = useState<string | null>(null);
+  const [textEditable, setTextEditable] = useState(true);
+  const [rawDiagnostics, setRawDiagnostics] = useState<
+    Array<{ message: string; line: number; column: number }>
+  >([]);
+  const [authMode, setAuthMode] = useState<ConfigAuthData["mode"]>("api-key");
+  const [authKey, setAuthKey] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState<"idle" | "saving" | "saved">("idle");
+  const [revealed, setRevealed] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const rawEditorParent = useRef<HTMLDivElement | null>(null);
+  const rawEditorView = useRef<EditorView | null>(null);
+  const diagnoseTimer = useRef<number | null>(null);
+  const diagnoseGeneration = useRef(0);
+  const loadGeneration = useRef(0);
+  const useCodeMirror = typeof navigator === "undefined" || !/jsdom/i.test(navigator.userAgent);
+  const isAuth = file === "auth.json";
+  const currentSelection = selection.current;
+
+  const diagnose = useCallback(
+    (value: string) => {
+      if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
+      const generation = ++diagnoseGeneration.current;
+      diagnoseTimer.current = window.setTimeout(() => {
+        void api
+          .post<{
+            diagnostics: Array<{
+              severity?: string;
+              message: string;
+              line: number;
+              column: number;
+            }>;
+          }>("/_aibox/api/configs/diagnose", {
+            ...tenantBody(tenant),
+            agent,
+            current: currentSelection,
+            config: currentSelection ? null : selection.config,
+            file,
+            content_base64: encodeBase64(new TextEncoder().encode(value)),
+          })
+          .then((result) => {
+            if (generation === diagnoseGeneration.current)
+              setRawDiagnostics(Array.isArray(result.diagnostics) ? result.diagnostics : []);
+          })
+          .catch(() => {
+            if (generation === diagnoseGeneration.current) setRawDiagnostics([]);
+          });
+      }, 250);
+    },
+    [agent, api, currentSelection, file, tenant, selection.config],
+  );
+
+  const setFromSnapshot = useCallback(
+    (value: ConfigFileData) => {
+      diagnoseGeneration.current += 1;
+      if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
+      const bytes = decodeBase64(value.content_base64);
+      try {
+        const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        setEditor(content);
+        setTextEditable(true);
+        setRawDiagnostics([]);
+        setVisualFields(value.visual ?? null);
+        setVisualProvider(() => {
+          if (!value.visual_provider) return null;
+          const route = requestProxyRoute(tenant, api.bootstrap?.listen);
+          const split = splitRequestProxyValue(value.visual_provider.base_url, route);
+          return {
+            ...value.visual_provider,
+            base_url: value.visual_provider.base_url,
+            proxy_routed: split.routed,
+          };
+        });
+        setVisualError(value.visual_error ?? null);
+        if (isAuth && value.auth) {
+          setAuthMode(value.auth.mode);
+          setAuthKey(value.auth.api_key ?? "");
+        }
+      } catch {
+        setEditor("");
+        setTextEditable(false);
+        setVisualFields(null);
+        setVisualError("This file is not valid UTF-8 and cannot be edited in the Console.");
+        setRawDiagnostics([]);
+      }
+    },
+    [api.bootstrap?.listen, isAuth, tenant],
+  );
+
+  useEffect(() => {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setSnapshot(null);
+    setEditor("");
+    setVisualFields(null);
+    setVisualProvider(null);
+    setVisualError(null);
+    setRawDiagnostics([]);
+    void api
+      .post<ConfigFileData>("/_aibox/api/configs/reveal", {
+        ...tenantBody(tenant),
+        agent,
+        current: currentSelection,
+        config: currentSelection ? null : selection.config,
+        file,
+      })
+      .then((value) => {
+        if (loadGeneration.current !== generation) return;
+        onRevealRetryChange(file, null);
+        setFromSnapshot(value);
+        setSnapshot(value);
+        if (!isAuth) onVisualAvailable?.(Boolean(value.visual && !value.visual_error));
+      })
+      .catch((cause) => {
+        if (loadGeneration.current !== generation) return;
+        onRevealRetryChange(file, () => setReloadNonce((value) => value + 1));
+        onError(messageOf(cause));
+      })
+      .finally(() => {
+        if (loadGeneration.current === generation) setLoading(false);
+      });
+    return () => {
+      loadGeneration.current += 1;
+      diagnoseGeneration.current += 1;
+      if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
+      onRevealRetryChange(file, null);
+    };
+  }, [
+    agent,
+    api,
+    currentSelection,
+    file,
+    isAuth,
+    onError,
+    onRevealRetryChange,
+    onVisualAvailable,
+    tenant,
+    selection.config,
+    setFromSnapshot,
+    reloadNonce,
+  ]);
+
+  useEffect(() => {
+    if (mode === "raw" && snapshot && textEditable) diagnose(editor);
+  }, [diagnose, editor, mode, snapshot, textEditable]);
+
+  const editorBytes = useMemo(() => {
+    if (!snapshot || !textEditable) return null;
+    return new TextEncoder().encode(editor);
+  }, [editor, snapshot, textEditable]);
+  const visualDirty =
+    Boolean(snapshot && visualFields) &&
+    JSON.stringify(
+      visualFields?.map(({ path, included, value }) => ({ path, included, value })),
+    ) !==
+      JSON.stringify(
+        snapshot?.visual?.map(({ path, included, value }) => ({ path, included, value })),
+      );
+  const providerDirty = Boolean(
+    snapshot &&
+    visualProvider &&
+    JSON.stringify(comparableProvider(visualProvider)) !==
+      JSON.stringify(comparableProvider(snapshot.visual_provider)),
+  );
+  const authDirty =
+    isAuth &&
+    Boolean(snapshot?.auth) &&
+    (authMode !== snapshot?.auth?.mode || authKey !== (snapshot?.auth?.api_key ?? ""));
+  const dirty =
+    mode === "visual"
+      ? isAuth
+        ? authDirty
+        : visualDirty || providerDirty
+      : editorBytes !== null &&
+        snapshot !== null &&
+        encodeBase64(editorBytes) !== snapshot.content_base64;
+  const canSave = Boolean(
+    snapshot && textEditable && (isAuth ? authMode === "api-key" || mode === "raw" : true),
+  );
+
+  const save = useCallback(async (): Promise<boolean> => {
+    if (operationBusy || !snapshot || !editorBytes || !canSave) return false;
+    if (
+      mode === "visual" &&
+      !isAuth &&
+      visualProvider?.included &&
+      onBeforeSave &&
+      !onBeforeSave(true)
+    )
+      return false;
+    if (mode === "visual" && !isAuth && visualFields) {
+      for (const field of visualFields) {
+        if (!field.included || !field.request_proxy_route || typeof field.value !== "string")
+          continue;
+        const route = requestProxyRoute(tenant, api.bootstrap?.listen);
+        const split = splitRequestProxyValue(field.value, route);
+        if (!proxyValueIsValid(split.upstream)) {
+          onError(`${field.label} must contain a valid HTTP or HTTPS upstream URL.`);
+          return false;
+        }
+      }
+    }
+    if (mode === "visual" && isAuth && snapshot.auth?.extra_fields) {
+      if (!window.confirm("Replace the extra native credential fields with an API-key object?"))
+        return false;
+    }
+    if (mode === "visual" && !isAuth && visualProvider?.included) {
+      if (!visualProvider.name.trim() || !visualProvider.base_url.trim()) {
+        onError("Custom provider name and base URL must not be empty.");
+        return false;
+      }
+      const route = requestProxyRoute(tenant, api.bootstrap?.listen);
+      const upstream = splitRequestProxyValue(visualProvider.base_url, route).upstream;
+      if (!proxyValueIsValid(upstream)) {
+        onError("Custom provider base URL must contain a valid HTTP or HTTPS URL.");
+        return false;
+      }
+    }
+    setFeedback("saving");
+    try {
+      const value = await api.post<ConfigFileData>("/_aibox/api/configs/save", {
+        ...tenantBody(tenant),
+        agent,
+        current: currentSelection,
+        config: currentSelection ? null : selection.config,
+        file,
+        revision: snapshot.revision,
+        content_base64: encodeBase64(editorBytes),
+        ...(mode === "visual" && !isAuth && visualFields
+          ? {
+              visual: visualFields.map(({ path, included, value: fieldValue }) => ({
+                path,
+                included,
+                value: fieldValue,
+              })),
+            }
+          : {}),
+        ...(mode === "visual" && !isAuth && visualProvider
+          ? {
+              visual_provider: {
+                included: visualProvider.included,
+                name: visualProvider.name,
+                base_url: visualProvider.base_url,
+                proxy_routed: Boolean(visualProvider.proxy_routed),
+              },
+            }
+          : {}),
+        ...(mode === "visual" && isAuth ? { visual_auth: { included: true, value: authKey } } : {}),
+      });
+      setFromSnapshot(value);
+      setSnapshot(value);
+      if (value.linked_file) onLinkedFileSaved?.(value.linked_file.file);
+      setFeedback("saved");
+      onError(null);
+      onSaved();
+      window.setTimeout(() => setFeedback("idle"), 4_000);
+      return true;
+    } catch (cause) {
+      setFeedback("idle");
+      onError(messageOf(cause));
+      return false;
+    }
+  }, [
+    agent,
+    api,
+    authKey,
+    canSave,
+    editorBytes,
+    file,
+    isAuth,
+    mode,
+    onError,
+    onSaved,
+    operationBusy,
+    tenant,
+    currentSelection,
+    selection.config,
+    setFromSnapshot,
+    snapshot,
+    visualFields,
+    visualProvider,
+    onBeforeSave,
+    onLinkedFileSaved,
+  ]);
+
+  const restore = useCallback(() => {
+    if (!snapshot) return;
+    setFromSnapshot(snapshot);
+    onError(null);
+  }, [onError, setFromSnapshot, snapshot]);
+
+  useEffect(() => {
+    onControllerChange(
+      file,
+      snapshot
+        ? { dirty, canSave, save, restore, reload: () => setReloadNonce((value) => value + 1) }
+        : null,
+    );
+    return () => onControllerChange(file, null);
+  }, [canSave, dirty, file, onControllerChange, restore, save, snapshot]);
+
+  useEffect(() => {
+    if (!useCodeMirror || mode !== "raw" || !snapshot || !textEditable || !rawEditorParent.current)
+      return;
+    const language: Extension = file.endsWith(".json") ? json() : StreamLanguage.define(toml);
+    const view = new EditorView({
+      parent: rawEditorParent.current,
+      state: EditorState.create({
+        doc: editor,
+        extensions: [
+          basicSetup,
+          language,
+          EditorView.cspNonce.of(codeMirrorCspNonce()),
+          syntaxHighlighting(configHighlightStyle),
+          lintGutter(),
+          keymap.of([...defaultKeymap, indentWithTab, ...searchKeymap]),
+          EditorView.contentAttributes.of({ "aria-label": `${file} content` }),
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            const value = update.state.doc.toString();
+            setEditor(value);
+            diagnose(value);
+          }),
+        ],
+      }),
+    });
+    rawEditorView.current = view;
+    return () => {
+      diagnoseGeneration.current += 1;
+      view.destroy();
+      rawEditorView.current = null;
+    };
+    // Keep the editor instance alive while its document changes; the next effect synchronizes it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagnose, file, mode, snapshot, textEditable, useCodeMirror]);
+
+  useEffect(() => {
+    const view = rawEditorView.current;
+    if (!view || mode !== "raw") return;
+    if (view.state.doc.toString() !== editor)
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: editor } });
+  }, [editor, mode]);
+
+  useEffect(() => {
+    const view = rawEditorView.current;
+    if (!view || mode !== "raw") return;
+    view.dispatch(
+      setDiagnostics(
+        view.state,
+        rawDiagnostics.map((diagnostic) => {
+          const lineInfo = view.state.doc.line(
+            Math.min(Math.max(1, diagnostic.line), view.state.doc.lines),
+          );
+          const from = Math.min(lineInfo.from + Math.max(1, diagnostic.column) - 1, lineInfo.to);
+          return {
+            from,
+            to: Math.min(from + 1, lineInfo.to),
+            severity: "error" as const,
+            message: diagnostic.message,
+          };
+        }),
+      ),
+    );
+  }, [mode, rawDiagnostics]);
+
+  const updateVisualField = useCallback((path: string, update: Partial<ConfigVisualField>) => {
+    setVisualFields((fields) => {
+      if (!fields) return null;
+      const next = fields.map((field) => (field.path === path ? { ...field, ...update } : field));
+      return next;
+    });
+  }, []);
+
+  const updateVisualProvider = useCallback((update: Partial<ConfigVisualProvider>) => {
+    setVisualProvider((provider) => (provider ? { ...provider, ...update } : provider));
+  }, []);
+
+  if (loading)
+    return (
+      <div className={styles.configFilePane}>
+        <Loading />
+      </div>
+    );
+  if (!snapshot) return <div className={styles.configFilePane} />;
+
+  return (
+    <section className={styles.configFilePane} aria-label={`${file} editor`}>
+      <div className={styles.editorTools}>
+        <div className={styles.fileTitle}>
+          <strong>{file}</strong>
+          <span>{snapshot.exists ? "Existing file" : "New file"}</span>
+        </div>
+        {isAuth && mode === "visual" && <span className={styles.authModeBadge}>{authMode}</span>}
+        <ActionButton
+          className={styles.primaryButton}
+          tone="primary"
+          disabled={operationBusy || !dirty || !canSave}
+          onClick={() => void save()}
+        >
+          {feedback === "saving" ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}
+          <span aria-live="polite">
+            {feedback === "saving" ? "Saving…" : feedback === "saved" ? "Saved" : "Save"}
+          </span>
+        </ActionButton>
+      </div>
+      {snapshot.warnings && snapshot.warnings.length > 0 && (
+        <div className={styles.fileWarnings} role="status">
+          {snapshot.warnings.map((warning) => (
+            <span key={warning}>
+              <AlertTriangle size={14} /> {warning}
+            </span>
+          ))}
+        </div>
+      )}
+      {mode === "visual" && !isAuth && visualFields ? (
+        <VisualConfigFields
+          fields={visualFields}
+          provider={visualProvider ?? undefined}
+          onChange={updateVisualField}
+          onProviderChange={updateVisualProvider}
+          tenant={tenant}
+          listen={api.bootstrap?.listen}
+        />
+      ) : mode === "visual" && isAuth && snapshot.auth ? (
+        <div className={styles.visualEditor}>
+          <section className={styles.visualGroup}>
+            <header>
+              <h3>Credentials</h3>
+            </header>
+            <div className={styles.authVisualBody}>
+              {authMode === "chatgpt" ? (
+                <>
+                  <div className={styles.authStatus} role="status">
+                    <Check size={16} /> ChatGPT credentials are active.
+                  </div>
+                  <p>Use Raw to inspect the native token object, or switch to an API key.</p>
+                  <div className={styles.dialogActions}>
+                    <button type="button" onClick={onRequestRaw}>
+                      Open Raw
+                    </button>
+                    <ActionButton
+                      tone="primary"
+                      className={styles.primaryButton}
+                      onClick={() => {
+                        if (!window.confirm("Switch this draft to API-key credentials?")) return;
+                        setAuthMode("api-key");
+                      }}
+                    >
+                      Switch to API key credentials
+                    </ActionButton>
+                  </div>
+                </>
+              ) : (
+                <div className={styles.visualField}>
+                  <div className={styles.visualFieldMeta}>
+                    <VisualOptionLabel
+                      id="config-option-openai-api-key"
+                      label="OpenAI API key"
+                      description="API key used by Codex for OpenAI authentication."
+                      required={false}
+                    />
+                  </div>
+                  <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
+                    <TextInput
+                      id="config-option-openai-api-key"
+                      type={revealed ? "text" : "password"}
+                      value={authKey}
+                      onChange={(event) => setAuthKey(event.target.value)}
+                      aria-label="OpenAI API key"
+                    />
+                    <IconButton
+                      label={revealed ? "Hide OpenAI API key" : "Show OpenAI API key"}
+                      onClick={() => setRevealed((value) => !value)}
+                    >
+                      {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </IconButton>
+                  </div>
+                </div>
+              )}
+              {snapshot.auth.warnings.map((warning) => (
+                <div className={styles.inlineWarning} key={warning}>
+                  <AlertTriangle size={15} /> <span>{warning}</span>
+                </div>
+              ))}
+              {authMode === "api-key" && snapshot.auth.extra_fields && (
+                <div className={styles.inlineWarning}>
+                  <AlertTriangle size={15} />
+                  <span>Saving will replace extra native credential fields.</span>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : textEditable ? (
+        useCodeMirror ? (
+          <div ref={rawEditorParent} className={styles.codeEditor} aria-label={`${file} content`} />
+        ) : (
+          <TextArea
+            className={`${styles.codeEditor} ${styles.codeEditorFallback}`}
+            aria-label={`${file} content`}
+            value={editor}
+            onChange={(event) => {
+              setEditor(event.target.value);
+              diagnose(event.target.value);
+            }}
+            spellCheck={false}
+          />
+        )
+      ) : (
+        <div className={styles.binaryConfigNotice} role="status">
+          <AlertTriangle size={18} />
+          <span>This file is not valid UTF-8 and cannot be edited in the Console.</span>
+          <button
+            type="button"
+            onClick={() => {
+              const raw = decodeBase64(snapshot.content_base64);
+              const url = URL.createObjectURL(new Blob([new Uint8Array(raw).buffer]));
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = file;
+              link.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            <Download size={14} /> Download raw file
+          </button>
+        </div>
+      )}
+      {mode === "raw" && rawDiagnostics.length > 0 && (
+        <div className={styles.editorDiagnostics} role="alert">
+          {rawDiagnostics.map((diagnostic, index) => (
+            <span key={`${diagnostic.line}-${diagnostic.column}-${index}`}>
+              Line {diagnostic.line}, column {diagnostic.column}: {diagnostic.message}
+            </span>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1280,32 +2136,24 @@ export function ConfigPage({
     error: tenantError,
     retry: retryTenants,
   } = useTenants(api);
-  const [scope, setScope] = useState<Scope>(initialRoute.scope);
+  const [tenant, setTenant] = useState<TenantSelection>(initialRoute.tenant);
   const [agent, setAgent] = useState<Agent>(initialRoute.agent);
   const [catalog, setCatalog] = useState<ConfigListData | null>(null);
   const [selection, setSelection] = useState<ConfigSelection>(initialRoute.selection);
+  const selectionRef = useRef<ConfigSelection>(initialRoute.selection);
   const [file, setFile] = useState<string | null>(initialRoute.file);
-  const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
-  const [editor, setEditor] = useState("");
   const [editorMode, setEditorMode] = useState<"visual" | "raw">("raw");
-  const [visualFields, setVisualFields] = useState<ConfigVisualField[] | null>(null);
-  const [visualError, setVisualError] = useState<string | null>(null);
-  const [textEditable, setTextEditable] = useState(true);
-  const [rawDiagnostics, setRawDiagnostics] = useState<
-    Array<{ message: string; line: number; column: number }>
-  >([]);
-  const rawEditorParent = useRef<HTMLDivElement | null>(null);
-  const rawEditorView = useRef<EditorView | null>(null);
-  const diagnoseTimer = useRef<number | null>(null);
-  const diagnoseGeneration = useRef(0);
-  const rawDiagnoseContext = useRef({ api, scope, agent, selection, file });
-  const useCodeMirror = typeof navigator === "undefined" || !/jsdom/i.test(navigator.userAgent);
+  const [visualAvailable, setVisualAvailable] = useState(false);
+  const visualModeInitialized = useRef(false);
+  const fileControllers = useRef(new Map<string, ConfigFileController>());
+  const revealRetries = useRef(new Map<string, () => void>());
+  const [fileStatuses, setFileStatuses] = useState<
+    Record<string, { dirty: boolean; canSave: boolean }>
+  >({});
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [saveFeedback, setSaveFeedback] = useState<"idle" | "saving" | "saved">("idle");
   const [loadingCatalog, setLoadingCatalog] = useState(false);
-  const [loadingFile, setLoadingFile] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
@@ -1322,8 +2170,6 @@ export function ConfigPage({
   const [preview, setPreview] = useState<PropagationPreview | null>(null);
   const [report, setReport] = useState<PropagationReport | null>(null);
   const catalogController = useRef<AbortController | null>(null);
-  const fileLoadGeneration = useRef(0);
-  const saveFeedbackTimer = useRef<number | null>(null);
   const unsavedTitleId = useId();
   const createTitleId = useId();
   const createHelpId = useId();
@@ -1332,62 +2178,10 @@ export function ConfigPage({
   const mutationBusy = busy || operationRunning;
 
   useEffect(() => {
-    rawDiagnoseContext.current = { api, scope, agent, selection, file };
-  }, [agent, api, file, scope, selection]);
-
-  const scheduleRawDiagnose = useCallback((value: string) => {
-    if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
-    const generation = ++diagnoseGeneration.current;
-    diagnoseTimer.current = window.setTimeout(() => {
-      const {
-        api: currentApi,
-        scope: currentScope,
-        agent: currentAgent,
-        selection: currentSelection,
-        file: currentFile,
-      } = rawDiagnoseContext.current;
-      if (!currentFile) return;
-      void currentApi
-        .post<{
-          diagnostics: Array<{ severity?: string; message: string; line: number; column: number }>;
-        }>("/_aibox/api/configs/diagnose", {
-          ...scopeBody(currentScope),
-          agent: currentAgent,
-          current: currentSelection.current,
-          config: currentSelection.current ? null : currentSelection.config,
-          file: currentFile,
-          content_base64: encodeBase64(new TextEncoder().encode(value)),
-        })
-        .then((result) => {
-          if (diagnoseGeneration.current === generation)
-            setRawDiagnostics(Array.isArray(result.diagnostics) ? result.diagnostics : []);
-        })
-        .catch(() => {
-          if (diagnoseGeneration.current === generation) setRawDiagnostics([]);
-        });
-    }, 250);
-  }, []);
-
-  useEffect(
-    () => () => {
-      diagnoseGeneration.current += 1;
-      if (diagnoseTimer.current !== null) window.clearTimeout(diagnoseTimer.current);
-    },
-    [],
-  );
-
-  useEffect(
-    () => () => {
-      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
-    },
-    [],
-  );
-
-  useEffect(() => {
     if (observedLocationVersion.current === locationVersion) return;
     observedLocationVersion.current = locationVersion;
     const route = readConfigRoute();
-    setScope(route.scope);
+    setTenant(route.tenant);
     setAgent(route.agent);
     setSelection(route.selection);
     setFile(route.file);
@@ -1397,6 +2191,15 @@ export function ConfigPage({
   }, [locationVersion]);
 
   useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+
+  const managedTenantMissing =
+    !loadingTenants &&
+    tenant.kind === "managed" &&
+    !tenants.some((row) => row.kind === "managed" && row.name === tenant.name && row.exists);
+
+  useEffect(() => {
     if (!detailOpen || !window.matchMedia?.("(max-width: 760px)").matches) return;
     const frame = window.requestAnimationFrame(() =>
       (detailHeadingRef.current ?? detailBackButtonRef.current)?.focus(),
@@ -1404,7 +2207,14 @@ export function ConfigPage({
     return () => window.cancelAnimationFrame(frame);
   }, [detailOpen, file, selection]);
 
-  const tenantOptions = useMemo<SessionFilterOption<ConfigScopeKey>[]>(() => {
+  useEffect(() => {
+    if (!managedTenantMissing || !detailOpen) return;
+    setDetailOpen(false);
+    setFile(null);
+    changePageLocation("configs", configLocation(tenant, agent, null), onLocationChange, true);
+  }, [agent, detailOpen, managedTenantMissing, onLocationChange, tenant]);
+
+  const tenantOptions = useMemo<SessionFilterOption<ConfigTenantKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
     const managed = tenants
       .filter((tenant): tenant is TenantRow & { kind: "managed"; name: string } =>
@@ -1440,13 +2250,33 @@ export function ConfigPage({
     [],
   );
   const configTenantLabel =
-    scope.scope === "host"
+    tenant.kind === "host"
       ? "Host Tenant"
-      : (tenants.find((tenant) => tenant.kind === "managed" && tenant.name === scope.tenant)
-          ?.display_name ?? scope.tenant);
+      : (tenants.find((row) => row.kind === "managed" && row.name === tenant.name)?.display_name ??
+        tenant.name);
   const configSelectionLabel = selection.current
     ? "Current Config"
     : `Named Config ${selection.config}`;
+  const currentSelection = selection.current;
+  const selectedTenantKey = configTenantKey(tenant);
+  const selectedConfigKey = selection.current ? "current" : `named:${selection.config}`;
+
+  const configFiles = catalog?.files ?? [];
+  const paneRefs = useRef(new Map<string, HTMLDivElement>());
+
+  useEffect(() => {
+    visualModeInitialized.current = false;
+    setVisualAvailable(false);
+    setEditorMode("raw");
+  }, [agent, selectedConfigKey, selectedTenantKey]);
+
+  useEffect(() => {
+    if (!detailOpen || !file) return;
+    const frame = window.requestAnimationFrame(() =>
+      paneRefs.current.get(file)?.scrollIntoView?.({ block: "nearest" }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailOpen, file, catalog]);
 
   const loadCatalog = useCallback(
     async (kind: "initial" | "refresh" | "background" = "initial") => {
@@ -1455,7 +2285,7 @@ export function ConfigPage({
       catalogController.current = controller;
       if (kind === "initial") setLoadingCatalog(true);
       if (kind === "refresh") setRefreshing(true);
-      const query = scopeQuery(scope);
+      const query = tenantQuery(tenant);
       query.set("agent", agent);
       try {
         const data = await api.get<ConfigListData>(
@@ -1463,6 +2293,22 @@ export function ConfigPage({
           controller.signal,
         );
         if (controller.signal.aborted || catalogController.current !== controller) return null;
+        const routedSelection = selectionRef.current;
+        if (
+          !routedSelection.current &&
+          !data.configs.some((entry) => entry.name === routedSelection.config)
+        ) {
+          const fallback: ConfigSelection = { current: true };
+          selectionRef.current = fallback;
+          setSelection(fallback);
+          setDetailOpen(false);
+          changePageLocation(
+            "configs",
+            configLocation(tenant, agent, null),
+            onLocationChange,
+            true,
+          );
+        }
         setCatalog(data);
         setFile((current) =>
           current && data.files.includes(current) ? current : (data.files[0] ?? null),
@@ -1487,12 +2333,15 @@ export function ConfigPage({
         }
       }
     },
-    [agent, api, scope],
+    [agent, api, onLocationChange, tenant],
   );
 
   useEffect(() => {
     setCatalog(null);
-    setSnapshot(null);
+    fileControllers.current.clear();
+    setFileStatuses({});
+    setVisualAvailable(false);
+    setEditorMode("raw");
     setSelectionMode(false);
     setSelectedNames(new Set());
     void loadCatalog();
@@ -1505,272 +2354,92 @@ export function ConfigPage({
   const allSelectable =
     selectableNames.length > 0 && selectableNames.every((name) => selectedNames.has(name));
 
-  const editorBytes = useMemo(() => {
-    if (!snapshot) return null;
-    try {
-      if (!textEditable) return null;
-      return new TextEncoder().encode(editor);
-    } catch {
-      return null;
-    }
-  }, [editor, snapshot, textEditable]);
-  const visualDirty =
-    snapshot !== null &&
-    visualFields !== null &&
-    JSON.stringify(visualFields.map(({ path, included, value }) => ({ path, included, value }))) !==
-      JSON.stringify(
-        (snapshot.visual ?? []).map(({ path, included, value }) => ({ path, included, value })),
-      );
-  const editorDirty =
-    snapshot !== null &&
-    (editorMode === "visual"
-      ? visualDirty
-      : editorBytes !== null && encodeBase64(editorBytes) !== snapshot.content_base64);
+  const editorDirty = Object.values(fileStatuses).some((status) => status.dirty);
+  const dirtyFiles = (catalog?.files ?? []).filter((name) => fileStatuses[name]?.dirty);
 
   useEffect(() => onDirtyChange?.(editorDirty), [editorDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-  const setEditorFromSnapshot = useCallback(
-    (value: ConfigFileData, preferredMode?: "visual" | "raw") => {
-      diagnoseGeneration.current += 1;
-      if (diagnoseTimer.current !== null) {
-        window.clearTimeout(diagnoseTimer.current);
-        diagnoseTimer.current = null;
-      }
-      const bytes = decodeBase64(value.content_base64);
-      try {
-        const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        const mode = preferredMode ?? (value.visual ? "visual" : "raw");
-        setEditor(content);
-        setEditorMode(mode);
-        setVisualFields(value.visual ?? null);
-        setVisualError(value.visual_error ?? null);
-        setTextEditable(true);
-        setRawDiagnostics([]);
-        if (mode === "raw") scheduleRawDiagnose(content);
-      } catch {
-        setEditor("");
-        setEditorMode("raw");
-        setVisualFields(null);
-        setVisualError("This file is not valid UTF-8 and cannot be edited in the Console.");
-        setTextEditable(false);
-        setRawDiagnostics([]);
-      }
+  const registerFileController = useCallback(
+    (name: string, controller: ConfigFileController | null) => {
+      setFileStatuses((current) => {
+        const next = { ...current };
+        if (controller) {
+          fileControllers.current.set(name, controller);
+          next[name] = { dirty: controller.dirty, canSave: controller.canSave };
+        } else {
+          fileControllers.current.delete(name);
+          delete next[name];
+        }
+        return next;
+      });
     },
-    [scheduleRawDiagnose],
+    [],
   );
 
-  useEffect(() => {
-    if (!catalog || !file) {
-      diagnoseGeneration.current += 1;
-      setSnapshot(null);
-      setEditor("");
-      return;
-    }
-    const generation = ++fileLoadGeneration.current;
-    diagnoseGeneration.current += 1;
-    if (diagnoseTimer.current !== null) {
-      window.clearTimeout(diagnoseTimer.current);
-      diagnoseTimer.current = null;
-    }
-    setRawDiagnostics([]);
-    setSnapshot(null);
-    setEditor("");
-    setLoadingFile(true);
-    const body = {
-      ...scopeBody(scope),
-      agent,
-      current: selection.current,
-      config: selection.current ? null : selection.config,
-      file,
-    };
-    void api
-      .post<ConfigFileData>("/_aibox/api/configs/reveal", body)
-      .then((value) => {
-        if (fileLoadGeneration.current !== generation) return;
-        setEditorFromSnapshot(value, selection.current ? "raw" : undefined);
-        setSnapshot(value);
-      })
-      .catch((cause) => {
-        if (fileLoadGeneration.current !== generation) return;
-        setError(messageOf(cause));
-      })
-      .finally(() => {
-        if (fileLoadGeneration.current === generation) setLoadingFile(false);
-      });
-    return () => {
-      if (fileLoadGeneration.current === generation) fileLoadGeneration.current += 1;
-    };
-  }, [agent, api, catalog, file, scope, selection, setEditorFromSnapshot]);
+  const registerRevealRetry = useCallback((name: string, retry: (() => void) | null) => {
+    if (retry) revealRetries.current.set(name, retry);
+    else revealRetries.current.delete(name);
+  }, []);
 
-  function switchEditorMode(next: "visual" | "raw") {
-    if (next === editorMode) return;
-    if (next === "visual") {
-      if (!visualFields || visualError || rawDiagnostics.length > 0) {
-        setError(
-          visualError ??
-            rawDiagnostics[0]?.message ??
-            "Fix Raw Editor errors before switching to Visual.",
-        );
+  const handlePaneSaved = useCallback(() => {
+    void loadCatalog("background");
+  }, [loadCatalog]);
+
+  const prepareMainConfigSave = useCallback((customProvider: boolean) => {
+    if (!customProvider) return true;
+    const auth = fileControllers.current.get("auth.json");
+    if (!auth?.dirty) return true;
+    setError("Save auth.json before saving a Custom provider configuration.");
+    return false;
+  }, []);
+
+  const handleLinkedFileSaved = useCallback((name: string) => {
+    fileControllers.current.get(name)?.reload();
+  }, []);
+
+  const handleVisualAvailable = useCallback(
+    (available: boolean) => {
+      setVisualAvailable(available);
+      if (available && !visualModeInitialized.current && !currentSelection) {
+        visualModeInitialized.current = true;
+        setEditorMode("visual");
+      }
+    },
+    [currentSelection],
+  );
+
+  const requestEditorAction = useCallback(
+    (run: () => void | Promise<void>) => {
+      if (editorDirty) setPendingAction({ run });
+      else void run();
+    },
+    [editorDirty],
+  );
+
+  const switchEditorMode = useCallback(
+    (next: "visual" | "raw") => {
+      if (next === editorMode) return;
+      if (next === "visual" && (!visualAvailable || currentSelection)) {
+        setError("Visual Editor is available only for a valid Named Config main file.");
         return;
       }
-    }
-    requestEditorAction(() => {
-      if (next === "visual") {
-        diagnoseGeneration.current += 1;
-        if (diagnoseTimer.current !== null) {
-          window.clearTimeout(diagnoseTimer.current);
-          diagnoseTimer.current = null;
-        }
-      }
-      setEditorMode(next);
-      setError(null);
-    });
-  }
-
-  function updateVisualField(path: string, update: Partial<ConfigVisualField>) {
-    setVisualFields(
-      (fields) =>
-        fields?.map((field) => (field.path === path ? { ...field, ...update } : field)) ?? null,
-    );
-  }
-
-  function visualPayload(): ConfigVisualFieldInput[] | undefined {
-    if (editorMode !== "visual" || !visualFields) return undefined;
-    return visualFields.map(({ path, included, value }) => ({ path, included, value }));
-  }
-
-  async function saveFile(refreshCatalog: boolean): Promise<boolean> {
-    if (operationRunning || !snapshot || !file || editorBytes === null) return false;
-    setBusy(true);
-    setSaveFeedback("saving");
-    if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
-    try {
-      const value = await api.post<ConfigFileData>("/_aibox/api/configs/save", {
-        ...scopeBody(scope),
-        agent,
-        current: selection.current,
-        config: selection.current ? null : selection.config,
-        file,
-        revision: snapshot.revision,
-        content_base64: encodeBase64(editorBytes),
-        visual: visualPayload(),
+      requestEditorAction(() => {
+        setEditorMode(next);
+        setError(null);
       });
-      setEditorFromSnapshot(value, editorMode);
-      setSnapshot(value);
-      setError(null);
-      if (refreshCatalog) await loadCatalog("background");
-      setSaveFeedback("saved");
-      saveFeedbackTimer.current = window.setTimeout(() => {
-        setSaveFeedback("idle");
-        saveFeedbackTimer.current = null;
-      }, 4_000);
-      return true;
-    } catch (cause) {
-      setSaveFeedback("idle");
-      setError(messageOf(cause));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    if (editorDirty && saveFeedback === "saved") setSaveFeedback("idle");
-  }, [editorDirty, saveFeedback]);
-
-  useEffect(() => {
-    if (
-      !useCodeMirror ||
-      !rawEditorParent.current ||
-      editorMode !== "raw" ||
-      !snapshot ||
-      !textEditable
-    )
-      return;
-    rawEditorView.current?.destroy();
-    const language: Extension = file?.endsWith(".json") ? json() : StreamLanguage.define(toml);
-    const view = new EditorView({
-      parent: rawEditorParent.current,
-      state: EditorState.create({
-        doc: editor,
-        extensions: [
-          basicSetup,
-          language,
-          EditorView.cspNonce.of(codeMirrorCspNonce()),
-          syntaxHighlighting(configHighlightStyle),
-          lintGutter(),
-          keymap.of([...defaultKeymap, indentWithTab, ...searchKeymap]),
-          EditorView.contentAttributes.of({ "aria-label": `${file} content` }),
-          EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            const value = update.state.doc.toString();
-            setEditor(value);
-            scheduleRawDiagnose(value);
-          }),
-        ],
-      }),
-    });
-    rawEditorView.current = view;
-    return () => {
-      diagnoseGeneration.current += 1;
-      if (diagnoseTimer.current !== null) {
-        window.clearTimeout(diagnoseTimer.current);
-        diagnoseTimer.current = null;
-      }
-      view.destroy();
-      rawEditorView.current = null;
-    };
-    // The instance is recreated only when the selected file or editor mode changes.
-    // The document is synchronized below so typing never tears down the view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorMode, file, scheduleRawDiagnose, snapshot, textEditable, useCodeMirror]);
-
-  useEffect(() => {
-    const view = rawEditorView.current;
-    if (!useCodeMirror) return;
-    if (!view || editorMode !== "raw") return;
-    const current = view.state.doc.toString();
-    if (current === editor) return;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: editor },
-    });
-  }, [editor, editorMode, useCodeMirror]);
-
-  useEffect(() => {
-    const view = rawEditorView.current;
-    if (!useCodeMirror) return;
-    if (!view || editorMode !== "raw") return;
-    const diagnostics = rawDiagnostics.map((diagnostic) => {
-      const line = Math.max(1, diagnostic.line);
-      const column = Math.max(1, diagnostic.column);
-      const lineInfo = view.state.doc.line(Math.min(line, view.state.doc.lines));
-      const from = Math.min(lineInfo.from + column - 1, lineInfo.to);
-      return {
-        from,
-        to: Math.min(from + 1, lineInfo.to),
-        severity: "error" as const,
-        message: diagnostic.message,
-      };
-    });
-    view.dispatch(setDiagnostics(view.state, diagnostics));
-  }, [rawDiagnostics, editorMode, useCodeMirror]);
-
-  function restoreSnapshot() {
-    if (!snapshot) return;
-    setEditorFromSnapshot(snapshot);
-    setError(null);
-  }
-
-  function requestEditorAction(run: () => void | Promise<void>) {
-    if (editorDirty) setPendingAction({ run });
-    else void run();
-  }
+    },
+    [currentSelection, editorMode, requestEditorAction, visualAvailable],
+  );
 
   async function saveAndRunPendingAction() {
     if (!pendingAction) return;
     const action = pendingAction.run;
-    if (!(await saveFile(false))) return;
+    const names = agent === "codex" ? ["auth.json", "config.toml"] : (catalog?.files ?? []);
+    for (const name of names) {
+      const controller = fileControllers.current.get(name);
+      if (controller?.dirty && !(await controller.save())) return;
+    }
     setPendingAction(null);
     await action();
   }
@@ -1778,23 +2447,25 @@ export function ConfigPage({
   async function discardAndRunPendingAction() {
     if (!pendingAction) return;
     const action = pendingAction.run;
-    restoreSnapshot();
+    for (const controller of fileControllers.current.values()) {
+      if (controller.dirty) controller.restore();
+    }
     setPendingAction(null);
     await action();
   }
 
-  function selectScope(values: ReadonlySet<ConfigScopeKey>) {
+  function selectTenant(values: ReadonlySet<ConfigTenantKey>) {
     const next = [...values][0];
-    if (!next || next === configScopeKey(scope)) return;
+    if (!next || next === configTenantKey(tenant)) return;
     requestEditorAction(() => {
-      setScope(scopeFromConfigKey(next));
+      setTenant(tenantSelectionFromConfigKey(next));
       setSelection({ current: true });
       setSelectionMode(false);
       setSelectedNames(new Set());
       setDetailOpen(false);
       changePageLocation(
         "configs",
-        configLocation(scopeFromConfigKey(next), agent, null),
+        configLocation(tenantSelectionFromConfigKey(next), agent, null),
         onLocationChange,
       );
     });
@@ -1809,7 +2480,7 @@ export function ConfigPage({
       setSelectionMode(false);
       setSelectedNames(new Set());
       setDetailOpen(false);
-      changePageLocation("configs", configLocation(scope, next, null), onLocationChange);
+      changePageLocation("configs", configLocation(tenant, next, null), onLocationChange);
     });
   }
 
@@ -1820,7 +2491,7 @@ export function ConfigPage({
       const nextSelection: ConfigSelection = { current: false, config: name };
       changePageLocation(
         "configs",
-        configLocation(scope, agent, nextSelection, file),
+        configLocation(tenant, agent, nextSelection, file),
         onLocationChange,
       );
     });
@@ -1832,7 +2503,7 @@ export function ConfigPage({
       setDetailOpen(true);
       changePageLocation(
         "configs",
-        configLocation(scope, agent, { current: true }, file),
+        configLocation(tenant, agent, { current: true }, file),
         onLocationChange,
       );
     });
@@ -1864,7 +2535,7 @@ export function ConfigPage({
     if (operationRunning || !name) return;
     setBusy(true);
     try {
-      await api.post("/_aibox/api/configs/create", { ...scopeBody(scope), agent, config: name });
+      await api.post("/_aibox/api/configs/create", { ...tenantBody(tenant), agent, config: name });
       setNewName("");
       setCreateError(null);
       setCreateOpen(false);
@@ -1873,7 +2544,7 @@ export function ConfigPage({
       setDetailOpen(true);
       changePageLocation(
         "configs",
-        configLocation(scope, agent, { current: false, config: name }, file),
+        configLocation(tenant, agent, { current: false, config: name }, file),
         onLocationChange,
       );
     } catch (cause) {
@@ -1889,23 +2560,15 @@ export function ConfigPage({
     setApplyFeedback(null);
     let applyError: string | null = null;
     try {
-      await api.post("/_aibox/api/configs/apply", { ...scopeBody(scope), agent, config: name });
+      await api.post("/_aibox/api/configs/apply", { ...tenantBody(tenant), agent, config: name });
     } catch (cause) {
       applyError = `${messageOf(cause)} Some Current Config files may already have been updated.`;
     } finally {
       const refreshed = await loadCatalog("background");
-      if (refreshed) {
-        await Promise.allSettled(
-          refreshed.files.map((currentFile) =>
-            api.post<ConfigFileData>("/_aibox/api/configs/reveal", {
-              ...scopeBody(scope),
-              agent,
-              current: true,
-              config: null,
-              file: currentFile,
-            }),
-          ),
-        );
+      if (refreshed && currentSelection) {
+        for (const currentFile of refreshed.files) {
+          fileControllers.current.get(currentFile)?.reload();
+        }
       }
       setApplyTarget(null);
       setError(applyError);
@@ -1925,7 +2588,7 @@ export function ConfigPage({
     setBusy(true);
     try {
       await api.post("/_aibox/api/configs/delete", {
-        ...scopeBody(scope),
+        ...tenantBody(tenant),
         agent,
         configs: requestedNames,
         all: false,
@@ -1938,7 +2601,7 @@ export function ConfigPage({
       if (deletedSelected) {
         setSelection({ current: true });
         setDetailOpen(false);
-        changePageLocation("configs", configLocation(scope, agent, null), onLocationChange, true);
+        changePageLocation("configs", configLocation(tenant, agent, null), onLocationChange, true);
       }
       await loadCatalog("background");
     } catch (cause) {
@@ -1957,7 +2620,12 @@ export function ConfigPage({
         ) {
           setSelection({ current: true });
           setDetailOpen(false);
-          changePageLocation("configs", configLocation(scope, agent, null), onLocationChange, true);
+          changePageLocation(
+            "configs",
+            configLocation(tenant, agent, null),
+            onLocationChange,
+            true,
+          );
         }
       }
       setError(deletionError);
@@ -2013,6 +2681,7 @@ export function ConfigPage({
             : error
               ? () => {
                   setError(null);
+                  for (const retry of revealRetries.current.values()) retry();
                   void loadCatalog("refresh");
                 }
               : undefined
@@ -2060,11 +2729,18 @@ export function ConfigPage({
                     className={styles.sessionTenantFilter}
                     disabled={busy || loadingCatalog || refreshing}
                     label="Tenant"
-                    onCommit={selectScope}
+                    onCommit={selectTenant}
                     options={tenantOptions}
                     pluralLabel="tenants"
-                    selected={new Set([configScopeKey(scope)])}
+                    selected={new Set([configTenantKey(tenant)])}
                     triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
+                    unavailableSummary={
+                      loadingTenants
+                        ? "Loading"
+                        : managedTenantMissing
+                          ? "Not found"
+                          : "Unavailable"
+                    }
                     allowMultiple={false}
                   />
                   <SessionMultiSelect
@@ -2140,45 +2816,47 @@ export function ConfigPage({
           <div className={styles.configList} aria-busy={loadingCatalog}>
             {(loadingTenants || loadingCatalog) && !catalog && <Loading />}
             <div className={styles.configRowGroup}>
-              <div
-                className={`${styles.configRow} ${selection.current ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
-              >
-                <button
-                  ref={(element) => {
-                    if (element) configRowButtons.current.set("current", element);
-                    else configRowButtons.current.delete("current");
-                  }}
-                  type="button"
-                  className={styles.configRowMain}
-                  aria-label={
-                    selectionMode ? "Current Config cannot be selected" : "Current Config"
-                  }
-                  aria-pressed={!selectionMode && selection.current ? true : undefined}
-                  disabled={busy || loadingCatalog || (selectionMode ? true : false)}
-                  onClick={() => void openCurrent()}
+              {!managedTenantMissing && (
+                <div
+                  className={`${styles.configRow} ${selection.current ? styles.configRowInspected : ""} ${selectionMode ? `${styles.configRowSelection} ${styles.configRowProtected}` : ""}`}
                 >
-                  <CurrentConfigIcon size={16} data-icon="current-config" />
-                  <span className={styles.configRowText}>
-                    <strong>Current Config</strong>
-                  </span>
-                  {selectionMode && <span className={styles.configProtected}>Protected</span>}
-                </button>
-                {!selectionMode &&
-                  scope.scope === "host" &&
-                  agent === "codex" &&
-                  catalog?.credential_propagation_available && (
-                    <button
-                      type="button"
-                      className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
-                      title="Propagate credentials"
-                      aria-label="Propagate credentials"
-                      disabled={mutationBusy}
-                      onClick={() => void previewPropagation()}
-                    >
-                      Propagate credentials
-                    </button>
-                  )}
-              </div>
+                  <button
+                    ref={(element) => {
+                      if (element) configRowButtons.current.set("current", element);
+                      else configRowButtons.current.delete("current");
+                    }}
+                    type="button"
+                    className={styles.configRowMain}
+                    aria-label={
+                      selectionMode ? "Current Config cannot be selected" : "Current Config"
+                    }
+                    aria-pressed={!selectionMode && selection.current ? true : undefined}
+                    disabled={busy || loadingCatalog || (selectionMode ? true : false)}
+                    onClick={() => void openCurrent()}
+                  >
+                    <CurrentConfigIcon size={16} data-icon="current-config" />
+                    <span className={styles.configRowText}>
+                      <strong>Current Config</strong>
+                    </span>
+                    {selectionMode && <span className={styles.configProtected}>Protected</span>}
+                  </button>
+                  {!selectionMode &&
+                    tenant.kind === "host" &&
+                    agent === "codex" &&
+                    catalog?.credential_propagation_available && (
+                      <button
+                        type="button"
+                        className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
+                        title="Propagate credentials"
+                        aria-label="Propagate credentials"
+                        disabled={mutationBusy}
+                        onClick={() => void previewPropagation()}
+                      >
+                        Propagate credentials
+                      </button>
+                    )}
+                </div>
+              )}
               <div className={styles.catalogDivider}>
                 <span>Named Configs</span>
                 <IconButton
@@ -2199,9 +2877,9 @@ export function ConfigPage({
                 const applied = entry.name === appliedName;
                 const selectedForDeletion = selectedNames.has(entry.name);
                 const selectedForInspection = !selection.current && selection.config === entry.name;
-                const issue = configIssuePresentation(entry);
+                const issue = configIssuePresentation(entry) ?? configWarningPresentation(entry);
                 const issueDescriptionId = issue
-                  ? configIssueDescriptionId(scope, agent, entry.name)
+                  ? configIssueDescriptionId(tenant, agent, entry.name)
                   : undefined;
                 return (
                   <div
@@ -2311,7 +2989,16 @@ export function ConfigPage({
           </div>
         </aside>
         <section className={styles.configEditor}>
-          {catalog ? (
+          {loadingTenants || loadingCatalog ? (
+            <Loading />
+          ) : managedTenantMissing ? (
+            <EmptyState
+              variant="detail"
+              icon={<ManagedTenantIcon size={26} aria-hidden="true" />}
+              title="Managed Tenant not found"
+              description="The selected Managed Tenant does not exist."
+            />
+          ) : catalog ? (
             <>
               <div className={styles.configEditorHeader}>
                 <IconButton
@@ -2323,7 +3010,7 @@ export function ConfigPage({
                       setDetailOpen(false);
                       changePageLocation(
                         "configs",
-                        configLocation(scope, agent, null),
+                        configLocation(tenant, agent, null),
                         onLocationChange,
                       );
                       window.requestAnimationFrame(() => {
@@ -2337,10 +3024,10 @@ export function ConfigPage({
                 <div className={styles.configContextStack}>
                   <div className={styles.contextFacts} aria-label="Config editing context">
                     <span>
-                      <small>Scope</small>
+                      <small>Tenant</small>
                       <strong>
                         {configTenantLabel}
-                        {scope.scope === "host" && <em>Host risk</em>}
+                        {tenant.kind === "host" && <em>Host risk</em>}
                       </strong>
                     </span>
                     <span>
@@ -2353,199 +3040,111 @@ export function ConfigPage({
                     </span>
                     <span>
                       <small>File</small>
-                      <strong className={styles.contextFile}>{file ?? "—"}</strong>
+                      <strong
+                        className={styles.contextFile}
+                        title={agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                      >
+                        {agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                      </strong>
                     </span>
                   </div>
-                  {(selection.current || file === "auth.json" || editorMode === "raw") && (
+                  {(selection.current || agent === "codex" || editorMode === "raw") && (
                     <span className={styles.sensitiveContext}>
                       Native content may contain credentials and is displayed without redaction.
                     </span>
                   )}
-                  {catalog.files.length > 1 ? (
-                    <div className={styles.fileTabs} role="tablist" aria-label="Config files">
-                      {catalog.files.map((name, index) => (
-                        <button
-                          type="button"
-                          id={`config-file-tab-${name.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
-                          role="tab"
-                          aria-selected={file === name}
-                          aria-controls="config-file-panel"
-                          tabIndex={file === name ? 0 : -1}
-                          key={name}
-                          onKeyDown={(event) => {
-                            const last = catalog.files.length - 1;
-                            let next: number;
-                            if (event.key === "ArrowRight") next = index === last ? 0 : index + 1;
-                            else if (event.key === "ArrowLeft")
-                              next = index === 0 ? last : index - 1;
-                            else if (event.key === "Home") next = 0;
-                            else if (event.key === "End") next = last;
-                            else return;
-                            event.preventDefault();
-                            const nextFile = catalog.files[next];
-                            requestEditorAction(() => {
-                              setFile(nextFile);
-                              changePageLocation(
-                                "configs",
-                                configLocation(scope, agent, selection, nextFile),
-                                onLocationChange,
-                              );
-                              window.requestAnimationFrame(() =>
-                                document
-                                  .getElementById(
-                                    `config-file-tab-${nextFile.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-                                  )
-                                  ?.focus(),
-                              );
-                            });
-                          }}
-                          onClick={() =>
-                            requestEditorAction(() => {
-                              setFile(name);
-                              changePageLocation(
-                                "configs",
-                                configLocation(scope, agent, selection, name),
-                                onLocationChange,
-                              );
-                            })
-                          }
-                        >
-                          {name}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <h2 ref={detailHeadingRef} tabIndex={-1}>
-                      {file ?? "Configuration"}
-                    </h2>
-                  )}
+                  <h2 ref={detailHeadingRef} tabIndex={-1}>
+                    {agent === "codex" && !selection.current
+                      ? "Codex configuration"
+                      : (file ?? "Configuration")}
+                  </h2>
                 </div>
               </div>
-              <div
-                id="config-file-panel"
-                className={styles.configFilePanel}
-                role="tabpanel"
-                aria-labelledby={
-                  file && catalog.files.length > 1
-                    ? `config-file-tab-${file.replace(/[^a-zA-Z0-9_-]/g, "-")}`
-                    : undefined
-                }
-              >
-                {loadingFile ? (
-                  <Loading />
-                ) : snapshot ? (
-                  <>
-                    <div className={styles.editorTools}>
-                      <span>{snapshot.exists ? "Existing file" : "New file"}</span>
-                      <div className={styles.segmented} aria-label="Editor mode">
-                        {visualFields && (
-                          <button
-                            type="button"
-                            aria-pressed={editorMode === "visual"}
-                            onClick={() => switchEditorMode("visual")}
-                          >
-                            Visual
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          aria-pressed={editorMode === "raw"}
-                          onClick={() => switchEditorMode("raw")}
-                        >
-                          Raw
-                        </button>
-                      </div>
+              <div className={styles.configFilePanel}>
+                <div className={styles.editorModeBar} aria-label="Editor mode">
+                  <span>
+                    {dirtyFiles.length > 0
+                      ? `${dirtyFiles.length} unsaved file${dirtyFiles.length === 1 ? "" : "s"}`
+                      : "All files saved"}
+                  </span>
+                  <div className={styles.segmented}>
+                    {visualAvailable && !selection.current && (
                       <button
-                        className={styles.primaryButton}
                         type="button"
-                        disabled={
-                          mutationBusy ||
-                          !editorDirty ||
-                          (editorMode === "raw" && editorBytes === null)
-                        }
-                        onClick={() => void saveFile(true)}
+                        aria-pressed={editorMode === "visual"}
+                        onClick={() => switchEditorMode("visual")}
                       >
-                        {saveFeedback === "saving" ? (
-                          <LoaderCircle className="spin" size={14} aria-hidden="true" />
-                        ) : (
-                          <Save size={14} />
-                        )}
-                        <span aria-live="polite">
-                          {saveFeedback === "saving"
-                            ? "Saving…"
-                            : saveFeedback === "saved"
-                              ? "Saved"
-                              : "Save"}
-                        </span>
+                        Visual
                       </button>
-                    </div>
-                    {editorMode === "visual" && visualFields ? (
-                      <VisualConfigFields fields={visualFields} onChange={updateVisualField} />
-                    ) : textEditable ? (
-                      useCodeMirror ? (
-                        <div
-                          ref={rawEditorParent}
-                          className={styles.codeEditor}
-                          aria-label={`${file} content`}
-                        />
-                      ) : (
-                        <textarea
-                          className={`${styles.codeEditor} ${styles.codeEditorFallback}`}
-                          aria-label={`${file} content`}
-                          value={editor}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setEditor(value);
-                            scheduleRawDiagnose(value);
-                          }}
-                          spellCheck={false}
-                        />
-                      )
-                    ) : (
-                      <div className={styles.binaryConfigNotice} role="status">
-                        <AlertTriangle size={18} aria-hidden="true" />
-                        <span>
-                          This file is not valid UTF-8 and cannot be edited in the Console.
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const bytes = decodeBase64(snapshot.content_base64);
-                            const copy = new Uint8Array(bytes);
-                            const url = URL.createObjectURL(
-                              new Blob([copy.buffer], { type: "application/octet-stream" }),
-                            );
-                            const link = document.createElement("a");
-                            link.href = url;
-                            link.download = file ?? "config";
-                            link.click();
-                            URL.revokeObjectURL(url);
-                          }}
-                        >
-                          <Download size={14} /> Download raw file
-                        </button>
-                      </div>
                     )}
-                    {editorMode === "raw" && rawDiagnostics.length > 0 && (
-                      <div className={styles.editorDiagnostics} role="alert">
-                        {rawDiagnostics.map((diagnostic, index) => (
-                          <span key={`${diagnostic.line}-${diagnostic.column}-${index}`}>
-                            Line {diagnostic.line}, column {diagnostic.column}: {diagnostic.message}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className={styles.emptyPane}>
-                    <NamedConfigIcon size={22} />
-                    <span>Unable to load {file ?? "configuration"}.</span>
+                    <button
+                      type="button"
+                      aria-pressed={editorMode === "raw"}
+                      onClick={() => switchEditorMode("raw")}
+                    >
+                      Raw
+                    </button>
                   </div>
-                )}
+                  {dirtyFiles.length > 0 && (
+                    <ActionButton
+                      className={styles.primaryButton}
+                      tone="primary"
+                      disabled={mutationBusy}
+                      onClick={() => {
+                        void (async () => {
+                          setBusy(true);
+                          const names =
+                            agent === "codex" ? ["auth.json", "config.toml"] : configFiles;
+                          for (const name of names) {
+                            const controller = fileControllers.current.get(name);
+                            if (controller?.dirty && !(await controller.save())) break;
+                          }
+                          await loadCatalog("background");
+                          setBusy(false);
+                        })();
+                      }}
+                    >
+                      <Save size={14} /> Save all
+                    </ActionButton>
+                  )}
+                </div>
+                <div className={styles.configFileStack}>
+                  {configFiles.map((name) => (
+                    <div
+                      key={name}
+                      ref={(element) => {
+                        if (element) paneRefs.current.set(name, element);
+                        else paneRefs.current.delete(name);
+                      }}
+                      className={`${styles.configFileSection} ${file === name ? styles.configFileSectionFocused : ""}`}
+                    >
+                      <ConfigFilePane
+                        key={`${configTenantKey(tenant)}:${agent}:${selection.current ? "current" : `named:${selection.config}`}:${name}`}
+                        api={api}
+                        tenant={tenant}
+                        agent={agent}
+                        selection={selection}
+                        file={name}
+                        mode={selection.current ? "raw" : editorMode}
+                        operationBusy={mutationBusy}
+                        onControllerChange={registerFileController}
+                        onError={setError}
+                        onRevealRetryChange={registerRevealRetry}
+                        onSaved={handlePaneSaved}
+                        onBeforeSave={name === "config.toml" ? prepareMainConfigSave : undefined}
+                        onLinkedFileSaved={handleLinkedFileSaved}
+                        onVisualAvailable={
+                          name === (agent === "claude" ? "settings.json" : "config.toml")
+                            ? handleVisualAvailable
+                            : undefined
+                        }
+                        onRequestRaw={() => setEditorMode("raw")}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             </>
-          ) : loadingTenants || loadingCatalog ? (
-            <Loading />
           ) : (
             <div className={styles.emptyPane} role="status">
               <AlertTriangle size={22} aria-hidden="true" />
@@ -2563,7 +3162,13 @@ export function ConfigPage({
         >
           <section>
             <h2 id={unsavedTitleId}>Unsaved changes</h2>
-            <p>Save changes to {file ?? "this file"} before continuing?</p>
+            <p>
+              Save changes to{" "}
+              {dirtyFiles.length > 1
+                ? `${dirtyFiles.length} files`
+                : (dirtyFiles[0] ?? "this file")}{" "}
+              before continuing?
+            </p>
             <div className={styles.dialogActions}>
               <button type="button" onClick={() => setPendingAction(null)} disabled={busy}>
                 Cancel
@@ -2575,14 +3180,14 @@ export function ConfigPage({
               >
                 Discard and continue
               </button>
-              <button
+              <ActionButton
                 className={styles.primaryButton}
-                type="button"
+                tone="primary"
                 onClick={() => void saveAndRunPendingAction()}
-                disabled={mutationBusy || editorBytes === null}
+                disabled={mutationBusy || dirtyFiles.some((name) => !fileStatuses[name]?.canSave)}
               >
                 Save and continue
-              </button>
+              </ActionButton>
             </div>
           </section>
         </Dialog>
@@ -2603,7 +3208,7 @@ export function ConfigPage({
             <h2 id={createTitleId}>Create Named Config</h2>
             <label>
               Name
-              <input
+              <TextInput
                 autoFocus
                 aria-label="Named Config name"
                 value={newName}
@@ -2629,9 +3234,10 @@ export function ConfigPage({
               <button type="button" onClick={() => setCreateOpen(false)} disabled={busy}>
                 Cancel
               </button>
-              <button
+              <ActionButton
                 className={styles.primaryButton}
-                type="submit"
+                htmlType="submit"
+                tone="primary"
                 disabled={!createNameValid || mutationBusy}
               >
                 {busy ? (
@@ -2640,7 +3246,7 @@ export function ConfigPage({
                   <Plus size={14} />
                 )}
                 {busy ? "Creating…" : "Create"}
-              </button>
+              </ActionButton>
             </div>
           </form>
         </Dialog>
@@ -2667,7 +3273,7 @@ export function ConfigPage({
               </p>
             </div>
           }
-          confirmation={scope.scope === "host" ? "Host Tenant" : undefined}
+          confirmation={tenant.kind === "host" ? "Host Tenant" : undefined}
           confirmLabel="Apply to Current Config"
           variant="primary"
           busy={mutationBusy}
@@ -2792,9 +3398,9 @@ export function ConfigPage({
                 Close
               </button>
               {preview && (
-                <button
+                <ActionButton
                   className={styles.primaryButton}
-                  type="button"
+                  tone="primary"
                   disabled={mutationBusy || preview.preview.updates === 0}
                   onClick={() => void executePropagation()}
                 >
@@ -2802,7 +3408,7 @@ export function ConfigPage({
                   {busy
                     ? "Propagating…"
                     : `Propagate ${preview.preview.updates} credential update${preview.preview.updates === 1 ? "" : "s"}`}
-                </button>
+                </ActionButton>
               )}
             </div>
           </section>
@@ -2835,13 +3441,13 @@ function ConfigDriftBadge({ status }: { status: ApplicationStatus }) {
   );
 }
 
-type SessionScopeKey = "host" | `managed:${string}`;
+type SessionTenantKey = "host" | `managed:${string}`;
 
 interface SessionSource {
   key: string;
-  scope: Scope;
-  scopeKey: SessionScopeKey;
-  scopeLabel: string;
+  tenant: TenantSelection;
+  tenantKey: SessionTenantKey;
+  tenantLabel: string;
   agent: Agent;
   agentLabel: string;
 }
@@ -2996,7 +3602,7 @@ function SessionEvidenceDisclosure({
     if (evidence || loading || hidden || !snapshot) return;
     setLoading(true);
     setError(null);
-    const query = scopeQuery(session.source.scope);
+    const query = tenantQuery(session.source.tenant);
     query.set("agent", session.source.agent);
     query.set("id", session.id);
     query.set("entry", entryId);
@@ -3214,49 +3820,49 @@ function agentLabel(agent: Agent): string {
   return SESSION_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
 }
 
-function scopeFromSessionKey(key: SessionScopeKey): Scope {
-  return key === "host" ? { scope: "host" } : { scope: "managed", tenant: key.slice(8) };
+function tenantSelectionFromSessionKey(key: SessionTenantKey): TenantSelection {
+  return key === "host" ? { kind: "host" } : { kind: "managed", name: key.slice(8) };
 }
 
-function sessionScopeLabel(key: SessionScopeKey): string {
+function sessionTenantLabel(key: SessionTenantKey): string {
   return key === "host" ? "Host Tenant" : `Tenant ${key.slice(8)}`;
 }
 
-function sessionListScopeLabel(key: SessionScopeKey): string {
+function sessionListTenantLabel(key: SessionTenantKey): string {
   return key === "host" ? "Host Tenant" : key.slice(8);
 }
 
 function visibleSessionSource(source: SessionSource): string {
-  return `${source.scopeLabel} ${source.agentLabel}`;
+  return `${source.tenantLabel} ${source.agentLabel}`;
 }
 
 function visibleSessionListSource(source: SessionSource): string {
-  return `${sessionListScopeLabel(source.scopeKey)} ${source.agentLabel}`;
+  return `${sessionListTenantLabel(source.tenantKey)} ${source.agentLabel}`;
 }
 
 function accessibleSessionSource(source: SessionSource): string {
-  return `${source.scopeLabel} · ${source.agentLabel}`;
+  return `${source.tenantLabel} · ${source.agentLabel}`;
 }
 
-function sessionSource(scopeKey: SessionScopeKey, agent: Agent): SessionSource {
+function sessionSource(tenantKey: SessionTenantKey, agent: Agent): SessionSource {
   return {
-    key: JSON.stringify([scopeKey, agent]),
-    scope: scopeFromSessionKey(scopeKey),
-    scopeKey,
-    scopeLabel: sessionScopeLabel(scopeKey),
+    key: JSON.stringify([tenantKey, agent]),
+    tenant: tenantSelectionFromSessionKey(tenantKey),
+    tenantKey,
+    tenantLabel: sessionTenantLabel(tenantKey),
     agent,
     agentLabel: agentLabel(agent),
   };
 }
 
 interface SessionRouteSelection {
-  scopeKey: SessionScopeKey;
+  tenantKey: SessionTenantKey;
   agent: Agent;
   id: string;
 }
 
 interface SessionRouteState {
-  scopes: Set<SessionScopeKey>;
+  tenants: Set<SessionTenantKey>;
   agents: Set<Agent>;
   selection: SessionRouteSelection | null;
   tab: SessionTab;
@@ -3264,44 +3870,44 @@ interface SessionRouteState {
 
 function readSessionRoute(): SessionRouteState {
   const query = pageSearch();
-  const scopes = new Set(
+  const tenants = new Set(
     query
-      .getAll("scope")
+      .getAll("tenant")
       .map(tenantKeyFromParam)
-      .filter((value): value is SessionScopeKey => value !== null),
+      .filter((value): value is SessionTenantKey => value !== null),
   );
   const agents = new Set(
     query
       .getAll("agent")
       .filter((value): value is Agent => value === "codex" || value === "claude"),
   );
-  if (scopes.size === 0) scopes.add("managed:default");
+  if (tenants.size === 0) tenants.add("managed:default");
   if (agents.size === 0) agents.add("codex");
 
-  const selectedScope = tenantKeyFromParam(query.get("session_scope"));
+  const selectedTenant = tenantKeyFromParam(query.get("session_tenant"));
   const selectedAgent = query.get("session_agent");
   const id = query.get("session");
   const selection: SessionRouteSelection | null =
-    selectedScope && (selectedAgent === "codex" || selectedAgent === "claude") && id
-      ? { scopeKey: selectedScope, agent: selectedAgent, id }
+    selectedTenant && (selectedAgent === "codex" || selectedAgent === "claude") && id
+      ? { tenantKey: selectedTenant, agent: selectedAgent, id }
       : null;
   const tab = query.get("tab") === "details" ? "details" : "conversation";
-  return { scopes, agents, selection, tab };
+  return { tenants, agents, selection, tab };
 }
 
 function sessionLocation(
-  scopes: ReadonlySet<SessionScopeKey>,
+  tenants: ReadonlySet<SessionTenantKey>,
   agents: ReadonlySet<Agent>,
   selection?: SessionRouteSelection | null,
   tab: SessionTab = "conversation",
 ): URLSearchParams {
   const query = new URLSearchParams();
-  for (const scope of [...scopes].sort()) query.append("scope", scope);
+  for (const tenant of [...tenants].sort()) query.append("tenant", tenant);
   for (const agent of SESSION_AGENT_OPTIONS.map((option) => option.value)) {
     if (agents.has(agent)) query.append("agent", agent);
   }
   if (selection) {
-    query.set("session_scope", selection.scopeKey);
+    query.set("session_tenant", selection.tenantKey);
     query.set("session_agent", selection.agent);
     query.set("session", selection.id);
     if (tab === "details") query.set("tab", tab);
@@ -3312,7 +3918,7 @@ function sessionLocation(
 function sourcedSession(source: SessionSource, row: SessionRow): SourcedSession {
   return {
     ...row,
-    key: JSON.stringify([source.scopeKey, source.agent, row.id]),
+    key: JSON.stringify([source.tenantKey, source.agent, row.id]),
     source,
   };
 }
@@ -3320,7 +3926,7 @@ function sourcedSession(source: SessionSource, row: SessionRow): SourcedSession 
 function compareSessions(left: SourcedSession, right: SourcedSession): number {
   return (
     right.start_ts.localeCompare(left.start_ts) ||
-    left.source.scopeLabel.localeCompare(right.source.scopeLabel) ||
+    left.source.tenantLabel.localeCompare(right.source.tenantLabel) ||
     left.source.agentLabel.localeCompare(right.source.agentLabel) ||
     left.id.localeCompare(right.id)
   );
@@ -3346,6 +3952,7 @@ function SessionMultiSelect<T extends string>({
   pluralLabel,
   selected,
   triggerIcon,
+  unavailableSummary,
 }: {
   allowMultiple?: boolean;
   className?: string;
@@ -3356,6 +3963,7 @@ function SessionMultiSelect<T extends string>({
   pluralLabel: string;
   selected: ReadonlySet<T>;
   triggerIcon: ReactNode;
+  unavailableSummary?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"single" | "multiple" | "choose-one">("single");
@@ -3367,7 +3975,10 @@ function SessionMultiSelect<T extends string>({
   const selectedOption = options.find((option) => selected.has(option.value));
   const summary =
     selected.size === 1
-      ? (selectedOption?.summaryLabel ?? selectedOption?.label ?? "1 selected")
+      ? (selectedOption?.summaryLabel ??
+        selectedOption?.label ??
+        unavailableSummary ??
+        "1 selected")
       : `${selected.size} ${pluralLabel}`;
   const draftChanged =
     draft.size !== selected.size || [...draft].some((value) => !selected.has(value));
@@ -3616,8 +4227,8 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     error: tenantError,
     retry: retryTenants,
   } = useTenants(api);
-  const [selectedScopes, setSelectedScopes] = useState<Set<SessionScopeKey>>(
-    () => initialRoute.scopes,
+  const [selectedTenants, setSelectedTenants] = useState<Set<SessionTenantKey>>(
+    () => initialRoute.tenants,
   );
   const [selectedAgents, setSelectedAgents] = useState<Set<Agent>>(() => initialRoute.agents);
   const [routeSelection, setRouteSelection] = useState<SessionRouteSelection | null>(
@@ -3660,17 +4271,18 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     useFailureNotifications();
 
   function updateSessionTab(next: SessionTab) {
+    if (next === sessionTab) return;
     setSessionTab(next);
     const selection = currentSession
       ? {
-          scopeKey: currentSession.source.scopeKey,
+          tenantKey: currentSession.source.tenantKey,
           agent: currentSession.source.agent,
           id: currentSession.id,
         }
       : routeSelection;
     changePageLocation(
       "sessions",
-      sessionLocation(selectedScopes, selectedAgents, selection, next),
+      sessionLocation(selectedTenants, selectedAgents, selection, next),
       onLocationChange,
     );
   }
@@ -3733,7 +4345,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     return () => window.cancelAnimationFrame(frame);
   }, [currentSessionKey]);
 
-  const tenantOptions = useMemo<SessionFilterOption<SessionScopeKey>[]>(() => {
+  const tenantOptions = useMemo<SessionFilterOption<SessionTenantKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
     const managed = tenants
       .filter((tenant): tenant is TenantRow & { kind: "managed"; name: string } =>
@@ -3768,15 +4380,22 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     [],
   );
 
+  const selectedSessionTenant = selectedTenants.size === 1 ? [...selectedTenants][0] : null;
+  const sessionTenantMissing =
+    !loadingTenants &&
+    !tenantError &&
+    selectedSessionTenant?.startsWith("managed:") === true &&
+    !tenantOptions.some((option) => option.value === selectedSessionTenant);
+
   const sources = useMemo(() => {
-    const scopeKeys = [...selectedScopes].sort();
+    const tenantKeys = [...selectedTenants].sort();
     const agents = SESSION_AGENT_OPTIONS.map((option) => option.value).filter((agent) =>
       selectedAgents.has(agent),
     );
-    return scopeKeys.flatMap((scopeKey) =>
-      agents.map((selectedAgent) => sessionSource(scopeKey, selectedAgent)),
+    return tenantKeys.flatMap((tenantKey) =>
+      agents.map((selectedAgent) => sessionSource(tenantKey, selectedAgent)),
     );
-  }, [selectedAgents, selectedScopes]);
+  }, [selectedAgents, selectedTenants]);
 
   const abortDetailStream = useCallback(() => {
     streamController.current?.abort();
@@ -3816,14 +4435,14 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       setLoadingDetail(true);
       if (updateLocation) {
         const nextSelection = {
-          scopeKey: row.source.scopeKey,
+          tenantKey: row.source.tenantKey,
           agent: row.source.agent,
           id: row.id,
         };
         setRouteSelection(nextSelection);
         changePageLocation(
           "sessions",
-          sessionLocation(selectedScopes, selectedAgents, nextSelection, sessionTab),
+          sessionLocation(selectedTenants, selectedAgents, nextSelection, sessionTab),
           onLocationChange,
         );
       }
@@ -3831,7 +4450,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       let nextMeta: SessionDetailMeta | null = null;
       let nextStats: SessionDetailStats | null = null;
       let nextWarnings: string[] = [];
-      const query = scopeQuery(row.source.scope);
+      const query = tenantQuery(row.source.tenant);
       query.set("agent", row.source.agent);
       query.set("id", row.id);
       try {
@@ -3887,7 +4506,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
         }
       }
     },
-    [abortDetailStream, api, onLocationChange, selectedAgents, selectedScopes, sessionTab],
+    [abortDetailStream, api, onLocationChange, selectedAgents, selectedTenants, sessionTab],
   );
 
   useEffect(() => {
@@ -3896,7 +4515,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     const route = readSessionRoute();
     clearInspection();
     setData(null);
-    setSelectedScopes(route.scopes);
+    setSelectedTenants(route.tenants);
     setSelectedAgents(route.agents);
     setRouteSelection(route.selection);
     setSessionTab(route.tab);
@@ -3917,7 +4536,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
       try {
         const results = await Promise.allSettled(
           sources.map(async (source) => {
-            const query = scopeQuery(source.scope);
+            const query = tenantQuery(source.tenant);
             query.set("agent", source.agent);
             const result = await api.get<SessionListData>(
               `/_aibox/api/sessions?${query}`,
@@ -4021,7 +4640,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     if (!routeSelection || !data || loadingList) return;
     const row = data.sessions.find(
       (candidate) =>
-        candidate.source.scopeKey === routeSelection.scopeKey &&
+        candidate.source.tenantKey === routeSelection.tenantKey &&
         candidate.source.agent === routeSelection.agent &&
         candidate.id === routeSelection.id,
     );
@@ -4033,7 +4652,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     clearInspection();
     changePageLocation(
       "sessions",
-      sessionLocation(selectedScopes, selectedAgents),
+      sessionLocation(selectedTenants, selectedAgents),
       onLocationChange,
       true,
     );
@@ -4045,7 +4664,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     openSession,
     routeSelection,
     selectedAgents,
-    selectedScopes,
+    selectedTenants,
   ]);
 
   useEffect(() => {
@@ -4087,12 +4706,12 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     setSelectedKeys(new Set());
   }
 
-  function commitScopes(values: ReadonlySet<SessionScopeKey>) {
+  function commitTenants(values: ReadonlySet<SessionTenantKey>) {
     const next = new Set(values);
     clearInspection();
     setData(null);
     setRouteSelection(null);
-    setSelectedScopes(next);
+    setSelectedTenants(next);
     changePageLocation("sessions", sessionLocation(next, selectedAgents), onLocationChange);
   }
 
@@ -4102,7 +4721,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     setData(null);
     setRouteSelection(null);
     setSelectedAgents(next);
-    changePageLocation("sessions", sessionLocation(selectedScopes, next), onLocationChange);
+    changePageLocation("sessions", sessionLocation(selectedTenants, next), onLocationChange);
   }
 
   function closeSessionInspection() {
@@ -4111,7 +4730,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
     setRouteSelection(null);
     changePageLocation(
       "sessions",
-      sessionLocation(selectedScopes, selectedAgents),
+      sessionLocation(selectedTenants, selectedAgents),
       onLocationChange,
     );
     window.requestAnimationFrame(() => {
@@ -4121,7 +4740,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
 
   async function requestSessionDeletion(source: SessionSource, ids: string[]) {
     return api.post<{ deleted: number }>("/_aibox/api/sessions/delete", {
-      ...scopeBody(source.scope),
+      ...tenantBody(source.tenant),
       agent: source.agent,
       ids,
       all: false,
@@ -4345,11 +4964,18 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                     className={styles.sessionTenantFilter}
                     disabled={loadingTenants || deletionBusy}
                     label="Tenant"
-                    onCommit={commitScopes}
+                    onCommit={commitTenants}
                     options={tenantOptions}
                     pluralLabel="tenants"
-                    selected={selectedScopes}
+                    selected={selectedTenants}
                     triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
+                    unavailableSummary={
+                      loadingTenants
+                        ? "Loading"
+                        : sessionTenantMissing
+                          ? "Not found"
+                          : "Unavailable"
+                    }
                   />
                   <SessionMultiSelect
                     className={styles.sessionAgentFilter}
@@ -4531,7 +5157,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                     <time dateTime={currentSession.start_ts}>
                       {formatTimestamp(currentSession.start_ts)}
                     </time>{" "}
-                    · {duration(detailStats?.observed_duration_ms)} ·{" "}
+                    · {compactDuration(detailStats?.observed_duration_ms)} ·{" "}
                     {messageCountLabel(
                       detailStats?.message_count ?? currentSession.message_count ?? 0,
                     )}{" "}
@@ -4602,7 +5228,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                       <dl className={styles.sessionDetailsGrid}>
                         <div>
                           <dt>Tenant</dt>
-                          <dd>{sessionListScopeLabel(currentSession.source.scopeKey)}</dd>
+                          <dd>{sessionListTenantLabel(currentSession.source.tenantKey)}</dd>
                         </div>
                         <div>
                           <dt>Coding Agent</dt>
@@ -4657,7 +5283,7 @@ export function SessionPage({ api, operation, locationVersion = 0, onLocationCha
                         {detailStats && (
                           <div>
                             <dt>Duration</dt>
-                            <dd>{duration(detailStats.observed_duration_ms)}</dd>
+                            <dd>{compactDuration(detailStats.observed_duration_ms)}</dd>
                           </div>
                         )}
                         {detailStats && (

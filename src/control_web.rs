@@ -2,7 +2,7 @@
 
 use crate::agent::AgentKind;
 use crate::component::{self, ComponentKind, ComponentSpec, ComponentStatus};
-use crate::config_model::VisualFieldInput;
+use crate::config_model::{VisualFieldInput, VisualProviderInput};
 use crate::request_assessment::effective_assessment;
 use crate::request_store::AssessmentLevel;
 use crate::service::{ConsoleCspNonce, PendingAuthPropagation, ServiceState};
@@ -79,12 +79,14 @@ async fn index(Extension(csp_nonce): Extension<ConsoleCspNonce>) -> Response<Bod
 struct BootstrapResponse {
     version: &'static str,
     csrf_token: String,
+    listen: String,
 }
 
 async fn bootstrap(State(state): State<ServiceState>) -> Json<BootstrapResponse> {
     Json(BootstrapResponse {
         version: env!("CARGO_PKG_VERSION"),
         csrf_token: state.csrf.to_string(),
+        listen: state.listen.to_string(),
     })
 }
 
@@ -446,21 +448,15 @@ async fn delete_tenants(
     .await
 }
 
-#[derive(Clone, Deserialize)]
-struct Scope {
-    #[serde(default = "managed_scope")]
-    scope: String,
-    tenant: Option<String>,
-}
-
-fn managed_scope() -> String {
-    "managed".to_string()
+fn default_tenant_selection() -> String {
+    "managed:default".to_string()
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ComponentQuery {
-    #[serde(flatten)]
-    scope: Scope,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
 }
 
 #[derive(Serialize)]
@@ -476,7 +472,7 @@ async fn list_components(
     State(state): State<ServiceState>,
     Query(query): Query<ComponentQuery>,
 ) -> Response<Body> {
-    let selected = match resolve_tenant(&state, &query.scope) {
+    let selected = match resolve_tenant(&state, &query.tenant) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -506,9 +502,10 @@ fn component_rows(selected: &Tenant) -> Result<Vec<ComponentRow>> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ComponentMutation {
-    #[serde(flatten)]
-    scope: Scope,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
     component: String,
     version: Option<String>,
 }
@@ -517,7 +514,7 @@ async fn install_component(
     State(state): State<ServiceState>,
     Json(request): Json<ComponentMutation>,
 ) -> Response<Body> {
-    let selected = match resolve_tenant(&state, &request.scope) {
+    let selected = match resolve_tenant(&state, &request.tenant) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -561,7 +558,7 @@ async fn remove_component(
     State(state): State<ServiceState>,
     Json(request): Json<ComponentMutation>,
 ) -> Response<Body> {
-    let selected = match resolve_tenant(&state, &request.scope) {
+    let selected = match resolve_tenant(&state, &request.tenant) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -582,9 +579,10 @@ async fn remove_component(
 }
 
 #[derive(Deserialize)]
-struct AgentScopeQuery {
-    #[serde(flatten)]
-    scope: Scope,
+#[serde(deny_unknown_fields)]
+struct AgentTenantQuery {
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
     #[serde(default = "default_agent")]
     agent: AgentKind,
 }
@@ -604,17 +602,33 @@ struct ConfigListResponse {
 
 async fn list_configs(
     State(state): State<ServiceState>,
-    Query(query): Query<AgentScopeQuery>,
+    Query(query): Query<AgentTenantQuery>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &query.scope, query.agent) {
+    let selected = match resolve_agent(&state, &query.tenant, query.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
-    let check_credential_propagation =
-        query.scope.scope == "host" && query.agent == AgentKind::Codex;
+    let check_credential_propagation = query.tenant == "host" && query.agent == AgentKind::Codex;
     let root = state.root.clone();
     let host_home = state.host_home.clone();
     blocking(move || {
+        let missing_managed_tenant = match &selected.tenant {
+            Tenant::Managed(tenant) => !tenant.exists()?,
+            Tenant::Host { .. } => false,
+        };
+        if missing_managed_tenant {
+            return Ok(ConfigListResponse {
+                named_configs: Vec::new(),
+                configs: Vec::new(),
+                files: selected.agent.config_files(),
+                application: config::ApplicationStatus {
+                    last_application: None,
+                    drift: config::ConfigDrift::Untracked,
+                    detail: None,
+                },
+                credential_propagation_available: false,
+            });
+        }
         let configs = config::inspect_named_configs(&selected)?;
         let credential_propagation_available = check_credential_propagation
             && config::credential_propagation_source_available(&root, &host_home)?;
@@ -690,9 +704,10 @@ async fn execute_auth_propagation(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigMutationBase {
-    #[serde(flatten)]
-    scope: Scope,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
     #[serde(default = "default_agent")]
     agent: AgentKind,
     config: String,
@@ -702,7 +717,7 @@ async fn create_config(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigMutationBase>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &request.scope, request.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -714,9 +729,10 @@ async fn create_config(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigFileRequest {
-    #[serde(flatten)]
-    scope: Scope,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
     #[serde(default = "default_agent")]
     agent: AgentKind,
     #[serde(default)]
@@ -734,14 +750,38 @@ struct ConfigFileResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     visual: Option<Vec<config::VisualFieldState>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    visual_provider: Option<crate::config_model::VisualProviderState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     visual_error: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<ConfigAuthResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linked_file: Option<LinkedConfigFileResponse>,
+}
+
+#[derive(Serialize)]
+struct LinkedConfigFileResponse {
+    file: String,
+    exists: bool,
+    revision: String,
+    content_base64: String,
+}
+
+#[derive(Serialize)]
+struct ConfigAuthResponse {
+    mode: &'static str,
+    api_key: Option<String>,
+    extra_fields: bool,
+    warnings: Vec<String>,
 }
 
 async fn reveal_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigFileRequest>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &request.scope, request.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -760,46 +800,100 @@ async fn reveal_config_file(
                     request.config.as_deref().unwrap_or_default(),
                     text,
                 ) {
-                    Ok(fields) => ConfigVisualResult {
-                        fields: Some(fields),
+                    Ok(state) => ConfigVisualResult {
+                        fields: Some(state.fields),
+                        provider: state.provider,
                         error: None,
                     },
                     Err(error) => ConfigVisualResult {
                         fields: None,
+                        provider: None,
                         error: Some(format!("{error:#}")),
                     },
                 },
                 None => ConfigVisualResult {
                     fields: None,
+                    provider: None,
                     error: Some("configuration is not valid UTF-8".to_string()),
                 },
             }
         } else {
             ConfigVisualResult {
                 fields: None,
+                provider: None,
                 error: None,
             }
         };
-        Ok(config_file_response(snapshot, visual))
+        let warnings = if request.current {
+            Vec::new()
+        } else {
+            config::config_file_warnings(
+                &selected,
+                request.config.as_deref().unwrap_or_default(),
+                &request.file,
+                &snapshot.content,
+            )
+            .unwrap_or_default()
+        };
+        let auth = if !request.current && selected.agent.tag() == "codex" {
+            let auth_file = selected.agent.native_auth_file().expect("Codex auth file");
+            let auth_snapshot = if request.file == auth_file {
+                snapshot.clone()
+            } else {
+                config::read_config_file(&selected, request.config.as_deref(), false, auth_file)?
+            };
+            if !auth_snapshot.exists {
+                None
+            } else {
+                let text = std::str::from_utf8(&auth_snapshot.content)
+                    .context("Named Config auth.json is not valid UTF-8")?;
+                config::inspect_named_codex_auth(
+                    &selected,
+                    request.config.as_deref().unwrap_or_default(),
+                    text,
+                )
+                .ok()
+                .map(|inspected| ConfigAuthResponse {
+                    mode: inspected.mode,
+                    api_key: inspected.api_key,
+                    extra_fields: inspected.extra_fields,
+                    warnings: inspected.warnings,
+                })
+            }
+        } else {
+            None
+        };
+        Ok(config_file_response(snapshot, visual, warnings, auth))
     })
     .await
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SaveConfigFileRequest {
-    #[serde(flatten)]
-    selection: ConfigFileRequest,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
+    #[serde(default = "default_agent")]
+    agent: AgentKind,
+    #[serde(default)]
+    current: bool,
+    config: Option<String>,
+    file: String,
     revision: String,
     content_base64: String,
     #[serde(default)]
     visual: Option<Vec<VisualFieldInput>>,
+    #[serde(default)]
+    visual_provider: Option<VisualProviderInput>,
+    #[serde(default)]
+    visual_auth: Option<crate::config_model::VisualAuthInput>,
 }
 
 async fn save_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<SaveConfigFileRequest>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &request.selection.scope, request.selection.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -811,42 +905,87 @@ async fn save_config_file(
             }
         };
     mutate_blocking(state, move || {
-        let snapshot = config::save_config_file(
+        let saved = config::save_config_file_with_linked(
             &selected,
-            request.selection.config.as_deref(),
-            request.selection.current,
-            &request.selection.file,
+            request.config.as_deref(),
+            request.current,
+            &request.file,
             &request.revision,
             &content,
+            request.visual_provider.as_ref(),
             request.visual.as_deref(),
+            request.visual_auth.as_ref(),
         )?;
-        let visual = if !request.selection.current
-            && request.selection.file == selected.agent.main_config_file()
-        {
+        let snapshot = saved.snapshot;
+        let visual = if !request.current && request.file == selected.agent.main_config_file() {
             let text = std::str::from_utf8(&snapshot.content).ok();
             text.and_then(|text| {
                 config::visual_field_states(
                     &selected,
-                    request.selection.config.as_deref().unwrap_or_default(),
+                    request.config.as_deref().unwrap_or_default(),
                     text,
                 )
                 .ok()
             })
-            .map(|fields| ConfigVisualResult {
-                fields: Some(fields),
+            .map(|state| ConfigVisualResult {
+                fields: Some(state.fields),
+                provider: state.provider,
                 error: None,
             })
             .unwrap_or(ConfigVisualResult {
                 fields: None,
+                provider: None,
                 error: None,
             })
         } else {
             ConfigVisualResult {
                 fields: None,
+                provider: None,
                 error: None,
             }
         };
-        Ok(config_file_response(snapshot, visual))
+        let warnings = if request.current {
+            Vec::new()
+        } else {
+            config::config_file_warnings(
+                &selected,
+                request.config.as_deref().unwrap_or_default(),
+                &request.file,
+                &snapshot.content,
+            )
+            .unwrap_or_default()
+        };
+        let auth = if !request.current && selected.agent.tag() == "codex" {
+            let auth_file = selected.agent.native_auth_file().expect("Codex auth file");
+            let auth_snapshot = if request.file == auth_file {
+                snapshot.clone()
+            } else {
+                config::read_config_file(&selected, request.config.as_deref(), false, auth_file)?
+            };
+            if !auth_snapshot.exists {
+                None
+            } else {
+                let text = std::str::from_utf8(&auth_snapshot.content)
+                    .context("Named Config auth.json is not valid UTF-8")?;
+                config::inspect_named_codex_auth(
+                    &selected,
+                    request.config.as_deref().unwrap_or_default(),
+                    text,
+                )
+                .ok()
+                .map(|inspected| ConfigAuthResponse {
+                    mode: inspected.mode,
+                    api_key: inspected.api_key,
+                    extra_fields: inspected.extra_fields,
+                    warnings: inspected.warnings,
+                })
+            }
+        } else {
+            None
+        };
+        let mut response = config_file_response(snapshot, visual, warnings, auth);
+        response.linked_file = saved.linked.map(linked_config_file_response);
+        Ok(response)
     })
     .await
 }
@@ -854,13 +993,21 @@ async fn save_config_file(
 #[derive(Default)]
 struct ConfigVisualResult {
     fields: Option<Vec<config::VisualFieldState>>,
+    provider: Option<crate::config_model::VisualProviderState>,
     error: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DiagnoseConfigRequest {
-    #[serde(flatten)]
-    selection: ConfigFileRequest,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
+    #[serde(default = "default_agent")]
+    agent: AgentKind,
+    #[serde(default)]
+    current: bool,
+    config: Option<String>,
+    file: String,
     content_base64: String,
 }
 
@@ -904,7 +1051,7 @@ async fn diagnose_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<DiagnoseConfigRequest>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &request.selection.scope, request.selection.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -918,15 +1065,15 @@ async fn diagnose_config_file(
     blocking(move || {
         let _ = config::read_config_file(
             &selected,
-            request.selection.config.as_deref(),
-            request.selection.current,
-            &request.selection.file,
+            request.config.as_deref(),
+            request.current,
+            &request.file,
         )?;
         let mut diagnostics = Vec::new();
         match std::str::from_utf8(&content) {
             Ok(text) => {
-                let result = if request.selection.current {
-                    if request.selection.file == selected.agent.main_config_file() {
+                let result = if request.current {
+                    if request.file == selected.agent.main_config_file() {
                         selected.agent.parse_main_config(text).map(|_| ())
                     } else {
                         serde_json::from_str::<Value>(text)
@@ -936,7 +1083,7 @@ async fn diagnose_config_file(
                 } else {
                     crate::config_model::NamedConfigDefinition::validate_file(
                         selected.agent,
-                        &request.selection.file,
+                        &request.file,
                         text,
                     )
                 };
@@ -966,7 +1113,7 @@ async fn apply_config(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigMutationBase>,
 ) -> Response<Body> {
-    let selected = match resolve_agent(&state, &request.scope, request.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -978,9 +1125,10 @@ async fn apply_config(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeleteConfigsRequest {
-    #[serde(flatten)]
-    scope: Scope,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
     #[serde(default = "default_agent")]
     agent: AgentKind,
     #[serde(default)]
@@ -997,7 +1145,7 @@ async fn delete_configs(
     if request.all && request.confirmation != "delete all configs" {
         return api_error(StatusCode::BAD_REQUEST, "confirmation does not match");
     }
-    let selected = match resolve_agent(&state, &request.scope, request.agent) {
+    let selected = match resolve_agent(&state, &request.tenant, request.agent) {
         Ok(selected) => selected,
         Err(error) => return result_error(error),
     };
@@ -1010,9 +1158,9 @@ async fn delete_configs(
 
 async fn list_sessions(
     State(state): State<ServiceState>,
-    Query(query): Query<AgentScopeQuery>,
+    Query(query): Query<AgentTenantQuery>,
 ) -> Response<Body> {
-    let tenant = match resolve_tenant(&state, &query.scope) {
+    let tenant = match resolve_tenant(&state, &query.tenant) {
         Ok(tenant) => tenant,
         Err(error) => return result_error(error),
     };
@@ -1029,9 +1177,9 @@ async fn list_sessions(
 
 async fn session_summary(
     State(state): State<ServiceState>,
-    Query(query): Query<AgentScopeQuery>,
+    Query(query): Query<AgentTenantQuery>,
 ) -> Response<Body> {
-    let tenant = match resolve_tenant(&state, &query.scope) {
+    let tenant = match resolve_tenant(&state, &query.tenant) {
         Ok(tenant) => tenant,
         Err(error) => return result_error(error),
     };
@@ -1047,9 +1195,12 @@ async fn session_summary(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SessionDetailQuery {
-    #[serde(flatten)]
-    selection: AgentScopeQuery,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
+    #[serde(default = "default_agent")]
+    agent: AgentKind,
     id: String,
 }
 
@@ -1057,7 +1208,7 @@ async fn session_detail(
     State(state): State<ServiceState>,
     Query(query): Query<SessionDetailQuery>,
 ) -> Response<Body> {
-    let tenant = match resolve_tenant(&state, &query.selection.scope) {
+    let tenant = match resolve_tenant(&state, &query.tenant) {
         Ok(tenant) => tenant,
         Err(error) => return result_error(error),
     };
@@ -1065,7 +1216,7 @@ async fn session_detail(
         return result_error(error);
     }
     let home = tenant.home_dir().to_path_buf();
-    let agent = query.selection.agent;
+    let agent = query.agent;
     let id = query.id;
     let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(8);
     tokio::task::spawn_blocking(move || {
@@ -1113,9 +1264,12 @@ async fn session_detail(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SessionEvidenceQuery {
-    #[serde(flatten)]
-    selection: AgentScopeQuery,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
+    #[serde(default = "default_agent")]
+    agent: AgentKind,
     id: String,
     entry: String,
     snapshot: String,
@@ -1125,7 +1279,7 @@ async fn session_evidence(
     State(state): State<ServiceState>,
     Query(query): Query<SessionEvidenceQuery>,
 ) -> Response<Body> {
-    let tenant = match resolve_tenant(&state, &query.selection.scope) {
+    let tenant = match resolve_tenant(&state, &query.tenant) {
         Ok(tenant) => tenant,
         Err(error) => return result_error(error),
     };
@@ -1134,7 +1288,7 @@ async fn session_evidence(
     }
     let home = tenant.home_dir().to_path_buf();
     let result = blocking(move || {
-        let backend = session::backend_for(query.selection.agent);
+        let backend = session::backend_for(query.agent);
         session::read_evidence(
             backend.as_ref(),
             &home,
@@ -1157,9 +1311,12 @@ fn send_ndjson(sender: &tokio::sync::mpsc::Sender<Bytes>, value: &Value) -> Resu
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeleteSessionsRequest {
-    #[serde(flatten)]
-    selection: AgentScopeQuery,
+    #[serde(default = "default_tenant_selection")]
+    tenant: String,
+    #[serde(default = "default_agent")]
+    agent: AgentKind,
     #[serde(default)]
     ids: Vec<String>,
     #[serde(default)]
@@ -1174,7 +1331,7 @@ async fn delete_sessions(
     if request.all && request.confirmation != "delete all sessions" {
         return api_error(StatusCode::BAD_REQUEST, "confirmation does not match");
     }
-    let tenant = match resolve_tenant(&state, &request.selection.scope) {
+    let tenant = match resolve_tenant(&state, &request.tenant) {
         Ok(tenant) => tenant,
         Err(error) => return result_error(error),
     };
@@ -1183,7 +1340,7 @@ async fn delete_sessions(
     }
     let home = tenant.home_dir().to_path_buf();
     mutate_blocking(state, move || {
-        let backend = session::backend_for(request.selection.agent);
+        let backend = session::backend_for(request.agent);
         let deleted = session::delete_sessions(backend.as_ref(), &home, &request.ids, request.all)?;
         Ok(json!({"deleted": deleted}))
     })
@@ -1303,31 +1460,35 @@ async fn cancel_operation(
     }
 }
 
-fn resolve_tenant(state: &ServiceState, scope: &Scope) -> Result<Tenant> {
-    match scope.scope.as_str() {
+fn resolve_tenant(state: &ServiceState, selection: &str) -> Result<Tenant> {
+    match selection {
         "host" => Ok(Tenant::Host {
             home_dir: state.host_home.as_ref().clone(),
             root_dir: state.root.as_ref().clone(),
         }),
-        "managed" => Ok(Tenant::Managed(ManagedTenant::resolve(
+        value if value.starts_with("managed:") => Ok(Tenant::Managed(ManagedTenant::resolve(
             &state.root,
-            scope.tenant.as_deref().unwrap_or("default"),
+            value
+                .strip_prefix("managed:")
+                .expect("managed Tenant selection prefix was checked"),
         )?)),
-        value => anyhow::bail!("unknown Tenant scope: {value}"),
+        value => anyhow::bail!("unknown Tenant selection: {value}"),
     }
 }
 
 fn resolve_agent(
     state: &ServiceState,
-    scope: &Scope,
+    tenant: &str,
     agent: AgentKind,
 ) -> Result<crate::tenant::TenantAgent> {
-    Ok(resolve_tenant(state, scope)?.for_agent(agent))
+    Ok(resolve_tenant(state, tenant)?.for_agent(agent))
 }
 
 fn config_file_response(
     snapshot: config::ConfigFileSnapshot,
     visual: ConfigVisualResult,
+    warnings: Vec<String>,
+    auth: Option<ConfigAuthResponse>,
 ) -> ConfigFileResponse {
     ConfigFileResponse {
         file: snapshot.file,
@@ -1335,7 +1496,20 @@ fn config_file_response(
         revision: snapshot.revision,
         content_base64: base64::engine::general_purpose::STANDARD.encode(snapshot.content),
         visual: visual.fields,
+        visual_provider: visual.provider,
         visual_error: visual.error,
+        warnings,
+        auth,
+        linked_file: None,
+    }
+}
+
+fn linked_config_file_response(snapshot: config::ConfigFileSnapshot) -> LinkedConfigFileResponse {
+    LinkedConfigFileResponse {
+        file: snapshot.file,
+        exists: snapshot.exists,
+        revision: snapshot.revision,
+        content_base64: base64::engine::general_purpose::STANDARD.encode(snapshot.content),
     }
 }
 

@@ -20,11 +20,21 @@
 .warning {
   color: var(--warning);
 }
+.help {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  color: var(--muted);
+}
 .indicator.error:hover {
   background: var(--danger-soft);
 }
 .indicator.warning:hover {
   background: var(--warning-soft);
+}
+.indicator.help:hover {
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
 }
 .indicator:focus-visible {
   outline-offset: 1px;

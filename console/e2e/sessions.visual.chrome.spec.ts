@@ -194,7 +194,7 @@ test.beforeEach(async ({ page }) => {
 test("capture redesigned Sessions detail", async ({ page }) => {
   await page.setViewportSize({ width: 1512, height: 900 });
   await page.goto(
-    `/_aibox/ui/sessions?scope=managed%3Adefault&agent=codex&session_scope=managed%3Adefault&session_agent=codex&session=${sessionId}`,
+    `/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex&session_tenant=managed%3Adefault&session_agent=codex&session=${sessionId}`,
   );
   await page.getByRole("heading", { name: "Direction" }).waitFor();
   await expect(page.getByRole("button", { name: /Jump to message/ })).toHaveCount(2);

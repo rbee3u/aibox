@@ -192,12 +192,43 @@ describe("OverviewPage", () => {
 
     expect(onNavigate).toHaveBeenCalledWith(
       "configs",
-      new URLSearchParams("scope=managed%3Adefault&agent=codex&config=broken"),
+      new URLSearchParams("tenant=managed%3Adefault&agent=codex&config=broken"),
     );
 
     const requestDetail = screen.getByText("0 errors · 2 warnings");
     await user.click(requestDetail.closest("button")!);
     expect(onNavigate).toHaveBeenLastCalledWith("requests", undefined);
+  });
+
+  it("uses singular labels for one Request error or warning", async () => {
+    const { api } = fakeApi();
+    const singularOverview = {
+      ...overview,
+      requests: { ...overview.requests, warning: 0, error: 1 },
+    } satisfies OverviewData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/overview") return Promise.resolve(singularOverview);
+      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
+      if (path.startsWith("/_aibox/api/sessions/summary?"))
+        return Promise.resolve({
+          count: 0,
+          warnings: [],
+          partial: false,
+        } satisfies SessionSummaryData);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+
+    render(
+      <OverviewPage
+        api={{ ...api, get } as unknown as ControlApi}
+        operation={null}
+        onNavigate={vi.fn()}
+        onOperation={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("1 error · 0 warnings")).toBeInTheDocument();
+    expect(screen.queryByText("1 errors · 0 warnings")).not.toBeInTheDocument();
   });
 
   it("shows the complete structural map and loads Session counts on demand", async () => {
@@ -217,14 +248,14 @@ describe("OverviewPage", () => {
     await user.click(screen.getAllByRole("button", { name: "Expand Sessions" })[0]);
     expect((await within(tree).findAllByText("3 Sessions")).length).toBe(2);
     expect(get).toHaveBeenCalledWith(
-      "/_aibox/api/sessions/summary?scope=managed&tenant=default&agent=codex",
+      "/_aibox/api/sessions/summary?tenant=managed%3Adefault&agent=codex",
       expect.any(AbortSignal),
     );
 
     await user.click(tree.querySelector<HTMLAnchorElement>('a[href*="config=daily"]')!);
     expect(onNavigate).toHaveBeenCalledWith("configs", expect.objectContaining({}));
     const query = onNavigate.mock.calls.at(-1)?.[1] as URLSearchParams;
-    expect(query.toString()).toBe("scope=managed%3Adefault&agent=codex&config=daily");
+    expect(query.toString()).toBe("tenant=managed%3Adefault&agent=codex&config=daily");
   });
 
   it("searches hidden branches and supports ARIA tree arrow navigation", async () => {

@@ -92,6 +92,7 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
+  const failedListPage = useRef<number | null>(null);
   const initialLoadPending = useRef(true);
   const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
   const deletionBusy = deletion !== null;
@@ -175,10 +176,11 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
 
   const selectTab = useCallback(
     (next: DetailTab) => {
+      if (next === tab) return;
       setTab(next);
       if (currentId) writeRequestsLocation({ page: pageRef.current, record: currentId, tab: next });
     },
-    [currentId, setTab],
+    [currentId, setTab, tab],
   );
 
   const exitSelectionMode = useCallback(() => {
@@ -216,11 +218,23 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
         setList(payload);
         setPage(targetPage);
         pageRef.current = targetPage;
-        resolveFailure("list");
+        if (
+          !background ||
+          failedListPage.current === null ||
+          failedListPage.current === targetPage
+        ) {
+          failedListPage.current = null;
+          resolveFailure("list");
+        }
         return payload;
       } catch (cause) {
-        if (listController.current === controller && !requestWasCancelled(cause, controller.signal))
+        if (
+          listController.current === controller &&
+          !requestWasCancelled(cause, controller.signal)
+        ) {
+          if (!background || failedListPage.current === null) failedListPage.current = targetPage;
           reportFailure("list", "Couldn’t load request records", cause, true);
+        }
         return null;
       } finally {
         if (listController.current === controller) {
@@ -239,7 +253,11 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
     (nextPage: number) => {
       const target = Math.max(1, nextPage);
       writeRequestsLocation({ page: target, record: currentId, tab });
-      void loadPage(target);
+      void loadPage(target).then((payload) => {
+        if (payload || failedListPage.current !== target) return;
+        const route = readRequestsLocation();
+        if (route.page === target) writeRequestsLocation({ ...route, page: pageRef.current }, true);
+      });
     },
     [currentId, loadPage, tab],
   );
@@ -268,6 +286,20 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       setRefreshing(false);
     }
   }, [page, refreshWithFallback]);
+
+  const retryListFailure = useCallback(async () => {
+    const targetPage = failedListPage.current ?? pageRef.current;
+    setRefreshing(true);
+    try {
+      const refreshed = await refreshWithFallback(targetPage);
+      if (!refreshed) return;
+      const route = readRequestsLocation();
+      if (route.page !== refreshed.page)
+        writeRequestsLocation({ ...route, page: refreshed.page }, true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshWithFallback]);
 
   useEffect(() => {
     if (selectionMode || dialogOpen) {
@@ -304,8 +336,7 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       if (route.page !== pageRef.current) void loadPage(route.page);
       if (route.record && route.record !== currentId) {
         setDetailOpen(true);
-        setTab(route.tab);
-        void selectRecord(route.record);
+        void selectRecord(route.record, route.tab);
       } else if (!route.record && currentId) {
         setDetailOpen(false);
         clearCurrentRecord();
@@ -374,7 +405,9 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       selectionPages.current.clear();
       setSelectionMode(false);
       if (currentId && deletedIds.includes(currentId)) {
+        setDetailOpen(false);
         clearCurrentRecord();
+        writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
       }
       setDialog(null);
       resolveFailure("action");
@@ -396,7 +429,13 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
     resolveFailure("action");
     try {
       await api.deleteRecords([id]);
-      clearRecordIfCurrent(id);
+      if (currentId === id) {
+        setDetailOpen(false);
+        clearCurrentRecord();
+        writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+      } else {
+        clearRecordIfCurrent(id);
+      }
       setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
       setFocusAfterDelete(
         focusTargetAfterDelete(
@@ -428,7 +467,7 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   function handleNotificationAction(notification: NotificationItemData) {
     resolveFailure(notification.source);
     if (notification.source === "list") {
-      void refreshPage();
+      void retryListFailure();
     } else if (notification.source === "inspection") {
       retryInspectionFailure();
     }

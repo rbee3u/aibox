@@ -129,7 +129,7 @@ test("shared typography distinguishes catalog metadata from technical values", a
   });
   await page.getByRole("button", { name: "Cancel" }).click();
 
-  await page.goto("/_aibox/ui/sessions?scope=managed%3Adefault&agent=codex");
+  await page.goto("/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex");
   const sessionRow = page.getByRole("button", {
     name: "Typography prompt, Tenant default · Codex",
   });
