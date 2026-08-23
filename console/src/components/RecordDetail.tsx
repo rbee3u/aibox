@@ -426,6 +426,12 @@ function usageStateMessage(detail: RecordDetailData): string {
   if (detail.state === "active" && !protocol.response_terminal) {
     return "Waiting for the upstream API to report token usage.";
   }
+  if (
+    detail.state !== "active" &&
+    (detail.summary.outcome !== "completed" || !protocol.response_terminal)
+  ) {
+    return "Token usage was not reported before this request ended.";
+  }
   return "The completed response did not report token usage.";
 }
 

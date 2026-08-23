@@ -120,6 +120,42 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Details" }));
     expect(onLocationChange).not.toHaveBeenCalled();
   });
+  it("keeps the Session catalog mounted when synchronizing an internal selection URL", async () => {
+    const { api, get, streamSessionDetail } = fakeApi({
+      sessions: () => list([firstSession, secondSession, thirdSession]),
+    });
+    const onLocationChange = vi.fn();
+    const user = userEvent.setup();
+    const view = render(<SessionPage api={api} search="" onLocationChange={onLocationChange} />);
+    const row = await screen.findByRole("button", {
+      name: "Second prompt, Tenant default · Codex",
+    });
+    const catalog = row.parentElement?.parentElement as HTMLDivElement;
+    catalog.scrollTop = 480;
+
+    await user.click(row);
+    await screen.findByRole("heading", { name: "Second prompt" });
+    const query = onLocationChange.mock.calls[0][1] as URLSearchParams;
+    view.rerender(
+      <SessionPage api={api} search={`?${query.toString()}`} onLocationChange={onLocationChange} />,
+    );
+    await act(async () => Promise.resolve());
+
+    expect(catalog).toBe(row.parentElement?.parentElement);
+    expect(catalog.scrollTop).toBe(480);
+    expect(
+      get.mock.calls.filter(([path]) => String(path).startsWith("/_aibox/api/sessions?")),
+    ).toHaveLength(1);
+    expect(streamSessionDetail).toHaveBeenCalledTimes(1);
+
+    view.rerender(<SessionPage api={api} search="" onLocationChange={onLocationChange} />);
+    expect(await screen.findByRole("heading", { name: "Select a Session" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        get.mock.calls.filter(([path]) => String(path).startsWith("/_aibox/api/sessions?")),
+      ).toHaveLength(2),
+    );
+  });
   it("keeps user messages separately and groups adjacent activity while preserving order", async () => {
     const streamSessionDetail = vi.fn(
       (_path: string, handlers: Parameters<ControlApi["streamSessionDetail"]>[1]) => {
@@ -200,6 +236,99 @@ describe("SessionPage", () => {
     expect(
       screen.getByText("Some transcript events could not be interpreted."),
     ).toBeInTheDocument();
+  });
+  it("collapses Transcript activity when refreshing Session detail", async () => {
+    const streamSessionDetail = vi.fn(
+      (_path: string, handlers: Parameters<ControlApi["streamSessionDetail"]>[1]) => {
+        handlers.onEvidence({
+          entry_id: "evidence-1",
+          line: 2,
+          timestamp: firstSession.start_ts,
+          native_type: "response_item",
+          role: null,
+          content_types: [],
+          status: "unsupported",
+          preview: "evidence preview",
+        });
+        handlers.onComplete(
+          {
+            start_ts: firstSession.start_ts,
+            last_event_ts: firstSession.start_ts,
+            observed_duration_ms: 0,
+            message_count: 0,
+            tool_count: 0,
+            entry_count: 1,
+            malformed_count: 0,
+            unsupported_count: 1,
+            hidden_internal_count: 0,
+            file_size: 128,
+            snapshot: "128:1",
+          },
+          ["encountered 1 unsupported Transcript Entry projection(s)"],
+        );
+        return Promise.resolve();
+      },
+    );
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    const activitySummary = await screen.findByText("Transcript activity");
+    const activityDisclosure = activitySummary.closest("details");
+    expect(activityDisclosure).not.toBeNull();
+    await user.click(activitySummary);
+    expect(activityDisclosure).toHaveAttribute("open");
+    await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
+    await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Transcript activity").closest("details")).not.toHaveAttribute("open");
+  });
+  it("offers Jump to latest when a long Conversation finishes loading at the beginning", async () => {
+    const completion = deferred<void>();
+    const streamSessionDetail = vi.fn(
+      async (_path: string, handlers: Parameters<ControlApi["streamSessionDetail"]>[1]) => {
+        handlers.onMessage({
+          entry_ids: ["message-1"],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text: "Please inspect the long Conversation.",
+        });
+        await completion.promise;
+        handlers.onComplete(
+          {
+            start_ts: firstSession.start_ts,
+            last_event_ts: firstSession.start_ts,
+            observed_duration_ms: 0,
+            message_count: 1,
+            tool_count: 0,
+            entry_count: 1,
+            malformed_count: 0,
+            unsupported_count: 0,
+            hidden_internal_count: 0,
+            file_size: 128,
+            snapshot: "128:1",
+          },
+          [],
+        );
+      },
+    );
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    const article = await screen.findByRole("article");
+    const scrollContainer = article.parentElement?.parentElement as HTMLDivElement;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, value: 1200 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+    act(() => completion.resolve());
+    expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
   });
   it("creates one navigation anchor for each user message", async () => {
     const streamSessionDetail = vi.fn(

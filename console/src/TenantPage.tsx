@@ -125,6 +125,13 @@ function componentPresentation(row: ComponentRow): {
 function tenantKeyOf(row: TenantRow): TenantKey {
   return row.kind === "host" ? "host" : `managed:${row.name}`;
 }
+function fallbackTenantKey(rows: TenantRow[]): TenantKey | null {
+  const fallback =
+    rows.find((row) => row.kind === "managed" && row.name === "default") ??
+    rows.find((row) => row.kind === "managed") ??
+    rows.find((row) => row.kind === "host");
+  return fallback ? tenantKeyOf(fallback) : null;
+}
 function tenantLocation(key: TenantKey | null, component?: string | null): URLSearchParams {
   const query = new URLSearchParams();
   if (key) query.set("tenant", key);
@@ -197,10 +204,10 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
     observedSearch.current = search;
     const query = new URLSearchParams(search);
     const key = parseTenantSelectionKey(query.get("tenant"));
-    setSelectedKey(key);
+    setSelectedKey(key ?? fallbackTenantKey(tenants));
     setSelectedComponent(key ? query.get("component") : null);
     setDetailOpen(key !== null);
-  }, [search]);
+  }, [search, tenants]);
   useEffect(() => {
     if (!detailOpen || !selectedKey || !window.matchMedia?.("(max-width: 760px)").matches) return;
     const frame = window.requestAnimationFrame(() => detailHeadingRef.current?.focus());
@@ -212,16 +219,13 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
       setTenants(rows);
       setSelectedKey((current) => {
         if (current && rows.some((row) => tenantKeyOf(row) === current)) return current;
-        const fallback =
-          rows.find((row) => row.kind === "managed" && row.name === "default") ??
-          rows.find((row) => row.kind === "managed") ??
-          rows.find((row) => row.kind === "host");
+        const fallback = fallbackTenantKey(rows);
         if (current) {
           setSelectedComponent(null);
           setDetailOpen(false);
           changePageLocation("tenants", new URLSearchParams(), onLocationChange, true);
         }
-        return fallback ? tenantKeyOf(fallback) : null;
+        return fallback;
       });
       setSelectedKeys((current) => {
         const available = new Set(rows.map((row) => tenantKeyOf(row)));

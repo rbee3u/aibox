@@ -13,6 +13,7 @@ interface SessionMessageContentProps {
 }
 
 type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & { node?: unknown };
+type MarkdownLinkProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
 
 function withoutNode<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
   const next = { ...props };
@@ -70,6 +71,18 @@ function MarkdownCode({ className, children, ...props }: MarkdownCodeProps) {
   );
 }
 
+function MarkdownLink({ children, href, ...props }: MarkdownLinkProps) {
+  if (!href || !/^https?:\/\//i.test(href)) {
+    return <code title={href}>{children}</code>;
+  }
+  const anchorProps = withoutNode(props);
+  return (
+    <a {...anchorProps} href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  );
+}
+
 function PlainMessage({ text }: { text: string }) {
   return <pre className={styles.plainText}>{text}</pre>;
 }
@@ -82,10 +95,7 @@ function MarkdownMessage({ text }: { text: string }) {
         rehypePlugins={[rehypeHighlight]}
         skipHtml
         components={{
-          a: (props) => {
-            const anchorProps = withoutNode(props);
-            return <a {...anchorProps} target="_blank" rel="noreferrer" />;
-          },
+          a: MarkdownLink,
           code: MarkdownCode,
         }}
       >

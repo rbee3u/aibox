@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { ComponentProps, ElementType } from "react";
 import { vi } from "vitest";
 import { composeControlApi, ControlApi } from "./controlApi";
@@ -29,13 +30,17 @@ export type TestPageProps<T extends ElementType> = Omit<ComponentProps<T>, "api"
   api: TestControlApi;
 };
 
-export function TenantPage(props: TestPageProps<typeof TenantPageView>) {
-  const { api, ...pageProps } = props;
+export function TenantPage(
+  props: TestPageProps<typeof TenantPageView> & {
+    search?: string;
+  },
+) {
+  const { api, search = window.location.search, ...pageProps } = props;
   return (
     <TenantPageView
       {...pageProps}
       api={composeControlApi(materializeControlApi(api)).tenants}
-      search={window.location.search}
+      search={search}
     />
   );
 }
@@ -49,15 +54,14 @@ export function ConfigPage(props: TestPageProps<typeof ConfigPageView>) {
     />
   );
 }
-export function SessionPage(props: TestPageProps<typeof SessionPageView>) {
-  const { api, ...pageProps } = props;
-  return (
-    <SessionPageView
-      {...pageProps}
-      api={composeControlApi(materializeControlApi(api)).sessions}
-      search={window.location.search}
-    />
-  );
+export function SessionPage(
+  props: TestPageProps<typeof SessionPageView> & {
+    search?: string;
+  },
+) {
+  const { api, search = window.location.search, ...pageProps } = props;
+  const sessionApi = useMemo(() => composeControlApi(materializeControlApi(api)).sessions, [api]);
+  return <SessionPageView {...pageProps} api={sessionApi} search={search} />;
 }
 export function OperationPanel(
   props: Omit<ComponentProps<typeof OperationPanelView>, "api"> & { api: TestControlApi },

@@ -318,6 +318,7 @@ function SseEventList({
         </div>
       )}
       <div
+        role="list"
         ref={listRef}
         className={styles.eventList}
         aria-label="SSE Events"
@@ -331,7 +332,7 @@ function SseEventList({
           const open = memory.expandedEvents.has(event.sequence);
           const timing = timingBySequence.get(event.sequence);
           return (
-            <article className={styles.eventCard} key={event.sequence}>
+            <article role="listitem" className={styles.eventCard} key={event.sequence}>
               <div className={styles.eventHeader}>
                 <button
                   type="button"

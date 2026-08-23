@@ -219,10 +219,13 @@ Request and Tenant rows have a 64-pixel minimum height, while the single-line
 Config rows use 56 pixels. Session rows also start at 64 pixels, but a
 Conversation Message preview may occupy two lines before it is truncated; only those rows grow to
 accommodate the second line, and the complete title remains available from the
-row title. Session source labels place the Tenant and Coding Agent together with
-a space; detail adds the Session ID after the same compact source. Compact
-list-empty states and larger detail-empty states use shared typography and
-spacing without changing each module's domain-specific copy.
+row title. Selecting a Session updates its shareable detail URL without
+restarting the unchanged catalog lifecycle, so the catalog keeps its scroll
+position and the selected row remains in context. Session source labels place
+the Tenant and Coding Agent together with a space; detail adds the Session ID
+after the same compact source. Compact list-empty states and larger detail-empty
+states use shared typography and spacing without changing each module's
+domain-specific copy.
 
 The Sessions detail is a compact header with a sticky `Conversation`/`Details`
 tab bar over independently scrolling content. The header contains the Session
@@ -241,7 +244,9 @@ the same anchors in a horizontally scrollable strip above the conversation.
 User Conversation Messages remain separate, render as right-aligned plain-text
 bubbles, and preserve line breaks. Agent Conversation Messages form the wider
 left reading stream and render safe GFM Markdown with raw HTML disabled, secure
-external links, and copy controls for fenced code. Adjacent Agent messages may
+absolute HTTP(S) links, and copy controls for fenced code. Root-relative,
+relative, anchor, and non-HTTP(S) destinations render as inert inline code so
+they cannot enter the same-listener Request Proxy. Adjacent Agent messages may
 merge only when no secondary Transcript record separates them. Message
 timestamps stay compact and expose the complete timestamp through their title.
 
@@ -393,6 +398,8 @@ is identified separately, and text such as `[DONE]` remains visible rather
 than being treated as JSON. Event cards prefer a JSON payload's top-level
 `type`, then its top-level `object`, before falling back to the SSE event type;
 standard Chat Completions chunks therefore appear as `chat.completion.chunk`.
+The cards form a labeled semantic list so assistive technology can identify
+the SSE Event collection and its boundaries.
 
 The `response-event-timings` route reads the existing best-effort
 `response.events.jsonl` index on demand and returns only each sequence and its
@@ -451,8 +458,11 @@ nanosecond offsets, uses `BigInt` to build Timing Stages on a shared axis, and
 falls back to a single Response body stage when a protocol has no observable
 First Token. Unknown protocols retain generic Timing and diagnostics while
 Token Usage states that the protocol is unsupported. A recognized active
-protocol without final usage says it is still waiting for the provider, and a
-terminal Record without usage says the completed response reported none.
+protocol without final usage says it is still waiting for the provider. A
+successfully completed Record with a terminal protocol response says that the
+completed response reported no usage; a failed, interrupted, or
+protocol-incomplete Record instead says that usage was not reported before the
+request ended.
 For streaming responses with First Token, the interval after that checkpoint
 is named `Response stream` rather than implying that every byte is model
 output.

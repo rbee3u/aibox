@@ -101,6 +101,9 @@ function sessionItemKey(item: SessionTimelineItem): string {
     )
     .join(",")}`;
 }
+function conversationIsAwayFromLatest(element: HTMLDivElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight > 160;
+}
 function appendActivityItem(
   current: SessionTimelineItem[],
   entry: SessionActivityItem,
@@ -267,21 +270,27 @@ function SessionEvidenceDisclosure({
 function SessionActivityGroup({
   api,
   entries,
+  reloadRevision,
   session,
   snapshot,
 }: {
   api: SessionApi;
   entries: SessionActivityItem[];
+  reloadRevision: number;
   session: SourcedSession;
   snapshot?: string;
 }) {
+  const disclosureRef = useRef<HTMLDetailsElement>(null);
   const summary = activitySummary(entries);
   const activityLabels =
     summary.labels.length > 0
       ? `${summary.labels.slice(0, 3).join(", ")}${summary.labels.length > 3 ? ` +${summary.labels.length - 3}` : ""}`
       : "Transcript events";
+  useEffect(() => {
+    if (disclosureRef.current) disclosureRef.current.open = false;
+  }, [reloadRevision]);
   return (
-    <details className={styles.sessionActivityGroup}>
+    <details ref={disclosureRef} className={styles.sessionActivityGroup}>
       <summary>
         <span>
           <Wrench size={13} aria-hidden="true" /> Transcript activity
@@ -656,6 +665,14 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
   const sessionRowButtons = useRef(new Map<string, HTMLButtonElement>());
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
+  const updateSessionLocation = useCallback(
+    (query: URLSearchParams, replace = false) => {
+      const suffix = query.toString();
+      observedSearch.current = suffix ? `?${suffix}` : "";
+      changePageLocation("sessions", query, onLocationChange, replace);
+    },
+    [onLocationChange],
+  );
   function updateSessionTab(next: SessionTab) {
     if (next === sessionTab) return;
     setSessionTab(next);
@@ -666,15 +683,11 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
           id: currentSession.id,
         }
       : routeSelection;
-    changePageLocation(
-      "sessions",
-      sessionLocation(selectedTenants, selectedAgents, selection, next),
-      onLocationChange,
-    );
+    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents, selection, next));
   }
   function onConversationScroll(event: UIEvent<HTMLDivElement>) {
     const element = event.currentTarget;
-    setShowJumpLatest(element.scrollHeight - element.scrollTop - element.clientHeight > 160);
+    setShowJumpLatest(conversationIsAwayFromLatest(element));
     const threshold = element.scrollTop + Math.min(element.clientHeight * 0.28, 180);
     let active: string | null = null;
     for (const [entryId, message] of userMessageRefs.current) {
@@ -724,6 +737,14 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
     });
     return () => window.cancelAnimationFrame(frame);
   }, [currentSessionKey]);
+  useEffect(() => {
+    if (!currentSessionKey || sessionTab !== "conversation" || loadingDetail) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = conversationScrollRef.current;
+      if (element) setShowJumpLatest(conversationIsAwayFromLatest(element));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentSessionKey, detailRevision, loadingDetail, sessionTab]);
   const tenantOptions = useMemo<SelectionOption<SessionTenantKey>[]>(() => {
     const host = tenants.find((tenant) => tenant.kind === "host");
     const managed = tenants
@@ -809,10 +830,8 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
           id: row.id,
         };
         setRouteSelection(nextSelection);
-        changePageLocation(
-          "sessions",
+        updateSessionLocation(
           sessionLocation(selectedTenants, selectedAgents, nextSelection, sessionTab),
-          onLocationChange,
         );
       }
       let nextTimeline: SessionTimelineItem[] = [];
@@ -876,7 +895,7 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
         }
       }
     },
-    [abortDetailStream, api, onLocationChange, selectedAgents, selectedTenants, sessionTab],
+    [abortDetailStream, api, selectedAgents, selectedTenants, sessionTab, updateSessionLocation],
   );
   useEffect(() => {
     if (observedSearch.current === search) return;
@@ -1013,21 +1032,16 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRouteSelection(null);
     clearInspection();
-    changePageLocation(
-      "sessions",
-      sessionLocation(selectedTenants, selectedAgents),
-      onLocationChange,
-      true,
-    );
+    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents), true);
   }, [
     clearInspection,
     data,
     loadingList,
-    onLocationChange,
     openSession,
     routeSelection,
     selectedAgents,
     selectedTenants,
+    updateSessionLocation,
   ]);
   useEffect(() => {
     if (selectionMode || !focusSelectAfterExit.current) return;
@@ -1069,7 +1083,7 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
     setData(null);
     setRouteSelection(null);
     setSelectedTenants(next);
-    changePageLocation("sessions", sessionLocation(next, selectedAgents), onLocationChange);
+    updateSessionLocation(sessionLocation(next, selectedAgents));
   }
   function commitAgents(values: ReadonlySet<CodingAgentKind>) {
     const next = new Set(values);
@@ -1077,17 +1091,13 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
     setData(null);
     setRouteSelection(null);
     setSelectedAgents(next);
-    changePageLocation("sessions", sessionLocation(selectedTenants, next), onLocationChange);
+    updateSessionLocation(sessionLocation(selectedTenants, next));
   }
   function closeSessionInspection() {
     const focusKey = currentSession?.key ?? null;
     clearInspection();
     setRouteSelection(null);
-    changePageLocation(
-      "sessions",
-      sessionLocation(selectedTenants, selectedAgents),
-      onLocationChange,
-    );
+    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents));
     window.requestAnimationFrame(() => {
       if (focusKey) sessionRowButtons.current.get(focusKey)?.focus();
     });
@@ -1785,6 +1795,7 @@ export function SessionPage({ api, operation, search, onLocationChange }: PagePr
                               key={sessionItemKey(item)}
                               api={api}
                               entries={item.value}
+                              reloadRevision={detailRevision}
                               session={currentSession}
                               snapshot={detailStats?.snapshot}
                             />

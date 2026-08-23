@@ -372,6 +372,22 @@ describe("RecordDetail", () => {
       screen.getByText("The completed response did not report token usage."),
     ).toBeInTheDocument();
 
+    const failedWithoutUsage = {
+      ...terminalWithoutUsage,
+      summary: {
+        ...terminalWithoutUsage.summary,
+        outcome: "upstream_error",
+        protocol: {
+          ...terminalWithoutUsage.summary.protocol,
+          response_terminal: false,
+        },
+      },
+    };
+    rerender(<RecordDetail {...detailProps(failedWithoutUsage)} />);
+    expect(
+      screen.getByText("Token usage was not reported before this request ended."),
+    ).toBeInTheDocument();
+
     const activeWithoutUsage = {
       ...terminalWithoutUsage,
       state: "active" as const,
@@ -673,6 +689,8 @@ describe("RecordDetail", () => {
     );
 
     expect(screen.getByText("SSE Event timing index is incomplete.")).toBeInTheDocument();
+    const eventList = screen.getByRole("list", { name: "SSE Events" });
+    expect(within(eventList).getAllByRole("listitem")).toHaveLength(2);
     const first = screen.getByRole("button", { name: /answer.delta/ });
     expect(first).toHaveTextContent("transport.delta");
     expect(screen.getByText("+1.251 s")).toHaveAttribute("title", "2026-08-06 12:00:01.251");

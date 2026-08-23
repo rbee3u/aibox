@@ -57,6 +57,19 @@ describe("TenantPage", () => {
     expect(rust.closest("button")).toHaveAttribute("aria-pressed", "true");
     expect(get).toHaveBeenCalledWith("/_aibox/api/components?tenant=managed%3Awork", undefined);
   });
+  it("restores the fallback Tenant when navigation clears the route selection", async () => {
+    const { api } = tenantApi();
+    const view = render(<TenantPage api={api} search="" />);
+
+    expect(await screen.findByRole("heading", { name: "default" })).toBeInTheDocument();
+
+    view.rerender(<TenantPage api={api} search="?tenant=host" />);
+    expect(await screen.findByRole("heading", { name: "Host Tenant" })).toBeInTheDocument();
+
+    view.rerender(<TenantPage api={api} search="" />);
+    expect(await screen.findByRole("heading", { name: "default" })).toBeInTheDocument();
+    expect(screen.queryByText("Select a Tenant")).not.toBeInTheDocument();
+  });
   it("groups Host and Managed Tenants and shows home paths", async () => {
     const { api } = tenantApi();
     render(<TenantPage api={api} />);
