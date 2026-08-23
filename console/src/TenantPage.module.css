@@ -1,0 +1,520 @@
+.catalogDivider {
+  composes: catalogDivider from "./CatalogLayout.module.css";
+}
+
+.catalogPage {
+  composes: catalogPage from "./CatalogLayout.module.css";
+}
+
+.configAddButton {
+  composes: configAddButton from "./CatalogLayout.module.css";
+}
+
+.configDeleteAction {
+  composes: configDeleteAction from "./CatalogLayout.module.css";
+}
+
+.configList {
+  composes: configList from "./CatalogLayout.module.css";
+}
+
+.configProtected {
+  composes: configProtected from "./CatalogLayout.module.css";
+}
+
+.configRow {
+  composes: configRow from "./CatalogLayout.module.css";
+}
+
+.configRowAction {
+  composes: configRowAction from "./CatalogLayout.module.css";
+}
+
+.configRowActions {
+  composes: configRowActions from "./CatalogLayout.module.css";
+}
+
+.configRowGroup {
+  composes: configRowGroup from "./CatalogLayout.module.css";
+}
+
+.configRowInspected {
+  composes: configRowInspected from "./CatalogLayout.module.css";
+}
+
+.configRowMain {
+  composes: configRowMain from "./CatalogLayout.module.css";
+}
+
+.configRowProtected {
+  composes: configRowProtected from "./CatalogLayout.module.css";
+}
+
+.configRowSelected {
+  composes: configRowSelected from "./CatalogLayout.module.css";
+}
+
+.configRowSelection {
+  composes: configRowSelection from "./CatalogLayout.module.css";
+}
+
+.detailHeader {
+  composes: detailHeader from "./CatalogLayout.module.css";
+}
+
+.detailPane {
+  composes: detailPane from "./CatalogLayout.module.css";
+}
+
+.dialog {
+  composes: dialog from "./CatalogLayout.module.css";
+}
+
+.dialogActions {
+  composes: dialogActions from "./CatalogLayout.module.css";
+}
+
+.dialogDescription {
+  composes: dialogDescription from "./CatalogLayout.module.css";
+}
+
+.goodStatus {
+  composes: goodStatus from "./CatalogLayout.module.css";
+}
+
+.hasSelection {
+  composes: hasSelection from "./CatalogLayout.module.css";
+}
+
+.inlineWarning {
+  composes: inlineWarning from "./CatalogLayout.module.css";
+}
+
+.neutralStatus {
+  composes: neutralStatus from "./CatalogLayout.module.css";
+}
+
+.page {
+  composes: page from "./CatalogLayout.module.css";
+}
+
+.planList {
+  composes: planList from "./CatalogLayout.module.css";
+}
+
+.sessionCancelSelection {
+  composes: sessionCancelSelection from "./CatalogLayout.module.css";
+}
+
+.sessionDeleteSelected {
+  composes: sessionDeleteSelected from "./CatalogLayout.module.css";
+}
+
+.sessionHeaderActions {
+  composes: sessionHeaderActions from "./CatalogLayout.module.css";
+}
+
+.sessionRefresh {
+  composes: sessionRefresh from "./CatalogLayout.module.css";
+}
+
+.sessionSelect {
+  composes: sessionSelect from "./CatalogLayout.module.css";
+}
+
+.sessionSelectAll {
+  composes: sessionSelectAll from "./CatalogLayout.module.css";
+}
+
+.sessionSelectionActions {
+  composes: sessionSelectionActions from "./CatalogLayout.module.css";
+}
+
+.sessionSelectionCount {
+  composes: sessionSelectionCount from "./CatalogLayout.module.css";
+}
+
+.sessionSelectionIndicator {
+  composes: sessionSelectionIndicator from "./CatalogLayout.module.css";
+}
+
+.sessionToolbar {
+  composes: sessionToolbar from "./CatalogLayout.module.css";
+}
+
+.splitLayout {
+  composes: splitLayout from "./CatalogLayout.module.css";
+}
+
+.warnStatus {
+  composes: warnStatus from "./CatalogLayout.module.css";
+}
+
+.errorBanner,
+.inlineWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.band h2,
+.detailHeader h2,
+.editorHeader h2,
+.dialog h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-md);
+}
+
+.bandHeading,
+.detailHeader,
+.editorHeader,
+.sectionHeading,
+.operationPanel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.bandHeading > div,
+.detailHeader > div,
+.editorHeader > div {
+  min-width: 0;
+}
+
+.bandHeading code,
+.detailHeader code {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actionRow,
+.dialogActions,
+.editorTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.actionRow button,
+.componentRow button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.errorStatus {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.catalogPage,
+.configPage {
+  overflow: hidden;
+}
+
+.catalog,
+.tenantCatalog,
+.configCatalog {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.tenantCatalog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.tenantRowText {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.tenantRowText strong {
+  font-size: var(--catalog-row-primary-size);
+  font-weight: var(--weight-semibold);
+  line-height: var(--catalog-row-primary-line-height);
+}
+
+.tenantPath {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: var(--weight-regular) var(--catalog-row-secondary-size) /
+    var(--catalog-row-secondary-line-height) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hostRiskBadge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+}
+
+.hostRiskNotice {
+  display: block;
+  margin-top: 3px;
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.sessionWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.sessionRowMain > span:not(.sessionSelectionIndicator) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.sessionRowSelected .sessionSelectionIndicator {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.detailPane,
+.configEditor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.detailHeader,
+.editorHeader {
+  min-height: 66px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.sectionHeading {
+  padding: 14px 16px 8px;
+}
+
+.sectionHeading h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.sectionHeading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tableList {
+  min-height: 0;
+  overflow: auto;
+}
+
+.componentRow {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: 22px minmax(120px, 1fr) minmax(80px, 120px) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.componentRowSelected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.componentRow > div,
+.componentRowSelect > span {
+  display: grid;
+  min-width: 0;
+}
+
+.componentRowSelect {
+  display: grid;
+  min-width: 0;
+  grid-column: 1 / span 2;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-color: transparent;
+  text-align: left;
+  background: transparent;
+}
+
+.componentRowSelect:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.componentRow small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.componentRow input {
+  grid-column: 3;
+  min-width: 0;
+}
+
+.componentRow > span {
+  grid-column: 4;
+}
+
+.componentRow > .componentActions {
+  display: flex;
+  grid-column: 5;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.componentRemoveAction {
+  color: var(--danger);
+}
+
+.componentRemoveAction:hover:not(:disabled) {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.configWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.tenantRow {
+  min-height: 64px;
+}
+
+.defaultBadge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.authVisualBody .dialogActions,
+.authVisualBody .inlineWarning {
+  margin-right: 14px;
+  margin-left: 14px;
+}
+
+.propagationGroups .planList {
+  margin-top: 6px;
+}
+
+@media (pointer: coarse) {
+  .sessionDelete,
+  .configDeleteAction {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    opacity: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .configRowMain,
+  .sessionRowMain {
+    min-height: 56px;
+  }
+
+  .splitLayout,
+  .configLayout {
+    display: block;
+    height: calc(100% - 94px);
+  }
+
+  .sessionPage > .splitLayout {
+    height: 100%;
+  }
+
+  .catalog,
+  .tenantCatalog,
+  .configCatalog {
+    width: 100%;
+    height: 100%;
+    border-right: 0;
+  }
+
+  .detailPane,
+  .configEditor {
+    display: none;
+    width: 100%;
+    height: 100%;
+  }
+
+  .hasSelection .catalog {
+    display: none;
+  }
+
+  .hasSelection .tenantCatalog {
+    display: none;
+  }
+
+  .componentRow {
+    grid-template-columns: 22px minmax(100px, 1fr) auto;
+  }
+
+  .componentRow input {
+    grid-column: 2;
+  }
+
+  .componentRowSelect {
+    grid-column: 1 / span 2;
+    grid-row: 1;
+  }
+
+  .componentRow > span {
+    grid-column: 2;
+  }
+
+  .componentRow > button:not(.componentRowSelect) {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .componentRow > .componentActions {
+    grid-column: 3;
+    grid-row: 1 / span 3;
+    align-items: flex-end;
+    flex-direction: column;
+  }
+}

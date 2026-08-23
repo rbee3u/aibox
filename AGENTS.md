@@ -33,8 +33,13 @@ references between them.
   `src/request_web.rs` owns the Request API and embedded Console assets.
 - `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
   Root-local Service, Console Control API, and ephemeral Management Operations.
-- `console/` is the editable Console, including the Requests module.
-  `assets/console.*` is generated output; use `docs/console-ui.md`.
+- `console/src/App.tsx` owns Console routing and navigation guards;
+  `TenantPage.tsx`, `ConfigPage.tsx`, `SessionPage.tsx`, and
+  `RequestsPage.tsx` own their domain pages. `controlApi.ts` and `api.ts` own
+  the distinct Control and Request clients. `OverviewPage.tsx` orchestrates
+  Overview, while `TopologyCanvas.tsx` and `overviewTopology.ts` own its
+  rendering and pure topology model. `assets/console.*` is generated output;
+  use `docs/console-ui.md`.
 
 ## Constraints
 

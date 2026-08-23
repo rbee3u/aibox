@@ -34,6 +34,7 @@ describe("request display utilities", () => {
     expect(compactDuration(123000)).toBe("2m3s");
     expect(compactDuration(3603000)).toBe("1h3s");
     expect(compactDuration(3723000)).toBe("1h2m3s");
+    expect(compactDuration(9020920)).toBe("2h30m21s");
   });
 
   it("formats duration and byte-count unit boundaries", () => {

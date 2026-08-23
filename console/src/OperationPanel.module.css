@@ -1,0 +1,114 @@
+.detailHeader {
+  composes: detailHeader from "./CatalogLayout.module.css";
+}
+
+.bandHeading,
+.detailHeader,
+.editorHeader,
+.sectionHeading,
+.operationPanel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.operationPanel {
+  position: fixed;
+  z-index: 25;
+  right: 0;
+  bottom: 0;
+  left: var(--console-sidebar-width, 220px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.operationPanelExpanded {
+  display: flex;
+  height: min(44vh, 360px);
+  flex-direction: column;
+}
+
+.operationPanel header {
+  min-height: 42px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.operationPanel header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.operationPanel header > div strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operationPanel header > span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operationPanel pre {
+  min-height: 0;
+  max-height: min(30vh, 230px);
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: var(--text-xs) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.operationPanelExpanded pre {
+  flex: 1;
+  max-height: none;
+}
+
+.operationPanel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.operationPanel footer strong {
+  overflow: hidden;
+  color: var(--ink-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operationGap,
+.operationError {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-xs);
+}
+
+.operationGap {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.operationError {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (max-width: 900px) {
+  .operationPanel {
+    left: 0;
+  }
+}

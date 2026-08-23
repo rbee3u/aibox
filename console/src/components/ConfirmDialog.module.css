@@ -70,35 +70,3 @@
 .actions button {
   min-width: 90px;
 }
-
-.danger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-color: var(--danger);
-  color: white;
-  background: var(--danger);
-}
-
-.danger:hover:not(:disabled) {
-  border-color: var(--danger-strong);
-  color: white;
-  background: var(--danger-strong);
-}
-
-.primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-color: var(--accent);
-  color: white;
-  background: var(--accent);
-}
-
-.primary:hover:not(:disabled) {
-  border-color: var(--accent-strong);
-  color: white;
-  background: var(--accent-strong);
-}

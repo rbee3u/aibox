@@ -324,18 +324,6 @@ button.fact:hover {
   white-space: nowrap;
 }
 
-.primaryButton {
-  border-color: var(--accent);
-  color: #fff;
-  background: var(--accent);
-}
-
-.primaryButton:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: #fff;
-  background: var(--accent-strong);
-}
-
 .operationState {
   display: inline-flex;
   max-width: 180px;

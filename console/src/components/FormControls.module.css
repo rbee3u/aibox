@@ -1,0 +1,110 @@
+.control[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.control:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.control:active:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.control:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.control:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.toggle {
+  position: relative;
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.toggleMark {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.toggle:hover input:not(:disabled) + .toggleMark {
+  border-color: var(--accent);
+}
+
+.toggle:active input:not(:disabled) + .toggleMark {
+  border-color: var(--accent-strong);
+}
+
+.toggle input[aria-invalid="true"] + .toggleMark {
+  border-color: var(--danger);
+}
+
+.toggle input:checked + .toggleMark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.toggle input:checked + .toggleMark::after {
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.toggle input:focus-visible + .toggleMark {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.toggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (pointer: coarse) {
+  .control {
+    min-height: 44px;
+  }
+
+  .toggle {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .control,
+  .toggleMark {
+    transition-duration: 0.01ms;
+  }
+}

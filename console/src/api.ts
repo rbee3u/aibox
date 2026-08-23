@@ -1,14 +1,7 @@
 import type { EventTimingIndex, RecordDetail, RecordList, RequestApi } from "./types";
+import { HttpError, readHttpError } from "./httpError";
 
-export class ApiError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
-}
+export { HttpError as ApiError } from "./httpError";
 
 export function requestErrorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Requests API call failed";
@@ -21,25 +14,13 @@ export function requestWasCancelled(cause: unknown, signal: AbortSignal): boolea
   );
 }
 
-async function readError(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { error?: unknown };
-    if (typeof payload.error === "string" && payload.error) {
-      return payload.error;
-    }
-  } catch {
-    // The status text below is the useful fallback for a non-JSON error.
-  }
-  return `${response.status} ${response.statusText}`;
-}
-
-export function createRequestApi(fetchImpl: typeof fetch = fetch, csrfToken?: string): RequestApi {
+export function createRequestApi(fetchImpl: typeof fetch, csrfToken: string): RequestApi {
   const recordPath = (id: string) => `/_aibox/requests/api/records/${encodeURIComponent(id)}`;
 
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
     const response = await fetchImpl.call(window, path, { ...init, cache: "no-store" });
     if (!response.ok) {
-      throw new ApiError(await readError(response), response.status);
+      throw new HttpError(await readHttpError(response), response.status);
     }
     return response;
   }
@@ -58,7 +39,7 @@ export function createRequestApi(fetchImpl: typeof fetch = fetch, csrfToken?: st
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(csrfToken ? { "X-Aibox-Csrf": csrfToken } : {}),
+        "X-Aibox-Csrf": csrfToken,
       },
       body: JSON.stringify(body),
       signal,

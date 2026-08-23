@@ -1,14 +1,18 @@
 //! Named Config catalog, Current Config access, one-shot Config Application,
 //! and the entry points for global Codex Credential Propagation.
 
-pub(crate) use crate::config_model::VisualFieldState;
+pub(crate) use crate::config_model::{
+    CodexAuthInspection, VisualConfigOptionState, VisualConfigState,
+};
 use crate::config_model::{
-    NamedConfigDefinition, VisualFieldInput, render_visual_main, visual_fields,
+    CustomProviderInput, NamedConfigDefinition, VisualAuthInput, VisualConfigOptionInput,
+    inspect_codex_auth, inspect_visual_config, render_visual_auth, render_visual_main,
 };
 use crate::metadata::{self, PreparedMetadataWrite};
 use crate::tenant::{self, FileSnapshot, Tenant, TenantAgent};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
@@ -62,14 +66,45 @@ pub(crate) struct ConfigFileSnapshot {
     pub(crate) revision: String,
 }
 
-pub(crate) fn visual_field_states(
+pub(crate) struct ConfigSaveResult {
+    pub(crate) snapshot: ConfigFileSnapshot,
+    pub(crate) linked: Option<ConfigFileSnapshot>,
+}
+
+pub(crate) fn visual_config_state(
     selected: &TenantAgent,
     config: &str,
     content: &str,
-) -> Result<Vec<VisualFieldState>> {
+) -> Result<VisualConfigState> {
     tenant::validate_name("config", config)?;
-    ensure_complete_named_config(selected, config)?;
-    visual_fields(selected.agent, content)
+    ensure_named_config_main(selected, config)?;
+    inspect_visual_config(selected.agent, content)
+}
+
+pub(crate) fn inspect_named_codex_auth(
+    selected: &TenantAgent,
+    config: &str,
+    content: &str,
+) -> Result<CodexAuthInspection> {
+    tenant::validate_name("config", config)?;
+    ensure_safe_named_config(selected, config)?;
+    inspect_codex_auth(content, None)
+}
+
+pub(crate) fn config_file_warnings(
+    selected: &TenantAgent,
+    config: &str,
+    file: &str,
+    content: &[u8],
+) -> Result<Vec<String>> {
+    tenant::validate_name("config", config)?;
+    let text = std::str::from_utf8(content)
+        .with_context(|| format!("Named Config {file} is not valid UTF-8"))?;
+    crate::config_model::NamedConfigDefinition::validate_file_with_warnings(
+        selected.agent,
+        file,
+        text,
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -78,6 +113,8 @@ pub(crate) struct ConfigCatalogEntry {
     pub(crate) state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) detail: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -228,7 +265,7 @@ pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<Config
         if tenant::validate_name("config", &name).is_err() {
             continue;
         }
-        let (state, detail) = match inspect_named_config_directory(selected, &name) {
+        let (state, detail, warnings) = match inspect_named_config_directory(selected, &name) {
             Ok(Some(layout)) if !layout.complete(selected) => {
                 let missing = layout.missing_files(selected);
                 let noun = if missing.len() == 1 { "file" } else { "files" };
@@ -238,6 +275,7 @@ pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<Config
                         "Missing required {noun}: {}. Use Repair to restore this Named Config.",
                         missing.join(", ")
                     )),
+                    Vec::new(),
                 )
             }
             Ok(Some(_))
@@ -246,19 +284,24 @@ pub(crate) fn inspect_named_configs(selected: &TenantAgent) -> Result<Vec<Config
                         private_regular_file(&selected.named_config_file(&name, file))
                     }) =>
             {
-                ("ready", None)
+                match read_named_config_validation(selected, &name) {
+                    Ok(validation) => ("ready", None, validation.warnings),
+                    Err(error) => ("invalid", Some(format!("{error:#}")), Vec::new()),
+                }
             }
             Ok(Some(_)) => (
                 "invalid",
                 Some("Named Config permissions must be 0700/0600".to_string()),
+                Vec::new(),
             ),
             Ok(None) => continue,
-            Err(error) => ("invalid", Some(format!("{error:#}"))),
+            Err(error) => ("invalid", Some(format!("{error:#}")), Vec::new()),
         };
         configs.push(ConfigCatalogEntry {
             name,
             state,
             detail,
+            warnings,
         });
     }
     configs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -333,6 +376,8 @@ pub(crate) fn read_config_file(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(crate) fn save_config_file(
     selected: &TenantAgent,
     config: Option<&str>,
@@ -340,8 +385,35 @@ pub(crate) fn save_config_file(
     file: &str,
     expected_revision: &str,
     content: &[u8],
-    visual: Option<&[VisualFieldInput]>,
+    visual: Option<&[VisualConfigOptionInput]>,
+    visual_auth: Option<&VisualAuthInput>,
 ) -> Result<ConfigFileSnapshot> {
+    save_config_file_with_linked(
+        selected,
+        config,
+        current,
+        file,
+        expected_revision,
+        content,
+        None,
+        visual,
+        visual_auth,
+    )
+    .map(|result| result.snapshot)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn save_config_file_with_linked(
+    selected: &TenantAgent,
+    config: Option<&str>,
+    current: bool,
+    file: &str,
+    expected_revision: &str,
+    content: &[u8],
+    custom_provider: Option<&CustomProviderInput>,
+    visual: Option<&[VisualConfigOptionInput]>,
+    visual_auth: Option<&VisualAuthInput>,
+) -> Result<ConfigSaveResult> {
     if content.len() as u64 > MAX_CONFIG_BYTES {
         bail!("configuration file exceeds {MAX_CONFIG_BYTES} bytes");
     }
@@ -361,12 +433,17 @@ pub(crate) fn save_config_file(
         let config = config.context("Named Config name is missing")?;
         ensure_safe_named_config(selected, config)?;
         let content = if let Some(fields) = visual {
-            if file != selected.agent.main_config_file() {
-                bail!("Visual Editor is only available for the main Config file");
+            if visual_auth.is_some() || file != selected.agent.main_config_file() {
+                bail!("Visual main fields are only available for the main Config file");
             }
             let original = std::str::from_utf8(&before.content)
                 .with_context(|| format!("Named Config {file} is not valid UTF-8"))?;
-            render_visual_main(selected.agent, original, fields)?.into_bytes()
+            render_visual_main(selected.agent, original, fields, custom_provider)?.into_bytes()
+        } else if let Some(auth) = visual_auth {
+            if selected.agent.native_auth_file() != Some(file) {
+                bail!("Visual auth is only available for Codex auth.json");
+            }
+            render_visual_auth(auth)?.into_bytes()
         } else {
             content.to_vec()
         };
@@ -375,12 +452,46 @@ pub(crate) fn save_config_file(
         }
         let content_text = std::str::from_utf8(&content)
             .with_context(|| format!("Named Config {file} is not valid UTF-8"))?;
+        let layout = inspect_named_config_directory(selected, config)?
+            .context("Named Config directory disappeared while saving")?;
+        let _ = layout;
         NamedConfigDefinition::validate_file(selected.agent, file, content_text)
             .with_context(|| format!("validate Named Config '{config}' {file}"))?;
         (selected.named_config_file(config, file), 0o600, content)
     };
     write_atomic(&path, &content, mode)?;
-    read_config_file(selected, config, current, file)
+    let snapshot = read_config_file(selected, config, current, file)?;
+    let linked = if !current
+        && file == selected.agent.main_config_file()
+        && custom_provider.is_some_and(|provider| provider.included)
+        && selected.agent.native_auth_file().is_some()
+    {
+        let auth_file = selected.agent.native_auth_file().expect("Codex auth file");
+        let auth_before = read_config_file(selected, config, false, auth_file)?;
+        let empty_auth = if !auth_before.exists {
+            true
+        } else {
+            serde_json::from_slice::<Value>(&auth_before.content)
+                .ok()
+                .and_then(|value| value.as_object().map(Map::is_empty))
+                .unwrap_or(false)
+        };
+        if empty_auth {
+            let placeholder = selected
+                .agent
+                .config_auth_template()
+                .context("Codex auth template is missing")?
+                .as_bytes();
+            let auth_path = selected.named_config_file(config.expect("Named Config"), auth_file);
+            write_atomic(&auth_path, placeholder, 0o600)?;
+            Some(read_config_file(selected, config, false, auth_file)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok(ConfigSaveResult { snapshot, linked })
 }
 
 fn ensure_safe_named_config(selected: &TenantAgent, config: &str) -> Result<()> {
@@ -668,6 +779,13 @@ fn read_named_config_definition(
     selected: &TenantAgent,
     config: &str,
 ) -> Result<NamedConfigDefinition> {
+    Ok(read_named_config_validation(selected, config)?.definition)
+}
+
+fn read_named_config_validation(
+    selected: &TenantAgent,
+    config: &str,
+) -> Result<crate::config_model::NamedConfigValidation> {
     ensure_complete_named_config(selected, config)?;
     let main = read_regular_string(
         &selected.named_config_file(config, selected.agent.main_config_file()),
@@ -677,7 +795,7 @@ fn read_named_config_definition(
         .native_auth_file()
         .map(|file| read_regular_string(&selected.named_config_file(config, file)))
         .transpose()?;
-    NamedConfigDefinition::parse(selected.agent, &main, auth.as_deref())
+    NamedConfigDefinition::parse_with_warnings(selected.agent, &main, auth.as_deref())
         .with_context(|| format!("parse Named Config '{config}'"))
 }
 
@@ -698,6 +816,22 @@ fn ensure_complete_named_config(selected: &TenantAgent, config: &str) -> Result<
     for file in selected.agent.config_files() {
         validate_private_file(&selected.named_config_file(config, file))?;
     }
+    Ok(())
+}
+
+fn ensure_named_config_main(selected: &TenantAgent, config: &str) -> Result<()> {
+    tenant::validate_name("config", config)?;
+    let Some(layout) = inspect_named_config_directory(selected, config)? else {
+        bail!("Named Config '{config}' does not exist");
+    };
+    if !layout.main {
+        bail!(
+            "Named Config '{config}' is incomplete: missing {}",
+            selected.agent.main_config_file()
+        );
+    }
+    validate_private_directory(&selected.named_config_dir(config))?;
+    validate_private_file(&selected.named_config_file(config, selected.agent.main_config_file()))?;
     Ok(())
 }
 
@@ -871,6 +1005,13 @@ fn capture_optional_agent_file(selected: &TenantAgent, file: &str) -> Result<Fil
         Tenant::Host { .. } => "Host Home",
     };
     if !tenant::real_dir_exists(selected.home_dir(), home_label)? {
+        if matches!(&selected.tenant, Tenant::Managed(_)) {
+            return Ok(FileSnapshot {
+                present: false,
+                content: Vec::new(),
+                mode: None,
+            });
+        }
         bail!(
             "{home_label} does not exist: {}",
             selected.home_dir().display()

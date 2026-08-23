@@ -30,7 +30,7 @@ import type {
 import { useClipboardFeedback } from "../useClipboardFeedback";
 import { bytes, concatChunks, hex } from "../utils";
 import { JsonTree } from "./JsonTree";
-import styles from "./RecordDetail.module.css";
+import styles from "./BodyViewer.module.css";
 
 interface BodyViewerProps {
   kind: BodyKind;
@@ -383,6 +383,7 @@ function SseEventList({
                 <div className={styles.eventBody}>
                   {parsed.ok ? (
                     <JsonTree
+                      compact
                       value={parsed.value}
                       pathPrefix={`$event/${event.sequence}`}
                       expanded={memory.expandedNodes}

@@ -23,11 +23,14 @@ pub(crate) struct MainConfigField {
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
     pub(crate) group: &'static str,
-    pub(crate) suggestions: &'static [&'static str],
+    pub(crate) enum_values: &'static [&'static str],
     pub(crate) sensitive: bool,
+    pub(crate) required: bool,
+    pub(crate) required_for_custom_provider: bool,
+    pub(crate) request_proxy_route: bool,
 }
 
-const NO_SUGGESTIONS: &[&str] = &[];
+const NO_ENUM_VALUES: &[&str] = &[];
 const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 const REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
@@ -40,8 +43,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Anthropic base URL",
         description: "Endpoint used for Claude requests.",
         group: "Endpoint & credentials",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: true,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_AUTH_TOKEN"],
@@ -49,8 +55,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Anthropic auth token",
         description: "Credential passed to Claude as ANTHROPIC_AUTH_TOKEN.",
         group: "Endpoint & credentials",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: true,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
@@ -58,8 +67,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Default Haiku model",
         description: "Model used for the Haiku class of requests.",
         group: "Model defaults",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
@@ -67,8 +79,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Default Sonnet model",
         description: "Model used for the Sonnet class of requests.",
         group: "Model defaults",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_OPUS_MODEL"],
@@ -76,8 +91,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Default Opus model",
         description: "Model used for the Opus class of requests.",
         group: "Model defaults",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"],
@@ -85,8 +103,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Default Fable model",
         description: "Model used for the Fable class of requests.",
         group: "Model defaults",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["permissions", "defaultMode"],
@@ -94,8 +115,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Default permission mode",
         description: "Claude's native permission mode for tool use.",
         group: "Permissions",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["skipDangerousModePermissionPrompt"],
@@ -103,8 +127,11 @@ const CLAUDE_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Skip dangerous mode prompt",
         description: "Suppress Claude's confirmation prompt for dangerous mode.",
         group: "Permissions",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
 ];
 
@@ -115,8 +142,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Approval policy",
         description: "Controls when Codex pauses before executing commands.",
         group: "Execution & permissions",
-        suggestions: APPROVAL_POLICIES,
+        enum_values: APPROVAL_POLICIES,
         sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["sandbox_mode"],
@@ -124,8 +154,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Sandbox mode",
         description: "Filesystem and network access policy for command execution.",
         group: "Execution & permissions",
-        suggestions: SANDBOX_MODES,
+        enum_values: SANDBOX_MODES,
         sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["model_reasoning_effort"],
@@ -133,8 +166,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Model reasoning effort",
         description: "Reasoning effort for supported models.",
         group: "Model & reasoning",
-        suggestions: REASONING_EFFORTS,
+        enum_values: REASONING_EFFORTS,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["plan_mode_reasoning_effort"],
@@ -142,8 +178,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Plan mode reasoning effort",
         description: "Reasoning effort override used in Plan mode.",
         group: "Model & reasoning",
-        suggestions: PLAN_REASONING_EFFORTS,
+        enum_values: PLAN_REASONING_EFFORTS,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["model"],
@@ -151,17 +190,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Model",
         description: "Model selected for Codex sessions.",
         group: "Model & reasoning",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
-    },
-    MainConfigField {
-        path: &["openai_base_url"],
-        value_kind: MainConfigValueKind::String,
-        label: "OpenAI base URL",
-        description: "Base URL override for the built-in OpenAI provider.",
-        group: "Provider",
-        suggestions: NO_SUGGESTIONS,
-        sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["model_provider"],
@@ -169,8 +202,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Model provider",
         description: "Provider id selected from the model_providers table.",
         group: "Provider",
-        suggestions: &["openai", "custom"],
+        enum_values: &["openai", "custom"],
         sensitive: false,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["model_providers", "custom", "name"],
@@ -178,8 +214,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Custom provider name",
         description: "Display name for the fixed custom provider.",
         group: "Provider",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: true,
+        request_proxy_route: false,
     },
     MainConfigField {
         path: &["model_providers", "custom", "base_url"],
@@ -187,8 +226,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Custom provider base URL",
         description: "API base URL for the fixed custom provider.",
         group: "Provider",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: true,
+        request_proxy_route: true,
     },
     MainConfigField {
         path: &["model_providers", "custom", "requires_openai_auth"],
@@ -196,8 +238,11 @@ const CODEX_MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         label: "Use OpenAI authentication",
         description: "Whether the custom provider uses OpenAI authentication.",
         group: "Provider",
-        suggestions: NO_SUGGESTIONS,
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
+        required: false,
+        required_for_custom_provider: true,
+        request_proxy_route: false,
     },
 ];
 
@@ -206,10 +251,6 @@ sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
 model = "gpt-5.6-sol"
-# ChatGPT authentication:
-# openai_base_url = "https://chatgpt.com/backend-api/codex"
-# API key authentication:
-# openai_base_url = "https://api.openai.com/v1"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -443,7 +484,6 @@ mod tests {
                         MainConfigValueKind::String,
                     ),
                     (&["model"][..], MainConfigValueKind::String),
-                    (&["openai_base_url"][..], MainConfigValueKind::String),
                     (&["model_provider"][..], MainConfigValueKind::String),
                     (
                         &["model_providers", "custom", "name"][..],

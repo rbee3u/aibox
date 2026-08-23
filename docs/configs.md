@@ -4,7 +4,7 @@ The Console Configs module is the only management surface for Named Configs and
 Current Config. The `aibox run` command consumes Current Config from the selected
 Managed Tenant; it never reads or reapplies a Named Config.
 
-## Scope
+## Tenant
 
 Every Config belongs to one Tenant and one Coding Agent. Select the Managed
 Tenant or Host Tenant and the Agent in the Console before opening Configs.
@@ -27,7 +27,7 @@ your account state.
 Claude Named Configs contain only `settings.json`. Codex Named Configs contain
 only `config.toml` and `auth.json`. The Agent contract defines file order,
 templates, empty Current Config content, and the fixed Config Fields. A Named
-Config directory contains no scope marker or management metadata.
+Config directory contains no Tenant marker or management metadata.
 
 Config files are native text. Claude files are JSON and Codex main files are
 TOML; Codex `auth.json` is a complete JSON object and replaces the native auth
@@ -44,22 +44,36 @@ initialize a missing Managed Tenant or Agent state directory.
 
 The detail editor has two modes. A complete, safe Named Config main file
 (`settings.json` for Claude or `config.toml` for Codex) opens in **Visual Editor**
-when its native content is valid. Visual fields are sourced from the fixed
-`AgentKind` Config Field contract and are grouped with a friendly label, native
-path, description, and an **Include** switch. Turning Include off omits that
-Config Field; Config Application then removes the field from Current Config.
-Included empty strings and custom values are valid. Suggested values in a select
-are convenience choices, not a closed enum. Sensitive fields use a masked input
-with an explicit reveal control. Safe incomplete Named Config files remain
-Raw-only until the Config is repaired.
+when its native content is valid. Visual Config Options are sourced from the
+fixed `AgentKind` Config Field contract and use compact label-and-control rows.
+Native paths remain in Raw. A help icon exposes each Option's description on
+hover or keyboard focus, and required Options use an accessible `*` marker.
+Required Config Fields cannot be omitted. Optional free-text Options retain an
+**Include** control, optional enums use **Default** to omit the field, and
+optional booleans use **Default**, **Enabled**, or **Disabled**. Enum Options
+are closed to their declared values. An existing unknown string remains
+selectable as **Unsupported** so Visual can preserve it, but Visual cannot
+create a new unknown value. Codex custom-provider fields stay included while
+the Custom provider is enabled. Omitting another Config Field makes Config
+Application remove it from Current Config. Sensitive Options use a masked input
+with an explicit reveal control.
+Codex Visual treats Custom provider as one optional aggregate. Disabled omits
+both provider tables. Enabled immediately supplies `custom`,
+`https://example.com/v1`, and `requires_openai_auth = true`. Saving an enabled
+Custom provider creates the fixed `sk-example` placeholder in a missing or
+empty Named Config `auth.json`; existing credentials are never overwritten.
+The main Codex file may still open in Visual when auth is missing or malformed,
+so that Raw repair and Visual provider editing remain independent.
 
-**Raw Editor** remains available for supported Named Config main files and is the
-only editor for Current Config and Codex `auth.json`. It uses native JSON/TOML
-syntax highlighting and debounced backend diagnostics. Diagnostics prevent a
-switch from Raw to Visual but do not change Current Config's arbitrary-byte save
-semantics. A non-UTF-8 Current Config is read-only in the Console and can be
-downloaded as its original bytes. Switching modes, files, Configs, or scopes
-uses the existing unsaved-change confirmation.
+**Raw Editor** remains available for Named Config and is the only editor for
+Current Config. Codex shows `config.toml` above `auth.json` at a fixed 2:1 ratio;
+each file scrolls, diagnoses, tracks revisions, and saves independently. Visual
+mode keeps a separate Codex credentials section below the main fields. ChatGPT
+credentials may be inspected in Raw and explicitly converted to an API-key
+object; the conversion remains local until `auth.json` is saved. A non-UTF-8
+Current Config is read-only in the Console and can be downloaded as its original
+bytes. Leaving a Config or Tenant guards all dirty files, and Save-and-continue
+commits them in Agent-defined order without rollback.
 
 Each file is committed independently. If a later file fails, an earlier file is
 not rolled back. Existing file modes are preserved for Current Config; newly
@@ -123,16 +137,20 @@ KiB; unknown top-level metadata sections are preserved when a known section is
 updated.
 
 There is no activation state, migration reader, backup, rollback, lock
-directory, or Run History. A missing read-only scope stays quiet and creates no
+directory, or Run History. A missing read-only Tenant stays quiet and creates no
 directories. Service startup is the separate lifecycle operation that ensures
 the Default Managed Tenant baseline. The Console is the management boundary;
 the public CLI remains limited to `serve`, `run`, and `build`.
 
 ## Config Fields
 
-Named Config main files use native syntax but accept only these fixed fields.
-Unknown fields and wrong primitive types are errors; model names, URLs, endpoint
-availability, and provider enum values are not resolved by aibox.
+Named Config main files use native syntax but project only these fixed fields.
+Unknown fields are warnings and remain in the native source; wrong primitive
+types are errors. Model names, URLs, and endpoint availability are not resolved
+by aibox. Visual enum values are the closed sets declared by `AgentKind`; Raw
+may preserve unknown string values. Codex `approval_policy` is currently limited
+to `untrusted`, `on-request`, or `never`; the native granular object form is not
+supported by Named Config validation.
 
 Claude `settings.json` fields:
 
@@ -156,15 +174,16 @@ Codex `config.toml` fields:
 | `model_reasoning_effort` | string |
 | `plan_mode_reasoning_effort` | string |
 | `model` | string |
-| `openai_base_url` | string |
-| `model_provider` | string |
-| `model_providers.custom.name` | string |
-| `model_providers.custom.base_url` | string |
-| `model_providers.custom.requires_openai_auth` | boolean |
+| Custom provider | optional aggregate |
+| `model_providers.custom.name` | string, default `custom` |
+| `model_providers.custom.base_url` | string, default `https://example.com/v1` |
 
-`openai_base_url` controls Codex's built-in `openai` provider and has no effect
-while `model_provider` selects `custom`. The provider table name for the fixed
-custom field group is `custom`. Codex `auth.json` is one complete Config Field:
+Codex Named Config either omits `model_provider` and `model_providers` to use
+the official OpenAI default, or contains only `model_provider = "custom"` and
+the exact three-key `model_providers.custom` table. The table's
+`requires_openai_auth` is always `true`; Raw mode exposes it for repair but the
+current version rejects `false`. Codex
+`auth.json` is one complete Config Field:
 it may be any JSON object and replaces the complete native Current Config object
 during Application.
 

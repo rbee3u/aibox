@@ -10,10 +10,11 @@ import {
   type JsonValue,
 } from "../bodyPresentation";
 import { useClipboardFeedback } from "../useClipboardFeedback";
-import styles from "./RecordDetail.module.css";
+import styles from "./JsonTree.module.css";
 
 interface JsonTreeProps {
   value: JsonValue;
+  compact?: boolean;
   pathPrefix?: string;
   expanded: Set<string>;
   expandedStrings: Set<string>;
@@ -23,6 +24,7 @@ interface JsonTreeProps {
 
 export function JsonTree({
   value,
+  compact = false,
   pathPrefix = "$",
   expanded,
   expandedStrings,
@@ -95,7 +97,11 @@ export function JsonTree({
   }
 
   return (
-    <div className={styles.jsonTree} role="tree" aria-label="JSON body">
+    <div
+      className={`${styles.jsonTree} ${compact ? styles.compact : ""}`}
+      role="tree"
+      aria-label="JSON body"
+    >
       <JsonNode
         value={value}
         path={pathPrefix}

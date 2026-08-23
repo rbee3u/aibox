@@ -214,14 +214,16 @@ export function RecordList({
             const compactModel = reasoningEffort === "—" ? model : `${model} ${reasoningEffort}`;
             const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(record.total_ms);
-            const ended = formatTimestamp(record.ended_at ?? "");
+            const timestampKind = record.ended_at ? "Ended" : "Started";
+            const timestampValue = record.ended_at ?? record.started_at;
+            const timestamp = formatTimestamp(timestampValue);
             const issue = assessmentPresentation(record.assessment);
             const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
               modelDescription,
               timingDescription,
-              `Ended ${ended}`,
+              `${timestampKind} ${timestamp}`,
               issue ? assessmentIssueText(issue) : null,
             ]
               .filter((value): value is string => value !== null)
@@ -283,19 +285,13 @@ export function RecordList({
                       <span className={styles.timing} title={timingDescription}>
                         {firstToken} / {totalDuration}
                       </span>
-                      {record.ended_at ? (
-                        <time
-                          className={styles.timestamp}
-                          dateTime={record.ended_at}
-                          title={`Ended ${ended}`}
-                        >
-                          {ended}
-                        </time>
-                      ) : (
-                        <span className={styles.timestamp} title={`Ended ${ended}`}>
-                          {ended}
-                        </span>
-                      )}
+                      <time
+                        className={styles.timestamp}
+                        dateTime={timestampValue}
+                        title={`${timestampKind} ${timestamp}`}
+                      >
+                        {timestamp}
+                      </time>
                     </span>
                     <span id={metadataDescriptionId} className="srOnly">
                       {metadataDescription}

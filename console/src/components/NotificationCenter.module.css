@@ -68,6 +68,7 @@
   border-color: transparent;
   color: inherit;
   background: transparent;
+  box-shadow: none;
 }
 
 .action {
@@ -80,6 +81,14 @@
   width: 28px;
   place-items: center;
   padding: 0;
+}
+
+.action {
+  height: 28px;
+}
+
+.dismiss {
+  width: 28px;
 }
 
 .action:hover:not(:disabled),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ControlApi } from "./controlApi";
+import { composeControlApi, ControlApi } from "./controlApi";
 
 describe("Control API client", () => {
   it("invokes fetch with the Window receiver", async () => {
@@ -47,7 +47,10 @@ describe("Control API client", () => {
         }),
       ),
     );
-    const api = new ControlApi({ version: "1", csrf_token: "token" }, fetchMock);
+    const api = new ControlApi(
+      { version: "1", csrf_token: "token", listen: "127.0.0.1:3000" },
+      fetchMock,
+    );
     const messages: string[] = [];
     let meta = "";
     let complete = 0;
@@ -66,5 +69,69 @@ describe("Control API client", () => {
     expect(meta).toBe("session-1");
     expect(messages).toEqual(["hello"]);
     expect(complete).toBe(1);
+  });
+
+  it("owns semantic paths, Tenant encoding, query parameters, and Config wire fields", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(Response.json({})));
+    const api = composeControlApi(
+      new ControlApi({ version: "1", csrf_token: "token", listen: "127.0.0.1:3000" }, fetchMock),
+    );
+    const tenant = { kind: "managed", name: "work" } as const;
+    const target = {
+      tenant,
+      agent: "codex",
+      current: false,
+      config: "review",
+      file: "config.toml",
+    } as const;
+
+    await api.overview.loadSessionSummary(tenant, "codex");
+    await api.tenants.listComponents(tenant);
+    await api.configs.revealConfigFile(target);
+    await api.configs.saveConfigFile(target, {
+      revision: "rev-1",
+      contentBase64: "Y29udGVudA==",
+      visualOptions: [{ path: "model", included: true, value: "gpt-5" }],
+      customProvider: {
+        included: true,
+        name: "local",
+        base_url: "http://127.0.0.1:3000",
+        proxy_routed: true,
+      },
+    });
+    await api.sessions.loadSessionEvidence(tenant, "codex", "session/1", "entry 1", "10:2");
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/_aibox/api/sessions/summary?tenant=managed%3Awork&agent=codex",
+      "/_aibox/api/components?tenant=managed%3Awork",
+      "/_aibox/api/configs/reveal",
+      "/_aibox/api/configs/save",
+      "/_aibox/api/sessions/evidence?tenant=managed%3Awork&agent=codex&id=session%2F1&entry=entry+1&snapshot=10%3A2",
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({
+      tenant: "managed:work",
+      agent: "codex",
+      current: false,
+      config: "review",
+      file: "config.toml",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[3][1]?.body as string)).toEqual({
+      tenant: "managed:work",
+      agent: "codex",
+      current: false,
+      config: "review",
+      file: "config.toml",
+      revision: "rev-1",
+      content_base64: "Y29udGVudA==",
+      visual_options: [{ path: "model", included: true, value: "gpt-5" }],
+      custom_provider: {
+        included: true,
+        name: "local",
+        base_url: "http://127.0.0.1:3000",
+        proxy_routed: true,
+      },
+    });
   });
 });

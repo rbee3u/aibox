@@ -1,17 +1,21 @@
 import { Box, Menu } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRequestApi } from "./api";
-import { ConfigPage, OperationPanel, SessionPage, TenantPage } from "./ManagementPages";
+import { ConfigPage } from "./ConfigPage";
+import { OperationPanel } from "./OperationPanel";
+import { SessionPage } from "./SessionPage";
+import { TenantPage } from "./TenantPage";
 import { OverviewPage, type ConsoleNavigate } from "./OverviewPage";
 import { RequestsPage } from "./RequestsPage";
-import { ControlApi } from "./controlApi";
-import type { Operation } from "./controlApi";
+import { connectControlApi } from "./controlApi";
+import type { ConnectedControlApi, Operation } from "./controlApi";
+import { IconButton } from "./components/IconButton";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { readPreference, storePreference } from "./preferences";
 import { SidebarUtilities } from "./SidebarUtilities";
 import { usePersistentTheme } from "./usePersistentTheme";
 import { moduleIcons, type ModuleId } from "./consoleIcons";
 import styles from "./App.module.css";
-
 const modules = [
   { id: "overview", label: "Overview", detail: "Current status", icon: moduleIcons.overview },
   { id: "tenants", label: "Tenants", detail: "Identity & Components", icon: moduleIcons.tenants },
@@ -29,17 +33,21 @@ const modules = [
     icon: moduleIcons.requests,
   },
 ] as const;
-
 const SIDEBAR_COLLAPSED_KEY = "aibox-console-sidebar-collapsed";
-
-function moduleFromPath(): ModuleId {
-  const value = window.location.pathname.split("/").filter(Boolean).at(-1);
+interface RouteSnapshot {
+  module: ModuleId;
+  search: string;
+}
+function moduleFromPath(pathname: string): ModuleId {
+  const value = pathname.split("/").filter(Boolean).at(-1);
   return modules.some((module) => module.id === value) ? (value as ModuleId) : "overview";
 }
-
+function currentRoute(): RouteSnapshot {
+  return { module: moduleFromPath(window.location.pathname), search: window.location.search };
+}
 export function App() {
-  const [api, setApi] = useState<ControlApi | null>(null);
-  const [active, setActive] = useState<ModuleId>(moduleFromPath);
+  const [api, setApi] = useState<ConnectedControlApi | null>(null);
+  const [route, setRoute] = useState<RouteSnapshot>(currentRoute);
   const [collapsed, setCollapsed] = useState(
     () => readPreference(SIDEBAR_COLLAPSED_KEY) === "true",
   );
@@ -55,40 +63,32 @@ export function App() {
   const [operationDismissed, setOperationDismissed] = useState<string | null>(null);
   const [operationExpanded, setOperationExpanded] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
-  const [locationVersion, setLocationVersion] = useState(0);
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const configDirty = useRef(false);
   const acceptedLocation = useRef(currentLocation());
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-
   useEffect(() => {
-    void ControlApi.connect()
+    void connectControlApi()
       .then((client) => {
         setApi(client);
-        return client.get<{ operation: Operation | null }>("/_aibox/api/operations/current");
+        return client.operations.current();
       })
-      .then((value) => setOperation(value.operation))
+      .then(setOperation)
       .catch((cause: unknown) =>
         setStartupError(cause instanceof Error ? cause.message : String(cause)),
       );
   }, []);
-
   useEffect(() => {
     if (!api) return;
-    const source = new EventSource("/_aibox/api/operations/events");
-    source.addEventListener("open", () => setOperationConnection("connected"));
-    source.addEventListener("error", () => setOperationConnection("reconnecting"));
-    source.addEventListener("operation", (event) => {
-      const value = JSON.parse((event as MessageEvent<string>).data) as {
-        operation: Operation | null;
-        gap: boolean;
-      };
-      setOperation((current) => mergeOperation(current, value.operation, value.gap));
-      if (value.operation?.state === "running") setOperationDismissed(null);
+    return api.operations.subscribe({
+      onConnection: setOperationConnection,
+      onOperation: (value, gap) => {
+        setOperation((current) => mergeOperation(current, value, gap));
+        if (value?.state === "running") setOperationDismissed(null);
+      },
     });
-    return () => source.close();
   }, [api]);
-
   useEffect(() => {
     const onPopState = () => {
       const next = currentLocation();
@@ -97,13 +97,11 @@ export function App() {
         return;
       }
       acceptedLocation.current = next;
-      setActive(moduleFromPath());
-      setLocationVersion((value) => value + 1);
+      setRoute(currentRoute());
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-
   useEffect(() => {
     const preventDirtyUnload = (event: BeforeUnloadEvent) => {
       if (!configDirty.current) return;
@@ -113,11 +111,9 @@ export function App() {
     window.addEventListener("beforeunload", preventDirtyUnload);
     return () => window.removeEventListener("beforeunload", preventDirtyUnload);
   }, []);
-
   useEffect(() => {
     storePreference(SIDEBAR_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
-
   useEffect(() => {
     if (!window.matchMedia) return;
     const query = window.matchMedia("(max-width: 900px)");
@@ -129,18 +125,15 @@ export function App() {
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-
   const closeMobileNavigation = useCallback((restoreFocus = true) => {
     setMobileOpen(false);
     if (restoreFocus) window.requestAnimationFrame(() => menuButtonRef.current?.focus());
   }, []);
-
   useEffect(() => {
     const sidebar = sidebarRef.current;
     if (!sidebar) return;
     sidebar.inert = mobileLayout && !mobileOpen;
     if (!mobileLayout || !mobileOpen) return;
-
     const focusable = () =>
       [...sidebar.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), select")].filter(
         (element) => !element.hidden && element.tabIndex >= 0,
@@ -149,6 +142,7 @@ export function App() {
       (sidebar.querySelector<HTMLElement>('[aria-current="page"]') ?? focusable()[0])?.focus(),
     );
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeMobileNavigation();
@@ -170,54 +164,63 @@ export function App() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [closeMobileNavigation, mobileLayout, mobileOpen]);
-
   const requestApi = useMemo(
     () => (api ? createRequestApi(fetch, api.bootstrap.csrf_token) : null),
     [api],
   );
+  const active = route.module;
   const activeModule = modules.find((module) => module.id === active)!;
-
   const commitLocation = useCallback(
     (module: ModuleId, query?: URLSearchParams, replace = false) => {
       const suffix = query?.toString();
       const next = `/_aibox/ui/${module}${suffix ? `?${suffix}` : ""}`;
       window.history[replace ? "replaceState" : "pushState"](null, "", next);
       acceptedLocation.current = next;
+      setRoute({ module, search: suffix ? `?${suffix}` : "" });
     },
     [],
   );
-
   const navigate: ConsoleNavigate = (module, query) => {
-    if (configDirty.current && !confirmDiscardedConfig()) return;
+    const suffix = query?.toString();
+    const next = `/_aibox/ui/${module}${suffix ? `?${suffix}` : ""}`;
+    if (configDirty.current) {
+      setPendingNavigation(next);
+      return;
+    }
     commitLocation(module, query);
-    setActive(module);
     if (mobileLayout) closeMobileNavigation();
   };
-
+  const continuePendingNavigation = useCallback(() => {
+    if (!pendingNavigation) return;
+    window.history.pushState(null, "", pendingNavigation);
+    acceptedLocation.current = pendingNavigation;
+    setRoute(currentRoute());
+    setPendingNavigation(null);
+    if (mobileLayout) closeMobileNavigation();
+  }, [closeMobileNavigation, mobileLayout, pendingNavigation]);
   const updatePageLocation = useCallback(
     (module: ModuleId, query: URLSearchParams, replace = false) => {
       commitLocation(module, query, replace);
     },
     [commitLocation],
   );
-
+  const updateRequestsLocation = useCallback(
+    (query: URLSearchParams, replace = false) => updatePageLocation("requests", query, replace),
+    [updatePageLocation],
+  );
   const recordConfigDirty = useCallback((dirty: boolean) => {
     configDirty.current = dirty;
   }, []);
-
   function recordOperation(value: Operation) {
     setOperation(value);
     setOperationDismissed(null);
   }
-
   const visibleOperation =
     api && operation && operationDismissed !== operation.id ? operation : null;
-
   return (
     <div
-      className={`${styles.app} ${collapsed ? styles.collapsed : ""} ${
-        visibleOperation && operationExpanded ? styles.operationExpanded : ""
-      }`}
+      data-aibox-shell="true"
+      className={`${styles.app} ${collapsed ? styles.collapsed : ""} ${visibleOperation && operationExpanded ? styles.operationExpanded : ""}`}
     >
       <aside
         ref={sidebarRef}
@@ -285,17 +288,16 @@ export function App() {
       )}
       <div className={styles.workspace}>
         <header className={styles.topbar}>
-          <button
-            ref={menuButtonRef}
+          <IconButton
+            buttonRef={menuButtonRef}
             className={styles.menuButton}
-            type="button"
-            aria-label="Open navigation"
+            label="Open navigation"
             aria-controls="console-navigation"
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={18} />
-          </button>
+          </IconButton>
           <div className={styles.pageTitle}>
             <h1>{activeModule.label}</h1>
             <span>·</span>
@@ -316,7 +318,7 @@ export function App() {
           )}
           {api && active === "overview" && (
             <OverviewPage
-              api={api}
+              api={api.overview}
               operation={operation}
               onNavigate={navigate}
               onOperation={recordOperation}
@@ -324,36 +326,42 @@ export function App() {
           )}
           {api && active === "tenants" && (
             <TenantPage
-              api={api}
+              api={api.tenants}
               operation={operation}
-              locationVersion={locationVersion}
+              search={route.search}
               onLocationChange={updatePageLocation}
               onOperation={recordOperation}
             />
           )}
           {api && active === "configs" && (
             <ConfigPage
-              api={api}
+              api={api.configs}
               operation={operation}
-              locationVersion={locationVersion}
+              search={route.search}
               onDirtyChange={recordConfigDirty}
               onLocationChange={updatePageLocation}
             />
           )}
           {api && active === "sessions" && (
             <SessionPage
-              api={api}
+              api={api.sessions}
               operation={operation}
-              locationVersion={locationVersion}
+              search={route.search}
               onLocationChange={updatePageLocation}
             />
           )}
-          {requestApi && active === "requests" && <RequestsPage api={requestApi} />}
+          {requestApi && active === "requests" && (
+            <RequestsPage
+              api={requestApi}
+              search={route.search}
+              onLocationChange={updateRequestsLocation}
+            />
+          )}
         </main>
       </div>
       {api && visibleOperation && (
         <OperationPanel
-          api={api}
+          api={api.operations}
           operation={visibleOperation}
           connection={operationConnection}
           onOperation={recordOperation}
@@ -361,18 +369,25 @@ export function App() {
           onExpandedChange={setOperationExpanded}
         />
       )}
+      {pendingNavigation && (
+        <ConfirmDialog
+          title="Discard unsaved Config changes?"
+          message="Your unsaved Config changes will be lost if you continue."
+          confirmLabel="Discard and continue"
+          variant="primary"
+          onCancel={() => setPendingNavigation(null)}
+          onConfirm={continuePendingNavigation}
+        />
+      )}
     </div>
   );
 }
-
 function currentLocation(): string {
   return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
-
 function confirmDiscardedConfig(): boolean {
   return window.confirm("Discard unsaved Config changes and continue?");
 }
-
 function mergeOperation(
   current: Operation | null,
   incoming: Operation | null,

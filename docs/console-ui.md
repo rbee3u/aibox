@@ -76,23 +76,80 @@ references, so `assets/console.css` and `assets/console.js` are served as
 
 ## Code Boundaries
 
-`src/App.tsx` owns the persistent AIBox shell, URL-backed module navigation,
-sidebar preferences, latest Management Operation surface, and protection for
-unsaved Config edits across in-app, history, and browser navigation.
+`src/App.tsx` owns the persistent AIBox shell, the sole `history` and
+`popstate` integration, URL-backed module navigation, sidebar preferences,
+latest Management Operation surface, and protection for unsaved Config edits
+across in-app, history, and browser navigation. Pages receive an immutable
+`{ module, search }` route snapshot and navigation callbacks; they keep only
+pure query codecs and never subscribe to browser history themselves.
 `src/SidebarUtilities.tsx` owns the sidebar resource catalog, brand icons, and
-theme control.
-`src/OverviewPage.tsx` owns Overview. `src/ManagementPages.tsx` owns
-Tenants/Components, Configs, and Sessions. Desktop layouts support 1024px and
-wider with a collapsible sidebar; narrow layouts use one-panel catalog/detail
-navigation.
+theme control. The Claude, OpenAI, and GitHub brand SVGs are committed under
+`src/assets/brand/`; their LobeHub source and MIT license are recorded beside
+the assets, so runtime and build output do not depend on an icon package.
 
-`src/controlApi.ts` owns the Console-internal Control API and startup CSRF
-token; `src/api.ts` remains the Request API client. Their TypeScript
+`src/OverviewPage.tsx` orchestrates Overview data and controls,
+`src/TopologyCanvas.tsx` owns topology rendering, and
+`src/overviewTopology.ts` is the React-free tree, search, filter, and layout
+model. `src/TenantPage.tsx`, `src/ConfigPage.tsx`, and `src/SessionPage.tsx`
+own the management domains. Their CSS Modules own domain and responsive rules;
+`src/CatalogLayout.module.css` contains only shared catalog, split, and detail
+structure. Desktop layouts support 1024px and wider with a collapsible sidebar;
+narrow layouts use one-panel catalog/detail navigation.
+
+`connectControlApi()` in `src/controlApi.ts` owns the Console-internal Control
+transport and composes narrow Overview, Tenant, Config, Session, and Operation
+interfaces. Paths, query strings, wire bodies, CSRF, NDJSON, and SSE remain in
+that client. `src/api.ts` remains the distinct Request API client, and
+`RequestsPage` requires that client to be injected. Their TypeScript
 interfaces mirror the Rust JSON responses, including raw Summary timing,
 Request Outcome, the top-level Coding Agent Session ID, the persisted Model
 Protocol Summary and Record Assessment, and normalized Diagnostics groups.
-Components receive an API interface so tests can use deterministic fakes
-without sockets.
+Pages receive only their domain API interface so tests can use strict,
+deterministic fakes without sockets or HTTP knowledge.
+
+Vite uses its built-in React and TypeScript transform without the React Vite
+plugin. The development server therefore does not provide Fast Refresh; this
+keeps the production and development dependency surface smaller without
+changing the embedded Console behavior.
+
+## Visual System
+
+AIBox semantic CSS variables in `src/styles.css` are the single source of truth
+for Console color, surface, border, status, focus, code, and shadow roles. Both
+light and dark palettes are complete and tested for parity and primary text
+contrast. The default `system` theme follows `prefers-color-scheme`; explicit
+light or dark choices are persisted, and `data-resolved-theme` selects the
+palette before React renders.
+
+Small AIBox-owned UI primitives in `src/components/` provide ordinary actions,
+text inputs, text areas, checkboxes, native selects, icon buttons, and anchored
+tooltips. They use native HTML semantics and CSS Modules rather than a general
+visual or headless UI framework. Their props remain native except for narrow
+AIBox contracts such as action tone and a checkbox's boolean change callback.
+Use these primitives for ordinary controls; keep specialized domain interaction
+with the structure that owns it.
+
+CSS Modules continue to own domain layout and presentation. Do not replace the
+Overview topology, resource catalogs, Session conversation, CodeMirror,
+diagnostics, custom filter/listbox behavior, or other domain structures with a
+generic Card, Table, Tree, or Select solely for visual consistency. The native
+`Dialog` also remains the modal container because its focus trap, Escape,
+focus-restoration behavior, and tests are established. Lucide remains the
+interface icon system. Focused libraries may own specialized behavior such as
+code editing or Markdown rendering, but do not add a general visual framework,
+external fonts, CDN assets, or a second competing token source.
+
+All shared-control and tooltip styles are static. The request-scoped nonce from
+the `aibox-csp-nonce` meta element remains required for CodeMirror-generated
+styles under the embedded Console Content Security Policy. Frontend tests cover
+semantic tokens, system-theme changes, CSP propagation, native-control
+contracts, tooltips, and axe accessibility without committed screenshot
+baselines.
+
+The production JavaScript bundle is checked after every Console build. Its gzip
+size may grow by at most 64 KiB (65,536 bytes) from the current architecture
+baseline of 369,891 bytes; `scripts/check-bundle-budget.mjs` enforces the
+435,427-byte maximum before generated assets are published.
 
 ## Overview and Management Navigation
 
@@ -145,10 +202,10 @@ changes only on its explicit refresh. Expanding Sessions performs discovery
 only and does not parse Transcript content. Topology expansion, filters, zoom,
 and viewport position are deliberately not persisted.
 
-Management selections are shareable URL state. Tenants use `scope` and optional
-`component`; Configs use `scope`, `agent`, either `current=1` or `config`, and
-optional `file`; Sessions use repeated `scope` and `agent`, plus
-`session_scope`, `session_agent`, and `session` for the selected Session. Dirty
+Management selections are shareable URL state. Tenants use `tenant` and optional
+`component`; Configs use `tenant`, `agent`, either `current=1` or `config`, and
+optional `file`; Sessions use repeated `tenant` and `agent`, plus
+`session_tenant`, `session_agent`, and `session` for the selected Session. Dirty
 Config file edits require confirmation before in-app navigation, history
 navigation, or page unload can discard them.
 
@@ -189,7 +246,7 @@ merge only when no secondary Transcript record separates them. Message
 timestamps stay compact and expose the complete timestamp through their title.
 
 Consecutive Tool Activity and Transcript Evidence entries remain in native order
-but appear as one collapsed `Agent activity` disclosure. Its summary reports the
+but appear as one collapsed `Transcript activity` disclosure. Its summary reports the
 item count, bounded activity labels, and whether diagnostics are present;
 expansion reveals the individual safe summaries and on-demand evidence controls.
 Reasoning and thinking show a hidden-internal diagnostic state but never expose
@@ -223,13 +280,18 @@ not fall below 12 pixels. Specialized editor, JSON tree, Body, Transcript, and
 log line heights remain local because their reading modes differ.
 
 Named Config files open in the Visual editor when the Control API supplies a
-visual field model; Raw remains the explicit advanced view. Current Config
-files always open in Raw, with Visual available only as an optional view when
-supported. The editor header keeps Scope, Coding Agent, Config, and File visible
-as separate context fields. **Apply to Current Config** is a one-shot projection
-of fixed Config Fields, never an Active Config association. Confirmation,
-success feedback, Last applied, and Config Drift use that same language and
-retain the existing per-file commit and no-rollback semantics.
+Visual Config Option model; Raw remains the explicit advanced view. Visual uses
+compact desktop label-and-control rows that stack on narrow screens. Native
+paths stay in Raw, descriptions use hover-and-focus help tooltips, and required
+Options use an accessible `*`. Closed enum controls use declared native values;
+optional enums and booleans expose **Default** to omit their Config Field.
+Current Config files always open in Raw, with Visual available only as an
+optional view when supported. The editor header keeps Tenant, Coding Agent,
+Config, and File visible as separate context fields. **Apply to Current Config**
+is a one-shot projection of fixed Config Fields, never an Active Config
+association. Confirmation, success feedback, Last applied, and Config Drift use
+that same language and retain the existing per-file commit and no-rollback
+semantics.
 
 Requests uses `page` for its one-based page number, `record` for the selected
 Request Record ID, and `tab` for `summary`, `request`, or `response`. Invalid

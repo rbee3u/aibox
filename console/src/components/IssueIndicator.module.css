@@ -20,20 +20,26 @@
 .warning {
   color: var(--warning);
 }
+.help {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  color: var(--muted);
+}
 .indicator.error:hover {
   background: var(--danger-soft);
 }
 .indicator.warning:hover {
   background: var(--warning-soft);
 }
+.indicator.help:hover {
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
+}
 .indicator:focus-visible {
   outline-offset: 1px;
 }
 .tooltip {
-  position: fixed;
-  z-index: 80;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 16px));
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
@@ -43,14 +49,6 @@
   font-size: var(--text-xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
-  pointer-events: none;
-  visibility: hidden;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-.tooltipVisible {
-  visibility: visible;
-  opacity: 1;
 }
 .tooltipTitle {
   color: var(--ink);

@@ -1,12 +1,16 @@
 import axe from "axe-core";
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConfigPage, SessionPage, TenantPage } from "./ManagementPages";
+import { ConfigPage } from "./ConfigPage";
+import { SessionPage } from "./SessionPage";
+import { TenantPage } from "./TenantPage";
 import { OverviewPage } from "./OverviewPage";
 import { RequestsPage } from "./RequestsPage";
-import { ControlApi } from "./controlApi";
+import { composeControlApi, ControlApi } from "./controlApi";
 import type { OverviewData, TopologyData } from "./controlApi";
+import { materializeControlApi } from "./managementTestSupport";
 import { fakeApi } from "./test/fixtures";
+import { applyThemePreference } from "./usePersistentTheme";
 
 type Module = "overview" | "tenants" | "configs" | "sessions" | "requests";
 type Theme = "light" | "dark";
@@ -51,7 +55,7 @@ const tenants = [
 ] as const;
 
 function controlApi(): ControlApi {
-  return {
+  return materializeControlApi({
     bootstrap: { version: "1.2.3", csrf_token: "token" },
     get: vi.fn((path: string) => {
       if (path === "/_aibox/api/overview") return Promise.resolve(overview);
@@ -70,7 +74,6 @@ function controlApi(): ControlApi {
       }
       if (path.startsWith("/_aibox/api/configs?")) {
         return Promise.resolve({
-          named_configs: [],
           configs: [],
           files: ["config.toml", "auth.json"],
           application: { last_application: null, drift: "untracked" },
@@ -94,16 +97,16 @@ function controlApi(): ControlApi {
       return Promise.reject(new Error(`Unexpected Control API mutation: ${path}`));
     }),
     streamSessionDetail: vi.fn(),
-  } as unknown as ControlApi;
+  });
 }
 
 async function renderModule(module: Module) {
-  const api = controlApi();
+  const api = composeControlApi(controlApi());
   switch (module) {
     case "overview": {
       const result = render(
         <OverviewPage
-          api={api}
+          api={api.overview}
           operation={null}
           onNavigate={() => undefined}
           onOperation={() => undefined}
@@ -113,22 +116,24 @@ async function renderModule(module: Module) {
       return result;
     }
     case "tenants": {
-      const result = render(<TenantPage api={api} />);
+      const result = render(<TenantPage api={api.tenants} search={window.location.search} />);
       await screen.findByRole("button", { name: /^default, Managed Tenant/ });
       return result;
     }
     case "configs": {
-      const result = render(<ConfigPage api={api} />);
+      const result = render(<ConfigPage api={api.configs} search={window.location.search} />);
       await screen.findByRole("button", { name: "Tenant: default" });
       return result;
     }
     case "sessions": {
-      const result = render(<SessionPage api={api} />);
+      const result = render(<SessionPage api={api.sessions} search={window.location.search} />);
       await screen.findByRole("button", { name: "Tenant: default" });
       return result;
     }
     case "requests": {
-      const result = render(<RequestsPage api={fakeApi()} />);
+      const result = render(
+        <RequestsPage api={fakeApi()} search={window.location.search} onLocationChange={vi.fn()} />,
+      );
       await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
       return result;
     }
@@ -150,7 +155,7 @@ describe("Console accessibility gate", () => {
       "requests",
     ] satisfies Module[]) {
       it(`${module} has no serious or critical axe violations in ${theme} theme`, async () => {
-        document.documentElement.dataset.theme = theme;
+        applyThemePreference(theme);
         const { container } = await renderModule(module);
         const result = await axe.run(container, {
           runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] },

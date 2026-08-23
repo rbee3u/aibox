@@ -93,19 +93,8 @@ pub(crate) struct PropagationEntry {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-pub(crate) struct PropagationCounts {
-    pub(crate) updated: usize,
-    pub(crate) unchanged: usize,
-    pub(crate) conflicts: usize,
-    pub(crate) newer: usize,
-    pub(crate) invalid: usize,
-    pub(crate) failed: usize,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct AuthPropagationReport {
     pub(crate) entries: Vec<PropagationEntry>,
-    pub(crate) counts: PropagationCounts,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -266,8 +255,7 @@ pub(crate) fn execute_auth_propagation(plan: AuthPropagationPlan) -> AuthPropaga
             outcome,
         });
     }
-    let counts = counts_for(&entries);
-    AuthPropagationReport { entries, counts }
+    AuthPropagationReport { entries }
 }
 
 pub(crate) fn preview_auth_propagation(plan: &AuthPropagationPlan) -> AuthPropagationPreview {
@@ -427,19 +415,4 @@ fn classify_auth(content: &[u8], expected_account_id: Option<&str>) -> AuthConte
         last_refresh_text: last_refresh_text.to_string(),
         value,
     })
-}
-
-fn counts_for(entries: &[PropagationEntry]) -> PropagationCounts {
-    let mut counts = PropagationCounts::default();
-    for entry in entries {
-        match entry.outcome {
-            PropagationOutcome::Updated => counts.updated += 1,
-            PropagationOutcome::Unchanged => counts.unchanged += 1,
-            PropagationOutcome::Conflict { .. } => counts.conflicts += 1,
-            PropagationOutcome::Newer { .. } => counts.newer += 1,
-            PropagationOutcome::Invalid { .. } => counts.invalid += 1,
-            PropagationOutcome::Failed { .. } => counts.failed += 1,
-        }
-    }
-    counts
 }

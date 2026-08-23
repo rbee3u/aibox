@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { OverviewPage } from "./OverviewPage";
 import styles from "./OverviewPage.module.css";
 import type { Operation, OverviewData, SessionSummaryData, TopologyData } from "./controlApi";
-import { ControlApi } from "./controlApi";
+import { composeControlApi } from "./controlApi";
+import { materializeControlApi } from "./managementTestSupport";
 
 const overview = {
   service: {
@@ -119,7 +120,8 @@ function fakeApi(topologyData: TopologyData = topology) {
     return Promise.reject(new Error(`Unexpected GET ${path}`));
   });
   const post = vi.fn(() => Promise.resolve(operation));
-  return { api: { get, post } as unknown as ControlApi, get, post };
+  const control = materializeControlApi({ get, post });
+  return { api: composeControlApi(control).overview, control, get, post };
 }
 
 async function openTopology() {
@@ -166,7 +168,7 @@ describe("OverviewPage", () => {
       if (path === "/_aibox/api/topology") return Promise.resolve(topology);
       return Promise.reject(new Error(`Unexpected GET ${path}`));
     });
-    const api = { get, post: vi.fn() } as unknown as ControlApi;
+    const api = composeControlApi(materializeControlApi({ get, post: vi.fn() })).overview;
 
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
@@ -192,12 +194,43 @@ describe("OverviewPage", () => {
 
     expect(onNavigate).toHaveBeenCalledWith(
       "configs",
-      new URLSearchParams("scope=managed%3Adefault&agent=codex&config=broken"),
+      new URLSearchParams("tenant=managed%3Adefault&agent=codex&config=broken"),
     );
 
     const requestDetail = screen.getByText("0 errors · 2 warnings");
     await user.click(requestDetail.closest("button")!);
     expect(onNavigate).toHaveBeenLastCalledWith("requests", undefined);
+  });
+
+  it("uses singular labels for one Request error or warning", async () => {
+    const { control } = fakeApi();
+    const singularOverview = {
+      ...overview,
+      requests: { ...overview.requests, warning: 0, error: 1 },
+    } satisfies OverviewData;
+    const get = vi.fn((path: string) => {
+      if (path === "/_aibox/api/overview") return Promise.resolve(singularOverview);
+      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
+      if (path.startsWith("/_aibox/api/sessions/summary?"))
+        return Promise.resolve({
+          count: 0,
+          warnings: [],
+          partial: false,
+        } satisfies SessionSummaryData);
+      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    });
+
+    render(
+      <OverviewPage
+        api={composeControlApi(materializeControlApi({ ...control, get })).overview}
+        operation={null}
+        onNavigate={vi.fn()}
+        onOperation={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("1 error · 0 warnings")).toBeInTheDocument();
+    expect(screen.queryByText("1 errors · 0 warnings")).not.toBeInTheDocument();
   });
 
   it("shows the complete structural map and loads Session counts on demand", async () => {
@@ -217,14 +250,14 @@ describe("OverviewPage", () => {
     await user.click(screen.getAllByRole("button", { name: "Expand Sessions" })[0]);
     expect((await within(tree).findAllByText("3 Sessions")).length).toBe(2);
     expect(get).toHaveBeenCalledWith(
-      "/_aibox/api/sessions/summary?scope=managed&tenant=default&agent=codex",
+      "/_aibox/api/sessions/summary?tenant=managed%3Adefault&agent=codex",
       expect.any(AbortSignal),
     );
 
     await user.click(tree.querySelector<HTMLAnchorElement>('a[href*="config=daily"]')!);
     expect(onNavigate).toHaveBeenCalledWith("configs", expect.objectContaining({}));
     const query = onNavigate.mock.calls.at(-1)?.[1] as URLSearchParams;
-    expect(query.toString()).toBe("scope=managed%3Adefault&agent=codex&config=daily");
+    expect(query.toString()).toBe("tenant=managed%3Adefault&agent=codex&config=daily");
   });
 
   it("searches hidden branches and supports ARIA tree arrow navigation", async () => {

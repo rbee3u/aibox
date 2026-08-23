@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useCallback, useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestsPage } from "./RequestsPage";
 import { ApiError } from "./api";
@@ -21,8 +22,24 @@ import type { RequestApi } from "./types";
 
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
 
+function RequestsHarness({ api }: { api: RequestApi }) {
+  const [search, setSearch] = useState(window.location.search);
+  useEffect(() => {
+    const readLocation = () => setSearch(window.location.search);
+    window.addEventListener("popstate", readLocation);
+    return () => window.removeEventListener("popstate", readLocation);
+  }, []);
+  const onLocationChange = useCallback((query: URLSearchParams, replace = false) => {
+    const suffix = query.toString();
+    const next = `${window.location.pathname}${suffix ? `?${suffix}` : ""}`;
+    window.history[replace ? "replaceState" : "pushState"](null, "", next);
+    setSearch(suffix ? `?${suffix}` : "");
+  }, []);
+  return <RequestsPage api={api} search={search} onLocationChange={onLocationChange} />;
+}
+
 function renderApp(overrides: Partial<RequestApi> = {}) {
-  return render(<RequestsPage api={fakeApi(overrides)} />);
+  return render(<RequestsHarness api={fakeApi(overrides)} />);
 }
 
 function flushEffects() {
@@ -146,6 +163,113 @@ describe("Requests page", () => {
     expect(window.location.search).toBe("?page=2");
   });
 
+  it("does not navigate when clicking the already active Request detail Tab", async () => {
+    const user = userEvent.setup();
+    const pushState = vi.spyOn(window.history, "pushState");
+    renderApp();
+
+    await openCompletedRecord(user);
+    pushState.mockClear();
+
+    await user.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(pushState).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "Request" }));
+    expect(pushState).toHaveBeenCalledTimes(1);
+    pushState.mockClear();
+
+    await user.click(screen.getByRole("tab", { name: "Request" }));
+    expect(pushState).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "Response" }));
+    expect(pushState).toHaveBeenCalledTimes(1);
+    pushState.mockClear();
+
+    await user.click(screen.getByRole("tab", { name: "Response" }));
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed page navigation and keeps the route aligned with the visible page", async () => {
+    const secondPageSummary = completedSummaryFor(
+      "0198-demo-page-navigation-retry",
+      "second.example.test",
+    );
+    const firstPage = recordListFor([completedSummary], {
+      total: 51,
+      deletable_count: 51,
+      has_next: true,
+    });
+    const secondPage = recordListFor([secondPageSummary], {
+      total: 51,
+      deletable_count: 51,
+    });
+    const listRecords = vi
+      .fn<RequestApi["listRecords"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockRejectedValueOnce(new Error("second page unavailable"))
+      .mockResolvedValueOnce(secondPage);
+    const user = userEvent.setup();
+    renderApp({ listRecords });
+
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("second page unavailable");
+    expect(window.location.search).toBe("");
+    expect(screen.getByText("Page 1 of 2 · 1 shown · 51 total")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "POST api.example.test/v1/responses" }),
+    ).toBeInTheDocument();
+
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByRole("button", { name: "POST second.example.test/v1/responses" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Page 2 of 2 · 1 shown · 51 total")).toBeInTheDocument();
+    expect(window.location.search).toBe("?page=2");
+    expect(listRecords.mock.calls.map(([page]) => page)).toEqual([1, 2, 2]);
+  });
+
+  it("restores the URL Tab when browser history changes the selected record", async () => {
+    const secondSummary = completedSummaryFor("0198-demo-completed-second", "second.example.test");
+    const secondDetail = {
+      ...completedDetail,
+      request: {
+        ...completedDetail.request,
+        id: secondSummary.id,
+        upstream_url: secondSummary.upstream_url,
+      },
+    };
+    const user = userEvent.setup();
+    const getRecord = vi
+      .fn<RequestApi["getRecord"]>()
+      .mockImplementation((id) =>
+        Promise.resolve(id === secondSummary.id ? secondDetail : completedDetail),
+      );
+    renderApp({
+      listRecords: vi.fn().mockResolvedValue(recordListFor([completedSummary, secondSummary])),
+      getRecord,
+    });
+
+    await user.click(
+      await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "Response" }));
+    await user.click(screen.getByRole("button", { name: "POST second.example.test/v1/responses" }));
+
+    expect(window.location.search).toBe(`?record=${secondSummary.id}`);
+    act(() => window.history.back());
+
+    await waitFor(() => {
+      expect(window.location.search).toBe(`?record=${completedSummary.id}&tab=response`);
+      expect(screen.getByRole("tab", { name: "Response" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+  });
+
   it("returns to the list and clears a stale Request Record URL", async () => {
     window.history.replaceState(
       null,
@@ -209,7 +333,13 @@ describe("Requests page", () => {
     const activeRow = within(recordListPanel).getByRole("button", {
       name: "GET stream.example.test/events",
     });
-    expect(within(activeRow).getByTitle("Ended —")).toHaveTextContent("—");
+    const activeStarted = within(activeRow).getByTitle("Started 2026-08-06 12:01:00");
+    expect(activeStarted).toHaveTextContent("2026-08-06 12:01:00");
+    expect(activeStarted).toHaveAttribute("datetime", activeSummary.started_at);
+    expect(activeStarted.tagName).toBe("TIME");
+    expect(activeRow).toHaveAccessibleDescription(
+      "Model gpt-5.6-sol; Reasoning effort high; First token —; Duration 500ms; Started 2026-08-06 12:01:00",
+    );
     expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
       "— / 500ms",
     );
@@ -450,16 +580,6 @@ describe("Requests page", () => {
     expect(listRecords).toHaveBeenLastCalledWith(2, expect.any(AbortSignal));
   });
 
-  it("uses the browser API by default", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(recordList));
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<RequestsPage />);
-
-    await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
   it("switches from browsing controls to selection controls", async () => {
     const user = userEvent.setup();
     renderApp();
@@ -585,6 +705,7 @@ describe("Requests page", () => {
       ).not.toBeInTheDocument(),
     );
     expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id]);
+    expect(window.location.search).toBe("");
     expect(screen.getByText("Page 1 of 1 · 1 shown · 1 total")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Select a Request Record" })).toBeInTheDocument();
     await waitFor(() =>
@@ -1247,6 +1368,7 @@ describe("Requests page", () => {
 
     await screen.findByRole("heading", { name: "Select a Request Record" });
     expect(screen.queryByText("Loading record…")).not.toBeInTheDocument();
+    expect(window.location.search).toBe("");
   });
 
   it("shows list failures and retries in place", async () => {
@@ -1264,6 +1386,11 @@ describe("Requests page", () => {
   });
 
   it("retries the currently selected record from its inspection notification", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/_aibox/ui/requests?record=${completedSummary.id}&tab=response`,
+    );
     const getRecord = vi
       .fn<RequestApi["getRecord"]>()
       .mockRejectedValueOnce(new Error("detail unavailable"))
@@ -1271,7 +1398,6 @@ describe("Requests page", () => {
     const user = userEvent.setup();
     renderApp({ getRecord });
 
-    await openCompletedRecord(user);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Couldn’t load record");
     expect(screen.getByRole("heading", { name: "Record unavailable" })).toBeInTheDocument();
@@ -1281,6 +1407,8 @@ describe("Requests page", () => {
     expect(
       await screen.findByRole("region", { name: "Request Record details" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Response" })).toHaveAttribute("aria-selected", "true");
+    expect(window.location.search).toBe(`?record=${completedSummary.id}&tab=response`);
     expect(getRecord).toHaveBeenCalledTimes(2);
   });
 
@@ -1406,10 +1534,10 @@ describe("Requests page", () => {
       .mockResolvedValueOnce(refreshed);
     const api = fakeApi({ listRecords });
     const replacementApi = fakeApi({ listRecords: vi.fn().mockResolvedValue(refreshed) });
-    const { rerender } = render(<RequestsPage api={api} />);
+    const { rerender } = render(<RequestsHarness api={api} />);
 
     await flushEffects();
-    rerender(<RequestsPage api={replacementApi} />);
+    rerender(<RequestsHarness api={replacementApi} />);
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
     expect(initialSignal?.aborted).toBe(true);
 

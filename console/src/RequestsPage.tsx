@@ -1,6 +1,6 @@
 import { ArrowLeftRight, ChevronLeft, CircleAlert, LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createRequestApi, requestWasCancelled } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { requestWasCancelled } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { EmptyState } from "./components/EmptyState";
 import { NotificationCenter, type NotificationItemData } from "./components/NotificationCenter";
@@ -13,7 +13,9 @@ import type { DetailTab } from "./types";
 import styles from "./RequestsPage.module.css";
 
 interface RequestsPageProps {
-  api?: RequestApi;
+  api: RequestApi;
+  search: string;
+  onLocationChange: (query: URLSearchParams, replace?: boolean) => void;
 }
 type Dialog = { kind: "batch"; ids: string[] } | { kind: "record"; id: string } | null;
 type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
@@ -28,8 +30,8 @@ interface RequestsLocation {
   tab: DetailTab;
 }
 
-function readRequestsLocation(): RequestsLocation {
-  const params = new URLSearchParams(window.location.search);
+export function parseRequestsLocation(search: string): RequestsLocation {
+  const params = new URLSearchParams(search);
   const requestedPage = params.get("page");
   const parsedPage = requestedPage && /^\d+$/.test(requestedPage) ? Number(requestedPage) : 1;
   const page = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
@@ -42,7 +44,7 @@ function readRequestsLocation(): RequestsLocation {
   return { page, record, tab };
 }
 
-function requestsLocationSearch(value: RequestsLocation): string {
+export function serializeRequestsLocation(value: RequestsLocation): string {
   const params = new URLSearchParams();
   if (value.page > 1) params.set("page", String(value.page));
   if (value.record) params.set("record", value.record);
@@ -51,20 +53,17 @@ function requestsLocationSearch(value: RequestsLocation): string {
   return query ? `?${query}` : "";
 }
 
-function writeRequestsLocation(value: RequestsLocation, replace = false) {
-  const next = `${window.location.pathname}${requestsLocationSearch(value)}${window.location.hash}`;
-  window.history[replace ? "replaceState" : "pushState"](null, "", next);
-}
-
-function normalizeRequestsLocation(): RequestsLocation {
-  const value = readRequestsLocation();
-  if (window.location.search !== requestsLocationSearch(value)) writeRequestsLocation(value, true);
-  return value;
-}
-
-export function RequestsPage({ api: providedApi }: RequestsPageProps) {
-  const api = useMemo(() => providedApi ?? createRequestApi(), [providedApi]);
-  const [initialLocation] = useState(readRequestsLocation);
+export function RequestsPage({ api, search, onLocationChange }: RequestsPageProps) {
+  const [initialLocation] = useState(() => parseRequestsLocation(search));
+  const appliedSearch = useRef(serializeRequestsLocation(initialLocation));
+  const updateLocation = useCallback(
+    (value: RequestsLocation, replace = false) => {
+      const next = serializeRequestsLocation(value);
+      appliedSearch.current = next;
+      onLocationChange(new URLSearchParams(next), replace);
+    },
+    [onLocationChange],
+  );
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
   const [list, setList] = useState<RecordListData>({
@@ -92,16 +91,11 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   const listController = useRef<AbortController | null>(null);
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
+  const failedListPage = useRef<number | null>(null);
   const initialLoadPending = useRef(true);
   const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
-
-  useEffect(() => {
-    if (window.location.search !== requestsLocationSearch(initialLocation)) {
-      writeRequestsLocation(initialLocation, true);
-    }
-  }, [initialLocation]);
 
   const handleInspectionFailure = useCallback(
     (failure: InspectionFailure) => {
@@ -115,10 +109,10 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       if (failure.kind === "detail" && failure.retryable === false) {
         setDetailOpen(false);
         setFocusAfterInspection(null);
-        writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
       }
     },
-    [reportFailure],
+    [reportFailure, updateLocation],
   );
   const handleInspectionRecovery = useCallback(
     () => resolveFailure("inspection"),
@@ -149,6 +143,12 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
     setTab,
     tab,
   } = inspection;
+  const currentIdRef = useRef(currentId);
+  const tabRef = useRef(tab);
+  useEffect(() => {
+    currentIdRef.current = currentId;
+    tabRef.current = tab;
+  }, [currentId, tab]);
 
   useEffect(() => {
     if (!detailOpen || !currentId || !window.matchMedia?.("(max-width: 760px)").matches) return;
@@ -160,25 +160,26 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
     (id: string) => {
       setFocusAfterInspection(undefined);
       setDetailOpen(true);
-      writeRequestsLocation({ page: pageRef.current, record: id, tab: "summary" });
+      updateLocation({ page: pageRef.current, record: id, tab: "summary" });
       void selectRecord(id);
     },
-    [selectRecord],
+    [selectRecord, updateLocation],
   );
 
   const returnToList = useCallback(() => {
     setFocusAfterInspection(currentId);
     setDetailOpen(false);
     clearCurrentRecord();
-    writeRequestsLocation({ page: pageRef.current, record: null, tab: "summary" });
-  }, [clearCurrentRecord, currentId]);
+    updateLocation({ page: pageRef.current, record: null, tab: "summary" });
+  }, [clearCurrentRecord, currentId, updateLocation]);
 
   const selectTab = useCallback(
     (next: DetailTab) => {
+      if (next === tab) return;
       setTab(next);
-      if (currentId) writeRequestsLocation({ page: pageRef.current, record: currentId, tab: next });
+      if (currentId) updateLocation({ page: pageRef.current, record: currentId, tab: next });
     },
-    [currentId, setTab],
+    [currentId, setTab, tab, updateLocation],
   );
 
   const exitSelectionMode = useCallback(() => {
@@ -216,11 +217,23 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
         setList(payload);
         setPage(targetPage);
         pageRef.current = targetPage;
-        resolveFailure("list");
+        if (
+          !background ||
+          failedListPage.current === null ||
+          failedListPage.current === targetPage
+        ) {
+          failedListPage.current = null;
+          resolveFailure("list");
+        }
         return payload;
       } catch (cause) {
-        if (listController.current === controller && !requestWasCancelled(cause, controller.signal))
+        if (
+          listController.current === controller &&
+          !requestWasCancelled(cause, controller.signal)
+        ) {
+          if (!background || failedListPage.current === null) failedListPage.current = targetPage;
           reportFailure("list", "Couldn’t load request records", cause, true);
+        }
         return null;
       } finally {
         if (listController.current === controller) {
@@ -238,10 +251,13 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   const navigatePage = useCallback(
     (nextPage: number) => {
       const target = Math.max(1, nextPage);
-      writeRequestsLocation({ page: target, record: currentId, tab });
-      void loadPage(target);
+      updateLocation({ page: target, record: currentId, tab });
+      void loadPage(target).then((payload) => {
+        if (payload || failedListPage.current !== target) return;
+        updateLocation({ page: pageRef.current, record: currentId, tab }, true);
+      });
     },
-    [currentId, loadPage, tab],
+    [currentId, loadPage, tab, updateLocation],
   );
 
   const refreshWithFallback = useCallback(
@@ -253,11 +269,13 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
         if (payload.records.length > 0 || candidate === 1) return { page: candidate, payload };
         const lastPage = Math.max(1, Math.ceil(payload.total / RECORDS_PER_PAGE));
         candidate = Math.min(candidate - 1, lastPage);
-        const route = readRequestsLocation();
-        writeRequestsLocation({ ...route, page: candidate }, true);
+        updateLocation(
+          { page: candidate, record: currentIdRef.current, tab: tabRef.current },
+          true,
+        );
       }
     },
-    [loadPage],
+    [loadPage, updateLocation],
   );
 
   const refreshPage = useCallback(async () => {
@@ -268,6 +286,21 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       setRefreshing(false);
     }
   }, [page, refreshWithFallback]);
+
+  const retryListFailure = useCallback(async () => {
+    const targetPage = failedListPage.current ?? pageRef.current;
+    setRefreshing(true);
+    try {
+      const refreshed = await refreshWithFallback(targetPage);
+      if (!refreshed) return;
+      updateLocation(
+        { page: refreshed.page, record: currentIdRef.current, tab: tabRef.current },
+        true,
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshWithFallback, updateLocation]);
 
   useEffect(() => {
     if (selectionMode || dialogOpen) {
@@ -299,23 +332,27 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   }, [initialLocation, selectRecord]);
 
   useEffect(() => {
-    const onPopState = () => {
-      const route = normalizeRequestsLocation();
-      if (route.page !== pageRef.current) void loadPage(route.page);
-      if (route.record && route.record !== currentId) {
-        setDetailOpen(true);
-        setTab(route.tab);
-        void selectRecord(route.record);
-      } else if (!route.record && currentId) {
-        setDetailOpen(false);
-        clearCurrentRecord();
-      } else if (route.record && route.tab !== tab) {
-        setTab(route.tab);
-      }
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [clearCurrentRecord, currentId, loadPage, selectRecord, setTab, tab]);
+    if (appliedSearch.current === search) return;
+    appliedSearch.current = search;
+    const route = parseRequestsLocation(search);
+    const normalized = serializeRequestsLocation(route);
+    if (normalized !== search) {
+      updateLocation(route, true);
+      return;
+    }
+    if (route.page !== pageRef.current) void loadPage(route.page);
+    if (route.record && route.record !== currentId) {
+      // The App-owned history snapshot is an external navigation input for this page.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDetailOpen(true);
+      void selectRecord(route.record, route.tab);
+    } else if (!route.record && currentId) {
+      setDetailOpen(false);
+      clearCurrentRecord();
+    } else if (route.record && route.tab !== tab) {
+      setTab(route.tab);
+    }
+  }, [clearCurrentRecord, currentId, loadPage, search, selectRecord, setTab, tab, updateLocation]);
 
   const selectedIds = [...selected];
 
@@ -374,7 +411,9 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
       selectionPages.current.clear();
       setSelectionMode(false);
       if (currentId && deletedIds.includes(currentId)) {
+        setDetailOpen(false);
         clearCurrentRecord();
+        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
       }
       setDialog(null);
       resolveFailure("action");
@@ -396,7 +435,13 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
     resolveFailure("action");
     try {
       await api.deleteRecords([id]);
-      clearRecordIfCurrent(id);
+      if (currentId === id) {
+        setDetailOpen(false);
+        clearCurrentRecord();
+        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+      } else {
+        clearRecordIfCurrent(id);
+      }
       setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
       setFocusAfterDelete(
         focusTargetAfterDelete(
@@ -428,7 +473,7 @@ export function RequestsPage({ api: providedApi }: RequestsPageProps) {
   function handleNotificationAction(notification: NotificationItemData) {
     resolveFailure(notification.source);
     if (notification.source === "list") {
-      void refreshPage();
+      void retryListFailure();
     } else if (notification.source === "inspection") {
       retryInspectionFailure();
     }

@@ -9,7 +9,7 @@ describe("Request API client", () => {
         Response.json({ records: [], total: 0, deletable_count: 0, has_next: false }),
       );
     }) as typeof fetch;
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await expect(api.listRecords()).resolves.toMatchObject({ records: [] });
   });
@@ -22,7 +22,7 @@ describe("Request API client", () => {
           Response.json({ records: [], total: 0, deletable_count: 0, has_next: false }),
         ),
       );
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await api.listRecords(1);
     await api.listRecords(3);
@@ -35,7 +35,7 @@ describe("Request API client", () => {
 
   it("encodes record ids and keeps read requests cache-free", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({}));
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await api.getRecord("record/id");
 
@@ -59,7 +59,7 @@ describe("Request API client", () => {
       .fn<typeof fetch>()
       .mockImplementation(() => Promise.resolve(responses[responseIndex++]));
     const signal = new AbortController().signal;
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await Promise.all([
       api.listRecords(2, signal),
@@ -78,7 +78,7 @@ describe("Request API client", () => {
 
   it("sends selected records as JSON", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ deleted: 2 }));
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await expect(api.deleteRecords(["one", "two"])).resolves.toBe(2);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -113,7 +113,7 @@ describe("Request API client", () => {
     ],
   ])("surfaces the server's %s", async (_case, response, expectedError) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response);
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     const request = api.deleteRecords(["active"]);
     await expect(request).rejects.toBeInstanceOf(ApiError);
@@ -134,7 +134,7 @@ describe("Request API client", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValue(new Response(new Uint8Array([3, 4]), { headers }));
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await expect(api.loadBody("record/id", "response", 7)).resolves.toEqual({
       bytes: new Uint8Array([3, 4]),
@@ -149,7 +149,7 @@ describe("Request API client", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await expect(api.loadDecodedBody("record/id", "request")).resolves.toEqual(
       new Uint8Array([1, 2, 3]),
@@ -167,7 +167,7 @@ describe("Request API client", () => {
       warning: "index is incomplete",
     };
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
-    const api = createRequestApi(fetchMock);
+    const api = createRequestApi(fetchMock, "csrf");
 
     await expect(api.loadEventTimings("record/id", 3)).resolves.toEqual(payload);
     expect(fetchMock.mock.calls[0][0]).toBe(

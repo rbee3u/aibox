@@ -1,9 +1,15 @@
-export type Agent = "codex" | "claude";
-export type Scope = { scope: "host" } | { scope: "managed"; tenant: string };
+import { HttpError, readHttpError } from "./httpError";
+import { tenantBody, tenantQuery, type TenantSelection } from "./tenantSelection";
+
+export { tenantSelectionValue } from "./tenantSelection";
+export type { TenantSelection } from "./tenantSelection";
+
+export type CodingAgentKind = "codex" | "claude";
 
 export interface Bootstrap {
   version: string;
   csrf_token: string;
+  listen: string;
 }
 
 export interface OperationLog {
@@ -65,7 +71,7 @@ export interface TopologyNamedConfigs {
 }
 
 export interface TopologyAgent {
-  agent: Agent;
+  agent: CodingAgentKind;
   current_config: TopologyCurrentConfig;
   named_configs: TopologyNamedConfigs;
   application: ApplicationStatus;
@@ -76,10 +82,10 @@ export interface TopologyComponents {
   error?: string;
 }
 
-export interface TopologyTenant extends TenantRow {
+export type TopologyTenant = TenantRow & {
   agents: TopologyAgent[];
   components: TopologyComponents;
-}
+};
 
 export interface TopologyData {
   tenants: TopologyTenant[];
@@ -91,18 +97,24 @@ export interface SessionSummaryData {
   partial: boolean;
 }
 
-export interface TenantRow {
-  kind: "host" | "managed";
-  name: string | null;
+interface TenantRowBase {
   display_name: string;
   home: string;
   exists: boolean;
 }
 
+export type TenantRow =
+  | (TenantRowBase & { kind: "host"; name: null })
+  | (TenantRowBase & { kind: "managed"; name: string });
+
+export type ComponentKind = "claude-statusline" | "codex-statusline" | "rust" | "go";
+export type ComponentStatus =
+  "not-installed" | "installed" | "incomplete" | "modified" | "unmanaged";
+
 export interface ComponentRow {
-  kind: string;
+  kind: ComponentKind;
   supports_version: boolean;
-  status: string | null;
+  status: ComponentStatus | null;
   version: string | null;
   error: string | null;
 }
@@ -111,6 +123,7 @@ export interface ConfigCatalogEntry {
   name: string;
   state: "ready" | "incomplete" | "invalid";
   detail?: string;
+  warnings?: string[];
 }
 
 export interface LastApplication {
@@ -125,7 +138,6 @@ export interface ApplicationStatus {
 }
 
 export interface ConfigListData {
-  named_configs: string[];
   configs: ConfigCatalogEntry[];
   files: string[];
   application: ApplicationStatus;
@@ -137,20 +149,49 @@ export interface ConfigFileData {
   exists: boolean;
   revision: string;
   content_base64: string;
-  visual?: ConfigVisualField[];
+  visual_options?: ConfigVisualOption[];
+  custom_provider?: ConfigCustomProvider;
   visual_error?: string;
+  warnings?: string[];
+  auth?: ConfigAuthData;
+  linked_file?: ConfigLinkedFileData;
 }
 
-export interface ConfigVisualField {
+export interface ConfigLinkedFileData {
+  file: string;
+  exists: boolean;
+  revision: string;
+  content_base64: string;
+}
+
+export interface ConfigCustomProvider {
+  included: boolean;
+  name: string;
+  base_url: string;
+  request_proxy_route: boolean;
+  proxy_routed: boolean;
+}
+
+export interface ConfigAuthData {
+  mode: "chatgpt" | "api-key";
+  api_key: string | null;
+  extra_fields: boolean;
+  warnings: string[];
+}
+
+export interface ConfigVisualOption {
   path: string;
   label: string;
   description: string;
   group: string;
   value_kind: "string" | "bool";
-  suggestions: string[];
+  enum_values: string[];
   sensitive: boolean;
+  required: boolean;
+  request_proxy_route: boolean;
   included: boolean;
   value?: string | boolean;
+  proxy_routed: boolean;
 }
 
 export interface SessionRow {
@@ -158,9 +199,9 @@ export interface SessionRow {
   display_id: string;
   start_ts: string;
   title: string;
-  latest_message?: string;
-  message_count?: number;
-  tool_count?: number;
+  latest_message: string;
+  message_count: number;
+  tool_count: number;
   warnings: string[];
 }
 
@@ -179,7 +220,7 @@ export interface ConversationMessage {
 
 export interface ToolActivity {
   entry_ids: string[];
-  call_id?: string | null;
+  call_id: string | null;
   timestamp: string;
   name: string;
   status: "started" | "completed" | "failed" | "incomplete" | "unknown";
@@ -191,7 +232,7 @@ export interface TranscriptEvidenceSummary {
   line: number;
   timestamp: string;
   native_type: string;
-  role?: string | null;
+  role: string | null;
   content_types: string[];
   status: string;
   preview: string;
@@ -202,9 +243,9 @@ export interface SessionDetailMeta {
   title: string;
   start_ts: string;
   transcript_path: string;
-  cwd?: string | null;
-  model_provider?: string | null;
-  cli_version?: string | null;
+  cwd: string | null;
+  model_provider: string | null;
+  cli_version: string | null;
 }
 
 export interface SessionDetailStats {
@@ -216,7 +257,7 @@ export interface SessionDetailStats {
   malformed_count: number;
   unsupported_count: number;
   hidden_internal_count: number;
-  observed_duration_ms?: number | null;
+  observed_duration_ms: number | null;
   file_size: number;
   snapshot: string;
 }
@@ -228,13 +269,11 @@ export interface TranscriptEvidence {
   snapshot: string;
 }
 
-export interface PropagationOutcome {
-  status: "updated" | "unchanged" | "conflict" | "newer" | "invalid" | "failed";
-  last_refresh?: string;
-  target_last_refresh?: string;
-  source_last_refresh?: string;
-  reason?: string;
-}
+export type PropagationOutcome =
+  | { status: "updated" | "unchanged" }
+  | { status: "conflict"; last_refresh: string }
+  | { status: "newer"; target_last_refresh: string; source_last_refresh: string }
+  | { status: "invalid" | "failed"; reason: string };
 
 export interface PropagationPreview {
   plan_id: string;
@@ -246,28 +285,128 @@ export interface PropagationPreview {
 
 export interface PropagationReport {
   entries: Array<{ label: string; outcome: PropagationOutcome }>;
-  counts: Record<string, number>;
 }
 
-export class ApiError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
+export interface SessionDetailHandlers {
+  onMessage: (message: ConversationMessage) => void;
+  onTool: (tool: ToolActivity) => void;
+  onEvidence: (evidence: TranscriptEvidenceSummary) => void;
+  onMeta: (meta: SessionDetailMeta) => void;
+  onComplete: (stats: SessionDetailStats, warnings: string[]) => void;
 }
 
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    if (typeof body.error === "string") return body.error;
-  } catch {
-    // Fall through to the HTTP status when the server did not return JSON.
-  }
-  return `${response.status} ${response.statusText}`;
+export interface OverviewApi {
+  loadOverview(signal?: AbortSignal): Promise<OverviewData>;
+  loadTopology(signal?: AbortSignal): Promise<TopologyData>;
+  loadSessionSummary(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    signal?: AbortSignal,
+  ): Promise<SessionSummaryData>;
+  buildImage(force: boolean): Promise<Operation>;
 }
+
+export interface TenantApi {
+  listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
+  listComponents(tenant: TenantSelection, signal?: AbortSignal): Promise<ComponentRow[]>;
+  createTenant(name: string): Promise<void>;
+  deleteTenants(names: string[]): Promise<void>;
+  mutateComponent(
+    tenant: TenantSelection,
+    component: ComponentKind,
+    install: boolean,
+    version: string | null,
+  ): Promise<Operation | object>;
+}
+
+export interface ConfigFileTarget {
+  tenant: TenantSelection;
+  agent: CodingAgentKind;
+  current: boolean;
+  config: string | null;
+  file: string;
+}
+
+export interface ConfigApi {
+  bootstrap: Bootstrap;
+  listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
+  listConfigs(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    signal?: AbortSignal,
+  ): Promise<ConfigListData>;
+  revealConfigFile(target: ConfigFileTarget): Promise<ConfigFileData>;
+  diagnoseConfigFile(
+    target: ConfigFileTarget,
+    contentBase64: string,
+  ): Promise<{
+    diagnostics: Array<{ severity?: string; message: string; line: number; column: number }>;
+  }>;
+  saveConfigFile(
+    target: ConfigFileTarget,
+    input: {
+      revision: string;
+      contentBase64: string;
+      visualOptions?: Array<{ path: string; included: boolean; value?: string | boolean }>;
+      customProvider?: { included: boolean; name: string; base_url: string; proxy_routed: boolean };
+      visualAuth?: { included: boolean; value: string };
+    },
+  ): Promise<ConfigFileData>;
+  createConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
+  applyConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
+  deleteConfigs(tenant: TenantSelection, agent: CodingAgentKind, names: string[]): Promise<void>;
+  previewCredentialPropagation(): Promise<PropagationPreview>;
+  executeCredentialPropagation(planId: string): Promise<PropagationReport>;
+}
+
+export interface SessionApi {
+  listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
+  listSessions(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    signal?: AbortSignal,
+  ): Promise<SessionListData>;
+  streamSessionDetail(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    id: string,
+    handlers: SessionDetailHandlers,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  loadSessionEvidence(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    id: string,
+    entry: string,
+    snapshot: string,
+    signal?: AbortSignal,
+  ): Promise<TranscriptEvidence>;
+  deleteSessions(
+    tenant: TenantSelection,
+    agent: CodingAgentKind,
+    ids: string[],
+  ): Promise<{ deleted: number }>;
+}
+
+export interface OperationApi {
+  current(): Promise<Operation | null>;
+  cancel(id: string): Promise<void>;
+  subscribe(handlers: {
+    onConnection: (state: "connected" | "reconnecting") => void;
+    onOperation: (operation: Operation | null, gap: boolean) => void;
+  }): () => void;
+}
+
+export interface ConnectedControlApi {
+  bootstrap: Bootstrap;
+  overview: OverviewApi;
+  tenants: TenantApi;
+  configs: ConfigApi;
+  sessions: SessionApi;
+  operations: OperationApi;
+}
+
+export { HttpError as ApiError } from "./httpError";
 
 export class ControlApi {
   readonly bootstrap: Bootstrap;
@@ -280,13 +419,13 @@ export class ControlApi {
 
   static async connect(fetchImpl: typeof fetch = fetch): Promise<ControlApi> {
     const response = await fetchImpl.call(window, "/_aibox/api/bootstrap", { cache: "no-store" });
-    if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
     return new ControlApi((await response.json()) as Bootstrap, fetchImpl);
   }
 
   async get<T>(path: string, signal?: AbortSignal): Promise<T> {
     const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
-    if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
     return (await response.json()) as T;
   }
 
@@ -300,7 +439,7 @@ export class ControlApi {
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
     return (await response.json()) as T;
   }
 
@@ -317,7 +456,7 @@ export class ControlApi {
   ): Promise<void> {
     const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
     if (!response.ok || !response.body) {
-      throw new ApiError(await errorMessage(response), response.status);
+      throw new HttpError(await readHttpError(response), response.status);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -354,19 +493,161 @@ export class ControlApi {
 
   async loadSessionEvidence(path: string, signal?: AbortSignal): Promise<TranscriptEvidence> {
     const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
-    if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
     return (await response.json()) as TranscriptEvidence;
   }
 }
 
-export function scopeQuery(scope: Scope): URLSearchParams {
-  return new URLSearchParams(
-    scope.scope === "host" ? { scope: "host" } : { scope: "managed", tenant: scope.tenant },
-  );
+export function composeControlApi(client: ControlApi): ConnectedControlApi {
+  const listTenants = (signal?: AbortSignal) =>
+    client.get<TenantRow[]>("/_aibox/api/tenants", signal);
+  const configTargetBody = (target: ConfigFileTarget) => ({
+    ...tenantBody(target.tenant),
+    agent: target.agent,
+    current: target.current,
+    config: target.config,
+    file: target.file,
+  });
+
+  return {
+    bootstrap: client.bootstrap,
+    overview: {
+      loadOverview: (signal) => client.get<OverviewData>("/_aibox/api/overview", signal),
+      loadTopology: (signal) => client.get<TopologyData>("/_aibox/api/topology", signal),
+      loadSessionSummary: (tenant, agent, signal) => {
+        const query = tenantQuery(tenant);
+        query.set("agent", agent);
+        return client.get<SessionSummaryData>(`/_aibox/api/sessions/summary?${query}`, signal);
+      },
+      buildImage: (force) => client.post<Operation>("/_aibox/api/operations/build", { force }),
+    },
+    tenants: {
+      listTenants,
+      listComponents: (tenant, signal) =>
+        client.get<ComponentRow[]>(`/_aibox/api/components?${tenantQuery(tenant)}`, signal),
+      createTenant: async (name) => {
+        await client.post("/_aibox/api/tenants", { name });
+      },
+      deleteTenants: async (names) => {
+        await client.post("/_aibox/api/tenants/delete", {
+          names,
+          all: false,
+          confirmation: names.length === 1 ? names[0] : "",
+        });
+      },
+      mutateComponent: (tenant, component, install, version) =>
+        client.post<Operation | object>(
+          `/_aibox/api/components/${install ? "install" : "remove"}`,
+          {
+            ...tenantBody(tenant),
+            component,
+            version,
+          },
+        ),
+    },
+    configs: {
+      bootstrap: client.bootstrap,
+      listTenants,
+      listConfigs: (tenant, agent, signal) => {
+        const query = tenantQuery(tenant);
+        query.set("agent", agent);
+        return client.get<ConfigListData>(`/_aibox/api/configs?${query}`, signal);
+      },
+      revealConfigFile: (target) =>
+        client.post<ConfigFileData>("/_aibox/api/configs/reveal", configTargetBody(target)),
+      diagnoseConfigFile: (target, contentBase64) =>
+        client.post("/_aibox/api/configs/diagnose", {
+          ...configTargetBody(target),
+          content_base64: contentBase64,
+        }),
+      saveConfigFile: (target, input) =>
+        client.post<ConfigFileData>("/_aibox/api/configs/save", {
+          ...configTargetBody(target),
+          revision: input.revision,
+          content_base64: input.contentBase64,
+          ...(input.visualOptions ? { visual_options: input.visualOptions } : {}),
+          ...(input.customProvider ? { custom_provider: input.customProvider } : {}),
+          ...(input.visualAuth ? { visual_auth: input.visualAuth } : {}),
+        }),
+      createConfig: async (tenant, agent, config) => {
+        await client.post("/_aibox/api/configs/create", { ...tenantBody(tenant), agent, config });
+      },
+      applyConfig: async (tenant, agent, config) => {
+        await client.post("/_aibox/api/configs/apply", { ...tenantBody(tenant), agent, config });
+      },
+      deleteConfigs: async (tenant, agent, configs) => {
+        await client.post("/_aibox/api/configs/delete", {
+          ...tenantBody(tenant),
+          agent,
+          configs,
+          all: false,
+          confirmation: configs.length === 1 ? configs[0] : "",
+        });
+      },
+      previewCredentialPropagation: () =>
+        client.post<PropagationPreview>("/_aibox/api/configs/propagate-auth/preview"),
+      executeCredentialPropagation: (planId) =>
+        client.post<PropagationReport>("/_aibox/api/configs/propagate-auth/execute", {
+          plan_id: planId,
+        }),
+    },
+    sessions: {
+      listTenants,
+      listSessions: (tenant, agent, signal) => {
+        const query = tenantQuery(tenant);
+        query.set("agent", agent);
+        return client.get<SessionListData>(`/_aibox/api/sessions?${query}`, signal);
+      },
+      streamSessionDetail: (tenant, agent, id, handlers, signal) => {
+        const query = tenantQuery(tenant);
+        query.set("agent", agent);
+        query.set("id", id);
+        return client.streamSessionDetail(`/_aibox/api/sessions/detail?${query}`, handlers, signal);
+      },
+      loadSessionEvidence: (tenant, agent, id, entry, snapshot, signal) => {
+        const query = tenantQuery(tenant);
+        query.set("agent", agent);
+        query.set("id", id);
+        query.set("entry", entry);
+        query.set("snapshot", snapshot);
+        return client.loadSessionEvidence(`/_aibox/api/sessions/evidence?${query}`, signal);
+      },
+      deleteSessions: (tenant, agent, ids) =>
+        client.post("/_aibox/api/sessions/delete", {
+          ...tenantBody(tenant),
+          agent,
+          ids,
+          all: false,
+          confirmation: "",
+        }),
+    },
+    operations: {
+      current: () =>
+        client
+          .get<{ operation: Operation | null }>("/_aibox/api/operations/current")
+          .then((value) => value.operation),
+      cancel: async (id) => {
+        await client.post(`/_aibox/api/operations/${encodeURIComponent(id)}/cancel`);
+      },
+      subscribe: (handlers) => {
+        const source = new EventSource("/_aibox/api/operations/events");
+        source.addEventListener("open", () => handlers.onConnection("connected"));
+        source.addEventListener("error", () => handlers.onConnection("reconnecting"));
+        source.addEventListener("operation", (event) => {
+          const value = JSON.parse((event as MessageEvent<string>).data) as {
+            operation: Operation | null;
+            gap: boolean;
+          };
+          handlers.onOperation(value.operation, value.gap);
+        });
+        return () => source.close();
+      },
+    },
+  };
 }
 
-export function scopeBody(scope: Scope): Record<string, string> {
-  return scope.scope === "host" ? { scope: "host" } : { scope: "managed", tenant: scope.tenant };
+export async function connectControlApi(fetchImpl: typeof fetch = fetch) {
+  return composeControlApi(await ControlApi.connect(fetchImpl));
 }
 
 export function decodeBase64(value: string): Uint8Array {

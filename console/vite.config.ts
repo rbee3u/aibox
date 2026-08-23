@@ -1,10 +1,8 @@
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   base: "/_aibox/ui/",
   publicDir: false,
-  plugins: [react()],
   build: {
     outDir: "../assets",
     // The shared assets directory also contains non-Vite inputs such as the Dockerfile.

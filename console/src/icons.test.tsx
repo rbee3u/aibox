@@ -1,5 +1,5 @@
-import claudeIcon from "@lobehub/icons-static-svg/icons/claude.svg";
-import openaiIcon from "@lobehub/icons-static-svg/icons/openai.svg";
+import claudeIcon from "./assets/brand/claude.svg";
+import openaiIcon from "./assets/brand/openai.svg";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AgentIcon } from "./icons";

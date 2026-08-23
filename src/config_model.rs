@@ -13,14 +13,30 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::str::FromStr;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 /// A validated Named Config definition in native main/auth formats.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NamedConfigDefinition {
     agent: AgentKind,
     main: Map<String, Value>,
     auth: Option<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NamedConfigValidation {
+    pub(crate) definition: NamedConfigDefinition,
+    pub(crate) warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CodexAuthInspection {
+    pub(crate) mode: &'static str,
+    pub(crate) api_key: Option<String>,
+    pub(crate) extra_fields: bool,
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Desired native Current Config files after one Config Application.
@@ -34,24 +50,58 @@ pub(crate) struct ApplicationResult {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct VisualFieldInput {
+pub(crate) struct VisualConfigOptionInput {
     pub(crate) path: String,
     pub(crate) included: bool,
     pub(crate) value: Option<Value>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CustomProviderInput {
+    pub(crate) included: bool,
+    pub(crate) name: String,
+    pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) proxy_routed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VisualAuthInput {
+    pub(crate) included: bool,
+    pub(crate) value: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct VisualFieldState {
+pub(crate) struct VisualConfigOptionState {
     pub(crate) path: String,
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
     pub(crate) group: &'static str,
     pub(crate) value_kind: &'static str,
-    pub(crate) suggestions: Vec<&'static str>,
+    pub(crate) enum_values: Vec<&'static str>,
     pub(crate) sensitive: bool,
+    pub(crate) required: bool,
+    pub(crate) request_proxy_route: bool,
     pub(crate) included: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) value: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CustomProviderState {
+    pub(crate) included: bool,
+    pub(crate) name: String,
+    pub(crate) base_url: String,
+    pub(crate) request_proxy_route: bool,
+    pub(crate) proxy_routed: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct VisualConfigState {
+    pub(crate) options: Vec<VisualConfigOptionState>,
+    pub(crate) custom_provider: Option<CustomProviderState>,
 }
 
 fn path_string(path: &[&str]) -> String {
@@ -59,7 +109,7 @@ fn path_string(path: &[&str]) -> String {
 }
 
 /// Return the fixed-field schema and values represented by a native main file.
-pub(crate) fn visual_fields(agent: AgentKind, content: &str) -> Result<Vec<VisualFieldState>> {
+pub(crate) fn inspect_visual_config(agent: AgentKind, content: &str) -> Result<VisualConfigState> {
     let object = if content.trim().is_empty() {
         Map::new()
     } else {
@@ -68,10 +118,17 @@ pub(crate) fn visual_fields(agent: AgentKind, content: &str) -> Result<Vec<Visua
             .context("parse Visual Editor source")?
     };
     validate_config_main(agent, &object)?;
-    Ok(agent
+    let custom_provider = agent == AgentKind::Codex
+        && value_at_path(&object, &["model_provider"]).and_then(Value::as_str) == Some("custom");
+    let options = agent
         .main_config_fields()
         .iter()
-        .map(|field| VisualFieldState {
+        .filter(|field| {
+            !(agent == AgentKind::Codex
+                && (field.path == ["model_provider"]
+                    || field.path.starts_with(&["model_providers", "custom"])))
+        })
+        .map(|field| VisualConfigOptionState {
             path: path_string(field.path),
             label: field.label,
             description: field.description,
@@ -80,43 +137,80 @@ pub(crate) fn visual_fields(agent: AgentKind, content: &str) -> Result<Vec<Visua
                 MainConfigValueKind::String => "string",
                 MainConfigValueKind::Bool => "bool",
             },
-            suggestions: field.suggestions.to_vec(),
+            enum_values: field.enum_values.to_vec(),
             sensitive: field.sensitive,
-            included: value_at_path(&object, field.path).is_some(),
+            required: field.required || (custom_provider && field.required_for_custom_provider),
+            request_proxy_route: field.request_proxy_route,
+            included: value_at_path(&object, field.path).is_some()
+                || field.required
+                || (custom_provider && field.required_for_custom_provider),
             value: value_at_path(&object, field.path).cloned(),
         })
-        .collect())
+        .collect();
+    let custom_provider = if agent == AgentKind::Codex {
+        let custom =
+            value_at_path(&object, &["model_providers", "custom"]).and_then(Value::as_object);
+        Some(CustomProviderState {
+            included: custom.is_some(),
+            name: custom
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("custom")
+                .to_string(),
+            base_url: custom
+                .and_then(|value| value.get("base_url"))
+                .and_then(Value::as_str)
+                .unwrap_or("https://example.com/v1")
+                .to_string(),
+            request_proxy_route: true,
+            proxy_routed: false,
+        })
+    } else {
+        None
+    };
+    Ok(VisualConfigState {
+        options,
+        custom_provider,
+    })
 }
 
 /// Apply Visual Editor values to a native main file while preserving unrelated data.
 pub(crate) fn render_visual_main(
     agent: AgentKind,
     original: &str,
-    inputs: &[VisualFieldInput],
+    inputs: &[VisualConfigOptionInput],
+    provider_input: Option<&CustomProviderInput>,
 ) -> Result<String> {
     let mut seen = std::collections::HashSet::new();
+    let original_object = if original.trim().is_empty() {
+        Map::new()
+    } else {
+        agent
+            .parse_main_config(original)
+            .context("parse Visual Editor source")?
+    };
     let mut values = Map::new();
     for input in inputs {
         if !seen.insert(input.path.as_str()) {
-            bail!("duplicate Visual Config Field: {}", input.path);
+            bail!("duplicate Visual Config Option: {}", input.path);
         }
         let field = agent
             .main_config_fields()
             .iter()
             .find(|field| path_string(field.path) == input.path)
-            .with_context(|| format!("unsupported Visual Config Field: {}", input.path))?;
+            .with_context(|| format!("unsupported Visual Config Option: {}", input.path))?;
         if input.included {
             let value = input
                 .value
                 .clone()
-                .with_context(|| format!("Visual Config Field {} has no value", input.path))?;
+                .with_context(|| format!("Visual Config Option {} has no value", input.path))?;
             let valid = match field.value_kind {
                 MainConfigValueKind::String => value.is_string(),
                 MainConfigValueKind::Bool => value.is_boolean(),
             };
             if !valid {
                 bail!(
-                    "Visual Config Field {} must be {}",
+                    "Visual Config Option {} must be {}",
                     input.path,
                     match field.value_kind {
                         MainConfigValueKind::String => "a string",
@@ -124,10 +218,30 @@ pub(crate) fn render_visual_main(
                     }
                 );
             }
+            if !field.enum_values.is_empty() {
+                let value = value.as_str().expect("string enum field validated above");
+                let original_value =
+                    value_at_path(&original_object, field.path).and_then(Value::as_str);
+                if !field.enum_values.contains(&value) && original_value != Some(value) {
+                    bail!(
+                        "Visual Config Option {} must use a supported enum value",
+                        input.path
+                    );
+                }
+            }
             values.insert(input.path.clone(), value);
         }
     }
-    if seen.len() != agent.main_config_fields().len() {
+    let expected_fields = agent
+        .main_config_fields()
+        .iter()
+        .filter(|field| {
+            !(agent == AgentKind::Codex
+                && (field.path == ["model_provider"]
+                    || field.path.starts_with(&["model_providers", "custom"])))
+        })
+        .count();
+    if seen.len() != expected_fields {
         bail!("Visual Editor must provide every fixed Config Field");
     }
 
@@ -140,7 +254,11 @@ pub(crate) fn render_visual_main(
                     .parse_main_config(original)
                     .context("parse Visual Editor source")?
             };
-            for field in agent.main_config_fields() {
+            for field in agent.main_config_fields().iter().filter(|field| {
+                !(agent == AgentKind::Codex
+                    && (field.path == ["model_provider"]
+                        || field.path.starts_with(&["model_providers", "custom"])))
+            }) {
                 let key = path_string(field.path);
                 match values.get(&key) {
                     Some(value) => {
@@ -160,7 +278,11 @@ pub(crate) fn render_visual_main(
             } else {
                 DocumentMut::from_str(original).context("parse Visual Editor source")?
             };
-            for field in agent.main_config_fields() {
+            for field in agent.main_config_fields().iter().filter(|field| {
+                !(agent == AgentKind::Codex
+                    && (field.path == ["model_provider"]
+                        || field.path.starts_with(&["model_providers", "custom"])))
+            }) {
                 let key = path_string(field.path);
                 match values.get(&key) {
                     Some(value) => {
@@ -170,6 +292,37 @@ pub(crate) fn render_visual_main(
                         remove_codex_path(&mut document, field.path);
                     }
                 }
+            }
+            let Some(provider) = provider_input else {
+                bail!("Codex Visual Editor requires Custom provider state");
+            };
+            let _ = provider.proxy_routed;
+            if provider.included {
+                if provider.name.trim().is_empty() || provider.base_url.trim().is_empty() {
+                    bail!("Custom provider name and base URL must not be empty");
+                }
+                set_codex_path(
+                    &mut document,
+                    &["model_provider"],
+                    &Value::String("custom".to_string()),
+                )?;
+                set_codex_path(
+                    &mut document,
+                    &["model_providers", "custom", "name"],
+                    &Value::String(provider.name.clone()),
+                )?;
+                set_codex_path(
+                    &mut document,
+                    &["model_providers", "custom", "base_url"],
+                    &Value::String(provider.base_url.clone()),
+                )?;
+                set_codex_path(
+                    &mut document,
+                    &["model_providers", "custom", "requires_openai_auth"],
+                    &Value::Bool(true),
+                )?;
+            } else {
+                remove_codex_provider(&mut document);
             }
             let rendered = document.to_string();
             let object = agent
@@ -181,13 +334,71 @@ pub(crate) fn render_visual_main(
     }
 }
 
+pub(crate) fn render_visual_auth(input: &VisualAuthInput) -> Result<String> {
+    let value = if input.included {
+        let value = input
+            .value
+            .as_deref()
+            .context("OPENAI_API_KEY is required when included")?;
+        if value.is_empty() {
+            Value::Object(Map::new())
+        } else {
+            let mut object = Map::new();
+            object.insert(
+                "OPENAI_API_KEY".to_string(),
+                Value::String(value.to_string()),
+            );
+            Value::Object(object)
+        }
+    } else {
+        Value::Object(Map::new())
+    };
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+}
+
+pub(crate) fn inspect_codex_auth(
+    content: &str,
+    requires_openai_auth: Option<bool>,
+) -> Result<CodexAuthInspection> {
+    let (object, warnings) = validate_codex_auth(content, requires_openai_auth)?;
+    let chatgpt = object.get("auth_mode").and_then(Value::as_str) == Some("chatgpt");
+    let api_key = object
+        .get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let extra_fields = if chatgpt {
+        object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "auth_mode" | "OPENAI_API_KEY" | "tokens" | "last_refresh"
+            )
+        })
+    } else {
+        object.keys().any(|key| key != "OPENAI_API_KEY")
+    };
+    Ok(CodexAuthInspection {
+        mode: if chatgpt { "chatgpt" } else { "api-key" },
+        api_key,
+        extra_fields,
+        warnings,
+    })
+}
+
 impl NamedConfigDefinition {
     /// Parse and validate the fixed Config Fields for one Coding Agent.
     pub(crate) fn parse(agent: AgentKind, main: &str, auth: Option<&str>) -> Result<Self> {
+        Ok(Self::parse_with_warnings(agent, main, auth)?.definition)
+    }
+
+    pub(crate) fn parse_with_warnings(
+        agent: AgentKind,
+        main: &str,
+        auth: Option<&str>,
+    ) -> Result<NamedConfigValidation> {
         let main = agent
             .parse_main_config(main)
             .context("parse Named Config main configuration")?;
-        validate_config_main(agent, &main)?;
+        let mut warnings = validate_config_main(agent, &main)?;
 
         let auth = match agent {
             AgentKind::Claude => {
@@ -196,17 +407,42 @@ impl NamedConfigDefinition {
                 }
                 None
             }
-            AgentKind::Codex => Some(parse_json_object(
-                auth.context("Codex Named Config auth.json is missing")?,
-                "Named Config auth.json",
-            )?),
+            AgentKind::Codex => {
+                let auth = auth.context("Codex Named Config auth.json is missing")?;
+                let (object, auth_warnings) = validate_codex_auth(
+                    auth,
+                    (value_at_path(&main, &["model_provider"]).and_then(Value::as_str)
+                        == Some("custom"))
+                    .then(|| {
+                        value_at_path(
+                            &main,
+                            &["model_providers", "custom", "requires_openai_auth"],
+                        )
+                        .and_then(Value::as_bool)
+                    })
+                    .flatten(),
+                )?;
+                warnings.extend(auth_warnings);
+                Some(object)
+            }
         };
 
-        Ok(Self { agent, main, auth })
+        Ok(NamedConfigValidation {
+            definition: Self { agent, main, auth },
+            warnings,
+        })
     }
 
     /// Validate one independently editable file in a Named Config.
     pub(crate) fn validate_file(agent: AgentKind, file: &str, content: &str) -> Result<()> {
+        Self::validate_file_with_warnings(agent, file, content).map(|_| ())
+    }
+
+    pub(crate) fn validate_file_with_warnings(
+        agent: AgentKind,
+        file: &str,
+        content: &str,
+    ) -> Result<Vec<String>> {
         if file == agent.main_config_file() {
             let main = agent
                 .parse_main_config(content)
@@ -214,8 +450,7 @@ impl NamedConfigDefinition {
             return validate_config_main(agent, &main);
         }
         if agent.native_auth_file() == Some(file) {
-            parse_json_object(content, "Named Config auth.json")?;
-            return Ok(());
+            return Ok(validate_codex_auth(content, None)?.1);
         }
         bail!("unsupported Named Config file: {file}")
     }
@@ -309,16 +544,90 @@ impl NamedConfigDefinition {
     }
 }
 
-fn validate_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
+fn validate_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<Vec<String>> {
+    let warnings = validate_config_main_shape(agent, main)?;
+    validate_required_config_main(agent, main)?;
+    Ok(warnings)
+}
+
+fn validate_config_main_shape(agent: AgentKind, main: &Map<String, Value>) -> Result<Vec<String>> {
+    let warnings = validate_config_field_shape(agent, main)?;
+    if agent == AgentKind::Codex {
+        validate_codex_provider(main)?;
+    }
+    Ok(warnings)
+}
+
+fn validate_config_field_shape(agent: AgentKind, main: &Map<String, Value>) -> Result<Vec<String>> {
     let mut path = Vec::new();
-    validate_config_object(main, agent.main_config_fields(), &mut path)
+    let warnings = validate_config_object(main, agent.main_config_fields(), &mut path)?;
+    Ok(warnings)
+}
+
+fn validate_required_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
+    for field in agent.main_config_fields() {
+        if field.required {
+            let Some(value) = value_at_path(main, field.path) else {
+                bail!("required Config Field {} is missing", field.path.join("."));
+            };
+            if value.as_str().is_some_and(|value| value.trim().is_empty()) {
+                bail!("required Config Field {} is empty", field.path.join("."));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_codex_provider(main: &Map<String, Value>) -> Result<()> {
+    let provider = main.get("model_provider");
+    let providers = main.get("model_providers");
+    let Some(provider) = provider else {
+        if providers.is_some() {
+            bail!("model_providers must be absent when model_provider is absent");
+        }
+        return Ok(());
+    };
+    if provider.as_str() != Some("custom") {
+        bail!("model_provider must be custom when present");
+    }
+
+    let providers = providers
+        .and_then(Value::as_object)
+        .context("model_providers must be a table")?;
+    if providers.len() != 1 || !providers.contains_key("custom") {
+        bail!("model_providers must contain only custom");
+    }
+    let custom = providers
+        .get("custom")
+        .and_then(Value::as_object)
+        .context("model_providers.custom must be a table")?;
+    const EXPECTED: [&str; 3] = ["name", "base_url", "requires_openai_auth"];
+    if custom.len() != EXPECTED.len() || EXPECTED.iter().any(|key| !custom.contains_key(*key)) {
+        bail!(
+            "model_providers.custom must contain exactly name, base_url, and requires_openai_auth"
+        );
+    }
+    for key in ["name", "base_url"] {
+        let value = custom
+            .get(key)
+            .and_then(Value::as_str)
+            .with_context(|| format!("model_providers.custom.{key} must be a string"))?;
+        if value.trim().is_empty() {
+            bail!("model_providers.custom.{key} must not be empty");
+        }
+    }
+    if custom.get("requires_openai_auth").and_then(Value::as_bool) != Some(true) {
+        bail!("model_providers.custom.requires_openai_auth must be true");
+    }
+    Ok(())
 }
 
 fn validate_config_object(
     object: &Map<String, Value>,
     fields: &[MainConfigField],
     path: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     for (key, value) in object {
         path.push(key.clone());
         let exact = fields.iter().find(|field| path_matches(field.path, path));
@@ -344,13 +653,82 @@ fn validate_config_object(
                     display_path("config", path)
                 )
             })?;
-            validate_config_object(child, fields, path)?;
+            warnings.extend(validate_config_object(child, fields, path)?);
         } else {
-            bail!("unsupported Config Field {}", display_path("config", path));
+            warnings.push(format!(
+                "Unknown native field {}",
+                display_path("config", path)
+            ));
         }
         path.pop();
     }
-    Ok(())
+    Ok(warnings)
+}
+
+fn validate_codex_auth(
+    content: &str,
+    requires_openai_auth: Option<bool>,
+) -> Result<(Map<String, Value>, Vec<String>)> {
+    let object = parse_json_object(content, "Named Config auth.json")?;
+    let mut warnings = Vec::new();
+    if let Some(mode) = object.get("auth_mode") {
+        let mode = mode
+            .as_str()
+            .context("Named Config auth.json auth_mode must be a string")?;
+        if mode == "chatgpt" {
+            let account_id = object
+                .get("tokens")
+                .and_then(Value::as_object)
+                .and_then(|tokens| tokens.get("account_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .context("ChatGPT credentials require a non-empty tokens.account_id")?;
+            let _ = account_id;
+            let last_refresh = object
+                .get("last_refresh")
+                .and_then(Value::as_str)
+                .context("ChatGPT credentials require a string last_refresh")?;
+            OffsetDateTime::parse(last_refresh, &Rfc3339)
+                .context("ChatGPT credentials have invalid last_refresh")?;
+            for key in object.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "auth_mode" | "OPENAI_API_KEY" | "tokens" | "last_refresh"
+                ) {
+                    warnings.push(format!("Unknown native auth field /auth/{key}"));
+                }
+            }
+            if let Some(api_key) = object.get("OPENAI_API_KEY")
+                && !api_key.is_null()
+                && !api_key.is_string()
+            {
+                bail!("ChatGPT auth OPENAI_API_KEY must be a string or null");
+            }
+            return Ok((object, warnings));
+        }
+        warnings.push(format!(
+            "Unknown native auth field /auth/auth_mode ({mode})"
+        ));
+    }
+    if let Some(api_key) = object.get("OPENAI_API_KEY")
+        && !api_key.is_string()
+    {
+        bail!("API-key auth OPENAI_API_KEY must be a string");
+    }
+    for key in object.keys() {
+        if key != "OPENAI_API_KEY" {
+            warnings.push(format!("Unknown native auth field /auth/{key}"));
+        }
+    }
+    if requires_openai_auth == Some(true)
+        && object
+            .get("OPENAI_API_KEY")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.is_empty())
+    {
+        bail!("OPENAI_API_KEY is required when requires_openai_auth is true");
+    }
+    Ok((object, warnings))
 }
 
 fn parse_json_object(content: &str, label: &str) -> Result<Map<String, Value>> {
@@ -556,6 +934,12 @@ fn remove_codex_path(document: &mut DocumentMut, path: &[&str]) -> bool {
         document.as_table_mut().remove("model_providers");
         changed = true;
     }
+    changed
+}
+
+fn remove_codex_provider(document: &mut DocumentMut) -> bool {
+    let mut changed = document.as_table_mut().remove("model_provider").is_some();
+    changed |= document.as_table_mut().remove("model_providers").is_some();
     changed
 }
 

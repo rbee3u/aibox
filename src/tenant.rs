@@ -31,7 +31,7 @@ pub struct ManagedTenant {
     root_dir: PathBuf,
 }
 
-/// A persistent Coding Agent state scope.
+/// A persistent Coding Agent identity.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Tenant {
     /// An aibox-managed, runnable Tenant.
@@ -159,7 +159,7 @@ impl Tenant {
         }
     }
 
-    /// Validate the real Host Home. A missing Managed Home is an empty scope.
+    /// Validate the real Host Home. A missing Managed Tenant Home is empty state.
     pub fn validate_session_home(&self) -> Result<()> {
         if let Self::Host { home_dir, .. } = self {
             require_host_home(home_dir)?;
@@ -204,7 +204,7 @@ impl TenantAgent {
 
     /// Ensure the selected native Agent state directory exists.
     ///
-    /// Managed scope repairs the complete Tenant baseline. Host scope requires
+    /// A Managed Tenant repairs the complete baseline. A Host Tenant requires
     /// an existing real Home and creates only the Agent state child, without
     /// changing the Home directory's mode.
     pub fn ensure_agent_state_dir(&self) -> Result<()> {

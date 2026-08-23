@@ -1,4 +1,4 @@
-import githubIcon from "@lobehub/icons-static-svg/icons/github.svg";
+import githubIcon from "./assets/brand/github.svg";
 import {
   Check,
   ChevronLeft,
@@ -18,6 +18,8 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { ActionButton } from "./components/ActionButton";
+import { IconButton } from "./components/IconButton";
 import { AgentIcon, BrandIcon } from "./icons";
 import type { ThemePreference } from "./usePersistentTheme";
 import styles from "./App.module.css";
@@ -94,11 +96,9 @@ export function SidebarUtilities({
       <ThemeMenu collapsed={collapsed} onChange={onThemeChange} value={theme} />
       <div className={styles.sidebarMeta}>
         <span className={styles.sidebarVersion}>v{version}</span>
-        <button
+        <IconButton
           className={styles.collapseButton}
-          type="button"
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           onClick={onToggleCollapsed}
         >
           {collapsed ? (
@@ -106,7 +106,7 @@ export function SidebarUtilities({
           ) : (
             <ChevronLeft size={17} aria-hidden="true" />
           )}
-        </button>
+        </IconButton>
       </div>
     </footer>
   );
@@ -194,7 +194,7 @@ function ThemeMenu({
     setOpen(true);
   }
 
-  function handleItemKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+  function handleItemKeyDown(event: ReactKeyboardEvent<HTMLElement>, index: number) {
     let nextIndex: number | null = null;
     if (event.key === "ArrowDown") nextIndex = (index + 1) % themeOptions.length;
     if (event.key === "ArrowUp")
@@ -217,9 +217,9 @@ function ThemeMenu({
 
   return (
     <>
-      <button
+      <ActionButton
         className={`${styles.utilityItem} ${styles.themeButton}`}
-        type="button"
+        tone="quiet"
         ref={triggerRef}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -236,7 +236,7 @@ function ThemeMenu({
           size={14}
           aria-hidden="true"
         />
-      </button>
+      </ActionButton>
       {open &&
         createPortal(
           <div
@@ -250,10 +250,10 @@ function ThemeMenu({
               const Icon = option.icon;
               const selected = option.value === value;
               return (
-                <button
+                <ActionButton
                   className={styles.themeOption}
                   key={option.value}
-                  type="button"
+                  tone="quiet"
                   role="menuitemradio"
                   aria-checked={selected}
                   ref={(element) => {
@@ -266,7 +266,7 @@ function ThemeMenu({
                   <Icon size={17} aria-hidden="true" />
                   <span>{option.label}</span>
                   {selected && <Check className={styles.themeCheck} size={15} aria-hidden="true" />}
-                </button>
+                </ActionButton>
               );
             })}
           </div>,
