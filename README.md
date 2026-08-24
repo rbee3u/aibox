@@ -44,6 +44,14 @@ aibox run
 aibox run --agent claude
 ```
 
+Open a Debug Shell when you need to inspect a Tenant Home or its Component
+environment without starting a Coding Agent:
+
+```sh
+aibox debug
+aibox debug --tenant work
+```
+
 Pass prompts or native Coding Agent arguments after the hard `--` boundary:
 
 ```sh
@@ -52,9 +60,10 @@ aibox run -- exec "fix the failing tests"
 aibox run --agent claude -- "review the current changes"
 ```
 
-aibox parses only the left side and forwards the right side unchanged. The
-public CLI is `aibox console [--listen IP:PORT]` and `aibox run`. Runtime Image,
-Tenant, Component, Config, and Session management lives in the Console.
+aibox parses only the left side and forwards the right side unchanged to
+`run`. The public CLI is `aibox console [--listen IP:PORT]`, `aibox run`, and
+`aibox debug [--tenant TENANT]`. Runtime Image, Tenant, Component, Config, and
+Session management lives in the Console.
 
 ## Filesystem Boundary
 
@@ -65,6 +74,9 @@ Each Run creates a disposable container with these possible bind mounts:
 | Current directory or `--workspace <dir>` | `/workspace` | Read-write |
 | Selected Tenant Home | `/home/aibox` | Read-write |
 | Each `--mount host:container[:ro]` | Explicit path | Read-write or `:ro` |
+
+A Debug Shell mounts only its selected Tenant Home and starts in
+`/home/aibox`; it does not mount a Workspace or accept Extra Mounts.
 
 The Filesystem Sandbox is not a complete authority boundary. Networking is
 enabled; credentials can authorize remote actions; writable mounts can be
@@ -81,15 +93,17 @@ cleanup behavior.
 
 `aibox console` creates or repairs the protected Default Managed Tenant baseline
 before it starts listening. Running without a Service retains the same fallback:
-the first validated Run can initialize `default` before Docker starts, even if
-Docker later fails or the Coding Agent exits nonzero. Use a different Tenant
-when work should not share credentials, settings, or Sessions:
+the first validated Run or Debug Shell can initialize `default` after the
+Runtime Image preflight, even if Docker or the invoked process later fails. Use
+a different Tenant when work should not share credentials, settings, or
+Sessions:
 
 ```sh
 aibox run --tenant work
 ```
 
-Create `work` first from the Console's Tenants module.
+The first validated Run or Debug Shell can initialize `work`, or you can create
+it explicitly from the Console's Tenants module.
 
 Tenant Homes, Named Configs, and Requests persist under `$HOME/.aibox`.
 `AIBOX_ROOT` selects another location, which must be a directory dedicated to
@@ -218,8 +232,9 @@ TCP peer. See
 ## CLI Surface
 
 `aibox console` starts the foreground Service and embedded Console. `aibox run`
-starts a transient Coding Agent Run. Runtime Image construction and all other
-lifecycle and diagnostic workflows are available only in the Console.
+starts a transient Coding Agent Run. `aibox debug [--tenant TENANT]` starts a
+transient Tenant-only Debug Shell. Runtime Image construction and persistent
+lifecycle management remain in the Console.
 
 ## Learn More
 

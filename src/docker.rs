@@ -24,11 +24,11 @@
 use crate::sync::lock_unpoisoned;
 use anyhow::{Context, Result};
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[path = "docker_image.rs"]
@@ -50,6 +50,8 @@ pub const DOCKERFILE: &str = include_str!("../assets/aibox.Dockerfile");
 
 const CONTAINER_CREATE_WAIT: Duration = Duration::from_secs(1);
 const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+pub(crate) type LogCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DockerCli {
@@ -125,7 +127,15 @@ pub(crate) fn run_with(
     cmd: &[OsString],
     after_container_created: impl FnOnce(),
 ) -> Result<i32> {
-    run_with_mode(docker, run_args, image, cmd, after_container_created, true)
+    run_with_mode(
+        docker,
+        run_args,
+        image,
+        cmd,
+        after_container_created,
+        true,
+        None,
+    )
 }
 
 pub(crate) fn run_for_service(
@@ -134,8 +144,17 @@ pub(crate) fn run_for_service(
     image: &str,
     cmd: &[OsString],
     after_container_created: impl FnOnce(),
+    log: LogCallback,
 ) -> Result<i32> {
-    run_with_mode(docker, run_args, image, cmd, after_container_created, false)
+    run_with_mode(
+        docker,
+        run_args,
+        image,
+        cmd,
+        after_container_created,
+        false,
+        Some(log),
+    )
 }
 
 fn run_with_mode(
@@ -145,6 +164,7 @@ fn run_with_mode(
     cmd: &[OsString],
     after_container_created: impl FnOnce(),
     install_signals: bool,
+    log: Option<LogCallback>,
 ) -> Result<i32> {
     let mut after_container_created = Some(after_container_created);
     // Docker refuses to reuse an existing cidfile, so ask for a fresh path
@@ -157,15 +177,18 @@ fn run_with_mode(
     // and registration could otherwise find neither a pid nor a container id,
     // leaving the container running unsupervised.
     set_cidfile_mode(&cid_path, docker, install_signals)?;
-    let spawned = docker
-        .command()
+    let mut command = docker.command();
+    command
         .arg("run")
         .arg("--cidfile")
         .arg(&cid_path)
         .args(run_args)
         .arg(image)
-        .args(cmd)
-        .spawn();
+        .args(cmd);
+    if log.is_some() {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
+    let spawned = command.spawn();
     let child = match spawned {
         Ok(child) => child,
         Err(error) => {
@@ -176,6 +199,9 @@ fn run_with_mode(
 
     set_child(child.id());
     let mut registered_run = RegisteredRun::new(child);
+    if let Some(log) = log {
+        registered_run.capture_output(log)?;
+    }
     let create = wait_for_container_create(registered_run.child_mut(), &cid_path)?;
     let waited: Result<ExitStatus> = match create {
         ContainerCreate::Created => {
@@ -212,6 +238,7 @@ fn run_with_mode(
 struct RegisteredRun {
     child: Child,
     finished: bool,
+    output_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl RegisteredRun {
@@ -219,7 +246,28 @@ impl RegisteredRun {
         Self {
             child,
             finished: false,
+            output_threads: Vec::new(),
         }
+    }
+
+    fn capture_output(&mut self, log: LogCallback) -> Result<()> {
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .context("capture docker run stdout")?;
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .context("capture docker run stderr")?;
+        let stdout_log = log.clone();
+        self.output_threads.push(std::thread::spawn(move || {
+            forward_lines(stdout, stdout_log)
+        }));
+        self.output_threads
+            .push(std::thread::spawn(move || forward_lines(stderr, log)));
+        Ok(())
     }
 
     fn child_mut(&mut self) -> &mut Child {
@@ -228,8 +276,15 @@ impl RegisteredRun {
 
     fn finish(&mut self) -> bool {
         let stopped_lingering_container = finish_child();
+        self.finish_output();
         self.finished = true;
         stopped_lingering_container
+    }
+
+    fn finish_output(&mut self) {
+        for thread in self.output_threads.drain(..) {
+            let _ = thread.join();
+        }
     }
 
     fn finish_after_wait(&mut self, waited: Result<ExitStatus>) -> Result<(ExitStatus, bool)> {
@@ -246,6 +301,19 @@ impl Drop for RegisteredRun {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = finish_child();
+        self.finish_output();
+    }
+}
+
+pub(super) fn forward_lines(reader: impl Read, log: LogCallback) {
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => log(String::from_utf8_lossy(&bytes).trim_end().to_string()),
+        }
     }
 }
 

@@ -1,10 +1,9 @@
 //! Docker image construction and exact local-image inspection.
 
-use super::DockerCli;
+use super::{DockerCli, LogCallback, forward_lines};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::io::Write;
-use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,7 +73,7 @@ pub(crate) fn build_image_for_service(
     image: &str,
     cache: BuildCache,
     cancelled: Arc<AtomicBool>,
-    log: Arc<dyn Fn(String) + Send + Sync>,
+    log: LogCallback,
 ) -> Result<()> {
     let ctx = tempfile::tempdir().context("create empty build context")?;
     let mut cmd = docker.command();
@@ -119,18 +118,6 @@ pub(crate) fn build_image_for_service(
     }
     write_result.context("write Dockerfile to docker build stdin")?;
     Ok(())
-}
-
-fn forward_lines(reader: impl std::io::Read, log: Arc<dyn Fn(String) + Send + Sync>) {
-    let mut reader = BufReader::new(reader);
-    let mut bytes = Vec::new();
-    loop {
-        bytes.clear();
-        match reader.read_until(b'\n', &mut bytes) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => log(String::from_utf8_lossy(&bytes).trim_end().to_string()),
-        }
-    }
 }
 
 /// Whether an image reference exists locally.

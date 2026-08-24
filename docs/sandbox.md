@@ -1,8 +1,8 @@
 # Filesystem Sandbox and Mounts
 
-aibox treats the Docker container as the Coding Agent's Filesystem Sandbox. It
-limits which host paths enter the container while leaving the agent free to
-work inside those mounts.
+aibox treats the Docker container as the Coding Agent or Debug Shell's
+Filesystem Sandbox. It limits which host paths enter the container while
+leaving the process free to work inside those mounts.
 
 This Filesystem Sandbox is not a complete security boundary. Networking remains
 enabled, credentials can authorize remote effects, and Docker still relies on
@@ -64,6 +64,12 @@ Each Run:
 - mounts the selected Workspace at `/workspace`;
 - adds only the extra mounts supplied on the command line.
 
+A Debug Shell uses the same disposable Runtime Image and security flags, but
+mounts only the selected Tenant Home at `/home/aibox`, starts there, and accepts
+no Workspace or Extra Mount. It requires no Coding Agent Component. The shell
+has network access and can directly modify credentials, Sessions, Configs, and
+Component state in the Tenant Home.
+
 Runtime and toolchain Component installation also uses a disposable,
 cleanup-aware container, but mounts only the selected Tenant Home at
 `/home/aibox`; it does not mount a Workspace or accept Extra Mounts. The
@@ -91,9 +97,10 @@ services, and remain the user's responsibility.
 
 ## Cleanup
 
-Runs and Component installations use disposable Docker containers. aibox tracks
-the Docker child and container id, and keeps cleanup armed until it has checked
-that the container did not outlive the Docker client.
+Runs, Debug Shells, and Component installations use disposable Docker
+containers. aibox tracks the Docker child and container id, and keeps cleanup
+armed until it has checked that the container did not outlive the Docker
+client.
 
 The wrapper handles SIGINT, SIGTERM, and non-ignored SIGHUP by stopping the
 active container through Docker. After forwarding the first signal, it allows a
@@ -104,13 +111,13 @@ ignored. SIGKILL, a wrapper crash, Docker failure, or a host failure cannot
 guarantee cleanup. After such an event, inspect Docker for a leftover container
 before starting sensitive work.
 
-On ordinary completion, aibox propagates the `docker run` or Coding Agent exit
-status. If the Docker client reports success but leaves a live or uninspectable
-container that aibox must kill, aibox changes that successful status to a
-failure; an existing failure status is preserved.
+On ordinary completion, aibox propagates the `docker run`, Debug Shell, or
+Coding Agent exit status. If the Docker client reports success but leaves a
+live or uninspectable container that aibox must kill, aibox changes that
+successful status to a failure; an existing failure status is preserved.
 
-One aibox process supports one active container operation at a time: either a
-Run or a Component installation.
+One aibox process supports one active container operation at a time: a Run,
+Debug Shell, or Component installation.
 
 ## Request Proxy
 

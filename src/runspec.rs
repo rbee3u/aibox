@@ -1,5 +1,5 @@
 //! Resolve bind mounts, enforce the Filesystem Sandbox mount boundary, and
-//! assemble the `docker run` arguments shared by both Coding Agents.
+//! assemble the `docker run` arguments for Runs, Debug Shells, and Components.
 
 #[cfg(test)]
 use crate::agent::AgentKind;
@@ -352,6 +352,19 @@ pub fn assemble_run_args(workspace: &str, home_dir: &Path, extra_mounts: &[Strin
     args
 }
 
+/// Assemble Docker arguments for a Debug Shell scoped to one Managed Tenant Home.
+pub fn assemble_debug_args(home_dir: &Path) -> Vec<String> {
+    assemble_debug_args_for_terminal(home_dir, platform::has_tty())
+}
+
+fn assemble_debug_args_for_terminal(home_dir: &Path, has_tty: bool) -> Vec<String> {
+    let mut args = base_container_args_for_terminal(true, has_tty);
+    args.push("-v".into());
+    args.push(format!("{}:{CONTAINER_HOME}", home_dir.display()));
+    args.extend(["-w".into(), CONTAINER_HOME.into()]);
+    args
+}
+
 /// Assemble Docker arguments for a non-interactive task that may write only
 /// to one Managed Tenant Home.
 pub fn assemble_component_run_args(home_dir: &Path) -> Vec<String> {
@@ -363,9 +376,13 @@ pub fn assemble_component_run_args(home_dir: &Path) -> Vec<String> {
 }
 
 fn base_container_args(interactive: bool) -> Vec<String> {
+    base_container_args_for_terminal(interactive, platform::has_tty())
+}
+
+fn base_container_args_for_terminal(interactive: bool, has_tty: bool) -> Vec<String> {
     let mut args: Vec<String> = vec!["--rm".into()];
     if interactive {
-        args.push(if platform::has_tty() { "-it" } else { "-i" }.into());
+        args.push(if has_tty { "-it" } else { "-i" }.into());
     }
     args.extend(["--security-opt".into(), "no-new-privileges".into()]);
     args.extend(["--cap-drop".into(), "ALL".into()]);
@@ -763,6 +780,45 @@ mod tests {
         ]);
 
         assert_eq!(args, expected);
+    }
+
+    #[test]
+    fn debug_args_are_interactive_and_mount_only_the_tenant_home() {
+        let args = assemble_debug_args(Path::new("/abs/tenant"));
+        let mut expected = vec![
+            "--rm".to_string(),
+            if platform::has_tty() { "-it" } else { "-i" }.to_string(),
+            "--security-opt".to_string(),
+            "no-new-privileges".to_string(),
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
+        ];
+        if platform::is_linux() {
+            let (uid, gid) = platform::uid_gid();
+            expected.extend([
+                "--user".to_string(),
+                format!("{uid}:{gid}"),
+                "--add-host".to_string(),
+                "host.docker.internal:host-gateway".to_string(),
+            ]);
+        }
+        expected.extend([
+            "-v".to_string(),
+            "/abs/tenant:/home/aibox".to_string(),
+            "-w".to_string(),
+            "/home/aibox".to_string(),
+        ]);
+
+        assert_eq!(args, expected);
+        assert!(!args.iter().any(|arg| arg == "/workspace"));
+    }
+
+    #[test]
+    fn debug_args_select_tty_or_stdin_mode_from_the_terminal_state() {
+        for (has_tty, expected) in [(true, "-it"), (false, "-i")] {
+            let args = assemble_debug_args_for_terminal(Path::new("/abs/tenant"), has_tty);
+            assert_eq!(args.get(1).map(String::as_str), Some(expected));
+        }
     }
 
     #[test]

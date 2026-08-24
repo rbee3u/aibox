@@ -20,8 +20,6 @@ pub const HOST_STORAGE_KEY: &str = "__host";
 const CREATING_PREFIX: &str = "$creating-";
 const DELETING_PREFIX: &str = "$deleting-";
 const GITCONFIG: &[u8] = b"[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n";
-const AIBOX_ENV: &[u8] = include_bytes!("../assets/aibox-env.sh");
-const MANAGED_FILE_LIMIT: u64 = 64 * 1024;
 
 /// An aibox-managed, runnable Tenant.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -414,16 +412,6 @@ fn ensure_home_baseline(home: &Path) -> Result<()> {
         GITCONFIG,
         0o644,
     )?;
-    let config = home.join(".config");
-    ensure_real_dir(&config, "Tenant configuration directory")?;
-    let aibox_config = config.join("aibox");
-    ensure_real_dir(&aibox_config, "aibox Tenant configuration directory")?;
-    install_managed_file(
-        &aibox_config.join("env.sh"),
-        "aibox Tenant environment",
-        AIBOX_ENV,
-        0o644,
-    )?;
     for agent in AgentKind::ALL {
         ensure_agent_state(agent, home)?;
     }
@@ -656,41 +644,6 @@ fn install_missing_file(path: &Path, kind: &str, content: &[u8], mode: u32) -> R
     Ok(())
 }
 
-/// Converge one aibox-owned regular file to its canonical bytes and mode.
-///
-/// Unlike user-owned baseline files, this file is safe for aibox to repair on
-/// every initialization. The caller must validate every ancestor first.
-fn install_managed_file(path: &Path, kind: &str, content: &[u8], mode: u32) -> Result<()> {
-    let snapshot = FileSnapshot::capture_with_limit(path, MANAGED_FILE_LIMIT)
-        .with_context(|| format!("inspect {kind}"))?;
-    #[cfg(unix)]
-    let current_mode = snapshot.mode.map(|value| value & 0o777);
-    #[cfg(not(unix))]
-    let current_mode = Some(mode);
-    if snapshot.present && snapshot.content == content && current_mode == Some(mode) {
-        return Ok(());
-    }
-
-    let parent = path.parent().context("managed file path has no parent")?;
-    let mut temp = tempfile::Builder::new()
-        .prefix(".aibox-managed-")
-        .tempfile_in(parent)
-        .with_context(|| format!("create temporary {kind} in {}", parent.display()))?;
-    temp.write_all(content)
-        .with_context(|| format!("write temporary {kind}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(mode))?;
-    }
-    temp.as_file().sync_all()?;
-    temp.persist(path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("replace {kind} {}", path.display()))?;
-    sync_dir(parent)
-}
-
 /// Remove a regular final path entry when present, rejecting symlinks and other
 /// entry types.
 ///
@@ -891,7 +844,7 @@ mod tests {
         tenant.ensure_initialized().unwrap();
         assert_eq!(tenant.home_dir, root.path().join("tenants/work"));
         assert!(tenant.home_dir.join(".gitconfig").is_file());
-        assert!(tenant.home_dir.join(".config/aibox/env.sh").is_file());
+        assert!(!tenant.home_dir.join(".config").exists());
         assert!(tenant.home_dir.join(".codex").is_dir());
         assert!(!tenant.home_dir.join(".bash_profile").exists());
         assert!(!tenant.home_dir.join(".bashrc").exists());
@@ -907,11 +860,9 @@ mod tests {
         let gitconfig = tenant.home_dir.join(".gitconfig");
         let bash_profile = tenant.home_dir.join(".bash_profile");
         let bashrc = tenant.home_dir.join(".bashrc");
-        let environment = tenant.home_dir.join(".config/aibox/env.sh");
         fs::write(&gitconfig, b"[user]\nname = Keep Me\n").unwrap();
         fs::write(&bash_profile, b"export PROFILE_OWNER=user\n").unwrap();
         fs::write(&bashrc, b"export BASHRC_OWNER=user\n").unwrap();
-        fs::write(&environment, b"modified\n").unwrap();
         fs::remove_dir(tenant.home_dir.join(".claude")).unwrap();
 
         tenant.ensure_initialized().unwrap();
@@ -922,7 +873,6 @@ mod tests {
             b"export PROFILE_OWNER=user\n"
         );
         assert_eq!(fs::read(&bashrc).unwrap(), b"export BASHRC_OWNER=user\n");
-        assert_eq!(fs::read(&environment).unwrap(), AIBOX_ENV);
         assert!(tenant.home_dir.join(".claude").is_dir());
         assert!(tenant.home_dir.join(".codex").is_dir());
     }
@@ -978,8 +928,6 @@ mod tests {
             root.clone(),
             root.join(TENANTS_DIR),
             tenant.home_dir.clone(),
-            tenant.home_dir.join(".config"),
-            tenant.home_dir.join(".config/aibox"),
             tenant.home_dir.join(".claude"),
             tenant.home_dir.join(".codex"),
         ] {
@@ -994,24 +942,48 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn initialization_rejects_a_symlinked_managed_environment() {
+    fn initialization_ignores_a_legacy_managed_environment() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
         tenant.ensure_initialized().unwrap();
+        fs::create_dir_all(tenant.home_dir.join(".config/aibox")).unwrap();
         let environment = tenant.home_dir.join(".config/aibox/env.sh");
-        fs::remove_file(&environment).unwrap();
         symlink(outside.path().join("env.sh"), &environment).unwrap();
 
-        let error = tenant.ensure_initialized().unwrap_err().to_string();
+        tenant.ensure_initialized().unwrap();
 
-        assert!(
-            error.contains("inspect aibox Tenant environment"),
-            "{error}"
-        );
+        assert!(fs::symlink_metadata(&environment).unwrap().is_symlink());
         assert!(!outside.path().join("env.sh").exists());
+    }
+
+    #[test]
+    fn initialization_preserves_a_legacy_managed_environment_file() {
+        let root = tempfile::tempdir().unwrap();
+        let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+        tenant.ensure_initialized().unwrap();
+        let environment = tenant.home_dir.join(".config/aibox/env.sh");
+        fs::create_dir_all(environment.parent().unwrap()).unwrap();
+        fs::write(&environment, b"legacy bytes\n").unwrap();
+
+        tenant.ensure_initialized().unwrap();
+
+        assert_eq!(fs::read(environment).unwrap(), b"legacy bytes\n");
+    }
+
+    #[test]
+    fn initialization_ignores_an_abnormal_legacy_configuration_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+        tenant.ensure_initialized().unwrap();
+        let configuration = tenant.home_dir.join(".config");
+        fs::write(&configuration, b"not a directory\n").unwrap();
+
+        tenant.ensure_initialized().unwrap();
+
+        assert_eq!(fs::read(configuration).unwrap(), b"not a directory\n");
     }
 
     #[test]

@@ -32,12 +32,13 @@ mod session_claude;
 mod session_codex;
 mod sync;
 mod tenant;
+mod tenant_environment;
 #[cfg(test)]
 mod testutil;
 
 use agent::AgentKind;
 use anyhow::{Context, Result};
-use cli::{Cli, Command, RunArgs};
+use cli::{Cli, Command, DebugArgs, RunArgs};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
@@ -129,11 +130,45 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
                 &context.docker(),
             )
         }
+        Command::Debug(args) => {
+            reject_passthrough("debug takes no pass-through args", passthrough)?;
+            let root = context.root()?;
+            debug_tenant_with(&args, &root, &context.docker())
+        }
         Command::Console(args) => {
             reject_passthrough("console takes no pass-through args", passthrough)?;
             service::dispatch(&args)
         }
     }
+}
+
+fn debug_tenant_with(debug: &DebugArgs, root: &Path, docker: &DockerSource) -> Result<i32> {
+    let image = docker::IMAGE;
+    let tenant = ManagedTenant::resolve(root, debug.tenant_name())?;
+
+    if !docker.image_exists(image)? {
+        anyhow::bail!(
+            "{image} is not present locally; start `aibox console` and build the Runtime Image from Console Overview"
+        );
+    }
+
+    tenant.ensure_initialized()?;
+    let home_dir = std::fs::canonicalize(&tenant.home_dir)
+        .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
+    runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;
+    let components = tenant_environment_components(&home_dir);
+
+    let run_args = runspec::assemble_debug_args(&home_dir);
+    let command = tenant_environment::build_debug_command(components);
+    docker.run(&run_args, image, &command)
+}
+
+fn tenant_environment_components(home: &Path) -> component::TenantEnvironmentComponents {
+    let (components, warnings) = component::inspect_tenant_environment_components(home);
+    for warning in warnings {
+        eprintln!("!! {warning}");
+    }
+    components
 }
 
 fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()> {
@@ -170,8 +205,9 @@ fn run_agent_with(
     let home_dir = std::fs::canonicalize(&tenant.home_dir)
         .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
     runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;
+    let components = tenant_environment_components(&home_dir);
 
-    let agent_command = agent.build_command(passthrough);
+    let agent_command = agent.build_command(passthrough, components);
     let run_args = runspec::assemble_run_args(&workspace, &home_dir, &mounts);
 
     docker.run(&run_args, image, &agent_command)

@@ -1,8 +1,8 @@
 # Tenants, Sessions, And Components
 
 The Console Tenants module owns persistent identity lifecycle. The public
-`aibox run` command selects a Managed Tenant with `--tenant`; it does not create
-or select the Host Tenant.
+`aibox run` and `aibox debug` commands select a Managed Tenant with `--tenant`;
+neither can select the Host Tenant.
 
 ## Tenant Identity
 
@@ -10,9 +10,9 @@ A **Managed Tenant** is an aibox-managed, runnable identity with a Tenant Home.
 The **Default Managed Tenant** is the protected Managed Tenant named `default`.
 After taking the Service Lock, `aibox console` creates or repairs its Tenant Home
 baseline and fails before listening if the baseline cannot be established
-safely. A validated Run can still initialize a missing Managed Tenant when no
-Service has done so, even when Docker or the Coding Agent later exits nonzero. A
-Managed Tenant named `host` is ordinary and runnable.
+safely. A validated Run or Debug Shell can still initialize a missing Managed
+Tenant when no Service has done so, even when Docker or the invoked process
+later exits nonzero. A Managed Tenant named `host` is ordinary and runnable.
 
 The Default Managed Tenant cannot be selected for deletion. An explicit delete
 request for `default` is rejected, and deleting all Managed Tenants preserves
@@ -21,8 +21,8 @@ change; the next Service startup repairs the baseline.
 
 The **Host Tenant** is a management-only view backed by the real Host Home. It
 is selected by the Console for host-side Config, Session, and statusline work.
-It cannot Run and is never included in the Managed Tenant list or deletion
-selection. `host` and the Host Tenant are distinct identities.
+It cannot Run or open a Debug Shell and is never included in the Managed Tenant
+list or deletion selection. `host` and the Host Tenant are distinct identities.
 
 Tenant Homes, Named Config catalogs, and Requests live below the
 dedicated `$AIBOX_ROOT` (default `$HOME/.aibox`). Do not point that root at a
@@ -169,28 +169,48 @@ explicitly install every required Component in each Tenant after the rebuild.
 
 ### Tenant Environment
 
-Tenant initialization creates and repairs the aibox-owned
-`.config/aibox/env.sh`. It supplies HOME-local defaults for Cargo, rustup,
-GOROOT, GOPATH, npm's global prefix, and uv's Python install/bin directories. It
-adds Component binary directories without discarding or duplicating the user's
-PATH, disables Claude's background auto-updater, requires uv-managed Python,
-and permits only explicit interpreter downloads. Users should put their own
-exports in `.bash_profile` or `.bashrc`; aibox never creates or modifies either
-file. User-defined uv storage paths are preserved, while the managed-only and
-manual-download policies are unconditional.
+A Run or Debug Shell starts login Bash and lets Bash read the first applicable
+user login profile using native semantics. aibox never creates or modifies
+`.bash_profile` or `.bashrc`, and `.bashrc` is loaded only when the user's login
+profile chooses to source it.
 
-A Run starts login Bash, which reads `.bash_profile` using standard Bash
-semantics. The user may source `.bashrc` from that file when desired. aibox then
-loads its environment file and starts the selected Agent from `.local/bin`.
-Environment and Component changes take effect on the next Run. A missing,
-incomplete, or unmanaged selected Agent Component stops the Run with an
-instruction to resolve it in the Console; there is no first-Run install or
-Runtime Image fallback.
+After the login profile, the current aibox binary restores the structural
+`HOME=/home/aibox`. It snapshots native Component state before Docker starts
+and supplies a missing default only when the owning Component is `installed`:
+Node owns `NPM_CONFIG_PREFIX`; Claude owns `DISABLE_AUTOUPDATER`; Python owns
+`UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_BIN_DIR`, `UV_MANAGED_PYTHON`, and
+`UV_PYTHON_DOWNLOADS`; Rust owns `CARGO_HOME` and `RUSTUP_HOME`; Go owns
+`GOROOT` and `GOPATH`. `UV_MANAGED_PYTHON` is omitted when either it or
+`UV_NO_MANAGED_PYTHON` is already set. Codex owns no Tenant Environment
+default. Known missing, incomplete, or unmanaged Component state is quiet. An
+inspection error warns and skips only that Component without blocking Run or
+Debug.
+
+Explicit user values, including empty values and values for an absent
+Component, are preserved and exported. Existing Tenant-local binary
+directories absent from PATH are appended in stable order, independently of
+Component status, so preserved Cargo, GOPATH, and npm user tools remain
+available after Component removal. A nonempty path-owner variable selects its
+custom directory; when it is truly unset, the corresponding HOME-local
+candidate is considered instead; an explicit empty value suppresses that
+candidate. Every user PATH entry retains higher command-resolution priority,
+and existing entries, duplicates, relative entries, and empty segments are
+left in place. Because this composition occurs after the login profile, a
+profile that needs to invoke a Tenant Component must add that Component to PATH
+itself.
+
+A Run then invokes the selected Agent by its absolute Tenant-local launcher
+path. A missing, incomplete, or unmanaged selected Agent Component stops the
+Run with an instruction to resolve it in the Console; there is no first-Run
+install or Runtime Image fallback. A Debug Shell requires no Component and,
+after composing the same exported environment, enters Bash in `/home/aibox`
+without rereading profile or rc files. It mounts no Workspace or Extra Mount,
+but retains network access and writable access to all Tenant state.
 
 ## Concurrency
 
 Tenant lifecycle can recover its own interrupted filesystem work, but aibox does
 not coordinate separate processes editing the same Tenant or Coding Agent state.
-One process supports only one active container operation: a Run or a Component
-installation. See [Configs](configs.md) for per-file application and edit
-behavior.
+One process supports only one active container operation: a Run, Debug Shell,
+or Component installation. See [Configs](configs.md) for per-file application
+and edit behavior.

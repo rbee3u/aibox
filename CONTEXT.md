@@ -25,20 +25,25 @@ Workspace. A Run is not persistent history and has no identity relationship to
 a Session.
 _Avoid_: Session, Run History, execution profile
 
+**Debug Shell**:
+A transient Bash session using one Managed Tenant without a Coding Agent or
+Workspace. It exposes the Run-time Tenant Environment for direct diagnosis.
+_Avoid_: Run, recovery shell, Host shell
+
 **Workspace**:
 The host directory selected as the Coding Agent's working area for a Run.
 _Avoid_: Project directory, work directory, work tree
 
 **Filesystem Sandbox**:
-The boundary that limits a Coding Agent's local host-filesystem access during a
-Run. It is not a complete authority or network boundary.
+The boundary that limits local host-filesystem access during a Run or Debug
+Shell. It is not a complete authority or network boundary.
 _Avoid_: Complete isolation, authority boundary
 
 **Runtime Image**:
 The fixed local Docker image named `aibox:latest` that provides the stable OS
-substrate for Runs and Managed Tenant Component installation. It is independent
-of every Tenant and does not own application language runtimes, toolchains, or
-Coding Agent executables.
+substrate for Runs, Debug Shells, and Managed Tenant Component installation. It
+is independent of every Tenant and does not own application language runtimes,
+toolchains, or Coding Agent executables.
 _Avoid_: Agent image, Tenant image, persistent container
 
 **Extra Mount**:
@@ -68,7 +73,7 @@ _Avoid_: Public API, SDK, remote API
 **Service Lock**:
 The advisory `$AIBOX_ROOT/.service.lock` held for the lifetime of one aibox
 Service. It prevents a second Service for the same Root but does not coordinate
-`aibox run` or Console operations in another process.
+Runs, Debug Shells, or Console operations in another process.
 _Avoid_: Global lock, Run lock, filesystem transaction
 
 **Management Operation**:
@@ -109,8 +114,9 @@ persistent native Coding Agent and Component state.
 _Avoid_: Host Home, profile home
 
 **Tenant Environment**:
-The command environment composed for a Run from one Managed Tenant's persistent
-user initialization and Tenant Component paths.
+The command environment composed when a Run or Debug Shell starts from one
+Managed Tenant's user initialization, healthy Tenant Component defaults, and
+available Tenant-local tool paths.
 _Avoid_: Runtime Image environment, Agent Profile
 
 **Host Home**:

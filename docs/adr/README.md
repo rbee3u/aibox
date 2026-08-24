@@ -16,15 +16,17 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
 - [0005: Filesystem Sandbox and host trust](0005-filesystem-sandbox-and-host-trust.md)
   makes Docker the filesystem boundary and treats writable state as untrusted.
 - [0006: Application-only command boundary](0006-cli-only-command-boundary.md)
-  preserves native Coding Agent arguments without exposing orchestration APIs.
+  keeps `console`, `run`, and Tenant-only `debug` narrow without exposing
+  orchestration APIs.
 - [0007: Supervised Docker lifecycle](0007-supervised-docker-lifecycle.md) keeps
-  container cleanup under wrapper control.
+  Run, Debug Shell, and installer cleanup under wrapper control.
 - [0008: Global trusted Request Proxy](0008-global-trusted-request-service.md)
   separates the Request Proxy from Tenants on one explicitly trusted listener.
 - [0009: Request evidence and projections](0009-request-evidence-and-projections.md)
   keeps raw diagnostic evidence beside stable materialized views.
 - [0010: Foreground Service and Console](0010-foreground-service-and-console.md)
-  moves management into one Root-local foreground Service while preserving Run.
+  moves management into one Root-local foreground Service while preserving
+  direct Run and Debug execution.
 - [0011: Shared listener management boundary](0011-shared-listener-management-boundary.md)
   reserves loopback management paths without narrowing Request Proxy reachability.
 - [0012: Ephemeral Management Operations](0012-ephemeral-management-operations.md)

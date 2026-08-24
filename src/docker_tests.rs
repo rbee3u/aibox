@@ -151,6 +151,13 @@ case "$AIBOX_FAKE_DOCKER_MODE" in
         printf 'fake-container\n' > "$cid"
         exit 0
         ;;
+    service-output)
+        printf 'fake-container\n' > "$cid"
+        printf 'downloading installer\n'
+        printf 'network request failed\n' >&2
+        printf 'final detail without newline'
+        exit 31
+        ;;
     delayed-cid)
         sleep 0.2
         if [ -n "$AIBOX_CALLBACK_MARKER" ] && [ -e "$AIBOX_CALLBACK_MARKER" ]; then
@@ -539,6 +546,37 @@ fn run_forwards_run_args_image_and_cmd_in_order() {
                  <aibox:latest> <exec> <--flag>"
         ),
         "run must forward run_args, then image, then cmd, in order: {log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn service_run_forwards_stdout_stderr_and_final_partial_lines() {
+    let _run_lock = run_registry_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_docker(dir.path());
+    let docker = mode_docker(dir.path(), "service-output", []);
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let captured = messages.clone();
+    let log: LogCallback = Arc::new(move |line| captured.lock().unwrap().push(line));
+
+    let code = run_for_service(&docker, &[], "image:tag", &[], || {}, log).unwrap();
+
+    assert_eq!(code, 31);
+    let messages = messages.lock().unwrap();
+    assert!(
+        messages.iter().any(|line| line == "downloading installer"),
+        "stdout should reach the Management Operation log: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|line| line == "network request failed"),
+        "stderr should reach the Management Operation log: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|line| line == "final detail without newline"),
+        "a final partial line should not be lost: {messages:?}"
     );
 }
 

@@ -30,7 +30,7 @@ pub fn uid_gid() -> (u32, u32) {
 }
 
 /// True only when both stdin and stdout are TTYs. Decides `-it` (interactive)
-/// vs `-i` (piped) so that piping into the agent still works.
+/// vs `-i` (piped) so that piping into the agent or Debug Shell still works.
 pub fn has_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

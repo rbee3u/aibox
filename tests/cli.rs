@@ -100,7 +100,12 @@ fn process_environment_runs_with_fixed_runtime_image() {
         log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
         "{log}"
     );
-    assert!(log.contains("<aibox-codex> <exec> <probe>"), "{log}");
+    assert!(
+        log.contains(
+            "<aibox-tenant-environment> </home/aibox> <0> <0> <0> <0> <0> </home/aibox/.local/bin/codex> <exec> <probe>"
+        ),
+        "{log}"
+    );
     assert!(root.join("tenants/env-wired/.codex").is_dir());
     assert!(!home.join(".aibox").exists());
 }
@@ -151,5 +156,65 @@ fn console_rejects_agent_passthrough() {
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("`-- <args>` applies only to a run; console takes no pass-through args")
+    );
+}
+
+#[test]
+fn debug_uses_the_fixed_runtime_image_and_tenant_home_only() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("root");
+    let home = scratch.path().join("home");
+    let bin = scratch.path().join("bin");
+    let log = scratch.path().join("docker.log");
+    for directory in [&root, &home, &bin] {
+        std::fs::create_dir(directory).unwrap();
+    }
+    write_fake_docker(&bin);
+
+    let output = command(&home, &root, &bin)
+        .env("AIBOX_FAKE_DOCKER_LOG", &log)
+        .args(["debug", "--tenant", "work"])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let log = std::fs::read_to_string(log).unwrap();
+    assert!(
+        log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "<{}:/home/aibox>",
+            std::fs::canonicalize(root.join("tenants/work"))
+                .unwrap()
+                .display()
+        )),
+        "{log}"
+    );
+    assert!(log.contains("<-w> </home/aibox>"), "{log}");
+    assert!(!log.contains("</workspace>"), "{log}");
+    assert!(root.join("tenants/work").is_dir());
+}
+
+#[test]
+fn debug_rejects_agent_passthrough() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("root");
+    let home = scratch.path().join("home");
+    let bin = scratch.path().join("bin");
+    for directory in [&root, &home, &bin] {
+        std::fs::create_dir(directory).unwrap();
+    }
+
+    let output = command(&home, &root, &bin)
+        .args(["debug", "--", "command"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("`-- <args>` applies only to a run; debug takes no pass-through args")
     );
 }

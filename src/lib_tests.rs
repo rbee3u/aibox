@@ -113,13 +113,27 @@ impl RunFixture {
         .unwrap();
         tenant
     }
+
+    fn seed_go_component(&self, name: &str) -> ManagedTenant {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tenant = ManagedTenant::resolve(self.root.path(), name).unwrap();
+        tenant.ensure_initialized().unwrap();
+        std::fs::create_dir_all(tenant.home_dir.join(".goroot/bin")).unwrap();
+        std::fs::write(tenant.home_dir.join(".goroot/VERSION"), b"go1.2.3\n").unwrap();
+        let go = tenant.home_dir.join(".goroot/bin/go");
+        std::fs::write(&go, b"fake go\n").unwrap();
+        std::fs::set_permissions(&go, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tenant
+    }
 }
 
 #[cfg(unix)]
 #[test]
 fn run_uses_the_tenant_agent_component_and_forwards_opaque_args() {
     let fx = RunFixture::new();
-    fx.seed_codex_component("work");
+    let tenant = fx.seed_codex_component("work");
+    std::fs::write(tenant.home_dir.join(".goroot"), b"broken Go state\n").unwrap();
     let cli = Cli::try_parse_from(["aibox", "run", "--tenant", "work"]).unwrap();
     let passthrough = vec!["exec".into(), "fix tests".into(), "--json".into()];
     let code = run_with_context(
@@ -147,7 +161,29 @@ fn run_uses_the_tenant_agent_component_and_forwards_opaque_args() {
     );
     assert!(
         fx.log()
-            .contains("<aibox-codex> <exec> <fix tests> <--json>")
+            .contains("<aibox-tenant-environment> </home/aibox> <0> <0> <0> <0> <0> </home/aibox/.local/bin/codex> <exec> <fix tests> <--json>")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_uses_the_installed_component_snapshot_without_blocking_on_inspection_errors() {
+    let fx = RunFixture::new();
+    let tenant = fx.seed_go_component("work");
+    std::fs::create_dir(tenant.home_dir.join(".rustup")).unwrap();
+    std::fs::write(tenant.home_dir.join(".rustup/settings.toml"), [0xff, 0xfe]).unwrap();
+
+    let code = fx
+        .execute(&["aibox", "debug", "--tenant", "work"], &[])
+        .unwrap();
+
+    assert_eq!(code, 0);
+    assert!(
+        fx.log().contains(
+            "<aibox-tenant-environment> </home/aibox> <0> <0> <0> <0> <1> </bin/bash> <--noprofile> <--norc>"
+        ),
+        "{}",
+        fx.log()
     );
 }
 
@@ -180,13 +216,107 @@ fn run_initializes_a_missing_tenant_then_requires_an_explicit_agent_component() 
         error.contains("codex Component is not installed"),
         "{error}"
     );
-    assert!(
-        fx.root
-            .path()
-            .join("tenants/default/.config/aibox/env.sh")
-            .is_file()
-    );
+    assert!(fx.root.path().join("tenants/default").is_dir());
+    assert!(!fx.root.path().join("tenants/default/.config").exists());
     assert!(!fx.log().contains("<run>"), "{}", fx.log());
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_initializes_the_tenant_without_requiring_an_agent_component() {
+    let fx = RunFixture::new();
+
+    let code = fx
+        .execute(&["aibox", "debug", "--tenant", "work"], &[])
+        .unwrap();
+
+    assert_eq!(code, 0);
+    assert!(fx.root.path().join("tenants/work").is_dir());
+    let log = fx.log();
+    assert!(
+        log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
+        "{log}"
+    );
+    assert!(
+        log.contains("<aibox-tenant-environment> </home/aibox> <0> <0> <0> <0> <0> </bin/bash> <--noprofile> <--norc>"),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "<{}:/home/aibox>",
+            std::fs::canonicalize(fx.root.path().join("tenants/work"))
+                .unwrap()
+                .display()
+        )),
+        "{log}"
+    );
+    assert!(log.contains("<-w> </home/aibox>"), "{log}");
+    assert!(!log.contains("</workspace>"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_reports_missing_image_before_initializing_tenant() {
+    let fx = RunFixture::new();
+
+    let error = fx
+        .execute(
+            &["aibox", "debug"],
+            &[("AIBOX_FAKE_DOCKER_IMAGE_MODE", "missing")],
+        )
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("not present locally"), "{error}");
+    assert!(!fx.root.path().join("tenants/default").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_propagates_the_shell_exit_status() {
+    let fx = RunFixture::new();
+
+    let code = fx
+        .execute(
+            &["aibox", "debug"],
+            &[("AIBOX_FAKE_DOCKER_RUN_STATUS", "23")],
+        )
+        .unwrap();
+
+    assert_eq!(code, 23);
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_rejects_agent_passthrough() {
+    let fx = RunFixture::new();
+    let cli = Cli::try_parse_from(["aibox", "debug"]).unwrap();
+
+    let error = run_with_context(
+        cli,
+        &[OsString::from("command")],
+        TestCommandContext {
+            root: fx.root.path().to_path_buf(),
+            docker: docker::DockerCli::isolated(
+                fx.docker_dir.path().join("docker"),
+                [
+                    ("PATH".into(), "/usr/bin:/bin".into()),
+                    (
+                        "AIBOX_FAKE_DOCKER_LOG".into(),
+                        fx.docker_log.clone().into_os_string(),
+                    ),
+                ],
+            ),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("debug takes no pass-through args"),
+        "{error}"
+    );
+    assert!(!fx.root.path().join("tenants/default").exists());
 }
 
 #[cfg(unix)]

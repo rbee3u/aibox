@@ -1,8 +1,8 @@
 # AGENTS.md
 
 `aibox` is a Rust CLI and foreground local Service that runs Claude Code or
-OpenAI Codex inside a Docker container. The container is the Filesystem Sandbox
-boundary. `CONTEXT.md`
+OpenAI Codex, or opens a Managed Tenant Debug Shell, inside a Docker container.
+The container is the Filesystem Sandbox boundary. `CONTEXT.md`
 defines the canonical domain language; keep code, clap help, and user
 documentation aligned with it. Architectural decisions live in `docs/adr/`.
 
@@ -14,10 +14,11 @@ references between them.
 
 ## Implementation Map
 
-- `src/cli.rs` defines the two-command Clap surface and Run pass-through
+- `src/cli.rs` defines the three-command Clap surface and Run pass-through
   boundary; `src/lib.rs` resolves command scope and orchestrates commands.
 - `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
   Tenant resolution, lifecycle, layout, permissions, and shared path safety.
+  `src/tenant_environment.rs` composes the Run and Debug Shell environment.
 - `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
   catalog operations, Config Application, and Credential Propagation.
   `src/metadata.rs` owns the shared Tenant-and-Agent metadata document.
@@ -52,20 +53,20 @@ shared.
 
 **Keep the CLI surface narrow.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. The public commands are
-`console` and `run`; `console` owns only `--listen`, and Runtime Image, Tenant,
-Component, Config, and Session management is exposed through the Console
-Control API. Removed command names, including `build` and `serve`, must remain
-unknown Clap subcommands; do not add aliases, tombstones, or a completion
-protocol.
+`console`, `run`, and `debug`; `console` owns only `--listen`, `debug` owns only
+`--tenant`, and Runtime Image, Tenant, Component, Config, and Session management
+is exposed through the Console Control API. Removed command names, including
+`build` and `serve`, must remain unknown Clap subcommands; do not add aliases,
+tombstones, or a completion protocol.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only by
-Console Tenant-scoped views. The Host Tenant cannot Run and never appears in the
-Managed Tenant list or deletion. The Default Managed Tenant named `default` is
-protected from deletion. Service startup creates or repairs its Tenant Home
-baseline after acquiring the Service Lock and fails before listening when that
-cannot be done safely. Only `tenants/<name>` subtrees may be mounted from inside
-`$AIBOX_ROOT`.
+Console Tenant-scoped views. The Host Tenant cannot Run or open a Debug Shell
+and never appears in the Managed Tenant list or deletion. The Default Managed
+Tenant named `default` is protected from deletion. Service startup creates or
+repairs its Tenant Home baseline after acquiring the Service Lock and fails
+before listening when that cannot be done safely. Only `tenants/<name>`
+subtrees may be mounted from inside `$AIBOX_ROOT`.
 
 **Keep the direct layout.** A Managed Tenant exists exactly when
 `tenants/<name>` is a real directory. Named Config catalogs live under
@@ -125,7 +126,8 @@ initialization installs no Components. The Console derives Component state from
 native Managed or Host Tenant files without a registry. Node.js, Codex, Claude,
 Python, Rust, and Go remain Managed Tenant-only and install through the shared
 image with only the Tenant Home mounted; a Run requires its selected Coding Agent
-Component and never falls back to the Runtime Image. Status-line Components
+Component and never falls back to the Runtime Image. A Debug Shell requires no
+Component. Status-line Components
 directly manage their script when applicable and their native configuration
 values. Status-line paths are not Config Fields, so Config Application preserves
 them without ownership or overlap machinery. Expose repairable partial state as
@@ -135,11 +137,22 @@ config, credentials, Sessions, Workspace environments, package configuration,
 caches, tools, npm and pip user state, Cargo, and GOPATH outside the removed
 Component's owned release paths.
 
-**Keep the Tenant Environment ownership split.** aibox owns and repairs
-`.config/aibox/env.sh`; users exclusively own `.bash_profile` and `.bashrc`.
-A Run uses login Bash, then loads the aibox environment, then invokes the
-Tenant-local Agent launcher. Do not create or rewrite user profiles, implicitly
-load `.bashrc`, or hot-reload environment changes into an active Run.
+**Compose the Tenant Environment at launch.** A Run or Debug Shell uses login
+Bash and its native user-profile semantics, then the current aibox binary
+restores `HOME=/home/aibox`. Supply a missing Component-specific default only
+when native inspection reports its owning Node.js, Claude, Python, Rust, or Go
+Component as `installed`; known non-installed states are quiet, while an
+inspection error warns and skips only that Component without blocking Run or
+Debug. Take this snapshot after Tenant initialization and before Docker starts.
+User values take precedence even without the Component, and explicit empty
+values suppress defaults. Independently append only existing missing
+Tenant-local binary directories to PATH, retaining preserved user tool paths
+after Component removal; a truly unset path-owner variable uses its HOME-local
+candidate, while an explicit empty value suppresses that candidate. Do not
+persist an aibox environment file, create or rewrite user profiles, implicitly
+load `.bashrc`, or hot-reload environment changes into an active container. Run
+invokes the selected Tenant-local Agent by absolute path. Debug then opens Bash
+without rereading profile or rc files.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
@@ -160,8 +173,8 @@ a missing Managed Tenant, and the Components view reports its catalog as not
 installed. Host Component listing reports the two supported statuslines as not
 installed when the Host Home or Agent state is missing. Read-only views create
 nothing. Service startup initializes the Default Managed Tenant; Run, Config
-creation, Current Config editing, and Managed Tenant Component installation may
-initialize other missing state. Host statusline install may initialize an Agent
+creation, Current Config editing, Managed Tenant Component installation, and a
+Debug Shell may initialize other missing state. Host statusline install may initialize an Agent
 state directory inside an already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
@@ -172,7 +185,7 @@ commit one file at a time without rollback. Credential Propagation uses its
 preflight snapshots without write-time reconciliation, replaces targets
 independently, continues after individual write failures, and never rolls back
 successful targets. One aibox process supports only one active container
-operation: a Run or Component installation.
+operation: a Run, Debug Shell, or Component installation.
 
 **Keep the Request Proxy host-side and raw.** The Request Proxy is an always-on part of
 the aibox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
@@ -198,18 +211,19 @@ generated `assets/console.*` bundle, as `docs/console-ui.md` describes. Desktop
 Browser access is never required for routine changes. A headless browser uses
 the same container's loopback listener.
 
-**Keep Run transient and the crate application-only.** Do not add Run History or a
+**Keep execution transient and the crate application-only.** Do not add Run History or a
 Run-to-Session mapping. The Control API is Console-internal, not a public Rust
 or HTTP embedding surface. A validated Run attempt may initialize its Tenant before
-Docker startup fails or the Coding Agent returns nonzero. Expose only the
-application entry point from the library target, not embedding-oriented module
-or dispatch APIs.
+Docker startup fails or the Coding Agent returns nonzero. A Debug Shell is also
+transient, has no history, mounts no Workspace, and may initialize its Managed
+Tenant after the Runtime Image preflight. Expose only the application entry
+point from the library target, not embedding-oriented module or dispatch APIs.
 
 **Treat `AIBOX_ROOT` as dedicated but unmarked.** Do not add an ownership
 marker. Keep deletion structurally scoped and document that users must not
 point the root at a general-purpose directory.
 
-**Keep Docker runs cleanup-aware.** Runs and Component installers go
+**Keep Docker runs cleanup-aware.** Runs, Debug Shells, and Component installers go
 through `docker::run`; its child/cidfile registry supports one active container
 operation per process. Register the cidfile before spawning Docker, register
 the child immediately afterward, and keep cleanup armed until `finish_child`

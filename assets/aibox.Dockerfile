@@ -66,5 +66,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /workspace
 USER aibox
 
-# No ENTRYPOINT: the Rust wrapper starts a login Bash that loads the Tenant
-# environment and then executes the selected Tenant-local Coding Agent.
+# No ENTRYPOINT: the Rust wrapper composes the Tenant Environment through login
+# Bash, then executes a Tenant-local Coding Agent or Debug Shell.

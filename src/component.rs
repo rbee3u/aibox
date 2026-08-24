@@ -119,6 +119,64 @@ pub enum ComponentStatus {
     NotInstalled,
 }
 
+/// Installed Components that own defaults in the Tenant Environment.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TenantEnvironmentComponents {
+    node: bool,
+    claude: bool,
+    python: bool,
+    rust: bool,
+    go: bool,
+}
+
+impl TenantEnvironmentComponents {
+    #[cfg(test)]
+    pub(crate) fn for_tests(node: bool, claude: bool, python: bool, rust: bool, go: bool) -> Self {
+        Self {
+            node,
+            claude,
+            python,
+            rust,
+            go,
+        }
+    }
+
+    pub(crate) fn node(self) -> bool {
+        self.node
+    }
+
+    pub(crate) fn claude(self) -> bool {
+        self.claude
+    }
+
+    pub(crate) fn python(self) -> bool {
+        self.python
+    }
+
+    pub(crate) fn rust(self) -> bool {
+        self.rust
+    }
+
+    pub(crate) fn go(self) -> bool {
+        self.go
+    }
+
+    fn mark_installed(&mut self, kind: ComponentKind) {
+        match kind {
+            ComponentKind::Node => self.node = true,
+            ComponentKind::Claude => self.claude = true,
+            ComponentKind::Python => self.python = true,
+            ComponentKind::Rust => self.rust = true,
+            ComponentKind::Go => self.go = true,
+            ComponentKind::Codex
+            | ComponentKind::ClaudeStatusline
+            | ComponentKind::CodexStatusline => {
+                unreachable!("Component has no Tenant Environment defaults")
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ComponentInspection {
     pub(crate) kind: ComponentKind,
@@ -231,6 +289,40 @@ pub(crate) fn inspect_catalog(selected: &Tenant) -> Result<Vec<ComponentInspecti
         .collect())
 }
 
+/// Snapshot healthy Components that own Tenant Environment defaults.
+///
+/// Inspection failures are returned as warnings rather than failing the
+/// caller, so an unrelated damaged Component cannot block a Run or Debug
+/// Shell. Recognized non-installed states are intentionally quiet.
+pub(crate) fn inspect_tenant_environment_components(
+    home: &Path,
+) -> (TenantEnvironmentComponents, Vec<String>) {
+    let mut installed = TenantEnvironmentComponents::default();
+    let mut warnings = Vec::new();
+    for kind in [
+        ComponentKind::Node,
+        ComponentKind::Claude,
+        ComponentKind::Python,
+        ComponentKind::Rust,
+        ComponentKind::Go,
+    ] {
+        match inspect(kind, home) {
+            Ok(ComponentStatus::Installed { .. }) => installed.mark_installed(kind),
+            Ok(
+                ComponentStatus::Modified
+                | ComponentStatus::Incomplete
+                | ComponentStatus::Unmanaged
+                | ComponentStatus::NotInstalled,
+            ) => {}
+            Err(error) => warnings.push(format!(
+                "could not inspect {} Component; skipping its environment defaults: {error}",
+                kind.name()
+            )),
+        }
+    }
+    (installed, warnings)
+}
+
 /// Require the selected Coding Agent's Tenant-local executable before a Run.
 pub(crate) fn require_agent_component(agent: AgentKind, home: &Path) -> Result<()> {
     let kind = ComponentKind::for_agent(agent);
@@ -259,6 +351,7 @@ pub(crate) fn install_component(selected: &Tenant, component: &ComponentSpec) ->
 pub(crate) fn install_component_for_service(
     selected: &Tenant,
     component: &ComponentSpec,
+    log: crate::docker::LogCallback,
 ) -> Result<i32> {
     reject_host_runtime_component(selected, component.kind)?;
     match component.kind {
@@ -277,7 +370,7 @@ pub(crate) fn install_component_for_service(
                 tenant,
                 component,
                 &crate::docker::DockerCli::system(),
-                true,
+                Some(log),
             )
         }
     }
@@ -1337,14 +1430,14 @@ fn install_runtime_component_with(
     component: &ComponentSpec,
     docker: &crate::docker::DockerCli,
 ) -> Result<i32> {
-    install_runtime_component_with_mode(tenant, component, docker, false)
+    install_runtime_component_with_mode(tenant, component, docker, None)
 }
 
 fn install_runtime_component_with_mode(
     tenant: &ManagedTenant,
     component: &ComponentSpec,
     docker: &crate::docker::DockerCli,
-    service_mode: bool,
+    service_log: Option<crate::docker::LogCallback>,
 ) -> Result<i32> {
     let existing = if tenant.exists()? {
         inspect(component.kind, &tenant.home_dir)?
@@ -1399,8 +1492,17 @@ fn install_runtime_component_with_mode(
         OsString::from(component.version.as_deref().unwrap_or("")),
     ];
     let profiles = capture_user_shell_profiles(&home)?;
-    let run_result = if service_mode {
-        crate::docker::run_for_service(docker, &run_args, image, &command, || {})
+    let run_result = if let Some(log) = service_log {
+        let started_log = log.clone();
+        let component_name = component.kind.name();
+        crate::docker::run_for_service(
+            docker,
+            &run_args,
+            image,
+            &command,
+            move || started_log(format!("{component_name} installer container started")),
+            log,
+        )
     } else {
         crate::docker::run_with(docker, &run_args, image, &command, || {})
     };
@@ -1644,36 +1746,83 @@ fn remove_rust(home: &Path) -> Result<()> {
     let cargo_exists = tenant::real_dir_exists(&cargo, "Cargo Home")?;
     let bin = cargo.join("bin");
     let bin_exists = cargo_exists && tenant::real_dir_exists(&bin, "Cargo binary directory")?;
-    let proxies = [
-        "rustup",
-        "rustc",
-        "cargo",
-        "rustdoc",
-        "rustfmt",
-        "cargo-fmt",
-        "clippy-driver",
-        "cargo-clippy",
-    ];
-    if bin_exists {
-        for proxy in proxies {
-            tenant::real_file_exists(&bin.join(proxy), "rustup proxy")?;
-        }
-    }
+    let proxies = if bin_exists {
+        rustup_proxy_paths(&bin)?
+    } else {
+        Vec::new()
+    };
 
     // Remove the cross-directory proxies first. If removal is interrupted,
     // `.rustup` remains as recognizable incomplete Component state and a
     // repeated command can finish the operation. Removing `.rustup` first
     // could leave only proxies, which inspection intentionally does not claim
     // as aibox-owned state because they may belong to a manual Rust install.
+    for proxy in proxies {
+        fs::remove_file(&proxy)
+            .with_context(|| format!("remove rustup proxy {}", proxy.display()))?;
+    }
     if bin_exists {
-        for proxy in proxies {
-            tenant::remove_real_file_if_exists(&bin.join(proxy), "rustup proxy")?;
-        }
+        tenant::sync_dir(&bin)?;
     }
     if rustup_exists {
         tenant::remove_real_dir_if_exists(&rustup, "Rustup Home")?;
     }
     Ok(())
+}
+
+fn rustup_proxy_paths(bin: &Path) -> Result<Vec<PathBuf>> {
+    let rustup = bin.join("rustup");
+    let rustup_metadata = match fs::symlink_metadata(&rustup) {
+        Ok(metadata) if metadata.file_type().is_file() => Some(metadata),
+        Ok(_) => bail!(
+            "rustup executable is not a regular file: {}",
+            rustup.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspect rustup executable {}", rustup.display()));
+        }
+    };
+    let mut proxies = Vec::new();
+    for entry in fs::read_dir(bin)
+        .with_context(|| format!("read Cargo binary directory {}", bin.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("read Cargo binary entry in {}", bin.display()))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect Cargo binary entry {}", path.display()))?;
+        let owned = if path == rustup {
+            rustup_metadata.is_some()
+        } else if metadata.file_type().is_symlink() {
+            fs::read_link(&path).with_context(|| format!("read rustup proxy {}", path.display()))?
+                == Path::new("rustup")
+        } else {
+            rustup_metadata
+                .as_ref()
+                .is_some_and(|rustup| same_file_identity(&metadata, rustup))
+        };
+        if owned {
+            proxies.push(path);
+        }
+    }
+    // Keep the executable available until every hard-link proxy is gone so an
+    // interrupted removal can rediscover ownership on the next attempt.
+    proxies.sort_by_key(|path| path == &rustup);
+    Ok(proxies)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.file_type().is_file() && left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
 }
 
 fn write_atomic(path: &Path, content: &[u8], mode: Option<u32>) -> Result<()> {

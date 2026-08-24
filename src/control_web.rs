@@ -545,7 +545,9 @@ async fn install_component(
     match state.operations.start(label, move |context| {
         let _guard = guard;
         context.log(format!("Installing {spec}"));
-        component::install_component_for_service(&selected, &spec)?;
+        let log_context = context.clone();
+        let log: docker::LogCallback = Arc::new(move |line| log_context.log(line));
+        component::install_component_for_service(&selected, &spec, log)?;
         Ok(format!("Installed {spec}"))
     }) {
         Ok(operation) => json_response(StatusCode::ACCEPTED, &operation),

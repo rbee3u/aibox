@@ -140,7 +140,8 @@ There is no activation state, migration reader, backup, rollback, lock
 directory, or Run History. A missing read-only Tenant stays quiet and creates no
 directories. Service startup is the separate lifecycle operation that ensures
 the Default Managed Tenant baseline. The Console is the management boundary;
-the public CLI remains limited to `console` and `run`.
+the public CLI is limited to `console`, `run`, and the Tenant-only `debug`
+shell.
 
 ## Config Fields
 

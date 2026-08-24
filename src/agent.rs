@@ -399,22 +399,31 @@ impl AgentKind {
     }
 
     /// Build the Coding Agent command without adding Named Config data.
-    pub fn build_command(self, passthrough: &[OsString]) -> Vec<OsString> {
-        let script = match self {
-            Self::Claude => {
-                r#". "$HOME/.config/aibox/env.sh"; exec "$HOME/.local/bin/claude" "$@""#
-            }
-            Self::Codex => r#". "$HOME/.config/aibox/env.sh"; exec "$HOME/.local/bin/codex" "$@""#,
-        };
-        let mut command = vec![
-            OsString::from("/bin/bash"),
-            OsString::from("--login"),
-            OsString::from("-c"),
-            OsString::from(script),
-            OsString::from(format!("aibox-{}", self.tag())),
-        ];
-        command.extend(passthrough.iter().cloned());
-        command
+    pub fn build_command(
+        self,
+        passthrough: &[OsString],
+        components: crate::component::TenantEnvironmentComponents,
+    ) -> Vec<OsString> {
+        self.build_command_in_home(
+            passthrough,
+            std::path::Path::new(crate::tenant_environment::CONTAINER_HOME),
+            components,
+        )
+    }
+
+    fn build_command_in_home(
+        self,
+        passthrough: &[OsString],
+        home: &std::path::Path,
+        components: crate::component::TenantEnvironmentComponents,
+    ) -> Vec<OsString> {
+        let mut agent_command = vec![home.join(".local/bin").join(self.tag()).into_os_string()];
+        agent_command.extend(passthrough.iter().cloned());
+        crate::tenant_environment::build_command_for_home(
+            &agent_command,
+            home.as_os_str(),
+            components,
+        )
     }
 }
 
@@ -539,30 +548,35 @@ mod tests {
     #[test]
     fn build_command_preserves_passthrough_without_injecting_named_config() {
         let pass = vec![OsString::from("--model"), OsString::from("opus")];
-        let command = AgentKind::Claude.build_command(&pass);
+        let command = AgentKind::Claude.build_command(
+            &pass,
+            crate::component::TenantEnvironmentComponents::default(),
+        );
+        assert_eq!(&command[..3], ["/bin/bash", "--login", "-c"]);
         assert_eq!(
-            command,
+            &command[4..11],
             [
-                "/bin/bash",
-                "--login",
-                "-c",
-                r#". "$HOME/.config/aibox/env.sh"; exec "$HOME/.local/bin/claude" "$@""#,
-                "aibox-claude",
-                "--model",
-                "opus",
+                "aibox-tenant-environment",
+                "/home/aibox",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
             ]
         );
-
-        let command = AgentKind::Codex.build_command(&[]);
         assert_eq!(
-            command,
-            [
-                "/bin/bash",
-                "--login",
-                "-c",
-                r#". "$HOME/.config/aibox/env.sh"; exec "$HOME/.local/bin/codex" "$@""#,
-                "aibox-codex",
-            ]
+            &command[11..],
+            ["/home/aibox/.local/bin/claude", "--model", "opus",]
+        );
+
+        let command = AgentKind::Codex.build_command(
+            &[],
+            crate::component::TenantEnvironmentComponents::default(),
+        );
+        assert_eq!(
+            command.last(),
+            Some(&OsString::from("/home/aibox/.local/bin/codex"))
         );
     }
 
@@ -583,95 +597,11 @@ mod tests {
         let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
         let pass = vec![opaque.clone()];
 
-        let command = AgentKind::Codex.build_command(&pass);
+        let command = AgentKind::Codex.build_command(
+            &pass,
+            crate::component::TenantEnvironmentComponents::default(),
+        );
 
         assert_eq!(command.last(), Some(&opaque));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn login_launch_loads_profile_then_aibox_environment_without_forcing_bashrc() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-        use std::process::Command;
-
-        let home = tempfile::tempdir().unwrap();
-        fs::create_dir_all(home.path().join(".config/aibox")).unwrap();
-        fs::create_dir_all(home.path().join(".local/bin")).unwrap();
-        fs::write(
-            home.path().join(".config/aibox/env.sh"),
-            include_bytes!("../assets/aibox-env.sh"),
-        )
-        .unwrap();
-        fs::write(
-            home.path().join(".bash_profile"),
-            b"export PROFILE_VALUE=profile\n\
-export GOPATH=\"$HOME/custom-go\"\n\
-export UV_PYTHON_INSTALL_DIR=\"$HOME/custom-python\"\n\
-export UV_PYTHON_BIN_DIR=\"$HOME/custom-python-bin\"\n\
-export UV_MANAGED_PYTHON=0\n\
-export UV_PYTHON_DOWNLOADS=automatic\n",
-        )
-        .unwrap();
-        fs::write(home.path().join(".bashrc"), b"export BASHRC_VALUE=bashrc\n").unwrap();
-        let launcher = home.path().join(".local/bin/codex");
-        fs::write(
-            &launcher,
-            br#"#!/bin/bash
-if env | grep -q '^UV_NO_MANAGED_PYTHON='; then exit 9; fi
-printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "${PROFILE_VALUE-}" "${BASHRC_VALUE-}" "$GOPATH" "$DISABLE_AUTOUPDATER" "$UV_PYTHON_INSTALL_DIR" "$UV_PYTHON_BIN_DIR" "$UV_MANAGED_PYTHON" "$UV_PYTHON_DOWNLOADS" "$1"
-printf '%s\n' "$PATH"
-"#,
-        )
-        .unwrap();
-        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let command = AgentKind::Codex.build_command(&[OsString::from("argument with spaces")]);
-        let output = Command::new(&command[0])
-            .args(&command[1..])
-            .env("HOME", home.path())
-            .env("SHELL", "/bin/bash")
-            .env_remove("PROFILE_VALUE")
-            .env_remove("BASHRC_VALUE")
-            .env_remove("GOPATH")
-            .env_remove("DISABLE_AUTOUPDATER")
-            .env_remove("UV_PYTHON_INSTALL_DIR")
-            .env_remove("UV_PYTHON_BIN_DIR")
-            .env_remove("UV_MANAGED_PYTHON")
-            .env("UV_NO_MANAGED_PYTHON", "1")
-            .env_remove("UV_PYTHON_DOWNLOADS")
-            .output()
-            .unwrap();
-
-        assert!(output.status.success(), "{:?}", output);
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let mut lines = stdout.lines();
-        assert_eq!(
-            lines.next().unwrap(),
-            format!(
-                "profile||{0}/custom-go|1|{0}/custom-python|{0}/custom-python-bin|1|manual|argument with spaces",
-                home.path().display(),
-            )
-        );
-        let path = lines.next().unwrap();
-        assert!(
-            path.starts_with(&format!(
-                "{0}/.local/bin:{0}/custom-python-bin:",
-                home.path().display()
-            )),
-            "{path}"
-        );
-        for expected in [
-            home.path().join(".local/bin"),
-            home.path().join("custom-python-bin"),
-        ] {
-            assert_eq!(
-                path.split(':')
-                    .filter(|entry| *entry == expected.to_string_lossy())
-                    .count(),
-                1,
-                "{path}"
-            );
-        }
     }
 }

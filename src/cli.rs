@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
-    about = "Run Coding Agents inside a Docker Filesystem Sandbox",
+    about = "Run Coding Agents and Debug Shells inside a Docker Filesystem Sandbox",
     subcommand_required = true,
     arg_required_else_help = true,
     version
@@ -43,7 +43,7 @@ impl Cli {
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
         reject_short_option_clusters(&args)?;
-        reject_duplicate_run_selection_options(&args)?;
+        reject_duplicate_selection_options(&args)?;
         <Self as Parser>::try_parse_from(args)
     }
 }
@@ -162,8 +162,10 @@ fn option_takes_value(arg: &clap::Arg) -> bool {
         .is_some_and(|values| values.takes_values())
 }
 
-fn reject_duplicate_run_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
-    if args.get(1).and_then(|value| value.to_str()) != Some("run") {
+fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Error> {
+    let command = args.get(1).and_then(|value| value.to_str());
+    let accepts_agent = command == Some("run");
+    if !accepts_agent && command != Some("debug") {
         return Ok(());
     }
     let mut seen = BTreeSet::new();
@@ -177,9 +179,9 @@ fn reject_duplicate_run_selection_options(args: &[OsString]) -> Result<(), clap:
             continue;
         };
         let selection = match token {
-            "--agent" => Some(("--agent", true)),
+            "--agent" if accepts_agent => Some(("--agent", true)),
             "--tenant" => Some(("--tenant", true)),
-            token if token.starts_with("--agent=") => Some(("--agent", false)),
+            token if accepts_agent && token.starts_with("--agent=") => Some(("--agent", false)),
             token if token.starts_with("--tenant=") => Some(("--tenant", false)),
             _ => None,
         };
@@ -205,6 +207,8 @@ pub enum Command {
     /// Pass arguments verbatim after `--`, for example:
     /// `aibox run -- "fix the build"`.
     Run(RunArgs),
+    /// Open a Bash shell for a Managed Tenant without starting a Coding Agent.
+    Debug(DebugArgs),
     /// Start the local aibox Console and Request Proxy.
     Console(ConsoleArgs),
 }
@@ -266,6 +270,28 @@ impl RunArgs {
     }
 }
 
+/// Options for opening a Managed Tenant Debug Shell.
+#[derive(Debug, Args)]
+pub struct DebugArgs {
+    /// Managed Tenant lowercase DNS label (default: `default`).
+    #[arg(
+        id = "debug-tenant",
+        long = "tenant",
+        value_name = "TENANT",
+        value_parser = parse_tenant
+    )]
+    pub tenant: Option<String>,
+}
+
+impl DebugArgs {
+    /// Selected Managed Tenant, defaulting to `default`.
+    pub fn tenant_name(&self) -> &str {
+        self.tenant
+            .as_deref()
+            .unwrap_or(crate::tenant::DEFAULT_TENANT_NAME)
+    }
+}
+
 fn parse_tenant(value: &str) -> Result<String, String> {
     crate::tenant::validate_name("tenant", value)
         .map(|()| value.to_string())
@@ -311,7 +337,7 @@ mod tests {
         let help = Cli::try_parse_from(["aibox", "--help"]).unwrap_err();
         assert_eq!(help.kind(), ErrorKind::DisplayHelp);
         let help = help.to_string();
-        for command in ["console", "run"] {
+        for command in ["console", "debug", "run"] {
             assert!(help.contains(command), "{command}: {help}");
         }
         for command in [
@@ -359,6 +385,10 @@ mod tests {
         for args in [
             &["aibox", "console", "--tenant", "work"][..],
             &["aibox", "run", "--host"][..],
+            &["aibox", "debug", "--agent", "codex"][..],
+            &["aibox", "debug", "--workspace", "."][..],
+            &["aibox", "debug", "--mount", "src:/src"][..],
+            &["aibox", "debug", "work"][..],
         ] {
             assert_parse_error(args, ErrorKind::UnknownArgument);
         }
@@ -368,10 +398,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_run_selection_options_are_rejected_before_passthrough() {
+    fn duplicate_selection_options_are_rejected_before_passthrough() {
         for args in [
             &["aibox", "run", "--tenant", "one", "--tenant=two"][..],
             &["aibox", "run", "--agent=claude", "--agent", "codex"][..],
+            &["aibox", "debug", "--tenant", "one", "--tenant=two"][..],
         ] {
             let error = Cli::try_parse_from(args).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{args:?}");
@@ -398,6 +429,26 @@ mod tests {
             panic!("expected run command");
         };
         assert_eq!(args.tenant_name(), "host");
+    }
+
+    #[test]
+    fn debug_selects_a_managed_tenant_and_defaults_to_default() {
+        let cli = Cli::try_parse_from(["aibox", "debug"]).unwrap();
+        let Command::Debug(args) = cli.command else {
+            panic!("expected debug command");
+        };
+        assert_eq!(args.tenant_name(), "default");
+
+        let cli = Cli::try_parse_from(["aibox", "debug", "--tenant", "host"]).unwrap();
+        let Command::Debug(args) = cli.command else {
+            panic!("expected debug command");
+        };
+        assert_eq!(args.tenant_name(), "host");
+
+        assert_parse_error(
+            &["aibox", "debug", "--tenant", "Invalid"],
+            ErrorKind::ValueValidation,
+        );
     }
 
     #[test]

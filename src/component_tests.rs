@@ -36,6 +36,33 @@ fn missing_managed_catalog_is_read_only_and_reports_components_uninstalled() {
     assert!(!root.path().join("tenants/work").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn tenant_environment_snapshot_accepts_only_installed_and_collects_inspection_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+
+    fs::create_dir(tenant.home_dir.join(".node")).unwrap();
+    fs::create_dir(tenant.home_dir.join(".rustup")).unwrap();
+    fs::write(tenant.home_dir.join(".rustup/settings.toml"), [0xff, 0xfe]).unwrap();
+    fs::create_dir(tenant.home_dir.join(".goroot")).unwrap();
+    fs::create_dir(tenant.home_dir.join(".goroot/bin")).unwrap();
+    fs::write(tenant.home_dir.join(".goroot/VERSION"), b"go1.2.3\n").unwrap();
+    make_executable(&tenant.home_dir.join(".goroot/bin/go"));
+
+    let (components, warnings) = inspect_tenant_environment_components(&tenant.home_dir);
+
+    assert!(!components.node());
+    assert!(!components.claude());
+    assert!(!components.python());
+    assert!(!components.rust());
+    assert!(components.go());
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("rust Component"), "{warnings:?}");
+    assert!(warnings[0].contains("not UTF-8"), "{warnings:?}");
+}
+
 #[test]
 fn statusline_install_and_remove_manage_only_owned_state() {
     let root = tempfile::tempdir().unwrap();
@@ -595,6 +622,90 @@ fn rust_and_go_installers_do_not_require_python() {
     assert!(RUST_INSTALLER.contains("rustup\" run stable rustc --version"));
     assert!(!GO_INSTALLER.contains("python3"));
     assert!(GO_INSTALLER.contains("jq -er"));
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_removal_accepts_owned_symlink_and_hardlink_proxies_and_preserves_cargo_state() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let rustup_home = tenant.home_dir.join(".rustup");
+    let toolchain = rustup_home.join("toolchains/1.82.0-x86_64-unknown-linux-gnu");
+    fs::create_dir_all(toolchain.join("bin")).unwrap();
+    fs::write(
+        rustup_home.join("settings.toml"),
+        b"default_toolchain = \"1.82.0-x86_64-unknown-linux-gnu\"\n",
+    )
+    .unwrap();
+    make_executable(&toolchain.join("bin/rustc"));
+
+    let cargo_home = tenant.home_dir.join(".cargo");
+    let bin = cargo_home.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let rustup = bin.join("rustup");
+    make_executable(&rustup);
+    symlink("rustup", bin.join("cargo")).unwrap();
+    symlink("rustup", bin.join("cargo-miri")).unwrap();
+    fs::hard_link(&rustup, bin.join("rustc")).unwrap();
+    fs::hard_link(&rustup, bin.join("zz-rustup-proxy")).unwrap();
+    fs::create_dir_all(cargo_home.join("registry/cache")).unwrap();
+    fs::write(cargo_home.join("registry/cache/user-state"), b"keep\n").unwrap();
+    make_executable(&bin.join("user-tool"));
+
+    let selected = Tenant::Managed(tenant.clone());
+    assert_eq!(
+        inspect(ComponentKind::Rust, &tenant.home_dir).unwrap(),
+        ComponentStatus::Installed {
+            version: Some("1.82.0".to_string())
+        }
+    );
+    assert_eq!(
+        rustup_proxy_paths(&bin)
+            .unwrap()
+            .last()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str()),
+        Some("rustup")
+    );
+    remove_component(&selected, ComponentKind::Rust).unwrap();
+
+    assert!(!rustup_home.exists());
+    for proxy in ["rustup", "cargo", "cargo-miri", "rustc", "zz-rustup-proxy"] {
+        assert!(fs::symlink_metadata(bin.join(proxy)).is_err(), "{proxy}");
+    }
+    assert_eq!(
+        fs::read(cargo_home.join("registry/cache/user-state")).unwrap(),
+        b"keep\n"
+    );
+    assert_eq!(fs::read(bin.join("user-tool")).unwrap(), b"fixture\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_removal_preserves_a_foreign_binary_at_a_proxy_name() {
+    let root = tempfile::tempdir().unwrap();
+    let tenant = ManagedTenant::resolve(root.path(), "work").unwrap();
+    tenant.ensure_initialized().unwrap();
+    let rustup_home = tenant.home_dir.join(".rustup");
+    let toolchain = rustup_home.join("toolchains/1.82.0-x86_64-unknown-linux-gnu");
+    fs::create_dir_all(toolchain.join("bin")).unwrap();
+    fs::write(
+        rustup_home.join("settings.toml"),
+        b"default_toolchain = \"1.82.0-x86_64-unknown-linux-gnu\"\n",
+    )
+    .unwrap();
+    make_executable(&toolchain.join("bin/rustc"));
+    let bin = tenant.home_dir.join(".cargo/bin");
+    fs::create_dir_all(&bin).unwrap();
+    make_executable(&bin.join("rustup"));
+    fs::write(bin.join("cargo"), b"foreign cargo\n").unwrap();
+
+    remove_component(&Tenant::Managed(tenant), ComponentKind::Rust).unwrap();
+
+    assert_eq!(fs::read(bin.join("cargo")).unwrap(), b"foreign cargo\n");
 }
 
 #[cfg(unix)]
