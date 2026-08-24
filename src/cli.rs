@@ -205,15 +205,13 @@ pub enum Command {
     /// Pass arguments verbatim after `--`, for example:
     /// `aibox run -- "fix the build"`.
     Run(RunArgs),
-    /// Start the local aibox Service, Console, and Request Proxy.
-    Serve(ServeArgs),
-    /// Build the shared aibox Runtime Image.
-    Build(BuildArgs),
+    /// Start the local aibox Console and Request Proxy.
+    Console(ConsoleArgs),
 }
 
-/// Options for the local aibox Service.
+/// Options for the local aibox Console.
 #[derive(Debug, Args)]
-pub struct ServeArgs {
+pub struct ConsoleArgs {
     /// IP address and port to listen on.
     #[arg(
         long,
@@ -268,14 +266,6 @@ impl RunArgs {
     }
 }
 
-/// Options for building the shared Runtime Image.
-#[derive(Debug, Args)]
-pub struct BuildArgs {
-    /// Disable Docker's build cache and pull a fresh Debian base image.
-    #[arg(short, long)]
-    pub force: bool,
-}
-
 fn parse_tenant(value: &str) -> Result<String, String> {
     crate::tenant::validate_name("tenant", value)
         .map(|()| value.to_string())
@@ -321,27 +311,41 @@ mod tests {
         let help = Cli::try_parse_from(["aibox", "--help"]).unwrap_err();
         assert_eq!(help.kind(), ErrorKind::DisplayHelp);
         let help = help.to_string();
-        for command in ["run", "serve", "build"] {
+        for command in ["console", "run"] {
             assert!(help.contains(command), "{command}: {help}");
         }
-        for command in ["completion", "tenant", "component", "config", "session"] {
+        for command in [
+            "build",
+            "completion",
+            "component",
+            "config",
+            "serve",
+            "session",
+            "tenant",
+        ] {
             assert!(!help.contains(command), "{command}: {help}");
         }
     }
 
     #[test]
-    fn removed_management_commands_are_unknown() {
-        for command in ["completion", "tenant", "component", "config", "session"] {
+    fn removed_commands_are_unknown() {
+        for command in [
+            "build",
+            "completion",
+            "component",
+            "config",
+            "serve",
+            "session",
+            "tenant",
+        ] {
             assert_parse_error(&["aibox", command], ErrorKind::InvalidSubcommand);
         }
     }
 
     #[test]
     fn combined_short_options_are_rejected_without_blocking_attached_values() {
-        assert_parse_error(&["aibox", "build", "-ff"], ErrorKind::UnknownArgument);
         assert_parse_error(&["aibox", "run", "-xy"], ErrorKind::UnknownArgument);
 
-        Cli::try_parse_from(["aibox", "build", "-f"]).unwrap();
         let cli = Cli::try_parse_from(["aibox", "run", "-w.", "-msrc:/src:ro"]).unwrap();
         let Command::Run(args) = cli.command else {
             panic!("expected run command");
@@ -353,17 +357,14 @@ mod tests {
     #[test]
     fn selection_and_options_stay_in_their_command_scopes() {
         for args in [
-            &["aibox", "build", "--agent", "codex"][..],
-            &["aibox", "serve", "--tenant", "work"][..],
+            &["aibox", "console", "--tenant", "work"][..],
             &["aibox", "run", "--host"][..],
-            &["aibox", "build", "--listen", "127.0.0.1:9000"][..],
         ] {
             assert_parse_error(args, ErrorKind::UnknownArgument);
         }
 
         Cli::try_parse_from(["aibox", "run", "--agent", "claude", "--tenant", "work"]).unwrap();
-        Cli::try_parse_from(["aibox", "serve", "--listen", "0.0.0.0:8080"]).unwrap();
-        Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
+        Cli::try_parse_from(["aibox", "console", "--listen", "0.0.0.0:8080"]).unwrap();
     }
 
     #[test]
@@ -400,26 +401,23 @@ mod tests {
     }
 
     #[test]
-    fn serve_requires_a_nonzero_ip_socket() {
+    fn console_requires_a_nonzero_ip_socket() {
+        let cli = Cli::try_parse_from(["aibox", "console"]).unwrap();
+        let Command::Console(args) = cli.command else {
+            panic!("expected console command");
+        };
+        assert_eq!(args.listen, "127.0.0.1:9923".parse().unwrap());
+
         for value in ["localhost:9923", "127.0.0.1:0"] {
             assert_parse_error(
-                &["aibox", "serve", "--listen", value],
+                &["aibox", "console", "--listen", value],
                 ErrorKind::ValueValidation,
             );
         }
-        let cli = Cli::try_parse_from(["aibox", "serve", "--listen", "0.0.0.0:8080"]).unwrap();
-        let Command::Serve(args) = cli.command else {
-            panic!("expected serve command");
+        let cli = Cli::try_parse_from(["aibox", "console", "--listen", "0.0.0.0:8080"]).unwrap();
+        let Command::Console(args) = cli.command else {
+            panic!("expected console command");
         };
         assert_eq!(args.listen, "0.0.0.0:8080".parse().unwrap());
-    }
-
-    #[test]
-    fn build_retains_force_mode() {
-        let cli = Cli::try_parse_from(["aibox", "build", "--force"]).unwrap();
-        let Command::Build(args) = cli.command else {
-            panic!("expected build command");
-        };
-        assert!(args.force);
     }
 }

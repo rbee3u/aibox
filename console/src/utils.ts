@@ -1,8 +1,8 @@
-import type { EventTimingIndex, HeaderValue, RecordSummary } from "./types";
+import type { EventTimingIndex, HeaderValue, RequestSummary } from "./types";
 
 const UTC_PLUS_EIGHT_MS = 8 * 60 * 60 * 1000;
 const EXPLICIT_TIME_ZONE = /(?:z|[+-]\d{2}:\d{2})$/i;
-type RecordTarget = Pick<RecordSummary, "upstream_url" | "incoming_uri">;
+type RequestTarget = Pick<RequestSummary, "upstream_url" | "incoming_uri">;
 
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
@@ -60,42 +60,42 @@ export function bytes(value: number | null | undefined): string {
   return `${(value / 1048576).toFixed(1)} MB`;
 }
 
-export function recordUrl(record: RecordTarget): {
+export function requestUrl(request: RequestTarget): {
   host: string;
   path: string;
   label: string;
   title: string;
 } {
-  const url = parseUpstreamUrl(record);
+  const url = parseUpstreamUrl(request);
   if (url) {
     return {
       host: url.host,
       path: url.pathname,
       label: `${url.host}${url.pathname}`,
-      title: record.upstream_url ?? "",
+      title: request.upstream_url ?? "",
     };
   }
 
   const host = "invalid target";
-  const path = record.incoming_uri;
+  const path = request.incoming_uri;
   return {
     host,
     path,
     label: [host, path].filter(Boolean).join(" "),
-    title: record.incoming_uri,
+    title: request.incoming_uri,
   };
 }
 
-export function recordDetailUrl(record: RecordTarget): [string, string] {
-  const url = parseUpstreamUrl(record);
+export function requestDetailUrl(request: RequestTarget): [string, string] {
+  const url = parseUpstreamUrl(request);
   return url
     ? [url.origin, `${url.pathname}${url.search}`]
-    : ["invalid target", record.incoming_uri];
+    : ["invalid target", request.incoming_uri];
 }
 
-function parseUpstreamUrl(record: RecordTarget): URL | null {
+function parseUpstreamUrl(request: RequestTarget): URL | null {
   try {
-    return new URL(record.upstream_url ?? "");
+    return new URL(request.upstream_url ?? "");
   } catch {
     return null;
   }

@@ -214,7 +214,7 @@ describe("TenantPage", () => {
     ["installed", null, "Installed", null, true],
     ["incomplete", null, "Incomplete", "Repair", true],
     ["modified", null, "Modified", "Restore", true],
-    ["unmanaged", null, "Unmanaged", null, true],
+    ["unmanaged", null, "Unmanaged", null, false],
     [null, "unsafe component state", "Inspection error", "Retry inspection", false],
   ] as const)(
     "maps Component status %s to its safe action set",
@@ -235,11 +235,46 @@ describe("TenantPage", () => {
       if (primaryAction) {
         expect(screen.getByRole("button", { name: primaryAction })).toBeEnabled();
       }
-      const removeLabel = status === "unmanaged" ? "Remove detected state" : "Remove";
+      const removeLabel = "Remove";
       if (removable) expect(screen.getByRole("button", { name: removeLabel })).toBeEnabled();
       else expect(screen.queryByRole("button", { name: removeLabel })).not.toBeInTheDocument();
     },
   );
+  it("offers an explicit latest or exact-version update for installed runtimes", async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const { api } = tenantApi({
+      post,
+      components: [
+        {
+          kind: "python",
+          supports_version: true,
+          status: "installed",
+          version: "3.14.7",
+          error: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+
+    const version = await screen.findByLabelText("Python toolchain version");
+    expect(version).toHaveAttribute("placeholder", "latest");
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    expect(post).toHaveBeenLastCalledWith("/_aibox/api/components/install", {
+      tenant: "managed:default",
+      component: "python",
+      version: null,
+    });
+
+    await user.type(version, " 3.13.7 ");
+    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(post).toHaveBeenLastCalledWith("/_aibox/api/components/install", {
+      tenant: "managed:default",
+      component: "python",
+      version: "3.13.7",
+    });
+  });
   it("summarizes Component removal and waits for confirmation", async () => {
     const post = vi.fn().mockResolvedValue({});
     const { api } = tenantApi({

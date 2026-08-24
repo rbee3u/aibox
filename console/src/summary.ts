@@ -1,4 +1,4 @@
-import type { RecordDetail, RequestedEffective } from "./types";
+import type { RequestDetail, RequestedEffective } from "./types";
 
 type TimingStageTone = "request" | "wait" | "model" | "finalize";
 type TimingStageStatus = "complete" | "ongoing" | "incomplete";
@@ -44,7 +44,7 @@ export function elapsedNsMs(value: string | null | undefined): number | null {
   return parsed === null ? null : nsToMs(parsed);
 }
 
-export function timingStages(detail: RecordDetail): TimingStage[] {
+export function timingStages(detail: RequestDetail): TimingStage[] {
   const axis = parseNs(detail.timeline_end_at_ns) ?? 0n;
   if (axis <= 0n) return [];
 

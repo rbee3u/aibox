@@ -35,9 +35,10 @@ Run. It is not a complete authority or network boundary.
 _Avoid_: Complete isolation, authority boundary
 
 **Runtime Image**:
-The fixed local Docker image named `aibox:latest`, built by aibox and used for
-Runs and Managed Tenant toolchain installation. It is inspected and built
-independently of any Tenant.
+The fixed local Docker image named `aibox:latest` that provides the stable OS
+substrate for Runs and Managed Tenant Component installation. It is independent
+of every Tenant and does not own application language runtimes, toolchains, or
+Coding Agent executables.
 _Avoid_: Agent image, Tenant image, persistent container
 
 **Extra Mount**:
@@ -48,19 +49,20 @@ _Avoid_: Shared path, implicit mount
 ### Local management
 
 **aibox Service**:
-The foreground process started by `aibox serve`. One Service exclusively
+The foreground process started by `aibox console`. One Service exclusively
 manages one aibox Root for browser management while also running the global
 Request Proxy.
 _Avoid_: Daemon, Request server, backend
 
 **Console**:
-The browser interface embedded in the aibox Service. Its modules are Overview,
-Tenants, Configs, Sessions, and Requests.
+The exclusive management interface embedded in the aibox Service, with
+Overview, Tenants, Configs, Sessions, and Requests modules. Runtime Image builds
+and persistent lifecycle actions enter through it.
 _Avoid_: Requests Viewer, admin site, dashboard
 
 **Control API**:
-The Console-internal HTTP interface under `/_aibox/api/`. It is available only
-to loopback TCP peers and is not a public embedding API.
+The single Console-internal HTTP interface shared by every Console module. It
+is available only to loopback TCP peers and is not a public embedding API.
 _Avoid_: Public API, SDK, remote API
 
 **Service Lock**:
@@ -70,16 +72,16 @@ Service. It prevents a second Service for the same Root but does not coordinate
 _Avoid_: Global lock, Run lock, filesystem transaction
 
 **Management Operation**:
-The single cancellable long-running build or toolchain action retained in
-Service memory. Only the latest Operation and its bounded log are observable;
-it is not persistent history.
+The single cancellable long-running Console image build or Component action
+retained in Service memory. Only the latest Operation and its bounded log are
+observable; it is not persistent history.
 _Avoid_: Job, Run, Operation History
 
 ### Tenant identity
 
 **aibox Root**:
 The dedicated host storage boundary for aibox-managed identities,
-configuration, and Request Records.
+configuration, and Requests.
 _Avoid_: Install prefix, Tenant Home
 
 **Tenant**:
@@ -103,16 +105,22 @@ _Avoid_: Host Target, Host Namespace, host profile
 
 **Tenant Home**:
 The aibox-managed Home belonging to one Managed Tenant and containing its
-persistent native Coding Agent state.
+persistent native Coding Agent and Component state.
 _Avoid_: Host Home, profile home
+
+**Tenant Environment**:
+The command environment composed for a Run from one Managed Tenant's persistent
+user initialization and Tenant Component paths.
+_Avoid_: Runtime Image environment, Agent Profile
 
 **Host Home**:
 The real user Home that backs the Host Tenant's native Coding Agent state.
 _Avoid_: Tenant Home, aibox Root
 
 **Tenant Component**:
-An optional native capability installed for one Tenant, such as a Coding Agent
-status line or a Managed Tenant-local toolchain.
+An optional native capability independently installed and managed for one
+Tenant, such as a Coding Agent executable, language runtime, toolchain, or
+status line.
 _Avoid_: Plugin, package, add-on
 
 ### Configuration
@@ -193,7 +201,7 @@ _Avoid_: Prompt, Transcript Entry, Run
 **Tool Activity**:
 A tool invocation or result observed in a Transcript and shown as supporting
 evidence alongside Conversation Messages.
-_Avoid_: Conversation Message, Request Record, Run
+_Avoid_: Conversation Message, Request, Run
 
 **Transcript Evidence**:
 A diagnostic view of a Transcript Entry that is neither a Conversation Message
@@ -205,36 +213,48 @@ _Avoid_: Conversation Message, Tool Activity, raw Transcript
 One native record in a Coding Agent Transcript, including readable messages,
 Tool Activity, injected context, internal reasoning, malformed records, and
 other diagnostic evidence.
-_Avoid_: Prompt, Request Record, log line
+_Avoid_: Prompt, Request, log line
 
 ### Request diagnostics
 
 **Request Proxy**:
 The always-on host-side HTTP intermediary inside a running aibox Service that
-forwards requests and records application-visible evidence. It is global to
-aibox rather than owned by a Tenant or Coding Agent.
+forwards Incoming HTTP Requests as Upstream Requests and captures
+application-visible evidence. It is global to aibox rather than owned by a
+Tenant or Coding Agent.
 _Avoid_: Router, packet capture
 
 **Requests module**:
-The Console module for inspecting and deleting Request Records.
+The Console module for inspecting and deleting Requests.
 _Avoid_: Standalone Requests Viewer, packet capture
 
-**Request Record**:
-The diagnostic evidence from one request attempt received by the Request Proxy.
-It may exist without an upstream request or response.
-_Avoid_: Session, Transcript, Run History
+**Incoming HTTP Request**:
+The application-visible HTTP message received by the Request Proxy from a
+client.
+_Avoid_: Upstream Request
+
+**Upstream Request**:
+The HTTP message the Request Proxy sends toward the selected upstream service.
+It may not exist when an Incoming HTTP Request is rejected first.
+_Avoid_: Incoming HTTP Request, Provider Request
+
+**Request**:
+The diagnostic lifecycle that begins when the Request Proxy receives one
+Incoming HTTP Request, including captured request evidence, an optional
+response, timing, Request Outcome, and Request Assessment.
+_Avoid_: Request Trace, Session, Run History
 
 **Model Protocol Summary**:
 A materialized provider-specific diagnostic projection associated with a
-recognized model request in a Request Record.
-_Avoid_: Parsed Body, Request Outcome, Record Assessment
+recognized model request in a Request.
+_Avoid_: Parsed Body, Request Outcome, Request Assessment
 
 **Request Outcome**:
-The terminal lifecycle result of one Request Record, independent of any HTTP
-response status.
+The terminal lifecycle result of one Request, independent of any HTTP response
+status.
 _Avoid_: HTTP status, response code
 
-**Record Assessment**:
-The diagnostic classification of one Request Record, derived from its
-independent lifecycle, HTTP, provider, and integrity evidence.
+**Request Assessment**:
+The diagnostic classification of one Request, derived from its independent
+lifecycle, HTTP, provider, and integrity evidence.
 _Avoid_: Request Outcome, HTTP status, Provider Error

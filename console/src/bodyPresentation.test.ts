@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeDetail, completedDetail, withIncompleteRequestBody } from "./test/fixtures";
-import type { HeaderValue, RecordDetail, ResponseModeValue } from "./types";
+import type { HeaderValue, RequestDetail, ResponseModeValue } from "./types";
 import {
   bodyComplete,
   bodyMediaType,
@@ -24,7 +24,7 @@ function header(name: string, value: string): HeaderValue {
   return { name, value_base64: btoa(value) };
 }
 
-function detailWithResponse(mediaType: string, observed: ResponseModeValue): RecordDetail {
+function detailWithResponse(mediaType: string, observed: ResponseModeValue): RequestDetail {
   return {
     ...completedDetail,
     response: {

@@ -2,13 +2,14 @@
 
 The Console is a React and TypeScript application under `console/`. It
 contains Overview, Tenants/Components, Configs, Sessions, and the complete
-Requests module. Node and npm are development tools only. The Rust binary
+Requests module. A host Node and npm installation is used only to build this
+frontend; the Tenant-local Node Component is unrelated. The Rust binary
 continues to embed the generated files in `assets/console.html`,
 `assets/console.css`, and `assets/console.js`.
 
 ## Requirements
 
-Use Node 24, matching the bundled aibox development image (`v24.19.0`). With
+Use Node 24 (`v24.19.0`). With
 `nvm`, install and select it with `nvm install 24.19.0` and `nvm use 24.19.0`.
 The repository commits `package-lock.json`, so install the exact dependency
 tree with:
@@ -61,7 +62,7 @@ are current:
 
 ```sh
 make console-build
-cargo run -- serve
+cargo run -- console
 ```
 
 Open the embedded Console to check management modules and the real Request API.
@@ -97,15 +98,41 @@ structure. Desktop layouts support 1024px and wider with a collapsible sidebar;
 narrow layouts use one-panel catalog/detail navigation.
 
 `connectControlApi()` in `src/controlApi.ts` owns the Console-internal Control
-transport and composes narrow Overview, Tenant, Config, Session, and Operation
-interfaces. Paths, query strings, wire bodies, CSRF, NDJSON, and SSE remain in
-that client. `src/api.ts` remains the distinct Request API client, and
-`RequestsPage` requires that client to be injected. Their TypeScript
+transport and composes narrow Overview, Tenant, Config, Session, Requests, and
+Operation interfaces. Paths, query strings, wire bodies, binary Bodies, CSRF,
+NDJSON, and SSE remain in that client. `RequestsPage` receives its narrow
+Requests interface from the same connected client. The TypeScript
 interfaces mirror the Rust JSON responses, including raw Summary timing,
 Request Outcome, the top-level Coding Agent Session ID, the persisted Model
-Protocol Summary and Record Assessment, and normalized Diagnostics groups.
+Protocol Summary and Request Assessment, and normalized Diagnostics groups.
 Pages receive only their domain API interface so tests can use strict,
 deterministic fakes without sockets or HTTP knowledge.
+
+## Control API
+
+Console pages and generated resources live below `/_aibox/ui/`; every
+Console-internal data, Body, and event endpoint lives below `/_aibox/api/`.
+Top-level resources use plural names. Reads use GET, collection creation may
+use POST, and existing commands or destructive operations use
+`POST /<resource>/<action>`. A simple global identifier belongs in the path;
+compound Tenant-and-Agent selectors remain query or JSON body fields. The
+Control API is internal to the Console and has no compatibility guarantee for
+third-party clients.
+
+The Requests interface is:
+
+- `GET /_aibox/api/requests?page=N`
+- `POST /_aibox/api/requests/delete`
+- `GET /_aibox/api/requests/{id}`
+- `GET /_aibox/api/requests/{id}/request-body?offset=N`
+- `GET /_aibox/api/requests/{id}/response-body?offset=N`
+- `GET /_aibox/api/requests/{id}/request-body-decoded`
+- `GET /_aibox/api/requests/{id}/response-body-decoded`
+- `GET /_aibox/api/requests/{id}/response-event-timings?after_sequence=N`
+
+The list response uses `requests`; persisted Request metadata uses
+`request_id`. Deletion accepts `{ "ids": [...] }` and returns
+`{ "deleted": N }`.
 
 Vite uses its built-in React and TypeScript transform without the React Vite
 plugin. The development server therefore does not provide Fast Refresh; this
@@ -162,7 +189,8 @@ the complete structural Resource topology follows it, with Runtime below the
 map. Runtime reports Docker
 availability and exact local Runtime Image status (`built`, `missing`, or
 `unknown`) with its reference, short ID, creation time, and size. Its explicit
-actions are **Build** and **Build without cache**.
+actions are **Build** and **Build without cache**; Overview is the only Runtime
+Image build entry point.
 
 Resource topology is Tenant-centered: each Managed or Host Tenant contains its
 Codex and Claude resources, while Components are Tenant-owned siblings of the
@@ -208,6 +236,12 @@ optional `file`; Sessions use repeated `tenant` and `agent`, plus
 `session_tenant`, `session_agent`, and `session` for the selected Session. Dirty
 Config file edits require confirmation before in-app navigation, history
 navigation, or page unload can discard them.
+
+The Managed Tenant Components catalog contains Codex, Claude, their two status
+lines, Node.js, Python, Rust, and Go; the Host Tenant contains only the two
+status lines. Installed versioned Components expose a `latest`/exact-version
+Update control. Unmanaged state is diagnostic only and exposes neither Install
+nor Remove, because the Console cannot claim foreign launchers safely.
 
 The Tenants, Configs, Sessions, and Requests catalogs share one visual rhythm:
 48-pixel toolbars, aligned leading icons, 14-pixel semibold primary text,
@@ -298,15 +332,15 @@ association. Confirmation, success feedback, Last applied, and Config Drift use
 that same language and retain the existing per-file commit and no-rollback
 semantics.
 
-Requests uses `page` for its one-based page number, `record` for the selected
-Request Record ID, and `tab` for `summary`, `request`, or `response`. Invalid
-values are replaced with the canonical default URL. If a selected Request
-Record no longer exists, the Console returns to the list, removes `record` and
+Requests uses `page` for its one-based page number, `request` for the selected
+Request ID, and `tab` for `summary`, `request`, or `response`. Invalid values
+are replaced with the canonical default URL. If a selected Request no longer
+exists, the Console returns to the list, removes `request` and
 `tab`, and leaves a dismissible failure notice.
 
-Request Record pages contain 50 rows and intentionally have no filter query.
+Request pages contain 50 rows and intentionally have no filter query.
 Rows use the shared 16-pixel Requests icon before method, target, HTTP status,
-and an optional Record Assessment icon. The target is the primary text. Compact
+and an optional Request Assessment icon. The target is the primary text. Compact
 metadata starts under the method with `Model reasoning effort`, omitting the
 suffix when reasoning effort is unavailable. This flexible label elides from
 the end before the fixed-width `First Token / total timing` and timestamp group
@@ -316,7 +350,7 @@ right-aligned. Pagination shows the current and total page counts and restores
 a valid page and focus target after deletion.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
-the 5-second list / 3-second active-record polling. The Summary is
+the 5-second list / 3-second active-Request polling. The Summary is
 the default detail tab, and request/response bodies load only for the visible
 body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
@@ -334,22 +368,22 @@ task dock. Starting a new Operation or receiving a new failure expands it;
 polling does not reopen a dock the user collapsed. Expanded output reserves
 workspace space and scrolls independently.
 
-## Record Assessment and Diagnostics
+## Request Assessment and Diagnostics
 
 Request Outcome, HTTP response status, Provider Error, and diagnostic warnings
-remain independent evidence. The aibox Service derives one Record Assessment for
-consistent display; the browser never reclassifies a Record from `outcome`,
+remain independent evidence. The aibox Service derives one Request Assessment for
+consistent display; the browser never reclassifies a Request from `outcome`,
 status, or Body content. [Request Proxy](sandbox.md#request-proxy) is the
 canonical reference for which evidence produces Active, OK, Warning, or Error.
 
-Active takes visual precedence until the Request Record terminates. Every
+Active takes visual precedence until the Request terminates. Every
 terminal warning elevates OK to Warning. Duplicate findings with the same
 source, kind, and message collapse to their earliest observed time. The compact
 primary cause uses this precedence: recording integrity, Provider Error,
 proxy/transport, HTTP, then warnings. All findings remain visible regardless of
 which one is primary.
 
-The Record list leaves OK quiet and adds only one accessible Warning or Error
+The Request list leaves OK quiet and adds only one accessible Warning or Error
 icon beside the independent HTTP status. The detail header keeps `HTTP 200`
 green even when a red Provider Error tag is present; the tag names the primary
 cause, exposes its message as a tooltip, and adds `+N` for further findings.
@@ -362,16 +396,16 @@ Diagnostics renders the normalized `Proxy / transport`, `HTTP response`,
 The Request and Response tabs open in `Pretty` when the complete decoded Body
 has a renderer. The Requests module keeps three deliberately separate
 representations.
-The Body routes named below are suffixes of `/_aibox/requests/api/records/{id}/`:
+The Body routes named below are suffixes of `/_aibox/api/requests/{id}/`:
 
-- The Request Record and the existing `request-body` / `response-body` routes
+- The Request and the existing `request-body` / `response-body` routes
   contain the exact original application-visible bytes. Download always uses
   these routes and preserves those bytes.
 - `Source` is the unformatted content after applying the supported HTTP
   `Content-Encoding`. The top-level Copy action copies this text regardless of
   the selected view.
 - `Pretty` is derived in the browser from Source. It never changes or persists
-  a Request Record.
+  a Request.
 
 The read-only `request-body-decoded` and `response-body-decoded` Requests module
 routes accept no coding, an empty coding, `identity`, or one case-insensitive
@@ -407,7 +441,7 @@ complete-receipt offset. The browser joins those offsets to independently
 parsed SSE Events by sequence. A missing, truncated, or partly malformed index
 shows `Time unavailable` plus one warning and never suppresses Event data.
 Active views request later sequences during their normal poll. Event time is
-shown relative to Record start at millisecond precision, with the absolute
+shown relative to Request start at millisecond precision, with the absolute
 timestamp in a tooltip using the Requests module's existing timezone convention.
 Content-encoded event streams retain their exact encoded bytes but do not get
 an event index, because decoded Event boundaries cannot be mapped to exact raw
@@ -431,9 +465,10 @@ final Token Usage, and Provider Errors from native OpenAI Responses, OpenAI Chat
 Completions, or Claude Messages data while it records the exchange. Stable facts
 are atomically checkpointed in the optional `summary.protocol` object. List and
 detail APIs return that same object without parsing request/response bodies.
-Request Record format v3 has no v2 compatibility reader, migration, lazy backfill, or
-read-time repair. Raw bodies and the best-effort SSE index remain available for
-diagnosis.
+Request format v4 has no format v3 compatibility reader, migration, lazy
+backfill, or read-time repair. Stop the old Service, optionally back up the
+collection, and manually remove `$AIBOX_ROOT/requests` before the first start
+of an upgraded Service. The new Service recreates an empty collection.
 
 For a recognized streaming response, First Token is the offset at which the
 first trim-nonempty SSE `data:` line not beginning with `[DONE]` is completely
@@ -459,9 +494,9 @@ falls back to a single Response body stage when a protocol has no observable
 First Token. Unknown protocols retain generic Timing and diagnostics while
 Token Usage states that the protocol is unsupported. A recognized active
 protocol without final usage says it is still waiting for the provider. A
-successfully completed Record with a terminal protocol response says that the
+successfully completed Request with a terminal protocol response says that the
 completed response reported no usage; a failed, interrupted, or
-protocol-incomplete Record instead says that usage was not reported before the
+protocol-incomplete Request instead says that usage was not reported before the
 request ended.
 For streaming responses with First Token, the interval after that checkpoint
 is named `Response stream` rather than implying that every byte is model
@@ -486,29 +521,29 @@ message. Metric labels and values sit together as centered inline pairs,
 including Output and the lower-right Reasoning inset. Timing keeps its stage
 timeline and metric order while using the same centered inline treatment for
 First token, Duration, and Ended. The list and Timing summary display Request
-End Time for terminal Records and `—` for active or interrupted Records; list
+End Time for terminal Requests and `—` for active or interrupted Requests; list
 ordering follows descending canonical directory basename order. Active and
-interrupted Records therefore appear first by start time, followed by terminal
-Records by End Time; host and UUID break same-millisecond ties. Diagnostics and
+interrupted Requests therefore appear first by start time, followed by terminal
+Requests by End Time; host and UUID break same-millisecond ties. Diagnostics and
 the other detail tabs do not use this presentation.
 
-When an older or partial Record lacks one Timing boundary but retains later
+When an older or partial Request lacks one Timing boundary but retains later
 boundaries, the timeline combines the adjacent phases around that unknown
 boundary and marks the combined interval `incomplete`. It continues with later
 independently measurable stages instead of inventing a missing duration or
 hiding the remaining checkpoints.
 
-The Record list uses one-based pages of 50 from the current complete ordering.
-Each poll opens only each Record's `summary.json`, which contains the complete
+The Request list uses one-based pages of 50 from the current complete ordering.
+Each poll opens only each Request's `summary.json`, which contains the complete
 list projection and persisted Assessment. Detail reads remain strict over raw
 request/response metadata, Body entries, and relevant ancestors, so an unsafe
 or malformed raw entry can fail detail without hiding a valid list row.
 Polling refreshes the page the Requests module is already on, even when
-terminalization moves Records between pages. An empty page falls back through
+terminalization moves Requests between pages. An empty page falls back through
 earlier pages to the closest non-empty page or page 1. Multi-page selection
 pauses polling; after deletion the Requests module returns to the lowest page
-containing a selected Record and applies the same empty-page fallback.
-Single-record deletion returns to its originating page. A confirmation dialog
+containing a selected Request and applies the same empty-page fallback.
+Single-Request deletion returns to its originating page. A confirmation dialog
 pauses and cancels list, detail, and Body polling, then refreshes the applicable
 views when it closes.
-Active Records cannot be selected or deleted.
+Active Requests cannot be selected or deleted.

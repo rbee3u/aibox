@@ -1,12 +1,12 @@
-//! The forwarding path: proxy one request upstream and record it as it streams.
+//! The forwarding path: proxy one request upstream and capture it as it streams.
 //!
 //! [`handle`] is the Service router fallback for every non-management request. It
-//! resolves and validates the upstream target, opens a Request Record, streams
+//! resolves and validates the upstream target, opens a Request, streams
 //! the request body upstream and the response back, and classifies the terminal
 //! Request Outcome. Required raw-body, metadata, and Summary writes are in the
 //! forwarding path: failures terminate or truncate the exchange and return HTTP
 //! 507 when downstream response headers can still be replaced. Best-effort SSE
-//! indexing and protocol parse degradation instead become persistent Record
+//! indexing and protocol parse degradation instead become persistent Request
 //! warnings. Terminal-directory rename and sync failures are reported only on
 //! stderr; neither category changes what the client receives.
 //!
@@ -27,8 +27,8 @@ use crate::request_interpretation::{
 use crate::request_sse::is_first_token_data;
 use crate::request_sse::{ObservedSseEvent, PrefixSniff, SseIndexer, SsePrefixSniffer};
 use crate::request_store::{
-    DiagnosticMetadata, ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRecord, ObservedRequest,
-    Outcome, RecordLocator, RecordedHeader, RequestMetadata, RequestStore, ResponseMetadata,
+    DiagnosticMetadata, ErrorKind, ErrorMetadata, FORMAT_VERSION, NewRequest, ObservedRequest,
+    Outcome, RecordedHeader, RequestLocator, RequestMetadata, RequestStore, ResponseMetadata,
     ResponseSource, RuntimeMeasurements, SummaryHandle, SummaryMetadata, TimingMetadata,
     connection_named_headers, offset_ns, utc_now,
 };
@@ -57,13 +57,13 @@ pub(crate) async fn handle(state: AppState, request: Request<Body>) -> Response<
     let upstream = parsed
         .as_ref()
         .filter(|url| matches!(url.scheme(), "http" | "https"));
-    let ActiveRecord {
+    let ActiveRequest {
         mut guard,
         measurements,
         protocol,
         request_metadata,
-    } = match begin_record(&state, &parts, &incoming_uri, upstream) {
-        Ok(record) => record,
+    } = match begin_request(&state, &parts, &incoming_uri, upstream) {
+        Ok(active_request) => active_request,
         Err(error) => return bare_error(StatusCode::INSUFFICIENT_STORAGE, &error.to_string()),
     };
 
@@ -93,15 +93,15 @@ pub(crate) async fn handle(state: AppState, request: Request<Body>) -> Response<
     let request_context = RequestStreamContext {
         measurements,
         error_slot: request_error.clone(),
-        summary: guard.record.summary.clone(),
+        summary: guard.request.summary.clone(),
         protocol,
         request_headers: request_metadata.headers,
         expected_body_bytes,
-        record: RequestRecordTarget::Stored {
+        request: RequestTarget::Stored {
             store: guard.store.clone(),
-            locator: guard.record.locator.clone(),
+            locator: guard.request.locator.clone(),
         },
-        origin: guard.record.origin,
+        origin: guard.request.origin,
         shutdown: state.shutdown.clone(),
     };
     let request_stream =
@@ -138,7 +138,7 @@ pub(crate) async fn handle(state: AppState, request: Request<Body>) -> Response<
 fn stream_upstream_response(
     state: &AppState,
     upstream_response: reqwest::Response,
-    mut guard: RecordGuard,
+    mut guard: RequestGuard,
 ) -> Response<Body> {
     let status = upstream_response.status();
     let version = upstream_response.version();
@@ -165,11 +165,14 @@ fn stream_upstream_response(
     if let Err(error) =
         state
             .store
-            .write_response(&guard.record.locator, &guard.record.summary, &metadata)
+            .write_response(&guard.request.locator, &guard.request.summary, &metadata)
     {
-        return recording_failure(&mut guard, format!("record response metadata: {error:#}"));
+        return recording_failure(
+            &mut guard,
+            format!("write Upstream Response metadata: {error:#}"),
+        );
     }
-    let response_file = match guard.record.response_body.try_clone() {
+    let response_file = match guard.request.response_body.try_clone() {
         Ok(file) => tokio::fs::File::from_std(file),
         Err(error) => {
             return recording_failure(&mut guard, format!("clone response body file: {error}"));
@@ -202,21 +205,21 @@ fn stream_upstream_response(
         .unwrap_or_else(|error| bare_error(StatusCode::BAD_GATEWAY, &error.to_string()))
 }
 
-struct ActiveRecord {
-    guard: RecordGuard,
+struct ActiveRequest {
+    guard: RequestGuard,
     measurements: Arc<Mutex<RuntimeMeasurements>>,
     protocol: Arc<Mutex<ProtocolObserver>>,
     request_metadata: RequestMetadata,
 }
 
-fn begin_record(
+fn begin_request(
     state: &AppState,
     parts: &Parts,
     incoming_uri: &str,
     upstream: Option<&Url>,
-) -> anyhow::Result<ActiveRecord> {
+) -> anyhow::Result<ActiveRequest> {
     let host_hint = upstream.map(upstream_host);
-    let (record, request_metadata) = state.store.begin(ObservedRequest {
+    let (captured_request, request_metadata) = state.store.begin(ObservedRequest {
         method: parts.method.as_str(),
         incoming_uri,
         upstream_url: upstream.map(Url::as_str),
@@ -228,13 +231,13 @@ fn begin_record(
     let protocol = Arc::new(Mutex::new(ProtocolObserver::new(
         request_metadata.upstream_url.as_deref(),
     )));
-    let guard = RecordGuard::new(
+    let guard = RequestGuard::new(
         state.store.clone(),
-        record,
+        captured_request,
         measurements.clone(),
         protocol.clone(),
     );
-    Ok(ActiveRecord {
+    Ok(ActiveRequest {
         guard,
         measurements,
         protocol,
@@ -288,7 +291,7 @@ fn request_rejection(parts: &Parts, upstream: Option<&Url>) -> Option<RequestRej
 
 async fn prepare_upstream(
     state: &AppState,
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
     body: Body,
     url: &Url,
 ) -> Result<(reqwest::Client, Body), Response<Body>> {
@@ -347,7 +350,7 @@ async fn prepare_upstream(
 }
 
 fn upstream_request_failure(
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
     request_error: &Mutex<Option<RequestStreamFailure>>,
     error: &reqwest::Error,
 ) -> Response<Body> {
@@ -376,9 +379,9 @@ fn upstream_request_failure(
     )
 }
 
-struct RecordGuard {
+struct RequestGuard {
     store: RequestStore,
-    record: NewRecord,
+    request: NewRequest,
     measurements: Arc<Mutex<RuntimeMeasurements>>,
     protocol: Arc<Mutex<ProtocolObserver>>,
     /// Set by the request body stream on failure. The response task consults
@@ -389,16 +392,16 @@ struct RecordGuard {
     finished: bool,
 }
 
-impl RecordGuard {
+impl RequestGuard {
     fn new(
         store: RequestStore,
-        record: NewRecord,
+        request: NewRequest,
         measurements: Arc<Mutex<RuntimeMeasurements>>,
         protocol: Arc<Mutex<ProtocolObserver>>,
     ) -> Self {
         Self {
             store,
-            record,
+            request,
             measurements,
             protocol,
             request_error: Arc::new(Mutex::new(None)),
@@ -409,7 +412,7 @@ impl RecordGuard {
 
     fn mark_timing(&self, update: impl FnOnce(&mut TimingMetadata)) -> anyhow::Result<()> {
         self.store
-            .update_summary(&self.record.locator, &self.record.summary, |summary| {
+            .update_summary(&self.request.locator, &self.request.summary, |summary| {
                 update(&mut summary.timing);
                 true
             })?;
@@ -421,12 +424,12 @@ impl RecordGuard {
         headers: &[RecordedHeader],
         event_stream: Option<bool>,
     ) -> anyhow::Result<()> {
-        let at_ns = offset_ns(self.record.origin);
+        let at_ns = offset_ns(self.request.origin);
         let mut observer = lock_unpoisoned(&self.protocol);
         observer.observe_response_headers(headers, event_stream, at_ns.clone());
         let protocol = observer.snapshot();
         self.store
-            .update_summary(&self.record.locator, &self.record.summary, |summary| {
+            .update_summary(&self.request.locator, &self.request.summary, |summary| {
                 summary.timing.upstream_response_headers_at_ns = Some(at_ns);
                 summary.protocol = Some(protocol);
                 true
@@ -436,7 +439,7 @@ impl RecordGuard {
 
     fn observe_response_mode(&self, event_stream: bool) -> anyhow::Result<()> {
         let mut observer = lock_unpoisoned(&self.protocol);
-        if observer.observe_response_mode(event_stream, offset_ns(self.record.origin)) {
+        if observer.observe_response_mode(event_stream, offset_ns(self.request.origin)) {
             self.publish_protocol(observer.snapshot())?;
         }
         Ok(())
@@ -471,10 +474,10 @@ impl RecordGuard {
     }
 
     fn observe_json_response(&self, status: u16, headers: &[RecordedHeader]) -> anyhow::Result<()> {
-        let at_ns = offset_ns(self.record.origin);
+        let at_ns = offset_ns(self.request.origin);
         let mut observer = lock_unpoisoned(&self.protocol);
         self.store
-            .with_record_path(&self.record.locator, |directory| {
+            .with_request_path(&self.request.locator, |directory| {
                 observer.observe_json_response(
                     &directory.join("response.body"),
                     status,
@@ -486,13 +489,13 @@ impl RecordGuard {
     }
 
     fn observe_encoded_sse_response(&self) -> anyhow::Result<()> {
-        let at_ns = offset_ns(self.record.origin);
+        let at_ns = offset_ns(self.request.origin);
         let opened = self
             .store
-            .with_record_path(&self.record.locator, |directory| {
+            .with_request_path(&self.request.locator, |directory| {
                 crate::tenant::open_real_file(
                     &directory.join("response.body"),
-                    "Request Record response body",
+                    "Upstream Response body",
                 )
             })?;
         let file = match opened {
@@ -510,7 +513,7 @@ impl RecordGuard {
                     return Ok(());
                 }
             };
-        let mut indexer = SseIndexer::new(None, self.record.id.clone());
+        let mut indexer = SseIndexer::new(None, self.request.id.clone());
         let mut buffer = [0u8; 16 * 1024];
         loop {
             let read = match decoder.read(&mut buffer) {
@@ -539,7 +542,7 @@ impl RecordGuard {
 
     fn publish_protocol(&self, protocol: ProtocolSummary) -> anyhow::Result<()> {
         self.store
-            .update_summary(&self.record.locator, &self.record.summary, |summary| {
+            .update_summary(&self.request.locator, &self.request.summary, |summary| {
                 if summary.protocol.as_ref() == Some(&protocol) {
                     return false;
                 }
@@ -552,20 +555,18 @@ impl RecordGuard {
     fn add_warning(&self, kind: &str, message: String) {
         let result =
             self.store
-                .update_summary(&self.record.locator, &self.record.summary, |summary| {
+                .update_summary(&self.request.locator, &self.request.summary, |summary| {
                     summary.warnings.push(DiagnosticMetadata {
                         phase: "recording".to_string(),
                         kind: kind.to_string(),
                         message,
-                        at_ns: offset_ns(self.record.origin),
+                        at_ns: offset_ns(self.request.origin),
                     });
                     true
                 });
         if result.is_err() {
-            self.store.warning(
-                "request record summary checkpoint failed",
-                Some(&self.record.id),
-            );
+            self.store
+                .warning("request summary checkpoint failed", Some(&self.request.id));
         }
     }
 
@@ -575,11 +576,11 @@ impl RecordGuard {
             error: error.clone(),
         });
         let values = lock_unpoisoned(&self.measurements).clone();
-        self.record.request_body.sync_all().ok();
-        self.record.response_body.sync_all().ok();
+        self.request.request_body.sync_all().ok();
+        self.request.response_body.sync_all().ok();
         let result = self
             .store
-            .finish(&self.record, self.record.origin, &values, outcome, error);
+            .finish(&self.request, self.request.origin, &values, outcome, error);
         if result.is_ok() {
             self.finished = true;
             self.pending_terminal = None;
@@ -588,7 +589,7 @@ impl RecordGuard {
     }
 }
 
-impl Drop for RecordGuard {
+impl Drop for RequestGuard {
     fn drop(&mut self) {
         if self.finished {
             return;
@@ -604,26 +605,26 @@ impl Drop for RecordGuard {
                 }),
             });
         let _ = self.finish(terminal.outcome, terminal.error);
-        self.store.abandon_active(&self.record.id);
+        self.store.abandon_active(&self.request.id);
     }
 }
 
-enum RequestRecordTarget {
+enum RequestTarget {
     Stored {
         store: RequestStore,
-        locator: RecordLocator,
+        locator: RequestLocator,
     },
     #[cfg(test)]
     Unstored { directory: std::path::PathBuf },
 }
 
-impl RequestRecordTarget {
-    fn with_record_path<R>(
+impl RequestTarget {
+    fn with_request_path<R>(
         &self,
         operation: impl FnOnce(&std::path::Path) -> R,
     ) -> anyhow::Result<R> {
         match self {
-            Self::Stored { store, locator } => store.with_record_path(locator, operation),
+            Self::Stored { store, locator } => store.with_request_path(locator, operation),
             #[cfg(test)]
             Self::Unstored { directory } => Ok(operation(directory)),
         }
@@ -649,20 +650,20 @@ struct RequestStreamContext {
     protocol: Arc<Mutex<ProtocolObserver>>,
     request_headers: Vec<RecordedHeader>,
     expected_body_bytes: Option<u64>,
-    record: RequestRecordTarget,
+    request: RequestTarget,
     origin: Instant,
     shutdown: tokio_util::sync::CancellationToken,
 }
 
 async fn prepare_recorded_request_stream(
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
     body: Body,
     context: RequestStreamContext,
 ) -> Result<
     impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
     Response<Body>,
 > {
-    let request_file = match guard.record.request_body.try_clone() {
+    let request_file = match guard.request.request_body.try_clone() {
         Ok(file) => tokio::fs::File::from_std(file),
         Err(error) => {
             return Err(recording_failure(
@@ -672,7 +673,7 @@ async fn prepare_recorded_request_stream(
         }
     };
     if let Err(error) = guard.mark_timing(|timing| {
-        timing.upstream_request_started_at_ns = Some(offset_ns(guard.record.origin));
+        timing.upstream_request_started_at_ns = Some(offset_ns(guard.request.origin));
     }) {
         return Err(recording_failure(
             guard,
@@ -687,9 +688,9 @@ async fn prepare_recorded_request_stream(
             ));
         }
         lock_unpoisoned(&context.measurements).request_body_duration =
-            Some(guard.record.origin.elapsed());
+            Some(guard.request.origin.elapsed());
         if let Err(error) = checkpoint_request_complete(
-            &context.record,
+            &context.request,
             &context.summary,
             &context.protocol,
             &context.request_headers,
@@ -774,7 +775,7 @@ fn recorded_request_stream_with_summary(
             };
             let at_ns = offset_ns(context.origin);
             let first_request_byte = checkpoint_summary_update(
-                &context.record,
+                &context.request,
                 &context.summary,
                 |value| {
                     if value.timing.upstream_request_body_first_byte_at_ns.is_some() {
@@ -819,7 +820,7 @@ async fn complete_recorded_request(
     file.sync_all().await?;
     lock_unpoisoned(&context.measurements).request_body_duration = Some(context.origin.elapsed());
     checkpoint_request_complete(
-        &context.record,
+        &context.request,
         &context.summary,
         &context.protocol,
         &context.request_headers,
@@ -830,7 +831,7 @@ async fn complete_recorded_request(
 }
 
 fn checkpoint_request_complete(
-    record: &RequestRecordTarget,
+    captured_request: &RequestTarget,
     summary: &SummaryHandle,
     protocol: &Mutex<ProtocolObserver>,
     request_headers: &[RecordedHeader],
@@ -846,7 +847,7 @@ fn checkpoint_request_complete(
         return Ok(false);
     }
     let mut observer = lock_unpoisoned(protocol);
-    let _ = record.with_record_path(|directory| {
+    let _ = captured_request.with_request_path(|directory| {
         observer.observe_request(
             &directory.join("request.body"),
             request_headers,
@@ -854,7 +855,7 @@ fn checkpoint_request_complete(
         )
     })?;
     let protocol_snapshot = observer.snapshot();
-    checkpoint_summary_update(record, summary, |value| {
+    checkpoint_summary_update(captured_request, summary, |value| {
         value.timing.upstream_request_body_completed_at_ns = Some(at_ns);
         value.protocol = Some(protocol_snapshot);
         true
@@ -862,7 +863,7 @@ fn checkpoint_request_complete(
 }
 
 // Kept as a small test helper for deterministic body-stream tests that do not
-// have a Request Record directory to checkpoint.
+// have a Request directory to checkpoint.
 #[cfg(test)]
 fn recorded_request_stream(
     body: Body,
@@ -886,7 +887,7 @@ fn recorded_request_stream(
             protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
             request_headers: Vec::new(),
             expected_body_bytes: None,
-            record: RequestRecordTarget::Unstored {
+            request: RequestTarget::Unstored {
                 directory: std::path::PathBuf::new(),
             },
             origin: started,
@@ -896,11 +897,11 @@ fn recorded_request_stream(
 }
 
 fn checkpoint_summary_update(
-    record: &RequestRecordTarget,
+    captured_request: &RequestTarget,
     summary: &SummaryHandle,
     update: impl FnOnce(&mut SummaryMetadata) -> bool,
 ) -> anyhow::Result<bool> {
-    record.update_summary(summary, update)
+    captured_request.update_summary(summary, update)
 }
 
 #[cfg(test)]
@@ -909,7 +910,7 @@ fn record_response_stream(
     stream: impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
     file: tokio::fs::File,
     sender: mpsc::Sender<Result<Bytes, io::Error>>,
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
 ) -> impl std::future::Future<Output = ()> + '_ {
     record_response_stream_with_index(
         shutdown,
@@ -1017,7 +1018,7 @@ enum ResponseBodyTracker {
 }
 
 impl ResponseBodyTracker {
-    fn new(mode: ResponseStreamMode, guard: &RecordGuard) -> Self {
+    fn new(mode: ResponseStreamMode, guard: &RequestGuard) -> Self {
         match mode {
             ResponseStreamMode::Normal => Self::Normal,
             ResponseStreamMode::EventStream => Self::EventStream(Box::new(new_sse_indexer(guard))),
@@ -1033,7 +1034,7 @@ impl ResponseBodyTracker {
         &mut self,
         chunk: &Bytes,
         at_ns: String,
-        guard: &RecordGuard,
+        guard: &RequestGuard,
     ) -> anyhow::Result<()> {
         match self {
             Self::Normal | Self::OpaqueEventStream => Ok(()),
@@ -1062,7 +1063,7 @@ impl ResponseBodyTracker {
         }
     }
 
-    fn finish(&mut self, guard: &RecordGuard) -> anyhow::Result<()> {
+    fn finish(&mut self, guard: &RequestGuard) -> anyhow::Result<()> {
         match self {
             Self::Normal => Ok(()),
             Self::OpaqueEventStream => guard.observe_encoded_sse_response(),
@@ -1102,22 +1103,22 @@ impl ResponseBodyTracker {
     }
 }
 
-fn new_sse_indexer(guard: &RecordGuard) -> SseIndexer {
-    let event_index = match guard.store.create_event_index(&guard.record) {
+fn new_sse_indexer(guard: &RequestGuard) -> SseIndexer {
+    let event_index = match guard.store.create_event_index(&guard.request) {
         Ok(file) => Some(file),
         Err(error) => {
             guard.add_warning("event_index_failed", error.to_string());
             None
         }
     };
-    SseIndexer::new(event_index, guard.record.id.clone())
+    SseIndexer::new(event_index, guard.request.id.clone())
 }
 
 fn feed_sse_chunk(
     indexer: &mut SseIndexer,
     chunk: &Bytes,
     at_ns: &str,
-    guard: &RecordGuard,
+    guard: &RequestGuard,
 ) -> anyhow::Result<()> {
     let body_offset = indexer.body_offset();
     if let Err(error) = indexer.feed(chunk, body_offset, at_ns) {
@@ -1184,9 +1185,12 @@ async fn notify_recording_error(
 }
 
 async fn write_response_chunk(file: &mut tokio::fs::File, chunk: &Bytes) -> io::Result<()> {
-    file.write_all(chunk)
-        .await
-        .map_err(|error| io::Error::new(error.kind(), format!("record response body: {error}")))?;
+    file.write_all(chunk).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("write Upstream Response body: {error}"),
+        )
+    })?;
     file.flush()
         .await
         .map_err(|error| io::Error::new(error.kind(), format!("flush response body: {error}")))
@@ -1198,15 +1202,15 @@ async fn record_response_chunk(
     sender: &mpsc::Sender<Result<Bytes, io::Error>>,
     shutdown: &tokio_util::sync::CancellationToken,
     tracker: &mut ResponseBodyTracker,
-    guard: &RecordGuard,
+    guard: &RequestGuard,
 ) -> Option<ResponseStreamEnd> {
-    if guard.record.summary.read(|summary| {
+    if guard.request.summary.read(|summary| {
         summary
             .timing
             .upstream_response_body_first_byte_at_ns
             .is_none()
     }) && let Err(error) = guard.mark_timing(|timing| {
-        timing.upstream_response_body_first_byte_at_ns = Some(offset_ns(guard.record.origin));
+        timing.upstream_response_body_first_byte_at_ns = Some(offset_ns(guard.request.origin));
     }) {
         return Some(ResponseStreamEnd::incomplete(
             notify_recording_error(sender, shutdown, io::Error::other(error.to_string())).await,
@@ -1223,7 +1227,7 @@ async fn record_response_chunk(
         let mut values = lock_unpoisoned(&guard.measurements);
         values.response_bytes = values.response_bytes.saturating_add(chunk.len() as u64);
     }
-    if let Err(error) = tracker.observe_chunk(&chunk, offset_ns(guard.record.origin), guard) {
+    if let Err(error) = tracker.observe_chunk(&chunk, offset_ns(guard.request.origin), guard) {
         return Some(ResponseStreamEnd::incomplete(
             notify_recording_error(sender, shutdown, io::Error::other(error.to_string())).await,
         ));
@@ -1249,7 +1253,7 @@ async fn stream_response_body(
     file: &mut tokio::fs::File,
     sender: &mpsc::Sender<Result<Bytes, io::Error>>,
     tracker: &mut ResponseBodyTracker,
-    guard: &RecordGuard,
+    guard: &RequestGuard,
 ) -> ResponseStreamEnd {
     let mut stream = Box::pin(stream);
     loop {
@@ -1279,7 +1283,7 @@ async fn stream_response_body(
             }
             Ok(None) => {
                 return match tracker.finish(guard) {
-                    Ok(()) => ResponseStreamEnd::completed(offset_ns(guard.record.origin)),
+                    Ok(()) => ResponseStreamEnd::completed(offset_ns(guard.request.origin)),
                     Err(error) => ResponseStreamEnd::incomplete(response_error(
                         Outcome::RecordingFailed,
                         ErrorKind::ResponseRecordingFailed,
@@ -1334,7 +1338,7 @@ async fn record_response_stream_with_index(
     mut file: tokio::fs::File,
     sender: mpsc::Sender<Result<Bytes, io::Error>>,
     config: ResponseStreamConfig,
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
 ) {
     let ResponseStreamConfig {
         mode,
@@ -1364,7 +1368,7 @@ async fn record_response_stream_with_index(
         {
             guard
                 .store
-                .warning("request record finalization failed", Some(&guard.record.id));
+                .warning("request finalization failed", Some(&guard.request.id));
         }
     } else {
         let semantic_result = if stream_end.completed_at_ns.is_some() && !tracker.is_event_stream()
@@ -1392,23 +1396,26 @@ async fn record_response_stream_with_index(
             );
         }
         if let Err(error) = guard.finish(stream_end.terminal.outcome, stream_end.terminal.error) {
-            let message = format!("finalize Request Record: {error:#}");
+            let message = format!("finalize Request: {error:#}");
             let _ =
                 send_downstream(&sender, &shutdown, Err(io::Error::other(message.clone()))).await;
             guard
                 .store
-                .warning("request record finalization failed", Some(&guard.record.id));
+                .warning("request finalization failed", Some(&guard.request.id));
         }
     }
 }
 
-fn client_closed_terminal(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> ResponseStreamEnd {
+fn client_closed_terminal(
+    tracker: &ResponseBodyTracker,
+    guard: &RequestGuard,
+) -> ResponseStreamEnd {
     let family = guard.protocol_summary().family;
     if let Some(at_ns) = tracker.terminal_at_ns(family) {
         return ResponseStreamEnd::completed(at_ns.to_string());
     }
     if encoded_terminal_seen_on_close(tracker, guard) {
-        return ResponseStreamEnd::completed(offset_ns(guard.record.origin));
+        return ResponseStreamEnd::completed(offset_ns(guard.request.origin));
     }
     ResponseStreamEnd::incomplete(response_error(
         Outcome::ClientDisconnected,
@@ -1430,21 +1437,21 @@ fn declared_content_length(headers: &HeaderMap) -> Option<u64> {
 /// be recorded as a failed client disconnect. A content-coded stream has no
 /// incremental indexer, so decode the recorded body prefix and look for a
 /// terminal event there.
-fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RecordGuard) -> bool {
+fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RequestGuard) -> bool {
     if !matches!(tracker, ResponseBodyTracker::OpaqueEventStream) {
         return false;
     }
     let family = guard.protocol_summary().family;
     let observation = guard
         .store
-        .with_record_path(&guard.record.locator, |directory| {
+        .with_request_path(&guard.request.locator, |directory| {
             let file = crate::tenant::open_real_file(
                 &directory.join("response.body"),
-                "Request Record response body",
+                "Upstream Response body",
             )?;
             let mut decoder =
                 zstd::stream::read::Decoder::new(file).context("create zstd response decoder")?;
-            let mut indexer = SseIndexer::new(None, guard.record.id.clone());
+            let mut indexer = SseIndexer::new(None, guard.request.id.clone());
             let mut buffer = [0u8; 16 * 1024];
             // The client may have closed inside a frame; a delivered terminal
             // event still sits in the successfully decoded prefix.
@@ -1476,7 +1483,7 @@ fn encoded_terminal_seen_on_close(tracker: &ResponseBodyTracker, guard: &RecordG
 }
 
 async fn reject_with_body(
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
     body: Body,
     shutdown: tokio_util::sync::CancellationToken,
     status: StatusCode,
@@ -1484,7 +1491,7 @@ async fn reject_with_body(
     outcome: Outcome,
     kind: ErrorKind,
 ) -> Response<Body> {
-    let request_file = match guard.record.request_body.try_clone() {
+    let request_file = match guard.request.request_body.try_clone() {
         Ok(file) => tokio::fs::File::from_std(file),
         Err(error) => return recording_failure(guard, format!("clone request body file: {error}")),
     };
@@ -1517,7 +1524,7 @@ async fn reject_with_body(
             }
         };
         if let Err(error) = file.write_all(&chunk).await {
-            return recording_failure(guard, format!("record request body: {error}"));
+            return recording_failure(guard, format!("write Request body: {error}"));
         }
         let mut values = lock_unpoisoned(&guard.measurements);
         values.request_bytes = values.request_bytes.saturating_add(chunk.len() as u64);
@@ -1526,12 +1533,12 @@ async fn reject_with_body(
         return recording_failure(guard, format!("sync request body: {error}"));
     }
     lock_unpoisoned(&guard.measurements).request_body_duration =
-        Some(guard.record.origin.elapsed());
+        Some(guard.request.origin.elapsed());
     finish_proxy_response(guard, status, message, outcome, kind)
 }
 
 fn finish_proxy_response(
-    guard: &mut RecordGuard,
+    guard: &mut RequestGuard,
     status: StatusCode,
     message: &str,
     outcome: Outcome,
@@ -1566,7 +1573,7 @@ fn finish_proxy_response(
     response_with_headers(status, headers, Body::from(body))
 }
 
-fn recording_failure(guard: &mut RecordGuard, message: impl Into<String>) -> Response<Body> {
+fn recording_failure(guard: &mut RequestGuard, message: impl Into<String>) -> Response<Body> {
     let message = message.into();
     let _ = guard.finish(
         Outcome::RecordingFailed,
@@ -1856,10 +1863,13 @@ mod tests {
 
         let response = handle(state.clone(), request).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let record = state.store.scan().unwrap().remove(0);
-        assert_eq!(record.request.upstream_url.as_deref(), Some(target));
+        let captured_request = state.store.scan().unwrap().remove(0);
         assert_eq!(
-            record
+            captured_request.request.upstream_url.as_deref(),
+            Some(target)
+        );
+        assert_eq!(
+            captured_request
                 .request
                 .headers
                 .iter()
@@ -1868,25 +1878,25 @@ mod tests {
             2
         );
         assert_eq!(
-            std::fs::read(record.directory.join("request.body")).unwrap(),
+            std::fs::read(captured_request.directory.join("request.body")).unwrap(),
             b"request\0\xffbody"
         );
-        assert_eq!(record.result.unwrap().outcome, Outcome::Rejected);
+        assert_eq!(captured_request.result.unwrap().outcome, Outcome::Rejected);
     }
 
     #[test]
     fn terminal_retry_preserves_the_original_outcome() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest::test("GET", "/failed"))
             .unwrap();
-        let id = record.id.clone();
-        let summary_path = record.directory.join("summary.json");
-        let saved_summary_path = record.directory.join("summary.saved");
-        let mut guard = RecordGuard::new(
+        let id = captured_request.id.clone();
+        let summary_path = captured_request.directory.join("summary.json");
+        let saved_summary_path = captured_request.directory.join("summary.saved");
+        let mut guard = RequestGuard::new(
             store.clone(),
-            record,
+            captured_request,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(None))),
         );
@@ -1990,7 +2000,7 @@ mod tests {
                 protocol: Arc::new(Mutex::new(ProtocolObserver::new(None))),
                 request_headers: Vec::new(),
                 expected_body_bytes: Some(8),
-                record: RequestRecordTarget::Unstored {
+                request: RequestTarget::Unstored {
                     directory: temp.path().to_path_buf(),
                 },
                 origin: Instant::now(),
@@ -2024,14 +2034,19 @@ mod tests {
     async fn declared_empty_request_is_checkpointed_before_the_body_is_polled() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest::test("POST", "/empty"))
             .unwrap();
-        let id = record.id.clone();
+        let id = captured_request.id.clone();
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(None)));
-        let mut guard = RecordGuard::new(store.clone(), record, measurements.clone(), protocol);
-        let summary = guard.record.summary.clone();
+        let mut guard = RequestGuard::new(
+            store.clone(),
+            captured_request,
+            measurements.clone(),
+            protocol,
+        );
+        let summary = guard.request.summary.clone();
         let body = Body::from_stream(futures_util::stream::pending::<Result<Bytes, Infallible>>());
         let context = RequestStreamContext {
             measurements: measurements.clone(),
@@ -2040,11 +2055,11 @@ mod tests {
             protocol: guard.protocol.clone(),
             request_headers: Vec::new(),
             expected_body_bytes: Some(0),
-            record: RequestRecordTarget::Stored {
+            request: RequestTarget::Stored {
                 store: store.clone(),
-                locator: guard.record.locator.clone(),
+                locator: guard.request.locator.clone(),
             },
-            origin: guard.record.origin,
+            origin: guard.request.origin,
             shutdown: CancellationToken::new(),
         };
 
@@ -2143,7 +2158,7 @@ mod tests {
                 )))),
                 request_headers: Vec::new(),
                 expected_body_bytes: None,
-                record: RequestRecordTarget::Unstored {
+                request: RequestTarget::Unstored {
                     directory: temp.path().to_path_buf(),
                 },
                 origin: Instant::now(),
@@ -2174,21 +2189,22 @@ mod tests {
     async fn sse_chunks_reach_disk_before_the_client_without_a_socket() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some("https://example.com/v1/responses"),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("GET", "/https://example.com/v1/responses")
             })
             .unwrap();
-        let id = record.id.clone();
-        let response_path = record.directory.join("response.body");
-        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
+        let id = captured_request.id.clone();
+        let response_path = captured_request.directory.join("response.body");
+        let response_file =
+            tokio::fs::File::from_std(captured_request.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
             "https://example.com/v1/responses",
         ))));
-        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
+        let guard = RequestGuard::new(store.clone(), captured_request, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -2217,12 +2233,12 @@ mod tests {
         task.await.unwrap();
         assert!(client_receiver.recv().await.is_none());
 
-        let record = store.find(&id).unwrap();
+        let captured_request = store.find(&id).unwrap();
         assert_eq!(
-            std::fs::read(record.directory.join("response.body")).unwrap(),
+            std::fs::read(captured_request.directory.join("response.body")).unwrap(),
             b"data: first\n\ndata: second\n\n"
         );
-        let result = record.result.unwrap();
+        let result = captured_request.result.unwrap();
         assert_eq!(result.outcome, Outcome::Completed);
         assert_eq!(result.response_bytes, 27);
     }
@@ -2251,18 +2267,19 @@ mod tests {
     ) -> (Outcome, ProtocolSummary, TimingMetadata) {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some(upstream_url),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("POST", upstream_url)
             })
             .unwrap();
-        let id = record.id.clone();
-        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
+        let id = captured_request.id.clone();
+        let response_file =
+            tokio::fs::File::from_std(captured_request.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url))));
-        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
+        let guard = RequestGuard::new(store.clone(), captured_request, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(2);
         let (client_sender, mut client_receiver) = mpsc::channel(2);
@@ -2293,11 +2310,11 @@ mod tests {
         drop(client_receiver);
         task.await.unwrap();
 
-        let record = store.find(&id).unwrap();
+        let captured_request = store.find(&id).unwrap();
         (
-            record.result.unwrap().outcome,
-            record.summary.protocol.unwrap(),
-            record.summary.timing,
+            captured_request.result.unwrap().outcome,
+            captured_request.summary.protocol.unwrap(),
+            captured_request.summary.timing,
         )
     }
 
@@ -2423,18 +2440,19 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
         let upstream_url = "https://example.com/v1/responses";
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some(upstream_url),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("POST", upstream_url)
             })
             .unwrap();
-        let id = record.id.clone();
-        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
-        let guard = RecordGuard::new(
+        let id = captured_request.id.clone();
+        let response_file =
+            tokio::fs::File::from_std(captured_request.response_body.try_clone().unwrap());
+        let guard = RequestGuard::new(
             store.clone(),
-            record,
+            captured_request,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
         );
@@ -2474,11 +2492,11 @@ mod tests {
         task.await.unwrap();
         drop(upstream_sender);
 
-        let record = store.find(&id).unwrap();
-        assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
-        assert!(record.summary.protocol.unwrap().response_terminal);
+        let captured_request = store.find(&id).unwrap();
+        assert_eq!(captured_request.result.unwrap().outcome, Outcome::Completed);
+        assert!(captured_request.summary.protocol.unwrap().response_terminal);
         assert!(
-            record
+            captured_request
                 .summary
                 .timing
                 .upstream_response_body_completed_at_ns
@@ -2491,14 +2509,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
         let upstream_url = "https://example.com/v1/responses";
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some(upstream_url),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("POST", upstream_url)
             })
             .unwrap();
-        let id = record.id.clone();
+        let id = captured_request.id.clone();
         let headers = vec![
             RecordedHeader {
                 name: "content-type".to_string(),
@@ -2509,9 +2527,9 @@ mod tests {
                 value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
             },
         ];
-        let guard = RecordGuard::new(
+        let guard = RequestGuard::new(
             store.clone(),
-            record,
+            captured_request,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
         );
@@ -2528,7 +2546,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         )
         .unwrap();
         let response_file =
-            tokio::fs::File::from_std(guard.record.response_body.try_clone().unwrap());
+            tokio::fs::File::from_std(guard.request.response_body.try_clone().unwrap());
         let (sender, mut receiver) = mpsc::channel(2);
         let task = tokio::spawn(async move {
             let mut guard = guard;
@@ -2549,12 +2567,17 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         while receiver.recv().await.is_some() {}
         task.await.unwrap();
 
-        let record = store.find(&id).unwrap();
-        let protocol = record.summary.protocol.unwrap();
+        let captured_request = store.find(&id).unwrap();
+        let protocol = captured_request.summary.protocol.unwrap();
         assert!(protocol.response_terminal);
         assert_eq!(protocol.errors[0].kind, "service_unavailable_error");
         assert!(protocol.first_token_at_ns.is_none());
-        assert!(!record.directory.join("response.events.jsonl").exists());
+        assert!(
+            !captured_request
+                .directory
+                .join("response.events.jsonl")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -2599,19 +2622,20 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
         let upstream_url = "https://example.com/v1/responses";
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some(upstream_url),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("POST", upstream_url)
             })
             .unwrap();
-        let id = record.id.clone();
-        let event_index_path = record.directory.join("response.events.jsonl");
-        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
-        let guard = RecordGuard::new(
+        let id = captured_request.id.clone();
+        let event_index_path = captured_request.directory.join("response.events.jsonl");
+        let response_file =
+            tokio::fs::File::from_std(captured_request.response_body.try_clone().unwrap());
+        let guard = RequestGuard::new(
             store.clone(),
-            record,
+            captured_request,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
         );
@@ -2644,10 +2668,10 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         task.await.unwrap();
         assert!(client_receiver.recv().await.is_none());
 
-        let record = store.find(&id).unwrap();
-        assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
+        let captured_request = store.find(&id).unwrap();
+        assert_eq!(captured_request.result.unwrap().outcome, Outcome::Completed);
         assert_eq!(
-            record
+            captured_request
                 .summary
                 .protocol
                 .as_ref()
@@ -2656,9 +2680,16 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
                 .observed,
             Some(ResponseModeValue::Normal)
         );
-        assert!(record.summary.protocol.as_ref().unwrap().response_terminal);
+        assert!(
+            captured_request
+                .summary
+                .protocol
+                .as_ref()
+                .unwrap()
+                .response_terminal
+        );
         assert_eq!(
-            record
+            captured_request
                 .summary
                 .protocol
                 .unwrap()
@@ -2737,7 +2768,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
     #[test]
     fn sse_first_token_counts_any_eligible_data_line_and_never_overwrites_it() {
         let ignored = b"\xef\xbb\xbf: comment\nevent: response.created\r\ndata:\rdata: \t \ndata: [DONE] trailing\r\n";
-        let mut indexer = SseIndexer::new(None, "record-1".to_string());
+        let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
         indexer.feed(ignored, 0, "1").unwrap();
         assert!(indexer.take_first_token_at_ns().is_none());
 
@@ -2766,7 +2797,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n".as_slice(),
             b"data: {\"type\":\"response.created\"}\n".as_slice(),
         ] {
-            let mut indexer = SseIndexer::new(None, "record-1".to_string());
+            let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
             indexer.feed(line, 0, "7").unwrap();
             assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("7"));
         }
@@ -2779,7 +2810,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             b"data: ping\rdata: later\r".as_slice(),
             b"data: ping\r\ndata: later\r\n".as_slice(),
         ] {
-            let mut indexer = SseIndexer::new(None, "record-1".to_string());
+            let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
             indexer.feed(body, 0, "11").unwrap();
             indexer.finish().unwrap();
             assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("11"));
@@ -2788,7 +2819,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
 
     #[test]
     fn sse_first_token_uses_line_completion_and_eof_arrival_times() {
-        let mut indexer = SseIndexer::new(None, "record-1".to_string());
+        let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
         let first = b"\xef\xbb\xbfdata: {\"type\":\"response.created\"}";
         indexer.feed(first, 0, "1").unwrap();
         assert!(indexer.take_first_token_at_ns().is_none());
@@ -2797,7 +2828,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         indexer.feed(b"\n", (first.len() + 1) as u64, "3").unwrap();
         assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("3"));
 
-        let mut eof = SseIndexer::new(None, "record-2".to_string());
+        let mut eof = SseIndexer::new(None, "captured_request-2".to_string());
         eof.feed(b"data: ping", 0, "8").unwrap();
         assert!(eof.take_first_token_at_ns().is_none());
         assert!(eof.finish().unwrap());
@@ -2806,7 +2837,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
 
     #[test]
     fn terminal_sse_detection_does_not_require_an_event_index() {
-        let mut indexer = SseIndexer::new(None, "record-1".to_string());
+        let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
         let first = b"data: {\"type\":\"response.com";
         indexer.feed(first, 0, "1").unwrap();
         indexer
@@ -2821,12 +2852,12 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
         let tracker = ResponseBodyTracker::EventStream(Box::new(indexer));
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest::test("GET", "/terminal"))
             .unwrap();
-        let guard = RecordGuard::new(
+        let guard = RequestGuard::new(
             store,
-            record,
+            captured_request,
             Arc::new(Mutex::new(RuntimeMeasurements::default())),
             Arc::new(Mutex::new(ProtocolObserver::new(None))),
         );
@@ -2839,20 +2870,21 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
     async fn upstream_eof_wins_when_client_closes_at_the_same_time() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (captured_request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some("https://example.com/v1/health"),
                 host_hint: Some("example.com"),
                 ..ObservedRequest::test("GET", "/https://example.com/v1/health")
             })
             .unwrap();
-        let id = record.id.clone();
-        let response_file = tokio::fs::File::from_std(record.response_body.try_clone().unwrap());
+        let id = captured_request.id.clone();
+        let response_file =
+            tokio::fs::File::from_std(captured_request.response_body.try_clone().unwrap());
         let measurements = Arc::new(Mutex::new(RuntimeMeasurements::default()));
         let protocol = Arc::new(Mutex::new(ProtocolObserver::new(Some(
             "https://example.com/v1/responses",
         ))));
-        let guard = RecordGuard::new(store.clone(), record, measurements, protocol);
+        let guard = RequestGuard::new(store.clone(), captured_request, measurements, protocol);
         let (upstream_sender, upstream_receiver) =
             mpsc::channel::<Result<Bytes, reqwest::Error>>(1);
         let (client_sender, client_receiver) = mpsc::channel(1);
@@ -2888,7 +2920,7 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
             .truncate(true)
             .open(&path)
             .unwrap();
-        let mut indexer = SseIndexer::new(Some(file), "record-1".to_string());
+        let mut indexer = SseIndexer::new(Some(file), "captured_request-1".to_string());
         indexer.feed(b"\xef", 0, "1").unwrap();
         indexer.feed(b"\xbb\xbfdata: first\r", 1, "2").unwrap();
         indexer.feed(b"\n\r\ndata: second\n\n", 15, "3").unwrap();

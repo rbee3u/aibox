@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, requestErrorMessage, requestWasCancelled } from "./api";
+import { ApiError } from "./controlApi";
+import { requestErrorMessage, requestWasCancelled } from "./requestErrors";
 import { bodyComplete, bodyHeaders, contentCoding, isSseResponse } from "./bodyPresentation";
 import type {
   BodyKind,
@@ -7,8 +8,8 @@ import type {
   DecodedBodyState,
   DetailTab,
   EventTimingIndex,
-  RecordDetail,
-  RequestApi,
+  RequestDetail,
+  RequestsApi,
 } from "./types";
 import { mergeEventTimings } from "./utils";
 
@@ -19,8 +20,8 @@ export interface InspectionFailure {
   retryable?: boolean;
 }
 
-interface UseRecordInspectionOptions {
-  api: RequestApi;
+interface UseRequestInspectionOptions {
+  api: RequestsApi;
   initialTab?: DetailTab;
   paused: boolean;
   onFailure: (failure: InspectionFailure) => void;
@@ -39,16 +40,16 @@ const EMPTY_DECODED_BODIES: Record<BodyKind, DecodedBodyState> = {
   response: EMPTY_DECODED_BODY,
 };
 
-export function useRecordInspection({
+export function useRequestInspection({
   api,
   initialTab = "summary",
   paused,
   onFailure,
   onRecovery,
-}: UseRecordInspectionOptions) {
+}: UseRequestInspectionOptions) {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const currentIdRef = useRef<string | null>(null);
-  const [detail, setDetail] = useState<RecordDetail | null>(null);
+  const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [bodies, setBodies] = useState(EMPTY_BODIES);
   const [bodyStatus, setBodyStatus] = useState(EMPTY_BODY_STATUS);
   const [decodedBodies, setDecodedBodies] = useState(EMPTY_DECODED_BODIES);
@@ -85,7 +86,7 @@ export function useRecordInspection({
     },
     [onRecovery],
   );
-  const resetRecordData = useCallback(
+  const resetRequestData = useCallback(
     (nextTab: DetailTab = "summary") => {
       setDetail(null);
       setBodies(EMPTY_BODIES);
@@ -111,10 +112,10 @@ export function useRecordInspection({
     refreshActiveAfterPause.current = false;
     setCurrentId(null);
     setLoadingDetail(false);
-    resetRecordData();
-  }, [resetRecordData]);
+    resetRequestData();
+  }, [resetRequestData]);
 
-  const selectRecord = useCallback(
+  const selectRequest = useCallback(
     async (id: string, nextTab: DetailTab = "summary") => {
       detailController.current?.abort();
       bodyController.current?.abort();
@@ -122,12 +123,12 @@ export function useRecordInspection({
       detailController.current = controller;
       currentIdRef.current = id;
       setCurrentId(id);
-      resetRecordData(nextTab);
+      resetRequestData(nextTab);
       setLoadingDetail(true);
       try {
-        const record = await api.getRecord(id, controller.signal);
+        const request = await api.getRequest(id, controller.signal);
         if (detailController.current !== controller || controller.signal.aborted) return;
-        setDetail(record);
+        setDetail(request);
         clearFailure("detail");
       } catch (cause) {
         if (
@@ -146,7 +147,7 @@ export function useRecordInspection({
         if (detailController.current === controller) setLoadingDetail(false);
       }
     },
-    [api, clearCurrentRecord, clearFailure, reportFailure, resetRecordData],
+    [api, clearCurrentRecord, clearFailure, reportFailure, resetRequestData],
   );
 
   useEffect(() => {
@@ -168,10 +169,10 @@ export function useRecordInspection({
     if (paused || !resumeDetailAfterPause.current) return;
     const id = currentIdRef.current;
     resumeDetailAfterPause.current = false;
-    if (id) void selectRecord(id, tab);
-  }, [paused, selectRecord, tab]);
+    if (id) void selectRequest(id, tab);
+  }, [paused, selectRequest, tab]);
 
-  const clearRecordIfCurrent = useCallback(
+  const clearRequestIfCurrent = useCallback(
     (id: string) => {
       if (currentIdRef.current === id) clearCurrentRecord();
     },
@@ -198,7 +199,7 @@ export function useRecordInspection({
     const poll = async () => {
       if (!ownsRequest()) return;
       try {
-        const fresh = await api.getRecord(id, controller.signal);
+        const fresh = await api.getRequest(id, controller.signal);
         if (!ownsRequest()) return;
         setDetail(fresh);
         clearFailure("detail");
@@ -424,13 +425,13 @@ export function useRecordInspection({
     clearFailure();
     if (current.kind === "detail") {
       const id = currentIdRef.current;
-      if (id) void selectRecord(id, tab);
+      if (id) void selectRequest(id, tab);
     } else if (current.kind === "body") {
       setBodyRetry((value) => value + 1);
     } else if (current.bodyKind) {
       void download(current.bodyKind);
     }
-  }, [clearFailure, download, failure, selectRecord, tab]);
+  }, [clearFailure, download, failure, selectRequest, tab]);
 
   const selectTab = useCallback(
     (value: DetailTab) => {
@@ -444,7 +445,7 @@ export function useRecordInspection({
     bodies,
     bodyStatus,
     clearCurrentRecord,
-    clearRecordIfCurrent,
+    clearRequestIfCurrent,
     currentId,
     decodedBodies,
     detail,
@@ -454,7 +455,7 @@ export function useRecordInspection({
     loadingBody,
     loadingDetail,
     retryFailure,
-    selectRecord,
+    selectRequest,
     setTab: selectTab,
     tab,
   };

@@ -9,9 +9,9 @@
 //! Interpretation is observational, never authoritative: a failure becomes a
 //! deduplicated warning on the Summary and leaves the raw bodies, forwarding, and
 //! Request Outcome untouched. See
-//! `docs/adr/0009-request-record-evidence-and-projections.md`.
+//! `docs/adr/0009-request-evidence-and-projections.md`.
 
-use crate::request_store::{RecordedHeader, StoredRecord};
+use crate::request_store::{RecordedHeader, StoredRequest};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -382,7 +382,7 @@ impl ProtocolObserver {
         headers: &[RecordedHeader],
         at_ns: String,
     ) -> bool {
-        let file = match crate::tenant::open_real_file(path, "Request Record response body")
+        let file = match crate::tenant::open_real_file(path, "Upstream Response body")
             .context("open response JSON")
         {
             Ok(file) => file,
@@ -992,7 +992,7 @@ fn merge_option(target: &mut Option<u64>, value: Option<u64>) {
 }
 
 fn parse_request(path: &Path, headers: &[RecordedHeader]) -> Result<RequestEnvelope> {
-    let file = crate::tenant::open_real_file(path, "Request Record request body")?;
+    let file = crate::tenant::open_real_file(path, "Incoming HTTP Request body")?;
     match body_content_coding(headers)? {
         BodyContentCoding::Identity => serde_json::from_reader(file),
         BodyContentCoding::Zstd => {
@@ -1224,14 +1224,14 @@ fn error_parts(error: &Value, fallback_kind: &str, fallback_message: &str) -> (S
     (kind, message)
 }
 
-pub(crate) fn timeline_end_at_ns(record: &StoredRecord, live: Option<String>) -> Option<String> {
-    if record.active {
+pub(crate) fn timeline_end_at_ns(request: &StoredRequest, live: Option<String>) -> Option<String> {
+    if request.active {
         return live;
     }
-    if let Some(finished) = &record.summary.timing.finished_at_ns {
+    if let Some(finished) = &request.summary.timing.finished_at_ns {
         return Some(finished.clone());
     }
-    let protocol_offsets = record
+    let protocol_offsets = request
         .summary
         .protocol
         .as_ref()
@@ -1246,32 +1246,32 @@ pub(crate) fn timeline_end_at_ns(record: &StoredRecord, live: Option<String>) ->
             )
         });
     [
-        record
+        request
             .summary
             .timing
             .upstream_request_started_at_ns
             .as_ref(),
-        record
+        request
             .summary
             .timing
             .upstream_request_body_first_byte_at_ns
             .as_ref(),
-        record
+        request
             .summary
             .timing
             .upstream_request_body_completed_at_ns
             .as_ref(),
-        record
+        request
             .summary
             .timing
             .upstream_response_headers_at_ns
             .as_ref(),
-        record
+        request
             .summary
             .timing
             .upstream_response_body_first_byte_at_ns
             .as_ref(),
-        record
+        request
             .summary
             .timing
             .upstream_response_body_completed_at_ns
@@ -1787,7 +1787,7 @@ mod tests {
     }
 
     #[test]
-    fn timeline_end_uses_last_observed_checkpoint_for_interrupted_records() {
+    fn timeline_end_uses_last_observed_checkpoint_for_interrupted_requests() {
         let timing = TimingMetadata {
             upstream_request_started_at_ns: Some("1".to_string()),
             upstream_response_headers_at_ns: Some("9".to_string()),
@@ -1802,7 +1802,7 @@ mod tests {
         });
         let mut summary = SummaryMetadata::test(String::new(), Some(protocol));
         summary.timing = timing;
-        let record = StoredRecord {
+        let request = StoredRequest {
             directory: PathBuf::new(),
             sort_key: String::new(),
             request: RequestMetadata {
@@ -1823,6 +1823,6 @@ mod tests {
             active: false,
             live_elapsed_ns: None,
         };
-        assert_eq!(timeline_end_at_ns(&record, None).as_deref(), Some("20"));
+        assert_eq!(timeline_end_at_ns(&request, None).as_deref(), Some("20"));
     }
 }

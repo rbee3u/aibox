@@ -2,10 +2,10 @@ import type { Page, Route } from "@playwright/test";
 import type {
   AssessmentPrimary,
   ProtocolSummary,
-  RecordAssessment,
-  RecordDetail,
-  RecordList,
-  RecordSummary,
+  RequestAssessment,
+  RequestDetail,
+  RequestList,
+  RequestSummary,
 } from "../src/types";
 
 const requestBody = '{"model":"gpt-5.6-sol"}';
@@ -33,9 +33,9 @@ const assessment = {
   level: "error",
   primary: providerError,
   issue_count: 1,
-} satisfies RecordAssessment;
+} satisfies RequestAssessment;
 
-const primaryRecord = {
+const primaryRequest = {
   id: "019fe51f-82b7-7701-bfb0-231441977e27",
   started_at: "2026-08-09T06:04:45Z",
   ended_at: "2026-08-09T06:04:45.500Z",
@@ -49,15 +49,15 @@ const primaryRecord = {
   total_ms: 500,
   protocol,
   assessment,
-} satisfies RecordSummary;
+} satisfies RequestSummary;
 
 const detail = {
   request: {
-    id: primaryRecord.id,
-    started_at: primaryRecord.started_at,
-    method: primaryRecord.method,
-    incoming_uri: primaryRecord.incoming_uri,
-    upstream_url: primaryRecord.upstream_url,
+    id: primaryRequest.id,
+    started_at: primaryRequest.started_at,
+    method: primaryRequest.method,
+    incoming_uri: primaryRequest.incoming_uri,
+    upstream_url: primaryRequest.upstream_url,
     http_version: "HTTP/2.0",
     headers: [
       header("content-type", "application/json"),
@@ -73,20 +73,20 @@ const detail = {
     headers: [header("content-type", "text/event-stream")],
   },
   result: {
-    ended_at: primaryRecord.ended_at,
+    ended_at: primaryRequest.ended_at,
     outcome: "completed",
-    total_ms: primaryRecord.total_ms,
+    total_ms: primaryRequest.total_ms,
     error: null,
   },
   summary: {
     schema_version: 1,
-    record_id: primaryRecord.id,
+    request_id: primaryRequest.id,
     kind: "summary",
-    observed_at: primaryRecord.started_at,
+    observed_at: primaryRequest.started_at,
     request: {
-      method: primaryRecord.method,
-      incoming_uri: primaryRecord.incoming_uri,
-      upstream_url: primaryRecord.upstream_url,
+      method: primaryRequest.method,
+      incoming_uri: primaryRequest.incoming_uri,
+      upstream_url: primaryRequest.upstream_url,
       http_version: "HTTP/2.0",
     },
     response: { status: 200, http_version: "HTTP/2" },
@@ -119,7 +119,7 @@ const detail = {
   response_body_bytes: byteLength(responseBody),
   live_total_ms: null,
   timeline_end_at_ns: "500000000",
-} satisfies RecordDetail;
+} satisfies RequestDetail;
 
 export async function mockRequests(
   page: Page,
@@ -129,12 +129,12 @@ export async function mockRequests(
     sessionId = null,
   }: { total?: number; hasNext?: boolean; sessionId?: string | null } = {},
 ) {
-  const recordList = {
-    records: [primaryRecord],
+  const requestList = {
+    requests: [primaryRequest],
     total,
     deletable_count: 1,
     has_next: hasNext,
-  } satisfies RecordList;
+  } satisfies RequestList;
   await page.route("**/_aibox/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/_aibox/api/bootstrap") {
@@ -149,12 +149,8 @@ export async function mockRequests(
         body: 'event: operation\ndata: {"operation":null}\n\n',
       });
     }
-    throw new Error(`Unexpected Control API request: ${path}`);
-  });
-  await page.route("**/_aibox/requests/api/**", (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/_aibox/requests/api/records") return route.fulfill({ json: recordList });
-    if (path === `/_aibox/requests/api/records/${primaryRecord.id}`) {
+    if (path === "/_aibox/api/requests") return route.fulfill({ json: requestList });
+    if (path === `/_aibox/api/requests/${primaryRequest.id}`) {
       return route.fulfill({
         json: {
           ...detail,
@@ -178,7 +174,7 @@ export async function mockRequests(
         },
       });
     }
-    throw new Error(`Unexpected Requests API path: ${path}`);
+    throw new Error(`Unexpected Control API request: ${path}`);
   });
 }
 

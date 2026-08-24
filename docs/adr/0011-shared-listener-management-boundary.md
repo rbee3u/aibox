@@ -1,6 +1,8 @@
 # Separate loopback management from the Request Proxy on one listener
 
-The aibox Service uses one explicit listener for two trust domains. `/` and
+The aibox Service uses one explicit listener for two trust domains. Every
+Console data, body, and event endpoint belongs to the Control API under
+`/_aibox/api/`; `/` and
 every `/_aibox/*` path are reserved for management and require an actual
 loopback TCP peer plus a loopback `Host`; unknown reserved paths fail locally
 and never enter proxy routing. All other paths are Request Proxy input and may

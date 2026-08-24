@@ -1,11 +1,11 @@
 import { vi } from "vitest";
 import type {
-  RecordAssessment,
+  RequestAssessment,
   ProtocolSummary,
-  RecordDetail,
-  RecordList,
-  RecordSummary,
-  RequestApi,
+  RequestDetail,
+  RequestList,
+  RequestSummary,
+  RequestsApi,
 } from "../types";
 
 export interface Deferred<T> {
@@ -28,13 +28,13 @@ export const okAssessment = {
   level: "ok",
   primary: null,
   issue_count: 0,
-} satisfies RecordAssessment;
+} satisfies RequestAssessment;
 
 export const activeAssessment = {
   level: "active",
   primary: null,
   issue_count: 0,
-} satisfies RecordAssessment;
+} satisfies RequestAssessment;
 
 export const completedProtocol = {
   family: "openai_responses",
@@ -97,7 +97,7 @@ export const completedSummary = {
   total_ms: 1250,
   protocol: completedProtocol,
   assessment: okAssessment,
-} satisfies RecordSummary;
+} satisfies RequestSummary;
 
 export const activeSummary = {
   id: "0198-demo-active",
@@ -113,9 +113,9 @@ export const activeSummary = {
   total_ms: 500,
   protocol: activeProtocol,
   assessment: activeAssessment,
-} satisfies RecordSummary;
+} satisfies RequestSummary;
 
-export function completedSummaryFor(id: string, host: string): RecordSummary {
+export function completedSummaryFor(id: string, host: string): RequestSummary {
   const upstreamUrl = `https://${host}/v1/responses`;
   return {
     ...completedSummary,
@@ -125,22 +125,22 @@ export function completedSummaryFor(id: string, host: string): RecordSummary {
   };
 }
 
-export function recordListFor(
-  records: RecordSummary[],
-  overrides: Partial<Omit<RecordList, "records">> = {},
-): RecordList {
+export function requestListFor(
+  requests: RequestSummary[],
+  overrides: Partial<Omit<RequestList, "requests">> = {},
+): RequestList {
   return {
-    records,
-    total: records.length,
-    deletable_count: records.filter((record) => record.state !== "active").length,
+    requests,
+    total: requests.length,
+    deletable_count: requests.filter((request) => request.state !== "active").length,
     has_next: false,
     ...overrides,
   };
 }
 
-export const recordList = recordListFor([activeSummary, completedSummary]);
+export const requestList = requestListFor([activeSummary, completedSummary]);
 
-export const activeRecordList = recordListFor([activeSummary]);
+export const activeRequestList = requestListFor([activeSummary]);
 
 export const completedDetail = {
   request: {
@@ -168,7 +168,7 @@ export const completedDetail = {
   },
   summary: {
     schema_version: 3,
-    record_id: completedSummary.id,
+    request_id: completedSummary.id,
     kind: "summary",
     observed_at: completedSummary.started_at,
     request: {
@@ -210,7 +210,7 @@ export const completedDetail = {
   response_body_bytes: 8,
   live_total_ms: null,
   timeline_end_at_ns: "1250000000",
-} satisfies RecordDetail;
+} satisfies RequestDetail;
 
 export const activeDetail = {
   ...completedDetail,
@@ -225,7 +225,7 @@ export const activeDetail = {
   result: null,
   summary: {
     ...completedDetail.summary,
-    record_id: activeSummary.id,
+    request_id: activeSummary.id,
     request: {
       ...completedDetail.summary.request,
       method: activeSummary.method,
@@ -251,9 +251,9 @@ export const activeDetail = {
   response_body_bytes: 0,
   live_total_ms: 500,
   timeline_end_at_ns: "500000000",
-} satisfies RecordDetail;
+} satisfies RequestDetail;
 
-export function withRequestEncoding(detail: RecordDetail, encoding: string): RecordDetail {
+export function withRequestEncoding(detail: RequestDetail, encoding: string): RequestDetail {
   return {
     ...detail,
     request: {
@@ -266,7 +266,7 @@ export function withRequestEncoding(detail: RecordDetail, encoding: string): Rec
   };
 }
 
-export function withIncompleteRequestBody(detail: RecordDetail): RecordDetail {
+export function withIncompleteRequestBody(detail: RequestDetail): RequestDetail {
   return {
     ...detail,
     summary: {
@@ -279,10 +279,10 @@ export function withIncompleteRequestBody(detail: RecordDetail): RecordDetail {
   };
 }
 
-export function fakeApi(overrides: Partial<RequestApi> = {}): RequestApi {
+export function fakeApi(overrides: Partial<RequestsApi> = {}): RequestsApi {
   return {
-    listRecords: vi.fn().mockResolvedValue(recordList),
-    getRecord: vi.fn().mockResolvedValue(completedDetail),
+    listRequests: vi.fn().mockResolvedValue(requestList),
+    getRequest: vi.fn().mockResolvedValue(completedDetail),
     loadBody: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 }),
     loadDecodedBody: vi.fn().mockResolvedValue(new Uint8Array()),
     loadEventTimings: vi.fn().mockResolvedValue({
@@ -291,7 +291,7 @@ export function fakeApi(overrides: Partial<RequestApi> = {}): RequestApi {
       next_sequence: 0,
       warning: null,
     }),
-    deleteRecords: vi.fn().mockResolvedValue(0),
+    deleteRequests: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
 }

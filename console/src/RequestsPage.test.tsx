@@ -3,26 +3,26 @@ import userEvent from "@testing-library/user-event";
 import { useCallback, useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestsPage } from "./RequestsPage";
-import { ApiError } from "./api";
+import { ApiError } from "./controlApi";
 import {
   activeDetail,
-  activeRecordList,
+  activeRequestList,
   activeSummary,
   completedDetail,
   completedSummary,
   completedSummaryFor,
   deferred,
   fakeApi,
-  recordList,
-  recordListFor,
+  requestList,
+  requestListFor,
   withIncompleteRequestBody,
   withRequestEncoding,
 } from "./test/fixtures";
-import type { RequestApi } from "./types";
+import type { RequestsApi } from "./types";
 
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
 
-function RequestsHarness({ api }: { api: RequestApi }) {
+function RequestsHarness({ api }: { api: RequestsApi }) {
   const [search, setSearch] = useState(window.location.search);
   useEffect(() => {
     const readLocation = () => setSearch(window.location.search);
@@ -38,7 +38,7 @@ function RequestsHarness({ api }: { api: RequestApi }) {
   return <RequestsPage api={api} search={search} onLocationChange={onLocationChange} />;
 }
 
-function renderApp(overrides: Partial<RequestApi> = {}) {
+function renderApp(overrides: Partial<RequestsApi> = {}) {
   return render(<RequestsHarness api={fakeApi(overrides)} />);
 }
 
@@ -85,7 +85,7 @@ async function confirmDeletion(
 
 async function confirmSingleDeletion(user: ReturnType<typeof userEvent.setup>, buttonName: string) {
   await user.click(await screen.findByRole("button", { name: buttonName }));
-  expect(screen.getByRole("dialog", { name: "Delete this Request Record?" })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Delete this Request?" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Delete permanently" }));
 }
 
@@ -98,13 +98,13 @@ afterEach(() => {
 
 describe("Requests page", () => {
   it("shows an explicit loading state before the first list response", async () => {
-    const pending = deferred<typeof recordList>();
-    renderApp({ listRecords: vi.fn().mockReturnValue(pending.promise) });
+    const pending = deferred<typeof requestList>();
+    renderApp({ listRequests: vi.fn().mockReturnValue(pending.promise) });
 
-    expect(screen.getByRole("status")).toHaveTextContent("Loading Request Records…");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Requests…");
     expect(screen.queryByText("No request recorded yet.")).not.toBeInTheDocument();
 
-    pending.resolve(recordListFor([]));
+    pending.resolve(requestListFor([]));
     const emptyList = await screen.findByText("No request recorded yet.");
     expect(emptyList.closest('[data-empty-state="list"]')).toBeInTheDocument();
   });
@@ -113,51 +113,51 @@ describe("Requests page", () => {
     window.history.replaceState(
       null,
       "",
-      "/_aibox/ui/requests?page=2oops&record=%20&tab=body&extra=retired",
+      "/_aibox/ui/requests?page=2oops&request=%20&tab=body&extra=retired",
     );
     const replaceState = vi.spyOn(window.history, "replaceState");
-    const listRecords = vi.fn<RequestApi["listRecords"]>().mockResolvedValue(recordList);
+    const listRequests = vi.fn<RequestsApi["listRequests"]>().mockResolvedValue(requestList);
 
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
-    expect(listRecords).toHaveBeenCalledWith(1, expect.any(AbortSignal));
+    expect(listRequests).toHaveBeenCalledWith(1, expect.any(AbortSignal));
     expect(window.location.pathname).toBe("/_aibox/ui/requests");
     expect(window.location.search).toBe("");
     expect(replaceState).toHaveBeenCalled();
   });
 
-  it("restores page, Request Record, and detail Tab from the URL", async () => {
+  it("restores page, Request, and detail Tab from the URL", async () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/requests?page=2&record=${completedSummary.id}&tab=response`,
+      `/_aibox/ui/requests?page=2&request=${completedSummary.id}&tab=response`,
     );
-    const listRecords = vi.fn<RequestApi["listRecords"]>().mockResolvedValue(recordList);
-    const getRecord = vi.fn<RequestApi["getRecord"]>().mockResolvedValue(completedDetail);
+    const listRequests = vi.fn<RequestsApi["listRequests"]>().mockResolvedValue(requestList);
+    const getRequest = vi.fn<RequestsApi["getRequest"]>().mockResolvedValue(completedDetail);
 
-    renderApp({ listRecords, getRecord });
+    renderApp({ listRequests, getRequest });
 
     expect(await screen.findByRole("tab", { name: "Response" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(listRecords).toHaveBeenCalledWith(2, expect.any(AbortSignal));
-    expect(getRecord).toHaveBeenCalledWith(completedSummary.id, expect.any(AbortSignal));
-    expect(window.location.search).toBe(`?page=2&record=${completedSummary.id}&tab=response`);
+    expect(listRequests).toHaveBeenCalledWith(2, expect.any(AbortSignal));
+    expect(getRequest).toHaveBeenCalledWith(completedSummary.id, expect.any(AbortSignal));
+    expect(window.location.search).toBe(`?page=2&request=${completedSummary.id}&tab=response`);
   });
 
-  it("updates URL state while paging, opening a record, and changing Tabs", async () => {
+  it("updates URL state while paging, opening a request, and changing Tabs", async () => {
     const user = userEvent.setup();
     renderApp({
-      listRecords: vi.fn().mockResolvedValue({ ...recordList, has_next: true }),
+      listRequests: vi.fn().mockResolvedValue({ ...requestList, has_next: true }),
     });
 
     await openCompletedRecord(user);
-    expect(window.location.search).toBe(`?record=${completedSummary.id}`);
+    expect(window.location.search).toBe(`?request=${completedSummary.id}`);
     await user.click(screen.getByRole("tab", { name: "Request" }));
-    expect(window.location.search).toBe(`?record=${completedSummary.id}&tab=request`);
-    await user.click(screen.getByRole("button", { name: "Back to Request Record list" }));
+    expect(window.location.search).toBe(`?request=${completedSummary.id}&tab=request`);
+    await user.click(screen.getByRole("button", { name: "Back to Request list" }));
     expect(window.location.search).toBe("");
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(window.location.search).toBe("?page=2");
@@ -194,22 +194,22 @@ describe("Requests page", () => {
       "0198-demo-page-navigation-retry",
       "second.example.test",
     );
-    const firstPage = recordListFor([completedSummary], {
+    const firstPage = requestListFor([completedSummary], {
       total: 51,
       deletable_count: 51,
       has_next: true,
     });
-    const secondPage = recordListFor([secondPageSummary], {
+    const secondPage = requestListFor([secondPageSummary], {
       total: 51,
       deletable_count: 51,
     });
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockRejectedValueOnce(new Error("second page unavailable"))
       .mockResolvedValueOnce(secondPage);
     const user = userEvent.setup();
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await user.click(await screen.findByRole("button", { name: "Next" }));
 
@@ -228,10 +228,10 @@ describe("Requests page", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Page 2 of 2 · 1 shown · 51 total")).toBeInTheDocument();
     expect(window.location.search).toBe("?page=2");
-    expect(listRecords.mock.calls.map(([page]) => page)).toEqual([1, 2, 2]);
+    expect(listRequests.mock.calls.map(([page]) => page)).toEqual([1, 2, 2]);
   });
 
-  it("restores the URL Tab when browser history changes the selected record", async () => {
+  it("restores the URL Tab when browser history changes the selected request", async () => {
     const secondSummary = completedSummaryFor("0198-demo-completed-second", "second.example.test");
     const secondDetail = {
       ...completedDetail,
@@ -242,14 +242,14 @@ describe("Requests page", () => {
       },
     };
     const user = userEvent.setup();
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockImplementation((id) =>
         Promise.resolve(id === secondSummary.id ? secondDetail : completedDetail),
       );
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(recordListFor([completedSummary, secondSummary])),
-      getRecord,
+      listRequests: vi.fn().mockResolvedValue(requestListFor([completedSummary, secondSummary])),
+      getRequest,
     });
 
     await user.click(
@@ -258,11 +258,11 @@ describe("Requests page", () => {
     await user.click(screen.getByRole("tab", { name: "Response" }));
     await user.click(screen.getByRole("button", { name: "POST second.example.test/v1/responses" }));
 
-    expect(window.location.search).toBe(`?record=${secondSummary.id}`);
+    expect(window.location.search).toBe(`?request=${secondSummary.id}`);
     act(() => window.history.back());
 
     await waitFor(() => {
-      expect(window.location.search).toBe(`?record=${completedSummary.id}&tab=response`);
+      expect(window.location.search).toBe(`?request=${completedSummary.id}&tab=response`);
       expect(screen.getByRole("tab", { name: "Response" })).toHaveAttribute(
         "aria-selected",
         "true",
@@ -270,43 +270,41 @@ describe("Requests page", () => {
     });
   });
 
-  it("returns to the list and clears a stale Request Record URL", async () => {
+  it("returns to the list and clears a stale Request URL", async () => {
     window.history.replaceState(
       null,
       "",
-      "/_aibox/ui/requests?page=2&record=missing-record&tab=response",
+      "/_aibox/ui/requests?page=2&request=missing-request&tab=response",
     );
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(recordList),
-      getRecord: vi.fn().mockRejectedValue(new ApiError("Request Record not found", 404)),
+      listRequests: vi.fn().mockResolvedValue(requestList),
+      getRequest: vi.fn().mockRejectedValue(new ApiError("Request not found", 404)),
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Request Record not found");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Request not found");
     expect(window.location.search).toBe("?page=2");
-    expect(
-      screen.getByRole("heading", { level: 2, name: "Select a Request Record" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Select a Request" })).toBeInTheDocument();
     expect(
       screen
-        .getByRole("heading", { level: 2, name: "Select a Request Record" })
+        .getByRole("heading", { level: 2, name: "Select a Request" })
         .closest('[data-empty-state="detail"]'),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 
-  it("renders concise Request Record summaries in the Console module", async () => {
+  it("renders concise Request summaries in the Console module", async () => {
     renderApp();
 
-    const recordListPanel = await screen.findByRole("complementary", {
-      name: "Request Record list",
+    const requestListPanel = await screen.findByRole("complementary", {
+      name: "Request list",
     });
-    expect(within(recordListPanel).queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+    expect(within(requestListPanel).queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
     expect(
-      within(recordListPanel).getByRole("button", { name: "Refresh Request Record list" }),
+      within(requestListPanel).getByRole("button", { name: "Refresh Request list" }),
     ).toBeEnabled();
-    expect(within(recordListPanel).getByRole("button", { name: "Select" })).toBeEnabled();
-    expect(within(recordListPanel).queryByRole("button", { name: "Delete all" })).toBeNull();
-    const completedRow = within(recordListPanel).getByRole("button", {
+    expect(within(requestListPanel).getByRole("button", { name: "Select" })).toBeEnabled();
+    expect(within(requestListPanel).queryByRole("button", { name: "Delete all" })).toBeNull();
+    const completedRow = within(requestListPanel).getByRole("button", {
       name: "POST api.example.test/v1/responses",
     });
     const completedModel = within(completedRow).getByTitle(
@@ -314,7 +312,7 @@ describe("Requests page", () => {
     );
     const completedTiming = within(completedRow).getByTitle("First token 900ms; Duration 1s");
     const completedEnded = within(completedRow).getByTitle("Ended 2026-08-06 12:00:01");
-    const requestIcon = completedRow.querySelector('[data-icon="request-record"]');
+    const requestIcon = completedRow.querySelector('[data-icon="request-row"]');
     expect(requestIcon).toHaveClass("lucide-arrow-left-right");
     expect(requestIcon).toHaveAttribute("aria-hidden", "true");
     expect(completedModel).toHaveTextContent("gpt-5.6-sol high");
@@ -330,7 +328,7 @@ describe("Requests page", () => {
     expect(completedRow).toHaveAccessibleDescription(
       "Model gpt-5.6-sol; Reasoning effort high; First token 900ms; Duration 1s; Ended 2026-08-06 12:00:01",
     );
-    const activeRow = within(recordListPanel).getByRole("button", {
+    const activeRow = within(requestListPanel).getByRole("button", {
       name: "GET stream.example.test/events",
     });
     const activeStarted = within(activeRow).getByTitle("Started 2026-08-06 12:01:00");
@@ -340,7 +338,7 @@ describe("Requests page", () => {
     expect(activeRow).toHaveAccessibleDescription(
       "Model gpt-5.6-sol; Reasoning effort high; First token —; Duration 500ms; Started 2026-08-06 12:01:00",
     );
-    expect(within(recordListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
+    expect(within(requestListPanel).getByTitle("First token —; Duration 500ms")).toHaveTextContent(
       "— / 500ms",
     );
   });
@@ -356,25 +354,25 @@ describe("Requests page", () => {
   it("returns from a pending inspection without changing history and restores row focus", async () => {
     const detailRequest = deferred<typeof completedDetail>();
     let detailSignal: AbortSignal | undefined;
-    const getRecord = vi.fn<RequestApi["getRecord"]>().mockImplementation((_id, signal) => {
+    const getRequest = vi.fn<RequestsApi["getRequest"]>().mockImplementation((_id, signal) => {
       detailSignal = signal;
       return detailRequest.promise;
     });
     const user = userEvent.setup();
     window.history.replaceState(null, "", "/_aibox/ui/requests");
-    renderApp({ getRecord });
+    renderApp({ getRequest });
 
     const row = await screen.findByRole("button", {
       name: "POST api.example.test/v1/responses",
     });
     await user.click(row);
-    expect(screen.getByText("Loading record…")).toBeInTheDocument();
+    expect(screen.getByText("Loading request…")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/_aibox/ui/requests");
 
-    await user.click(screen.getByRole("button", { name: "Back to Request Record list" }));
+    await user.click(screen.getByRole("button", { name: "Back to Request list" }));
 
     expect(detailSignal?.aborted).toBe(true);
-    expect(screen.getByRole("heading", { name: "Select a Request Record" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select a Request" })).toBeInTheDocument();
     expect(document.querySelector('[data-icon="request-detail-empty"]')).toHaveClass(
       "lucide-arrow-left-right",
     );
@@ -383,15 +381,13 @@ describe("Requests page", () => {
 
     detailRequest.resolve(completedDetail);
     await flushEffects();
-    expect(
-      screen.queryByRole("region", { name: "Request Record details" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Request details" })).not.toBeInTheDocument();
   });
 
   it("prefers effective list metadata and preserves placeholders", async () => {
     const effective = {
       ...completedSummary,
-      id: "effective-record",
+      id: "effective-request",
       incoming_uri: "/https://api.example.test/effective",
       upstream_url: "https://api.example.test/effective",
       protocol: {
@@ -402,7 +398,7 @@ describe("Requests page", () => {
     };
     const requestedFallback = {
       ...completedSummary,
-      id: "requested-record",
+      id: "requested-request",
       incoming_uri: "/https://api.example.test/requested",
       upstream_url: "https://api.example.test/requested",
       total_ms: null,
@@ -415,14 +411,14 @@ describe("Requests page", () => {
     };
     const legacy = {
       ...completedSummary,
-      id: "legacy-record",
+      id: "legacy-request",
       incoming_uri: "/https://api.example.test/legacy",
       upstream_url: "https://api.example.test/legacy",
       protocol: null,
     };
     const missingEffort = {
       ...completedSummary,
-      id: "missing-effort-record",
+      id: "missing-effort-request",
       incoming_uri: "/https://api.example.test/missing-effort",
       upstream_url: "https://api.example.test/missing-effort",
       protocol: {
@@ -432,7 +428,7 @@ describe("Requests page", () => {
     };
     const longTiming = {
       ...completedSummary,
-      id: "long-timing-record",
+      id: "long-timing-request",
       incoming_uri: "/https://api.example.test/long-timing",
       upstream_url: "https://api.example.test/long-timing",
       total_ms: 1_735_000,
@@ -442,10 +438,10 @@ describe("Requests page", () => {
       },
     };
     renderApp({
-      listRecords: vi
+      listRequests: vi
         .fn()
         .mockResolvedValue(
-          recordListFor([effective, requestedFallback, legacy, missingEffort, longTiming]),
+          requestListFor([effective, requestedFallback, legacy, missingEffort, longTiming]),
         ),
     });
 
@@ -487,7 +483,7 @@ describe("Requests page", () => {
     ).toHaveTextContent("17m34s / 28m55s");
   });
 
-  it("includes a list issue in the record row's accessible description", async () => {
+  it("includes a list issue in the request row's accessible description", async () => {
     const message = "Our servers are currently overloaded. Please try again later.";
     const issueSummary = {
       ...completedSummary,
@@ -497,65 +493,65 @@ describe("Requests page", () => {
         issue_count: 1,
       },
     };
-    renderApp({ listRecords: vi.fn().mockResolvedValue(recordListFor([issueSummary])) });
+    renderApp({ listRequests: vi.fn().mockResolvedValue(requestListFor([issueSummary])) });
 
     const row = await screen.findByRole("button", {
       name: "POST api.example.test/v1/responses",
     });
     const issueMarker = within(row).getByRole("img", {
-      name: /Record error: Server error.*currently overloaded/,
+      name: /Request error: Server error.*currently overloaded/,
     });
     expect(issueMarker).not.toHaveAttribute("tabindex");
     expect(within(row).queryByText("Server error")).not.toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
-      /Record error: Server error\. Our servers are currently overloaded/,
+      /Request error: Server error\. Our servers are currently overloaded/,
     );
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {
-    const pendingList = deferred<typeof recordList>();
+    const pendingList = deferred<typeof requestList>();
     renderApp({
-      listRecords: vi.fn().mockReturnValue(pendingList.promise),
+      listRequests: vi.fn().mockReturnValue(pendingList.promise),
     });
 
     expect(screen.getByRole("button", { name: /Refresh/ })).toBeEnabled();
-    pendingList.resolve(recordList);
+    pendingList.resolve(requestList);
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
   it("marks the list refresh busy until a manual refresh completes", async () => {
-    const refresh = deferred<typeof recordList>();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
+    const refresh = deferred<typeof requestList>();
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
       .mockReturnValueOnce(refresh.promise);
     const user = userEvent.setup();
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
     const refreshButton = screen.getByRole("button", {
-      name: "Refresh Request Record list",
+      name: "Refresh Request list",
     });
     await user.click(refreshButton);
 
-    expect(screen.getByRole("button", { name: "Refreshing Request Record list" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Refreshing Request Record list" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Refreshing Request list" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refreshing Request list" })).toHaveAttribute(
       "aria-busy",
       "true",
     );
 
-    refresh.resolve(recordList);
+    refresh.resolve(requestList);
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Refresh Request Record list" })).toBeEnabled(),
+      expect(screen.getByRole("button", { name: "Refresh Request list" })).toBeEnabled(),
     );
   });
 
   it("keeps Next clickable while a background list refresh is pending", async () => {
     vi.useFakeTimers();
-    const firstPage = { ...recordList, has_next: true };
-    const secondPage = recordListFor([completedSummary], { total: 73, deletable_count: 72 });
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const firstPage = { ...requestList, has_next: true };
+    const secondPage = requestListFor([completedSummary], { total: 73, deletable_count: 72 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockImplementationOnce(
         (_page, signal) =>
@@ -566,7 +562,7 @@ describe("Requests page", () => {
           }),
       )
       .mockResolvedValueOnce(secondPage);
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await flushEffects();
     expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
@@ -577,7 +573,7 @@ describe("Requests page", () => {
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await flushEffects();
     expect(screen.getByText(/^Page 2 of /)).toBeInTheDocument();
-    expect(listRecords).toHaveBeenLastCalledWith(2, expect.any(AbortSignal));
+    expect(listRequests).toHaveBeenLastCalledWith(2, expect.any(AbortSignal));
   });
 
   it("switches from browsing controls to selection controls", async () => {
@@ -612,9 +608,7 @@ describe("Requests page", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
     expect(screen.getByText("0 selected")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Refresh Request Record list" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh Request list" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     ).not.toBeInTheDocument();
@@ -629,16 +623,16 @@ describe("Requests page", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("selects and clears all completed records on the current page", async () => {
+  it("selects and clears all completed requests on the current page", async () => {
     const secondCompleted = completedSummaryFor(
       "0198-demo-completed-second",
       "second.example.test",
     );
     const user = userEvent.setup();
     renderApp({
-      listRecords: vi
+      listRequests: vi
         .fn()
-        .mockResolvedValue(recordListFor([activeSummary, completedSummary, secondCompleted])),
+        .mockResolvedValue(requestListFor([activeSummary, completedSummary, secondCompleted])),
     });
 
     await user.click(await screen.findByRole("button", { name: "Select" }));
@@ -656,36 +650,36 @@ describe("Requests page", () => {
     expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
   });
 
-  it("disables selection when no completed records exist", async () => {
-    renderApp({ listRecords: vi.fn().mockResolvedValue(activeRecordList) });
+  it("disables selection when no completed requests exist", async () => {
+    renderApp({ listRequests: vi.fn().mockResolvedValue(activeRequestList) });
 
     expect(await screen.findByRole("button", { name: "Select" })).toBeDisabled();
   });
 
-  it("confirms one-record deletion, locks deletion, clears detail, and restores focus", async () => {
+  it("confirms one-request deletion, locks deletion, clears detail, and restores focus", async () => {
     const secondCompleted = completedSummaryFor(
       "0198-demo-completed-second",
       "second.example.test",
     );
-    const initial = recordListFor([completedSummary, secondCompleted]);
-    const afterDelete = recordListFor([secondCompleted]);
+    const initial = requestListFor([completedSummary, secondCompleted]);
+    const afterDelete = requestListFor([secondCompleted]);
     const deleteRequest = deferred<number>();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(initial)
       .mockResolvedValue(afterDelete);
-    const deleteRecords = vi
-      .fn<RequestApi["deleteRecords"]>()
+    const deleteRequests = vi
+      .fn<RequestsApi["deleteRequests"]>()
       .mockReturnValue(deleteRequest.promise);
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords });
+    renderApp({ listRequests, deleteRequests });
 
     await openCompletedRecord(user);
-    await screen.findByRole("region", { name: "Request Record details" });
+    await screen.findByRole("region", { name: "Request details" });
     await user.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
-    expect(screen.getByRole("dialog", { name: "Delete this Request Record?" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Delete this Request?" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
     const deleting = screen.getByRole("button", {
       name: "Deleting POST api.example.test/v1/responses",
@@ -704,33 +698,33 @@ describe("Requests page", () => {
         screen.queryByRole("button", { name: "POST api.example.test/v1/responses" }),
       ).not.toBeInTheDocument(),
     );
-    expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id]);
+    expect(deleteRequests).toHaveBeenCalledWith([completedSummary.id]);
     expect(window.location.search).toBe("");
     expect(screen.getByText("Page 1 of 1 · 1 shown · 1 total")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Select a Request Record" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select a Request" })).toBeInTheDocument();
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Delete POST second.example.test/v1/responses" }),
       ).toHaveFocus(),
     );
-    expect(screen.queryByText("Record deleted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Request deleted")).not.toBeInTheDocument();
   });
 
-  it("keeps list navigation locked while a record deletion is pending", async () => {
+  it("keeps list navigation locked while a request deletion is pending", async () => {
     vi.useFakeTimers();
-    const firstPage = recordListFor(recordList.records, {
+    const firstPage = requestListFor(requestList.requests, {
       total: 51,
       deletable_count: 50,
       has_next: true,
     });
     const deleteRequest = deferred<number>();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
-      .mockResolvedValue(recordListFor([activeSummary], { total: 50, deletable_count: 49 }));
+      .mockResolvedValue(requestListFor([activeSummary], { total: 50, deletable_count: 49 }));
     renderApp({
-      listRecords,
-      deleteRecords: vi.fn().mockReturnValue(deleteRequest.promise),
+      listRequests,
+      deleteRequests: vi.fn().mockReturnValue(deleteRequest.promise),
     });
 
     await flushEffects();
@@ -739,30 +733,30 @@ describe("Requests page", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
-    expect(screen.getByRole("button", { name: "Refresh Request Record list" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh Request list" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
     await advanceTimers(10_000);
-    expect(listRecords).toHaveBeenCalledTimes(1);
+    expect(listRequests).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       deleteRequest.resolve(1);
       await deleteRequest.promise;
     });
-    expect(listRecords.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByRole("button", { name: "Refresh Request Record list" })).toBeEnabled();
+    expect(listRequests.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("button", { name: "Refresh Request list" })).toBeEnabled();
   });
 
-  it("keeps a record when immediate deletion fails", async () => {
-    const deleteRecords = vi
-      .fn<RequestApi["deleteRecords"]>()
-      .mockRejectedValue(new Error("cannot delete record"));
+  it("keeps a request when immediate deletion fails", async () => {
+    const deleteRequests = vi
+      .fn<RequestsApi["deleteRequests"]>()
+      .mockRejectedValue(new Error("cannot delete request"));
     const user = userEvent.setup();
-    renderApp({ deleteRecords });
+    renderApp({ deleteRequests });
 
     await confirmSingleDeletion(user, "Delete POST api.example.test/v1/responses");
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("cannot delete record");
+    expect(alert).toHaveTextContent("cannot delete request");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "POST api.example.test/v1/responses" }),
@@ -774,17 +768,17 @@ describe("Requests page", () => {
     expect(alert).not.toBeInTheDocument();
   });
 
-  it("keeps an immediately deleted record removed when its list refresh fails", async () => {
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
-      .mockRejectedValue(new Error("cannot refresh Request Records"));
+  it("keeps an immediately deleted request removed when its list refresh fails", async () => {
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
+      .mockRejectedValue(new Error("cannot refresh Requests"));
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords: vi.fn().mockResolvedValue(1) });
+    renderApp({ listRequests, deleteRequests: vi.fn().mockResolvedValue(1) });
 
     await confirmSingleDeletion(user, "Delete POST api.example.test/v1/responses");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot refresh Request Records");
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot refresh Requests");
     expect(
       screen.queryByRole("button", { name: "POST api.example.test/v1/responses" }),
     ).not.toBeInTheDocument();
@@ -792,27 +786,27 @@ describe("Requests page", () => {
       screen.getByRole("button", { name: "GET stream.example.test/events" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 1 · 1 shown · 1 total")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Refresh Request Record list" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Refresh Request list" })).toHaveFocus();
   });
 
   it("returns to the previous page when immediate deletion empties the current page", async () => {
     const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
-    const firstPage = recordListFor([completedSummary], {
+    const firstPage = requestListFor([completedSummary], {
       total: 2,
       deletable_count: 2,
       has_next: true,
     });
-    const secondPage = recordListFor([secondPageSummary], { total: 2, deletable_count: 2 });
-    const emptySecondPage = recordListFor([], { total: 1, deletable_count: 1 });
-    const firstPageAfterDelete = recordListFor([completedSummary]);
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const secondPage = requestListFor([secondPageSummary], { total: 2, deletable_count: 2 });
+    const emptySecondPage = requestListFor([], { total: 1, deletable_count: 1 });
+    const firstPageAfterDelete = requestListFor([completedSummary]);
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage)
       .mockResolvedValueOnce(emptySecondPage)
       .mockResolvedValue(firstPageAfterDelete);
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords: vi.fn().mockResolvedValue(1) });
+    renderApp({ listRequests, deleteRequests: vi.fn().mockResolvedValue(1) });
 
     await user.click(await screen.findByRole("button", { name: "Next" }));
     await confirmSingleDeletion(user, "Delete POST second.example.test/v1/responses");
@@ -823,20 +817,20 @@ describe("Requests page", () => {
     ).toHaveFocus();
   });
 
-  it("preserves the selected count across record pages", async () => {
+  it("preserves the selected count across request pages", async () => {
     const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
-    const firstPage = recordListFor([completedSummary], {
+    const firstPage = requestListFor([completedSummary], {
       total: 2,
       deletable_count: 2,
       has_next: true,
     });
-    const secondPage = recordListFor([secondPageSummary], { total: 2, deletable_count: 2 });
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const secondPage = requestListFor([secondPageSummary], { total: 2, deletable_count: 2 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage);
     const user = userEvent.setup();
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await selectCompletedRecord(user);
     await user.click(screen.getByRole("button", { name: /Next/ }));
@@ -851,21 +845,21 @@ describe("Requests page", () => {
 
   it("returns to the first page after deleting a selection across pages", async () => {
     const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
-    const firstPage = recordListFor([completedSummary], {
+    const firstPage = requestListFor([completedSummary], {
       total: 2,
       deletable_count: 2,
       has_next: true,
     });
-    const secondPage = recordListFor([secondPageSummary], { total: 2, deletable_count: 2 });
-    const afterDelete = recordListFor([]);
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const secondPage = requestListFor([secondPageSummary], { total: 2, deletable_count: 2 });
+    const afterDelete = requestListFor([]);
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage)
       .mockResolvedValue(afterDelete);
-    const deleteRecords = vi.fn<RequestApi["deleteRecords"]>().mockResolvedValue(2);
+    const deleteRequests = vi.fn<RequestsApi["deleteRequests"]>().mockResolvedValue(2);
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords });
+    renderApp({ listRequests, deleteRequests });
 
     await selectCompletedRecord(user);
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -879,23 +873,23 @@ describe("Requests page", () => {
     await screen.findByText("Page 1 of 1 · 0 shown · 0 total");
     expect(screen.getByText("No request recorded yet.")).toBeInTheDocument();
     expect(document.querySelector('[data-icon="request-empty"]')).toHaveClass("lucide-inbox");
-    expect(deleteRecords).toHaveBeenCalledWith([completedSummary.id, secondPageSummary.id]);
-    expect(listRecords).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
+    expect(deleteRequests).toHaveBeenCalledWith([completedSummary.id, secondPageSummary.id]);
+    expect(listRequests).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
   });
 
   it("returns to the lowest selected page when selection starts on a later page", async () => {
     const page2Summary = completedSummaryFor("0198-demo-page-two", "two.example.test");
     const page3Summary = completedSummaryFor("0198-demo-page-three", "three.example.test");
     const pages = new Map([
-      [1, recordListFor([completedSummary], { total: 3, deletable_count: 3, has_next: true })],
-      [2, recordListFor([page2Summary], { total: 3, deletable_count: 3, has_next: true })],
-      [3, recordListFor([page3Summary], { total: 3, deletable_count: 3 })],
+      [1, requestListFor([completedSummary], { total: 3, deletable_count: 3, has_next: true })],
+      [2, requestListFor([page2Summary], { total: 3, deletable_count: 3, has_next: true })],
+      [3, requestListFor([page3Summary], { total: 3, deletable_count: 3 })],
     ]);
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockImplementation((page = 1) => Promise.resolve(pages.get(page)!));
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords: vi.fn().mockResolvedValue(2) });
+    renderApp({ listRequests, deleteRequests: vi.fn().mockResolvedValue(2) });
 
     await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -909,23 +903,23 @@ describe("Requests page", () => {
     );
     await confirmDeletion(user, "Delete selected");
 
-    await waitFor(() => expect(listRecords).toHaveBeenLastCalledWith(2, expect.any(AbortSignal)));
+    await waitFor(() => expect(listRequests).toHaveBeenLastCalledWith(2, expect.any(AbortSignal)));
     expect(screen.getByText(/^Page 2 of /)).toBeInTheDocument();
   });
 
   it("falls back when polling finds the current page empty", async () => {
     vi.useFakeTimers();
     const secondPageSummary = completedSummaryFor("0198-demo-poll-page", "poll.example.test");
-    const firstPage = { ...recordList, has_next: true };
-    const secondPage = recordListFor([secondPageSummary], { total: 51, deletable_count: 50 });
-    const emptySecondPage = recordListFor([], { total: 50, deletable_count: 49 });
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const firstPage = { ...requestList, has_next: true };
+    const secondPage = requestListFor([secondPageSummary], { total: 51, deletable_count: 50 });
+    const emptySecondPage = requestListFor([], { total: 50, deletable_count: 49 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage)
       .mockResolvedValueOnce(emptySecondPage)
       .mockResolvedValue(firstPage);
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await flushEffects();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -935,7 +929,7 @@ describe("Requests page", () => {
     await advanceTimers(5000);
 
     expect(screen.getByText(/^Page 1 of /)).toBeInTheDocument();
-    expect(listRecords).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
+    expect(listRequests).toHaveBeenLastCalledWith(1, expect.any(AbortSignal));
   });
 
   it("clears selection on Cancel, keeps focus safe, and ignores Escape", async () => {
@@ -947,7 +941,7 @@ describe("Requests page", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" });
     await user.click(cancel);
 
-    expect(screen.getByRole("button", { name: "Refresh Request Record list" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh Request list" })).toBeInTheDocument();
     const select = screen.getByRole("button", { name: "Select" });
     expect(select).toHaveFocus();
     await user.click(select);
@@ -967,7 +961,7 @@ describe("Requests page", () => {
 
     await selectCompletedRecord(user);
     await user.click(screen.getByRole("button", { name: "Delete selected" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request Record?" });
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request?" });
     fireEvent.keyDown(dialog, { key: "Escape" });
 
     expect(dialog).not.toBeInTheDocument();
@@ -977,13 +971,13 @@ describe("Requests page", () => {
 
   it("closes confirmation but keeps selection mode and selected ids when deletion fails", async () => {
     const user = userEvent.setup();
-    renderApp({ deleteRecords: vi.fn().mockRejectedValue(new Error("delete failed")) });
+    renderApp({ deleteRequests: vi.fn().mockRejectedValue(new Error("delete failed")) });
 
     await selectCompletedRecord(user);
     await confirmDeletion(user, "Delete selected");
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Couldn’t delete record");
+    expect(alert).toHaveTextContent("Couldn’t delete request");
     expect(alert).toHaveTextContent("delete failed");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear page" })).toBeInTheDocument();
@@ -995,41 +989,39 @@ describe("Requests page", () => {
 
   it("pauses list polling during selection and refreshes immediately after exit", async () => {
     vi.useFakeTimers();
-    const listRecords = vi.fn<RequestApi["listRecords"]>().mockResolvedValue(recordList);
-    renderApp({ listRecords });
+    const listRequests = vi.fn<RequestsApi["listRequests"]>().mockResolvedValue(requestList);
+    renderApp({ listRequests });
 
     await flushEffects();
     expect(screen.getByRole("button", { name: "Select" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     await advanceTimers(7500);
 
-    expect(listRecords).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByRole("button", { name: "Refresh Request Record list" }),
-    ).not.toBeInTheDocument();
+    expect(listRequests).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Refresh Request list" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flushEffects();
-    expect(listRecords).toHaveBeenCalledTimes(2);
+    expect(listRequests).toHaveBeenCalledTimes(2);
   });
 
   it("pauses inspection streams while selected deletion confirmation is open", async () => {
     vi.useFakeTimers();
-    const listPoll = deferred<typeof recordList>();
+    const listPoll = deferred<typeof requestList>();
     const detailPoll = deferred<typeof activeDetail>();
     const bodyPoll = deferred<{ bytes: Uint8Array; nextOffset: number }>();
     let listSignal: AbortSignal | undefined;
     let detailSignal: AbortSignal | undefined;
     let bodySignal: AbortSignal | undefined;
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
       .mockImplementationOnce((_page, signal) => {
         listSignal = signal;
         return listPoll.promise;
       })
-      .mockResolvedValue(recordList);
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+      .mockResolvedValue(requestList);
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockResolvedValueOnce(activeDetail)
       .mockImplementationOnce((_id, signal) => {
         detailSignal = signal;
@@ -1037,13 +1029,13 @@ describe("Requests page", () => {
       })
       .mockResolvedValue(activeDetail);
     const loadBody = vi
-      .fn<RequestApi["loadBody"]>()
+      .fn<RequestsApi["loadBody"]>()
       .mockImplementationOnce((_id, _kind, _offset, signal) => {
         bodySignal = signal;
         return bodyPoll.promise;
       })
       .mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 });
-    renderApp({ listRecords, getRecord, loadBody });
+    renderApp({ listRequests, getRequest, loadBody });
 
     await openActiveRecord();
     fireEvent.click(screen.getByRole("tab", { name: "Request" }));
@@ -1067,7 +1059,7 @@ describe("Requests page", () => {
       screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request Record?" });
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request?" });
     expect(dialog).toHaveTextContent(/selected raw Request and Response data/i);
     await flushEffects();
     expect([listSignal?.aborted, detailSignal?.aborted, bodySignal?.aborted]).toEqual([
@@ -1076,26 +1068,26 @@ describe("Requests page", () => {
       true,
     ]);
     await advanceTimers(10_000);
-    expect(listRecords).toHaveBeenCalledTimes(2);
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(listRequests).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenCalledTimes(2);
     expect(loadBody).toHaveBeenCalledTimes(1);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await flushEffects();
-    expect(listRecords).toHaveBeenCalledTimes(2);
-    expect(getRecord).toHaveBeenCalledTimes(3);
+    expect(listRequests).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenCalledTimes(3);
     expect(loadBody).toHaveBeenCalledTimes(2);
   });
 
   it("loads request and response Bodies only when their tabs are selected", async () => {
     const encoder = new TextEncoder();
-    const loadBody = vi.fn<RequestApi["loadBody"]>().mockImplementation((_id, kind) =>
+    const loadBody = vi.fn<RequestsApi["loadBody"]>().mockImplementation((_id, kind) =>
       Promise.resolve({
         bytes: encoder.encode(kind === "request" ? "request body" : "data: response body\n\n"),
         nextOffset: kind === "request" ? 12 : 21,
       }),
     );
-    const loadEventTimings = vi.fn<RequestApi["loadEventTimings"]>().mockResolvedValue({
+    const loadEventTimings = vi.fn<RequestsApi["loadEventTimings"]>().mockResolvedValue({
       state: "available",
       events: [{ sequence: 0, completed_at_ns: "900000000" }],
       next_sequence: 1,
@@ -1105,7 +1097,7 @@ describe("Requests page", () => {
     renderApp({ loadBody, loadEventTimings });
 
     await openCompletedRecord(user);
-    const detail = screen.getByRole("region", { name: "Request Record details" });
+    const detail = screen.getByRole("region", { name: "Request details" });
     expect(within(detail).getByRole("tab", { name: "Summary" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1121,7 +1113,7 @@ describe("Requests page", () => {
 
   it("keeps the detail view and retries a body read failure from its current offset", async () => {
     const loadBody = vi
-      .fn<RequestApi["loadBody"]>()
+      .fn<RequestsApi["loadBody"]>()
       .mockRejectedValueOnce(new Error("body unavailable"))
       .mockResolvedValue({
         bytes: new TextEncoder().encode("recovered body"),
@@ -1136,7 +1128,7 @@ describe("Requests page", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Couldn’t load Body");
     expect(alert).toHaveTextContent("body unavailable");
-    const detail = screen.getByRole("region", { name: "Request Record details" });
+    const detail = screen.getByRole("region", { name: "Request details" });
     expect(within(detail).getByRole("status")).toHaveTextContent("Original Body unavailable.");
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("recovered body")).toBeInTheDocument();
@@ -1151,7 +1143,7 @@ describe("Requests page", () => {
   it("retries downloading the same Body after a download failure", async () => {
     const bytes = new TextEncoder().encode("body");
     const loadBody = vi
-      .fn<RequestApi["loadBody"]>()
+      .fn<RequestsApi["loadBody"]>()
       .mockResolvedValueOnce({ bytes, nextOffset: bytes.length })
       .mockRejectedValueOnce(new Error("download unavailable"))
       .mockResolvedValue({ bytes, nextOffset: bytes.length });
@@ -1190,9 +1182,9 @@ describe("Requests page", () => {
       ...withRequestEncoding(completedDetail, "zstd"),
       request_body_bytes: zstdBytes.length,
     };
-    const loadDecodedBody = vi.fn<RequestApi["loadDecodedBody"]>().mockResolvedValue(decoded);
+    const loadDecodedBody = vi.fn<RequestsApi["loadDecodedBody"]>().mockResolvedValue(decoded);
     renderApp({
-      getRecord: vi.fn().mockResolvedValue(detail),
+      getRequest: vi.fn().mockResolvedValue(detail),
       loadBody: vi.fn().mockResolvedValue({ bytes: zstdBytes, nextOffset: zstdBytes.length }),
       loadDecodedBody,
     });
@@ -1217,12 +1209,12 @@ describe("Requests page", () => {
     };
     const retry = deferred<Uint8Array>();
     const loadDecodedBody = vi
-      .fn<RequestApi["loadDecodedBody"]>()
+      .fn<RequestsApi["loadDecodedBody"]>()
       .mockRejectedValueOnce(new Error("decode failed"))
       .mockReturnValueOnce(retry.promise);
     const user = userEvent.setup();
     renderApp({
-      getRecord: vi.fn().mockResolvedValue(detail),
+      getRequest: vi.fn().mockResolvedValue(detail),
       loadBody: vi.fn().mockImplementation((_id, _kind, offset) =>
         Promise.resolve({
           bytes: offset === 0 ? zstdBytes : new Uint8Array(),
@@ -1252,14 +1244,14 @@ describe("Requests page", () => {
       ...withRequestEncoding(activeDetail, "zstd"),
       request_body_bytes: zstdBytes.length,
     };
-    const getRecord = vi.fn<RequestApi["getRecord"]>().mockImplementation(() =>
+    const getRequest = vi.fn<RequestsApi["getRequest"]>().mockImplementation(() =>
       Promise.resolve({
         ...zstdDetail,
         request: { ...zstdDetail.request },
         summary: { ...zstdDetail.summary },
       }),
     );
-    const loadBody = vi.fn<RequestApi["loadBody"]>().mockImplementation((_id, _kind, offset) =>
+    const loadBody = vi.fn<RequestsApi["loadBody"]>().mockImplementation((_id, _kind, offset) =>
       Promise.resolve({
         bytes: offset === 0 ? zstdBytes : new Uint8Array(),
         nextOffset: zstdBytes.length,
@@ -1268,14 +1260,14 @@ describe("Requests page", () => {
     let decodedSignal: AbortSignal | undefined;
     const decodedRequest = deferred<Uint8Array>();
     const loadDecodedBody = vi
-      .fn<RequestApi["loadDecodedBody"]>()
+      .fn<RequestsApi["loadDecodedBody"]>()
       .mockImplementation((_id, _kind, signal) => {
         decodedSignal = signal;
         return decodedRequest.promise;
       });
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(activeRecordList),
-      getRecord,
+      listRequests: vi.fn().mockResolvedValue(activeRequestList),
+      getRequest,
       loadBody,
       loadDecodedBody,
     });
@@ -1284,7 +1276,7 @@ describe("Requests page", () => {
     expect(loadDecodedBody).toHaveBeenCalledTimes(1);
 
     await advanceTimers(3000);
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenCalledTimes(2);
     expect(loadBody).toHaveBeenCalledTimes(1);
     expect(loadDecodedBody).toHaveBeenCalledTimes(1);
     expect(decodedSignal?.aborted).toBe(false);
@@ -1296,7 +1288,7 @@ describe("Requests page", () => {
     expect(screen.getByText('"ready"')).toBeInTheDocument();
   });
 
-  it("ignores a stale zstd decode failure after selecting another record", async () => {
+  it("ignores a stale zstd decode failure after selecting another request", async () => {
     const decoded = new TextEncoder().encode('{"state":"ready"}');
     const completedZstd = {
       ...withRequestEncoding(completedDetail, "zstd"),
@@ -1310,13 +1302,13 @@ describe("Requests page", () => {
     const secondDecode = deferred<Uint8Array>();
     const decodeSignals: AbortSignal[] = [];
     const loadDecodedBody = vi
-      .fn<RequestApi["loadDecodedBody"]>()
+      .fn<RequestsApi["loadDecodedBody"]>()
       .mockImplementation((_id, _kind, signal) => {
         decodeSignals.push(signal!);
         return decodeSignals.length === 1 ? firstDecode.promise : secondDecode.promise;
       });
     renderApp({
-      getRecord: vi
+      getRequest: vi
         .fn()
         .mockImplementation((id: string) =>
           Promise.resolve(id === completedSummary.id ? completedZstd : activeZstd),
@@ -1349,91 +1341,89 @@ describe("Requests page", () => {
   });
 
   it("clears a pending completed inspection when selected deletion includes it", async () => {
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
-      .mockResolvedValue(activeRecordList);
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
+      .mockResolvedValue(activeRequestList);
     const detailRequest = deferred<typeof completedDetail>();
     const user = userEvent.setup();
     renderApp({
-      listRecords,
-      getRecord: vi.fn().mockReturnValue(detailRequest.promise),
-      deleteRecords: vi.fn().mockResolvedValue(1),
+      listRequests,
+      getRequest: vi.fn().mockReturnValue(detailRequest.promise),
+      deleteRequests: vi.fn().mockResolvedValue(1),
     });
 
     await openCompletedRecord(user);
-    expect(screen.getByText("Loading record…")).toBeInTheDocument();
+    expect(screen.getByText("Loading request…")).toBeInTheDocument();
     await selectCompletedRecord(user);
     await confirmDeletion(user, "Delete selected");
 
-    await screen.findByRole("heading", { name: "Select a Request Record" });
-    expect(screen.queryByText("Loading record…")).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Select a Request" });
+    expect(screen.queryByText("Loading request…")).not.toBeInTheDocument();
     expect(window.location.search).toBe("");
   });
 
   it("shows list failures and retries in place", async () => {
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockRejectedValueOnce(new Error("cannot scan Request Records"))
-      .mockResolvedValue(recordList);
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockRejectedValueOnce(new Error("cannot scan Requests"))
+      .mockResolvedValue(requestList);
     const user = userEvent.setup();
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("cannot scan Request Records");
+    expect(alert).toHaveTextContent("cannot scan Requests");
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
-  it("retries the currently selected record from its inspection notification", async () => {
+  it("retries the currently selected request from its inspection notification", async () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/requests?record=${completedSummary.id}&tab=response`,
+      `/_aibox/ui/requests?request=${completedSummary.id}&tab=response`,
     );
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockRejectedValueOnce(new Error("detail unavailable"))
       .mockResolvedValue(completedDetail);
     const user = userEvent.setup();
-    renderApp({ getRecord });
+    renderApp({ getRequest });
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Couldn’t load record");
-    expect(screen.getByRole("heading", { name: "Record unavailable" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back to Request Record list" })).toBeInTheDocument();
+    expect(alert).toHaveTextContent("Couldn’t load request");
+    expect(screen.getByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to Request list" })).toBeInTheDocument();
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
 
-    expect(
-      await screen.findByRole("region", { name: "Request Record details" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Request details" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Response" })).toHaveAttribute("aria-selected", "true");
-    expect(window.location.search).toBe(`?record=${completedSummary.id}&tab=response`);
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(window.location.search).toBe(`?request=${completedSummary.id}&tab=response`);
+    expect(getRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("clears a record that disappears before its detail loads", async () => {
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
-      .mockRejectedValue(new ApiError("Request Record not found", 404));
+  it("clears a request that disappears before its detail loads", async () => {
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
+      .mockRejectedValue(new ApiError("Request not found", 404));
     const user = userEvent.setup();
-    renderApp({ getRecord });
+    renderApp({ getRequest });
 
     await openCompletedRecord(user);
 
-    await screen.findByRole("heading", { name: "Select a Request Record" });
-    expect(screen.getByRole("alert")).toHaveTextContent("Request Record not found");
+    await screen.findByRole("heading", { name: "Select a Request" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Request not found");
   });
 
   it("stacks simultaneous list and detail failures by source", async () => {
     vi.useFakeTimers();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
       .mockRejectedValue(new Error("list polling failed"));
     renderApp({
-      listRecords,
-      getRecord: vi.fn().mockRejectedValue(new Error("detail loading failed")),
+      listRequests,
+      getRequest: vi.fn().mockRejectedValue(new Error("detail loading failed")),
     });
 
     await flushEffects();
@@ -1449,14 +1439,14 @@ describe("Requests page", () => {
 
   it("orders the three notification sources with the newest failure first", async () => {
     vi.useFakeTimers();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
       .mockRejectedValue(new Error("list failed"));
     renderApp({
-      listRecords,
-      getRecord: vi.fn().mockRejectedValue(new Error("detail failed")),
-      deleteRecords: vi.fn().mockRejectedValue(new Error("delete failed")),
+      listRequests,
+      getRequest: vi.fn().mockRejectedValue(new Error("detail failed")),
+      deleteRequests: vi.fn().mockRejectedValue(new Error("delete failed")),
     });
 
     await flushEffects();
@@ -1470,19 +1460,19 @@ describe("Requests page", () => {
     await flushEffects();
 
     expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
-      expect.stringContaining("Couldn’t load record"),
-      expect.stringContaining("Couldn’t delete record"),
-      expect.stringContaining("Couldn’t load request records"),
+      expect.stringContaining("Couldn’t load request"),
+      expect.stringContaining("Couldn’t delete request"),
+      expect.stringContaining("Couldn’t load requests"),
     ]);
   });
 
   it("does not re-notify a continuous polling failure until a successful request", async () => {
     vi.useFakeTimers();
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
       .mockRejectedValue(new Error("polling remains unavailable"));
-    renderApp({ listRecords });
+    renderApp({ listRequests });
 
     await flushEffects();
     await advanceTimers(5000);
@@ -1490,8 +1480,8 @@ describe("Requests page", () => {
     await advanceTimers(8000);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    listRecords
-      .mockResolvedValueOnce(recordList)
+    listRequests
+      .mockResolvedValueOnce(requestList)
       .mockRejectedValueOnce(new Error("polling remains unavailable"));
     await advanceTimers(2000);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1500,17 +1490,17 @@ describe("Requests page", () => {
   });
 
   it("keeps a post-delete list refresh failure visible", async () => {
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
-      .mockResolvedValueOnce(recordList)
-      .mockRejectedValue(new Error("cannot refresh Request Records"));
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(requestList)
+      .mockRejectedValue(new Error("cannot refresh Requests"));
     const user = userEvent.setup();
-    renderApp({ listRecords, deleteRecords: vi.fn().mockResolvedValue(1) });
+    renderApp({ listRequests, deleteRequests: vi.fn().mockResolvedValue(1) });
 
     await selectCompletedRecord(user);
     await confirmDeletion(user, "Delete selected");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot refresh Request Records");
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot refresh Requests");
     expect(
       screen.queryByRole("button", { name: "POST api.example.test/v1/responses" }),
     ).not.toBeInTheDocument();
@@ -1522,18 +1512,18 @@ describe("Requests page", () => {
   });
 
   it("aborts and ignores an older list response after a refresh", async () => {
-    const initial = deferred<typeof recordList>();
-    const refreshed = recordListFor([completedSummary]);
+    const initial = deferred<typeof requestList>();
+    const refreshed = requestListFor([completedSummary]);
     let initialSignal: AbortSignal | undefined;
-    const listRecords = vi
-      .fn<RequestApi["listRecords"]>()
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
       .mockImplementationOnce((_page, signal) => {
         initialSignal = signal;
         return initial.promise;
       })
       .mockResolvedValueOnce(refreshed);
-    const api = fakeApi({ listRecords });
-    const replacementApi = fakeApi({ listRecords: vi.fn().mockResolvedValue(refreshed) });
+    const api = fakeApi({ listRequests });
+    const replacementApi = fakeApi({ listRequests: vi.fn().mockResolvedValue(refreshed) });
     const { rerender } = render(<RequestsHarness api={api} />);
 
     await flushEffects();
@@ -1542,7 +1532,7 @@ describe("Requests page", () => {
     expect(initialSignal?.aborted).toBe(true);
 
     await act(async () => {
-      initial.resolve(recordList);
+      initial.resolve(requestList);
       await initial.promise;
     });
     expect(
@@ -1555,65 +1545,65 @@ describe("Requests page", () => {
 
   it("polls an active detail until it completes", async () => {
     vi.useFakeTimers();
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockResolvedValueOnce(activeDetail)
       .mockResolvedValueOnce({
         ...completedDetail,
         request: { ...completedDetail.request, id: activeSummary.id },
       });
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(activeRecordList),
-      getRecord,
+      listRequests: vi.fn().mockResolvedValue(activeRequestList),
+      getRequest,
     });
 
     await openActiveRecord();
-    const detail = screen.getByRole("region", { name: "Request Record details" });
+    const detail = screen.getByRole("region", { name: "Request details" });
     expect(within(detail).getAllByText("Waiting").length).toBeGreaterThan(0);
 
     await advanceTimers(3000);
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenCalledTimes(2);
     expect(within(detail).queryAllByText("Waiting")).toHaveLength(0);
     expect(within(detail).getByLabelText("HTTP/2 200 OK")).toBeInTheDocument();
   });
 
   it("stops polling an active detail after a deterministic not-found response", async () => {
     vi.useFakeTimers();
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockResolvedValueOnce(activeDetail)
-      .mockRejectedValue(new ApiError("Request Record not found", 404));
+      .mockRejectedValue(new ApiError("Request not found", 404));
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(activeRecordList),
-      getRecord,
+      listRequests: vi.fn().mockResolvedValue(activeRequestList),
+      getRequest,
     });
 
     await openActiveRecord();
     await advanceTimers(3000);
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Request Record not found");
-    expect(screen.getByRole("heading", { name: "Select a Request Record" })).toBeInTheDocument();
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("alert")).toHaveTextContent("Request not found");
+    expect(screen.getByRole("heading", { name: "Select a Request" })).toBeInTheDocument();
+    expect(getRequest).toHaveBeenCalledTimes(2);
     await advanceTimers(9000);
-    expect(getRecord).toHaveBeenCalledTimes(2);
+    expect(getRequest).toHaveBeenCalledTimes(2);
   });
 
   it("stops polling an active Body after a deterministic not-found response", async () => {
     vi.useFakeTimers();
     const incompleteDetail = withIncompleteRequestBody(activeDetail);
     const loadBody = vi
-      .fn<RequestApi["loadBody"]>()
-      .mockRejectedValue(new ApiError("Request Record not found", 404));
+      .fn<RequestsApi["loadBody"]>()
+      .mockRejectedValue(new ApiError("Request not found", 404));
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(activeRecordList),
-      getRecord: vi.fn().mockResolvedValue(incompleteDetail),
+      listRequests: vi.fn().mockResolvedValue(activeRequestList),
+      getRequest: vi.fn().mockResolvedValue(incompleteDetail),
       loadBody,
     });
 
     await openActiveRequestBody();
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Request Record not found");
-    expect(screen.getByRole("region", { name: "Request Record details" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Request not found");
+    expect(screen.getByRole("region", { name: "Request details" })).toBeInTheDocument();
     expect(loadBody).toHaveBeenCalledTimes(1);
     await advanceTimers(9000);
     expect(loadBody).toHaveBeenCalledTimes(1);
@@ -1623,16 +1613,16 @@ describe("Requests page", () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
     const requestPoll = deferred<{ bytes: Uint8Array; nextOffset: number }>();
-    const loadBody = vi.fn<RequestApi["loadBody"]>().mockImplementation((_id, kind, offset) => {
+    const loadBody = vi.fn<RequestsApi["loadBody"]>().mockImplementation((_id, kind, offset) => {
       if (offset === 0) return Promise.resolve({ bytes: encoder.encode(kind), nextOffset: 1 });
       return requestPoll.promise;
     });
-    const getRecord = vi
-      .fn<RequestApi["getRecord"]>()
+    const getRequest = vi
+      .fn<RequestsApi["getRequest"]>()
       .mockResolvedValue(withIncompleteRequestBody(activeDetail));
     renderApp({
-      listRecords: vi.fn().mockResolvedValue(activeRecordList),
-      getRecord,
+      listRequests: vi.fn().mockResolvedValue(activeRequestList),
+      getRequest,
       loadBody,
     });
 

@@ -37,8 +37,7 @@ mod testutil;
 
 use agent::AgentKind;
 use anyhow::{Context, Result};
-use cli::{BuildArgs, Cli, Command, RunArgs};
-use docker::BuildCache;
+use cli::{Cli, Command, RunArgs};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
@@ -54,14 +53,6 @@ enum DockerSource {
 }
 
 impl DockerSource {
-    fn build(&self, dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
-        match self {
-            Self::System => docker::build_image(dockerfile, image, cache),
-            #[cfg(test)]
-            Self::Injected(docker) => docker::build_image_with(docker, dockerfile, image, cache),
-        }
-    }
-
     fn image_exists(&self, image: &str) -> Result<bool> {
         match self {
             Self::System => docker::image_exists(image),
@@ -138,13 +129,9 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
                 &context.docker(),
             )
         }
-        Command::Serve(args) => {
-            reject_passthrough("serve takes no pass-through args", passthrough)?;
+        Command::Console(args) => {
+            reject_passthrough("console takes no pass-through args", passthrough)?;
             service::dispatch(&args)
-        }
-        Command::Build(args) => {
-            reject_passthrough("build takes no pass-through args", passthrough)?;
-            run_build_with(&args, &context.docker())
         }
     }
 }
@@ -154,25 +141,6 @@ fn reject_passthrough(restriction: &str, passthrough: &[OsString]) -> Result<()>
         anyhow::bail!("`-- <args>` applies only to a run; {restriction}");
     }
     Ok(())
-}
-
-fn run_build_with(args: &BuildArgs, docker: &DockerSource) -> Result<i32> {
-    let image = docker::IMAGE;
-    let cache = if args.force {
-        BuildCache::NoCachePull
-    } else {
-        BuildCache::Cached
-    };
-    if args.force {
-        eprintln!(">> building {image} (no cache, pulling fresh Debian base) ...");
-    } else {
-        eprintln!(">> building {image} (cache enabled) ...");
-    }
-    docker
-        .build(docker::DOCKERFILE, image, cache)
-        .context("build aibox image")?;
-
-    Ok(0)
 }
 
 fn run_agent_with(
@@ -193,11 +161,12 @@ fn run_agent_with(
 
     if !docker.image_exists(image)? {
         anyhow::bail!(
-            "{image} is not present locally; build it with `aibox build` or from Console Overview"
+            "{image} is not present locally; start `aibox console` and build the Runtime Image from Console Overview"
         );
     }
 
     tenant.ensure_initialized()?;
+    component::require_agent_component(agent, &tenant.home_dir)?;
     let home_dir = std::fs::canonicalize(&tenant.home_dir)
         .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
     runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;

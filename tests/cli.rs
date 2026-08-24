@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -50,6 +51,30 @@ fn assert_success(output: &Output) {
     );
 }
 
+fn seed_codex_component(root: &Path, tenant: &str) {
+    let home = root.join("tenants").join(tenant);
+    let standalone = home.join(".codex/packages/standalone");
+    let release = standalone.join("releases/1.2.3-x86_64-unknown-linux-musl");
+    std::fs::create_dir_all(release.join("bin")).unwrap();
+    std::fs::write(release.join("bin/codex"), b"fake codex\n").unwrap();
+    std::fs::set_permissions(
+        release.join("bin/codex"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    symlink(
+        "/home/aibox/.codex/packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl",
+        standalone.join("current"),
+    )
+    .unwrap();
+    symlink(
+        "/home/aibox/.codex/packages/standalone/current/bin/codex",
+        home.join(".local/bin/codex"),
+    )
+    .unwrap();
+}
+
 #[test]
 fn process_environment_runs_with_fixed_runtime_image() {
     let scratch = tempfile::tempdir().unwrap();
@@ -62,6 +87,7 @@ fn process_environment_runs_with_fixed_runtime_image() {
         std::fs::create_dir(directory).unwrap();
     }
     write_fake_docker(&bin);
+    seed_codex_component(&root, "env-wired");
     let output = command(&home, &root, &bin)
         .current_dir(&workspace)
         .env("AIBOX_FAKE_DOCKER_LOG", &log)
@@ -71,9 +97,10 @@ fn process_environment_runs_with_fixed_runtime_image() {
     assert_success(&output);
     let log = std::fs::read_to_string(log).unwrap();
     assert!(
-        log.contains("<aibox:latest> <codex> <exec> <probe>"),
+        log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
         "{log}"
     );
+    assert!(log.contains("<aibox-codex> <exec> <probe>"), "{log}");
     assert!(root.join("tenants/env-wired/.codex").is_dir());
     assert!(!home.join(".aibox").exists());
 }
@@ -87,7 +114,15 @@ fn removed_commands_are_unknown_subcommands() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir(&home).unwrap();
     std::fs::create_dir(&bin).unwrap();
-    for command_name in ["completion", "tenant", "component", "config", "session"] {
+    for command_name in [
+        "build",
+        "completion",
+        "component",
+        "config",
+        "serve",
+        "session",
+        "tenant",
+    ] {
         let output = command(&home, &root, &bin)
             .arg(command_name)
             .output()
@@ -95,4 +130,26 @@ fn removed_commands_are_unknown_subcommands() {
         assert!(!output.status.success(), "{command_name}");
         assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
     }
+}
+
+#[test]
+fn console_rejects_agent_passthrough() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("root");
+    let home = scratch.path().join("home");
+    let bin = scratch.path().join("bin");
+    for directory in [&root, &home, &bin] {
+        std::fs::create_dir(directory).unwrap();
+    }
+
+    let output = command(&home, &root, &bin)
+        .args(["console", "--", "agent-value"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("`-- <args>` applies only to a run; console takes no pass-through args")
+    );
 }

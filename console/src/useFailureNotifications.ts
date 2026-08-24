@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { requestErrorMessage } from "./api";
+import { requestErrorMessage } from "./requestErrors";
 import type { NotificationItemData } from "./components/NotificationCenter";
 
 type NotificationSource = NotificationItemData["source"];

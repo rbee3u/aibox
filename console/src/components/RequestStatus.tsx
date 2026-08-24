@@ -1,21 +1,21 @@
-import type { RecordAssessment, RecordState, ResponseMetadata } from "../types";
-import styles from "./RecordStatus.module.css";
+import type { RequestAssessment, RequestState, ResponseMetadata } from "../types";
+import styles from "./RequestStatus.module.css";
 import { IssueIndicator, IssueTooltip } from "./IssueIndicator";
 import {
   assessmentIssueText,
-  recordHeadlinePresentation,
-  recordStatusPresentation,
+  requestHeadlinePresentation,
+  requestStatusPresentation,
   type AssessmentPresentation,
-  type RecordStatusTone,
+  type RequestStatusTone,
 } from "./statusPresentation";
 
-interface RecordStatusProps {
+interface RequestStatusProps {
   status: number | null;
-  state: RecordState;
-  assessment: RecordAssessment;
+  state: RequestState;
+  assessment: RequestAssessment;
 }
 
-const TONE_CLASS: Record<RecordStatusTone, string> = {
+const TONE_CLASS: Record<RequestStatusTone, string> = {
   active: styles.active,
   error: styles.error,
   neutral: styles.neutral,
@@ -23,8 +23,8 @@ const TONE_CLASS: Record<RecordStatusTone, string> = {
   warning: styles.warningTone,
 };
 
-export function RecordStatus({ status, state, assessment }: RecordStatusProps) {
-  const presentation = recordStatusPresentation({ status, state, assessment });
+export function RequestStatus({ status, state, assessment }: RequestStatusProps) {
+  const presentation = requestStatusPresentation({ status, state, assessment });
 
   return (
     <span className={styles.root}>
@@ -57,12 +57,12 @@ function CompactIssue({ issue }: { issue: AssessmentPresentation }) {
 
 interface RecordHeadlineStatusProps {
   response: ResponseMetadata | null;
-  state: RecordState;
-  assessment: RecordAssessment;
+  state: RequestState;
+  assessment: RequestAssessment;
 }
 
 export function RecordHeadlineStatus({ response, state, assessment }: RecordHeadlineStatusProps) {
-  const presentation = recordHeadlinePresentation(response, state, assessment);
+  const presentation = requestHeadlinePresentation(response, state, assessment);
   const visualStatusText = response
     ? [response.status, response.reason_phrase].filter(Boolean).join(" ")
     : presentation.statusText;

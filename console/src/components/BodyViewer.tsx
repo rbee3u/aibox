@@ -25,7 +25,7 @@ import type {
   BodyLoadStatus,
   DecodedBodyState,
   EventTimingIndex,
-  RecordDetail,
+  RequestDetail,
 } from "../types";
 import { useClipboardFeedback } from "../useClipboardFeedback";
 import { bytes, concatChunks, hex } from "../utils";
@@ -34,7 +34,7 @@ import styles from "./BodyViewer.module.css";
 
 interface BodyViewerProps {
   kind: BodyKind;
-  detail: RecordDetail;
+  detail: RequestDetail;
   bodyChunks: Uint8Array[];
   bodyStatus: BodyLoadStatus;
   decoded: DecodedBodyState;

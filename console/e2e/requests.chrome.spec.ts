@@ -13,7 +13,7 @@ test("light desktop inspector", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("separator")).toHaveCount(0);
 
-  const issueMarker = page.getByRole("img", { name: /Record error: Server error/ });
+  const issueMarker = page.getByRole("img", { name: /Request error: Server error/ });
   await issueMarker.hover();
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toContainText("Error · Server error");
@@ -24,7 +24,7 @@ test("light desktop inspector", async ({ page }) => {
   await issueMarker.hover();
   await expect(tooltip).toBeVisible();
   await page
-    .getByRole("complementary", { name: "Request Record list" })
+    .getByRole("complementary", { name: "Request list" })
     .locator(":scope > [aria-busy]")
     .dispatchEvent("scroll");
   await expect(tooltip).toBeHidden();
@@ -41,9 +41,7 @@ test("light desktop inspector", async ({ page }) => {
   await expect(page.getByLabel("SSE Events")).toBeVisible();
 });
 
-test("390px Request Record inspection keeps the complete workflow in one panel", async ({
-  page,
-}) => {
+test("390px Request inspection keeps the complete workflow in one panel", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockRequests(page, { total: 101, hasNext: true });
   await page.goto("./");
@@ -56,7 +54,7 @@ test("390px Request Record inspection keeps the complete workflow in one panel",
     exact: true,
   });
   await row.click();
-  await expect(page.getByRole("region", { name: "Request Record details" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Request details" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Summary" })).toBeVisible();
   await page.getByRole("tab", { name: "Request" }).click();
   await expect(page.getByText("Bearer test-token-not-a-secret")).toBeVisible();
@@ -69,8 +67,8 @@ test("390px Request Record inspection keeps the complete workflow in one panel",
     )
     .toBe(true);
 
-  await page.getByRole("button", { name: "Back to Request Record list" }).click();
-  await expect(page.getByRole("complementary", { name: "Request Record list" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Request list" }).click();
+  await expect(page.getByRole("complementary", { name: "Request list" })).toBeVisible();
   await expect(row).toBeFocused();
 });
 

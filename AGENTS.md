@@ -14,7 +14,7 @@ references between them.
 
 ## Implementation Map
 
-- `src/cli.rs` defines the three-command Clap surface and Run pass-through
+- `src/cli.rs` defines the two-command Clap surface and Run pass-through
   boundary; `src/lib.rs` resolves command scope and orchestrates commands.
 - `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
   Tenant resolution, lifecycle, layout, permissions, and shared path safety.
@@ -23,20 +23,21 @@ references between them.
   `src/metadata.rs` owns the shared Tenant-and-Agent metadata document.
 - `src/runspec.rs`, `src/docker.rs`, and `src/docker_image.rs` own mount
   validation, cleanup-aware container execution, and image construction.
-  `src/component.rs` owns status-line and toolchain Components.
+  `src/component.rs` owns status-line, runtime, Coding Agent, and toolchain
+  Components.
 - `src/session.rs` owns shared Session discovery and dispatch;
   `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
 - `src/request.rs` owns shared Request state. `src/request_proxy.rs`,
   `src/request_store.rs`, `src/request_sse.rs`,
   `src/request_interpretation.rs`, and `src/request_assessment.rs` own
   forwarding, persistence, SSE indexing, protocol facts, and assessment.
-  `src/request_web.rs` owns the Request API and embedded Console assets.
+  `src/request_web.rs` owns the Requests portion of the Control API.
 - `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
   Root-local Service, Console Control API, and ephemeral Management Operations.
 - `console/src/App.tsx` owns Console routing and navigation guards;
   `TenantPage.tsx`, `ConfigPage.tsx`, `SessionPage.tsx`, and
-  `RequestsPage.tsx` own their domain pages. `controlApi.ts` and `api.ts` own
-  the distinct Control and Request clients. `OverviewPage.tsx` orchestrates
+  `RequestsPage.tsx` own their domain pages. `controlApi.ts` owns the unified
+  Control API client, including Requests. `OverviewPage.tsx` orchestrates
   Overview, while `TopologyCanvas.tsx` and `overviewTopology.ts` own its
   rendering and pure topology model. `assets/console.*` is generated output;
   use `docs/console-ui.md`.
@@ -51,10 +52,11 @@ shared.
 
 **Keep the CLI surface narrow.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. The public commands are
-`serve`, `run`, and `build`; `serve` owns only `--listen`, `build` owns only
-`--force`, and all Tenant, Component, Config, and Session management is exposed
-through the Console Control API. Removed management names must remain unknown
-Clap subcommands; do not add aliases, tombstones, or a completion protocol.
+`console` and `run`; `console` owns only `--listen`, and Runtime Image, Tenant,
+Component, Config, and Session management is exposed through the Console
+Control API. Removed command names, including `build` and `serve`, must remain
+unknown Clap subcommands; do not add aliases, tombstones, or a completion
+protocol.
 
 **Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only by
@@ -119,16 +121,25 @@ status line in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
 native auth file as a whole. Every Named Config file is mode `0600`.
 
 **Keep Components optional, native, and independently owned.** Tenant
-initialization does not install status lines or toolchains. The Console Components
-module derives
-statusline state from native Managed or Host Tenant files without a registry;
-Rust and Go remain Managed Tenant-only and install through the shared image with
-only the Tenant Home mounted. Status-line Components directly manage their
-script when applicable and their native configuration values. Status-line paths
-are not Config Fields, so Config Application preserves them without ownership
-or overlap machinery. Expose repairable partial state as `incomplete`.
-Component removal confirms before deleting any existing state. Preserve Cargo
-and GOPATH user state across SDK replacement and removal.
+initialization installs no Components. The Console derives Component state from
+native Managed or Host Tenant files without a registry. Node.js, Codex, Claude,
+Python, Rust, and Go remain Managed Tenant-only and install through the shared
+image with only the Tenant Home mounted; a Run requires its selected Coding Agent
+Component and never falls back to the Runtime Image. Status-line Components
+directly manage their script when applicable and their native configuration
+values. Status-line paths are not Config Fields, so Config Application preserves
+them without ownership or overlap machinery. Expose repairable partial state as
+`incomplete`, and never replace or remove unmanaged state automatically.
+Component removal confirms before deleting any existing state. Preserve Agent
+config, credentials, Sessions, Workspace environments, package configuration,
+caches, tools, npm and pip user state, Cargo, and GOPATH outside the removed
+Component's owned release paths.
+
+**Keep the Tenant Environment ownership split.** aibox owns and repairs
+`.config/aibox/env.sh`; users exclusively own `.bash_profile` and `.bashrc`.
+A Run uses login Bash, then loads the aibox environment, then invokes the
+Tenant-local Agent launcher. Do not create or rewrite user profiles, implicitly
+load `.bashrc`, or hot-reload environment changes into an active Run.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`
@@ -161,11 +172,13 @@ commit one file at a time without rollback. Credential Propagation uses its
 preflight snapshots without write-time reconciliation, replaces targets
 independently, continues after individual write failures, and never rolls back
 successful targets. One aibox process supports only one active container
-operation: a Run or toolchain installation.
+operation: a Run or Component installation.
 
 **Keep the Request Proxy host-side and raw.** The Request Proxy is an always-on part of
 the aibox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
-values and body bytes under the flat `$AIBOX_ROOT/requests/<record>/` layout.
+values and body bytes under the flat `$AIBOX_ROOT/requests/<request>/` layout.
+The current Request storage contract is format v4 with `request_id`; format v3
+is unsupported and must be cleared manually before an upgraded Service starts.
 One explicit `--listen` socket serves both the Request Proxy and Console;
 the surrounding network is trusted, so do not add authentication, TLS, request
 admission checks, or network-exposure confirmations. Apart from the
@@ -196,7 +209,7 @@ or dispatch APIs.
 marker. Keep deletion structurally scoped and document that users must not
 point the root at a general-purpose directory.
 
-**Keep Docker runs cleanup-aware.** Runs and toolchain installers go
+**Keep Docker runs cleanup-aware.** Runs and Component installers go
 through `docker::run`; its child/cidfile registry supports one active container
 operation per process. Register the cidfile before spawning Docker, register
 the child immediately afterward, and keep cleanup armed until `finish_child`
@@ -205,6 +218,12 @@ checks for a container that outlived the Docker client.
 **Keep the embedded Dockerfile context-free.** `docker_image.rs` passes it to
 `docker build -f -` with an empty context, so dependencies must be fetched
 during the build.
+
+**Keep mutable runtimes out of the Runtime Image.** The fixed image provides
+only the shared OS, shell, build, download, and diagnostic substrate. Python,
+uv, Node.js, Codex, Claude, Rust, and Go belong to Managed Tenant Components and
+must not be installed or pinned by the Dockerfile. Transitive ABI libraries
+needed by system diagnostics do not make their application runtime image-owned.
 
 ## Checks
 

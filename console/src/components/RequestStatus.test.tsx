@@ -1,17 +1,17 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { RecordAssessment, RecordState, ResponseMetadata } from "../types";
-import { RecordHeadlineStatus, RecordStatus } from "./RecordStatus";
+import type { RequestAssessment, RequestState, ResponseMetadata } from "../types";
+import { RecordHeadlineStatus, RequestStatus } from "./RequestStatus";
 import {
   assessmentPrimaryLabel,
   errorKindLabel,
-  recordHeadlinePresentation,
-  recordStatusPresentation,
+  requestHeadlinePresentation,
+  requestStatusPresentation,
 } from "./statusPresentation";
 
-const ok: RecordAssessment = { level: "ok", primary: null, issue_count: 0 };
-const active: RecordAssessment = { level: "active", primary: null, issue_count: 0 };
-const providerError: RecordAssessment = {
+const ok: RequestAssessment = { level: "ok", primary: null, issue_count: 0 };
+const active: RequestAssessment = { level: "active", primary: null, issue_count: 0 };
+const providerError: RequestAssessment = {
   level: "error",
   primary: {
     source: "provider",
@@ -20,7 +20,7 @@ const providerError: RecordAssessment = {
   },
   issue_count: 2,
 };
-const disconnectWarning: RecordAssessment = {
+const disconnectWarning: RequestAssessment = {
   level: "warning",
   primary: {
     source: "request",
@@ -32,10 +32,10 @@ const disconnectWarning: RecordAssessment = {
 
 function presentation(
   status: number | null,
-  assessment: RecordAssessment = ok,
-  state: RecordState = "completed",
+  assessment: RequestAssessment = ok,
+  state: RequestState = "completed",
 ) {
-  return recordStatusPresentation({ status, assessment, state });
+  return requestStatusPresentation({ status, assessment, state });
 }
 
 const response: ResponseMetadata = {
@@ -55,7 +55,7 @@ function showTooltip(target: HTMLElement) {
   return screen.getByRole("tooltip");
 }
 
-describe("record status presentation", () => {
+describe("request status presentation", () => {
   it.each([
     [100, "neutral"],
     [200, "success"],
@@ -70,7 +70,7 @@ describe("record status presentation", () => {
     expect(presentation(status)).toMatchObject({ label: String(status), tone });
   });
 
-  it("distinguishes waiting from streaming active records", () => {
+  it("distinguishes waiting from streaming active requests", () => {
     expect(presentation(null, active, "active")).toEqual({
       label: "Waiting",
       tone: "active",
@@ -102,7 +102,7 @@ describe("record status presentation", () => {
   });
 
   it("keeps HTTP 200 and a Provider Error separate", () => {
-    expect(recordHeadlinePresentation(response, "completed", providerError)).toEqual({
+    expect(requestHeadlinePresentation(response, "completed", providerError)).toEqual({
       statusText: "HTTP/2 200 OK",
       tone: "success",
       tag: {
@@ -115,12 +115,12 @@ describe("record status presentation", () => {
   });
 });
 
-describe("RecordStatus", () => {
+describe("RequestStatus", () => {
   it("shows Waiting and Streaming text in list status", () => {
-    const { rerender } = render(<RecordStatus status={null} state="active" assessment={active} />);
+    const { rerender } = render(<RequestStatus status={null} state="active" assessment={active} />);
     expect(screen.getByText("Waiting")).toBeInTheDocument();
 
-    rerender(<RecordStatus status={200} state="active" assessment={active} />);
+    rerender(<RequestStatus status={200} state="active" assessment={active} />);
     expect(screen.queryByText("HTTP/2")).not.toBeInTheDocument();
     expect(screen.getByText("200")).toBeInTheDocument();
     expect(screen.getByText("Streaming")).toBeInTheDocument();
@@ -129,11 +129,11 @@ describe("RecordStatus", () => {
   it("renders accessible list issues and opens their tooltips", () => {
     vi.useFakeTimers();
     const { rerender } = render(
-      <RecordStatus status={200} state="completed" assessment={providerError} />,
+      <RequestStatus status={200} state="completed" assessment={providerError} />,
     );
     expect(screen.getByText("200")).toBeInTheDocument();
     const errorMarker = screen.getByRole("img", {
-      name: /Record error: Server error.*currently overloaded/,
+      name: /Request error: Server error.*currently overloaded/,
     });
     expect(screen.queryByText("Server error")).not.toBeInTheDocument();
     expect(errorMarker).not.toHaveAttribute("title");
@@ -153,9 +153,9 @@ describe("RecordStatus", () => {
     fireEvent.pointerLeave(errorMarker);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    rerender(<RecordStatus status={null} state="completed" assessment={disconnectWarning} />);
+    rerender(<RequestStatus status={null} state="completed" assessment={disconnectWarning} />);
     const warningMarker = screen.getByRole("img", {
-      name: /Record warning: Client disconnected/,
+      name: /Request warning: Client disconnected/,
     });
     expect(screen.queryByText("Client disconnected")).not.toBeInTheDocument();
     expect(within(showTooltip(warningMarker)).getByText("Warning")).toBeInTheDocument();
@@ -207,7 +207,7 @@ describe("RecordStatus", () => {
   });
 
   it("opens compact diagnostics on touch-style click and closes outside", () => {
-    render(<RecordStatus status={200} state="completed" assessment={disconnectWarning} />);
+    render(<RequestStatus status={200} state="completed" assessment={disconnectWarning} />);
     const trigger = screen.getByRole("img", { name: /Client disconnected/ });
 
     fireEvent.click(trigger);

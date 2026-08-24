@@ -1,9 +1,9 @@
 //! Foreground aibox Service, protected management routes, and Request fallback.
 
-use crate::cli::ServeArgs;
+use crate::cli::ConsoleArgs;
 use crate::operation::OperationManager;
 use crate::request::AppState as RequestState;
-use crate::{config, control_web, request_proxy, request_web, tenant};
+use crate::{config, control_web, request_proxy, tenant};
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::body::Body;
@@ -11,7 +11,7 @@ use axum::extract::{ConnectInfo, FromRef, Request, State};
 use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::{get, post};
+use axum::routing::get;
 use base64::Engine as _;
 use fs2::FileExt as _;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -76,7 +76,7 @@ enum ShutdownReason {
     Terminate,
 }
 
-pub(crate) fn dispatch(args: &ServeArgs) -> Result<i32> {
+pub(crate) fn dispatch(args: &ConsoleArgs) -> Result<i32> {
     if args.listen.port() == 0 {
         bail!("aibox Service listener port must not be 0");
     }
@@ -194,7 +194,6 @@ fn router(state: ServiceState) -> Router {
     let protected = Router::new()
         .route("/", get(root_redirect))
         .merge(control_web::router())
-        .merge(request_viewer_routes())
         .route(
             "/_aibox",
             get(management_not_found).post(management_not_found),
@@ -211,43 +210,6 @@ fn router(state: ServiceState) -> Router {
         .merge(protected)
         .fallback(proxy_fallback)
         .with_state(state)
-}
-
-fn request_viewer_routes() -> Router<ServiceState> {
-    Router::new()
-        .route(
-            "/_aibox/requests/api/records",
-            get(request_web::list_records),
-        )
-        .route(
-            "/_aibox/requests/api/records/delete",
-            post(request_web::delete_records),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}",
-            get(request_web::record_detail).post(management_not_found),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/request-body",
-            get(request_web::request_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-body",
-            get(request_web::response_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/request-body-decoded",
-            get(request_web::decoded_request_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-body-decoded",
-            get(request_web::decoded_response_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-event-timings",
-            get(request_web::response_event_timings),
-        )
-        .route("/_aibox/requests/{*path}", get(request_web::not_found))
 }
 
 async fn root_redirect() -> Redirect {
@@ -672,9 +634,9 @@ mod tests {
                 .is_none()
         );
 
-        let removed_delete_all = Request::builder()
+        let removed_request_api = Request::builder()
             .method(Method::POST)
-            .uri("/_aibox/requests/api/records/delete-all")
+            .uri("/_aibox/requests/api/records")
             .header(header::HOST, "127.0.0.1:9923")
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::ORIGIN, "http://127.0.0.1:9923")
@@ -682,8 +644,36 @@ mod tests {
             .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
             .body(Body::from("{}"))
             .unwrap();
-        let removed = app.clone().oneshot(removed_delete_all).await.unwrap();
+        let removed = app.clone().oneshot(removed_request_api).await.unwrap();
         assert_eq!(removed.status(), StatusCode::NOT_FOUND);
+
+        for legacy_path in [
+            "/_aibox/requests/api/records",
+            "/_aibox/requests/app.css",
+            "/_aibox/requests/app.js",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(Method::GET, legacy_path, "127.0.0.1:5000"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{legacy_path}");
+        }
+
+        let requests = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/requests",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(requests.status(), StatusCode::OK);
+        let body = requests.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["requests"], serde_json::json!([]));
+        assert!(body.get("records").is_none());
 
         let bootstrap = app
             .oneshot(request(

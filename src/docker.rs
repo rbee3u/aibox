@@ -1,10 +1,10 @@
 //! Building and running cleanup-aware containers.
 //!
-//! Image inspection, [`build_image`] (invoked by `aibox build`), and [`run`]
-//! (which spawns `docker run` for a Coding Agent or toolchain installer) all
-//! shell out to the Docker CLI. Image build and inspection live in the
-//! `docker_image.rs` submodule, which documents the context-free build; this
-//! module owns the run path and its cleanup.
+//! Image inspection, Console-triggered image construction, and [`run`] (which
+//! spawns `docker run` for a Coding Agent or Component installer) all shell out
+//! to the Docker CLI. Image build and inspection live in the `docker_image.rs`
+//! submodule, which documents the context-free build; this module owns the run
+//! path and its cleanup.
 //!
 //! ## Signal-aware cleanup
 //!
@@ -17,7 +17,7 @@
 //!
 //! The child pid, cidfile, and run state intentionally support one active
 //! container operation per aibox process, whether a Run or a
-//! toolchain installation. Cleanup is best-effort for uncatchable termination
+//! Component installation. Cleanup is best-effort for uncatchable termination
 //! such as SIGKILL.
 
 #[cfg(test)]
@@ -37,15 +37,15 @@ mod image_ops;
 pub(crate) use image_ops::image_exists_with;
 #[cfg(test)]
 use image_ops::image_ref_for_exact_ls;
-pub use image_ops::{BuildCache, build_image, image_exists};
+pub use image_ops::{BuildCache, image_exists};
 pub(crate) use image_ops::{build_image_for_service, inspect_runtime_image};
 #[cfg(test)]
 pub(crate) use image_ops::{build_image_with, inspect_runtime_image_with};
 
-/// Fixed local Runtime Image tag used by every Run and toolchain installer.
+/// Fixed local Runtime Image tag used by every Run and runtime Component installer.
 pub const IMAGE: &str = "aibox:latest";
 
-/// Shared development-runtime Dockerfile with both Coding Agent CLIs installed.
+/// Shared base Runtime Image Dockerfile without Tenant-local runtimes.
 pub const DOCKERFILE: &str = include_str!("../assets/aibox.Dockerfile");
 
 const CONTAINER_CREATE_WAIT: Duration = Duration::from_secs(1);

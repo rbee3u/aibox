@@ -1,4 +1,4 @@
-export type RecordState = "active" | "completed" | "interrupted";
+export type RequestState = "active" | "completed" | "interrupted";
 export type BodyKind = "request" | "response";
 export type BodyLoadStatus = "idle" | "loaded" | "error";
 export type DetailTab = "summary" | BodyKind;
@@ -87,7 +87,7 @@ export interface AssessmentPrimary {
   message: string;
 }
 
-export interface RecordAssessment {
+export interface RequestAssessment {
   level: AssessmentLevel;
   primary: AssessmentPrimary | null;
   issue_count: number;
@@ -103,7 +103,7 @@ type DiagnosticGroups = Record<"request" | "http" | "provider" | "warnings", Ass
 
 interface SummaryMetadata {
   schema_version: number;
-  record_id: string;
+  request_id: string;
   kind: string;
   observed_at: string;
   request: SummaryRequestMetadata;
@@ -115,7 +115,7 @@ interface SummaryMetadata {
   outcome: string | null;
   errors: SummaryDiagnostic[];
   warnings: SummaryDiagnostic[];
-  assessment: RecordAssessment;
+  assessment: RequestAssessment;
 }
 
 type ProtocolFamily =
@@ -168,7 +168,7 @@ interface ResultMetadata {
   error: ErrorMetadata | null;
 }
 
-export interface RecordSummary {
+export interface RequestSummary {
   id: string;
   started_at: string;
   ended_at: string | null;
@@ -178,36 +178,36 @@ export interface RecordSummary {
   status: number | null;
   http_version: string | null;
   outcome: string;
-  state: RecordState;
+  state: RequestState;
   total_ms: number | null;
   protocol: ProtocolSummary | null;
-  assessment: RecordAssessment;
+  assessment: RequestAssessment;
 }
 
-export interface RecordList {
-  records: RecordSummary[];
+export interface RequestList {
+  requests: RequestSummary[];
   total: number;
   deletable_count: number;
   has_next: boolean;
 }
 
-export interface RecordDetail {
+export interface RequestDetail {
   request: RequestMetadata;
   response: ResponseMetadata | null;
   result: ResultMetadata | null;
   summary: SummaryMetadata;
-  assessment: RecordAssessment;
+  assessment: RequestAssessment;
   diagnostics: DiagnosticGroups;
-  state: RecordState;
+  state: RequestState;
   request_body_bytes: number;
   response_body_bytes: number;
   live_total_ms: number | null;
   timeline_end_at_ns: string | null;
 }
 
-export interface RequestApi {
-  listRecords(page?: number, signal?: AbortSignal): Promise<RecordList>;
-  getRecord(id: string, signal?: AbortSignal): Promise<RecordDetail>;
+export interface RequestsApi {
+  listRequests(page?: number, signal?: AbortSignal): Promise<RequestList>;
+  getRequest(id: string, signal?: AbortSignal): Promise<RequestDetail>;
   loadBody(
     id: string,
     kind: BodyKind,
@@ -220,5 +220,5 @@ export interface RequestApi {
     afterSequence: number,
     signal?: AbortSignal,
   ): Promise<EventTimingIndex>;
-  deleteRecords(ids: string[], signal?: AbortSignal): Promise<number>;
+  deleteRequests(ids: string[], signal?: AbortSignal): Promise<number>;
 }

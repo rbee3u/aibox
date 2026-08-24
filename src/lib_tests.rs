@@ -33,22 +33,6 @@ exit 99
 }
 
 #[cfg(unix)]
-fn write_build_docker(dir: &std::path::Path) {
-    crate::testutil::write_stub_script(
-        dir,
-        "docker",
-        r#"#!/bin/sh
-log="$AIBOX_FAKE_DOCKER_LOG"
-printf 'ARGS:' >> "$log"
-for arg in "$@"; do printf ' <%s>' "$arg" >> "$log"; done
-printf '\nSTDIN:' >> "$log"
-cat >> "$log"
-printf '\nEND\n' >> "$log"
-"#,
-    );
-}
-
-#[cfg(unix)]
 struct RunFixture {
     docker_dir: tempfile::TempDir,
     root: tempfile::TempDir,
@@ -101,41 +85,41 @@ impl RunFixture {
     fn log(&self) -> String {
         std::fs::read_to_string(&self.docker_log).unwrap_or_default()
     }
+
+    fn seed_codex_component(&self, name: &str) -> ManagedTenant {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let tenant = ManagedTenant::resolve(self.root.path(), name).unwrap();
+        tenant.ensure_initialized().unwrap();
+        let standalone = tenant.home_dir.join(".codex/packages/standalone");
+        let release = standalone.join("releases/1.2.3-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(release.join("bin")).unwrap();
+        std::fs::write(release.join("bin/codex"), b"fake codex\n").unwrap();
+        std::fs::set_permissions(
+            release.join("bin/codex"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::create_dir_all(tenant.home_dir.join(".local/bin")).unwrap();
+        symlink(
+            "/home/aibox/.codex/packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl",
+            standalone.join("current"),
+        )
+        .unwrap();
+        symlink(
+            "/home/aibox/.codex/packages/standalone/current/bin/codex",
+            tenant.home_dir.join(".local/bin/codex"),
+        )
+        .unwrap();
+        tenant
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn build_uses_fixed_runtime_image_and_force_cache_flags() {
-    let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("docker.log");
-    write_build_docker(dir.path());
-    let docker = docker::DockerCli::isolated(
-        dir.path().join("docker"),
-        [
-            ("PATH".into(), "/usr/bin:/bin".into()),
-            ("AIBOX_FAKE_DOCKER_LOG".into(), log.clone().into_os_string()),
-        ],
-    );
-    let root = tempfile::tempdir().unwrap();
-    let code = run_with_context(
-        Cli::try_parse_from(["aibox", "build", "--force"]).unwrap(),
-        &[],
-        TestCommandContext {
-            root: root.path().to_path_buf(),
-            docker,
-        },
-    )
-    .unwrap();
-    assert_eq!(code, 0);
-    let log = std::fs::read_to_string(log).unwrap();
-    assert!(log.contains("<--no-cache> <--pull>"), "{log}");
-    assert!(log.contains("<-t> <aibox:latest>"), "{log}");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_initializes_managed_tenant_and_forwards_opaque_args() {
+fn run_uses_the_tenant_agent_component_and_forwards_opaque_args() {
     let fx = RunFixture::new();
+    fx.seed_codex_component("work");
     let cli = Cli::try_parse_from(["aibox", "run", "--tenant", "work"]).unwrap();
     let passthrough = vec!["exec".into(), "fix tests".into(), "--json".into()];
     let code = run_with_context(
@@ -157,10 +141,13 @@ fn run_initializes_managed_tenant_and_forwards_opaque_args() {
     )
     .unwrap();
     assert_eq!(code, 0);
-    assert!(fx.root.path().join("tenants/work/.codex").is_dir());
     assert!(
         fx.log()
-            .contains("<aibox:latest> <codex> <exec> <fix tests> <--json>")
+            .contains("<aibox:latest> </bin/bash> <--login> <-c>")
+    );
+    assert!(
+        fx.log()
+            .contains("<aibox-codex> <exec> <fix tests> <--json>")
     );
 }
 
@@ -168,7 +155,7 @@ fn run_initializes_managed_tenant_and_forwards_opaque_args() {
 #[test]
 fn run_keeps_current_config_and_does_not_read_named_configs() {
     let fx = RunFixture::new();
-    let tenant = ManagedTenant::resolve(fx.root.path(), "default").unwrap();
+    let tenant = fx.seed_codex_component("default");
     let selected = tenant.for_agent(AgentKind::Codex);
     selected.ensure_agent_state_dir().unwrap();
     std::fs::write(selected.state_file("config.toml"), b"model = \"local\"\n").unwrap();
@@ -184,6 +171,26 @@ fn run_keeps_current_config_and_does_not_read_named_configs() {
 
 #[cfg(unix)]
 #[test]
+fn run_initializes_a_missing_tenant_then_requires_an_explicit_agent_component() {
+    let fx = RunFixture::new();
+
+    let error = fx.execute(&["aibox", "run"], &[]).unwrap_err().to_string();
+
+    assert!(
+        error.contains("codex Component is not installed"),
+        "{error}"
+    );
+    assert!(
+        fx.root
+            .path()
+            .join("tenants/default/.config/aibox/env.sh")
+            .is_file()
+    );
+    assert!(!fx.log().contains("<run>"), "{}", fx.log());
+}
+
+#[cfg(unix)]
+#[test]
 fn run_reports_missing_image_before_initializing_tenant() {
     let fx = RunFixture::new();
     let error = fx
@@ -194,6 +201,10 @@ fn run_reports_missing_image_before_initializing_tenant() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("not present locally"), "{error}");
+    assert!(error.contains("Console Overview"), "{error}");
+    assert!(error.contains("aibox console"), "{error}");
+    assert!(!error.contains("aibox build"), "{error}");
+    assert!(!error.contains("aibox serve"), "{error}");
     assert!(!fx.root.path().join("tenants/default").exists());
 }
 

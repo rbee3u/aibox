@@ -8,7 +8,7 @@
 //! rather than copying payloads. Content-encoded streams remain opaque.
 //!
 //! Indexing is deliberately subordinate to forwarding: a non-contiguous chunk or
-//! a write failure disables it and becomes a Record warning without altering the
+//! a write failure disables it and becomes a Request warning without altering the
 //! recorded bytes or the Request Outcome. The indexer also notes the first token
 //! and the provider terminal event, so a Coding Agent that closes immediately
 //! after a complete stream is not recorded as a client disconnect.
@@ -16,7 +16,7 @@
 //! Raw body recording remains unbounded, but this in-memory observer stops for
 //! the rest of a response when one unterminated line or Event exceeds 16 MiB.
 //! This releases buffered data and bounds diagnostic memory without truncating
-//! forwarding or the raw Record.
+//! forwarding or the raw Request.
 
 use crate::request_interpretation::ProtocolFamily;
 use crate::request_store::FORMAT_VERSION;
@@ -70,7 +70,7 @@ fn classify_sse_prefix(bytes: &[u8]) -> PrefixSniff {
 #[derive(Serialize)]
 struct SseEventIndexEntry {
     schema_version: u32,
-    record_id: String,
+    request_id: String,
     kind: String,
     sequence: u64,
     body_start: u64,
@@ -92,7 +92,7 @@ pub(crate) type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
 /// or forwarding the body.
 pub(crate) struct SseIndexer {
     file: Option<std::fs::File>,
-    record_id: String,
+    request_id: String,
     buffer: Vec<u8>,
     /// Buffer offset below which no line terminator exists, so feeding one
     /// long line chunk by chunk does not rescan the accumulated prefix.
@@ -118,18 +118,18 @@ pub(crate) struct SseIndexer {
 }
 
 impl SseIndexer {
-    pub(crate) fn new(file: Option<std::fs::File>, record_id: String) -> Self {
-        Self::with_observation_limit(file, record_id, MAX_SSE_EVENT_OBSERVATION_BYTES)
+    pub(crate) fn new(file: Option<std::fs::File>, request_id: String) -> Self {
+        Self::with_observation_limit(file, request_id, MAX_SSE_EVENT_OBSERVATION_BYTES)
     }
 
     fn with_observation_limit(
         file: Option<std::fs::File>,
-        record_id: String,
+        request_id: String,
         max_observation_bytes: usize,
     ) -> Self {
         Self {
             file,
-            record_id,
+            request_id,
             buffer: Vec::new(),
             scanned: 0,
             buffer_start: 0,
@@ -329,7 +329,7 @@ impl SseIndexer {
                 {
                     let entry = SseEventIndexEntry {
                         schema_version: FORMAT_VERSION,
-                        record_id: self.record_id.clone(),
+                        request_id: self.request_id.clone(),
                         kind: "sse_event".to_string(),
                         sequence: self.sequence,
                         body_start: self.event_start.unwrap_or(self.buffer_start),
@@ -530,7 +530,7 @@ mod tests {
         let path = directory.path().join("response.events.jsonl");
         std::fs::write(&path, []).unwrap();
         let read_only = std::fs::File::open(path).unwrap();
-        let mut indexer = SseIndexer::new(Some(read_only), "record".to_string());
+        let mut indexer = SseIndexer::new(Some(read_only), "request".to_string());
         let first = b"data: first\n\n";
         let second = b"data: second\n\n";
 
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn oversized_sse_line_stops_observation_without_retaining_the_body() {
-        let mut indexer = SseIndexer::with_observation_limit(None, "record".to_string(), 16);
+        let mut indexer = SseIndexer::with_observation_limit(None, "request".to_string(), 16);
         let chunk = b"data: 01234567890";
 
         let error = indexer.feed(chunk, 0, "1").unwrap_err().to_string();
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn oversized_multiline_sse_event_stops_observation() {
-        let mut indexer = SseIndexer::with_observation_limit(None, "record".to_string(), 12);
+        let mut indexer = SseIndexer::with_observation_limit(None, "request".to_string(), 12);
         let chunks: [&[u8]; 4] = [
             b"data: 1234\n",
             b"data: 5678\n",
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn observation_limit_accepts_the_exact_boundary_and_resets_per_event() {
-        let mut indexer = SseIndexer::with_observation_limit(None, "record".to_string(), 12);
+        let mut indexer = SseIndexer::with_observation_limit(None, "request".to_string(), 12);
         let chunk = b"data: 1234\ndata: 5678\ndata: 90\n\ndata: next\n\n";
 
         indexer.feed(chunk, 0, "1").unwrap();
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn done_is_terminal_only_for_chat_completions() {
-        let mut indexer = SseIndexer::new(None, "record".to_string());
+        let mut indexer = SseIndexer::new(None, "request".to_string());
         let body = b"data:  \t[DONE] \r\n\r\n";
 
         indexer.feed(body, 0, "7").unwrap();
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn error_event_is_terminal_for_a_recognized_family_only() {
-        let mut indexer = SseIndexer::new(None, "record".to_string());
+        let mut indexer = SseIndexer::new(None, "request".to_string());
         let body = b"data: {\"error\":{\"type\":\"server_error\"}}\n\n";
 
         indexer.feed(body, 0, "9").unwrap();
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn completed_events_remain_observable_when_a_later_event_exceeds_the_limit() {
-        let mut indexer = SseIndexer::with_observation_limit(None, "record".to_string(), 12);
+        let mut indexer = SseIndexer::with_observation_limit(None, "request".to_string(), 12);
         let chunk = b"data: ok\n\ndata: 01234567890";
 
         let error = indexer.feed(chunk, 0, "7").unwrap_err().to_string();
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn eof_enforces_the_accumulated_event_limit_without_emitting_a_partial_event() {
-        let mut indexer = SseIndexer::with_observation_limit(None, "record".to_string(), 12);
+        let mut indexer = SseIndexer::with_observation_limit(None, "request".to_string(), 12);
         let terminated = b"data: 1234\ndata: 5678\n";
         let unterminated = b"data: 123";
 

@@ -1,7 +1,7 @@
-//! The on-disk Request Record layout and its lifecycle.
+//! The on-disk Request layout and its lifecycle.
 //!
-//! [`RequestStore`] owns the flat `$AIBOX_ROOT/requests/<record>/` collection.
-//! Each Record directory holds raw evidence — `request.json`, `request.body`,
+//! [`RequestStore`] owns the flat `$AIBOX_ROOT/requests/<request>/` collection.
+//! Each Request directory holds raw evidence — `request.json`, `request.body`,
 //! `response.body`, `response.json` after response headers arrive, and the
 //! optional `response.events.jsonl` index — plus `summary.json`, the complete
 //! list projection.
@@ -11,7 +11,7 @@
 //! `summary.json` exists from [`RequestStore::begin`] onward and is atomically
 //! checkpointed at observable milestones, so an interrupted attempt still has
 //! meaningful state and timing. A directory name is only a materialized ordering
-//! hint: a Record starts under an `active-` name and [`RequestStore::finish`]
+//! hint: a Request starts under an `active-` name and [`RequestStore::finish`]
 //! renames it after the terminal Summary is committed. Readers accept both sides
 //! of that non-transactional boundary and never infer state from the name. See
 //! `docs/sandbox.md` for the complete layout contract.
@@ -19,8 +19,8 @@
 //! ## Reads do not trust the filesystem
 //!
 //! The collection sits in the owner's aibox root, so every read confirms that an
-//! entry is a real file or directory and that a Record is still a direct child of
-//! the collection. Listing tolerates per-Record corruption while detail reads
+//! entry is a real file or directory and that a Request is still a direct child of
+//! the collection. Listing tolerates per-Request corruption while detail reads
 //! stay strict, and a [`FORMAT_VERSION`] mismatch is unsupported rather than
 //! migrated.
 
@@ -28,7 +28,7 @@
 use crate::request_assessment::diagnostic_findings;
 use crate::request_assessment::{calculate_assessment, refresh_assessment};
 use crate::request_interpretation::{ProtocolSummary, coding_agent_session_id};
-use crate::request_reporter::{AbnormalRecordEvent, RequestReporter};
+use crate::request_reporter::{AbnormalRequestEvent, RequestReporter};
 use crate::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
 use crate::tenant;
 use anyhow::{Context, Result, bail};
@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub(crate) const FORMAT_VERSION: u32 = 3;
+pub(crate) const FORMAT_VERSION: u32 = 4;
 const REQUEST_JSON: &str = "request.json";
 const REQUEST_BODY: &str = "request.body";
 const RESPONSE_JSON: &str = "response.json";
@@ -258,7 +258,7 @@ pub(crate) struct AssessmentPrimary {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct RecordAssessment {
+pub(crate) struct RequestAssessment {
     pub level: AssessmentLevel,
     pub primary: Option<AssessmentPrimary>,
     pub issue_count: usize,
@@ -277,7 +277,7 @@ pub(crate) struct AssessmentFinding {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct SummaryMetadata {
     pub schema_version: u32,
-    pub record_id: String,
+    pub request_id: String,
     pub kind: String,
     pub observed_at: String,
     pub request: SummaryRequestMetadata,
@@ -291,15 +291,15 @@ pub(crate) struct SummaryMetadata {
     pub outcome: Option<Outcome>,
     pub errors: Vec<DiagnosticMetadata>,
     pub warnings: Vec<DiagnosticMetadata>,
-    pub assessment: RecordAssessment,
+    pub assessment: RequestAssessment,
 }
 
 #[cfg(test)]
 impl SummaryMetadata {
-    pub(crate) fn test(record_id: impl Into<String>, protocol: Option<ProtocolSummary>) -> Self {
+    pub(crate) fn test(request_id: impl Into<String>, protocol: Option<ProtocolSummary>) -> Self {
         Self {
             schema_version: FORMAT_VERSION,
-            record_id: record_id.into(),
+            request_id: request_id.into(),
             kind: "summary".to_string(),
             observed_at: "2026-08-06T04:00:00Z".to_string(),
             request: SummaryRequestMetadata {
@@ -316,7 +316,7 @@ impl SummaryMetadata {
             outcome: None,
             errors: Vec::new(),
             warnings: Vec::new(),
-            assessment: RecordAssessment::active(0),
+            assessment: RequestAssessment::active(0),
         }
     }
 }
@@ -364,11 +364,11 @@ pub(crate) struct RuntimeMeasurements {
     pub request_body_duration: Option<Duration>,
 }
 
-/// Process-local handle for the flat Request Record collection.
+/// Process-local handle for the flat Request collection.
 ///
 /// Clones share the active-attempt registry and namespace lock. The registry is
 /// deliberately not reconstructed from `active-` directory names: after a
-/// process restart, a nonterminal Record is interrupted rather than active.
+/// process restart, a nonterminal Request is interrupted rather than active.
 #[derive(Clone)]
 pub(crate) struct RequestStore {
     root: PathBuf,
@@ -377,18 +377,18 @@ pub(crate) struct RequestStore {
     reporter: Option<RequestReporter>,
 }
 
-/// Shared lookup for a Record directory whose name changes at terminalization.
+/// Shared lookup for a Request directory whose name changes at terminalization.
 ///
 /// Long-lived writers must resolve the path through this handle instead of
-/// retaining the creation path from [`NewRecord::directory`].
+/// retaining the creation path from [`NewRequest::directory`].
 #[derive(Clone, Debug)]
-pub(crate) struct RecordLocator {
+pub(crate) struct RequestLocator {
     inner: Arc<Mutex<PathBuf>>,
     host: Arc<str>,
     display_host: Arc<str>,
 }
 
-impl RecordLocator {
+impl RequestLocator {
     fn new(path: PathBuf, host: String, display_host: String) -> Self {
         Self {
             inner: Arc::new(Mutex::new(path)),
@@ -406,7 +406,7 @@ impl RecordLocator {
     }
 }
 
-/// The application-visible request that opens one Request Record.
+/// The application-visible request that opens one Request.
 ///
 /// [`RequestStore::begin`] takes this as a whole because its fields are mostly
 /// interchangeable strings: `method`, `incoming_uri`, and `http_version` share a
@@ -419,8 +419,8 @@ pub(crate) struct ObservedRequest<'a> {
     pub upstream_url: Option<&'a str>,
     pub http_version: &'a str,
     pub headers: Vec<RecordedHeader>,
-    /// Supplies the safe Console host and Record directory slug; a missing hint
-    /// records `invalid`.
+    /// Supplies the safe Console host and Request directory slug; a missing hint
+    /// requests `invalid`.
     pub host_hint: Option<&'a str>,
 }
 
@@ -440,8 +440,8 @@ impl<'a> ObservedRequest<'a> {
     }
 }
 
-/// Writable state returned after a Request Record has been durably opened.
-pub(crate) struct NewRecord {
+/// Writable state returned after a Request has been durably opened.
+pub(crate) struct NewRequest {
     pub id: String,
     /// Initial `active-` path, retained for tests and diagnostics only.
     ///
@@ -449,7 +449,7 @@ pub(crate) struct NewRecord {
     /// terminalization may rename the directory.
     #[allow(dead_code)]
     pub directory: PathBuf,
-    pub locator: RecordLocator,
+    pub locator: RequestLocator,
     pub request_body: fs::File,
     pub response_body: fs::File,
     pub summary: SummaryHandle,
@@ -457,7 +457,7 @@ pub(crate) struct NewRecord {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct StoredRecord {
+pub(crate) struct StoredRequest {
     pub directory: PathBuf,
     pub sort_key: String,
     pub request: RequestMetadata,
@@ -471,14 +471,14 @@ pub(crate) struct StoredRecord {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct StoredRecordSummary {
+pub(crate) struct StoredRequestSummary {
     pub sort_key: String,
     pub summary: SummaryMetadata,
     pub active: bool,
     pub live_elapsed_ns: Option<String>,
 }
 
-impl RecordAssessment {
+impl RequestAssessment {
     pub(crate) fn active(issue_count: usize) -> Self {
         Self {
             level: AssessmentLevel::Active,
@@ -511,12 +511,12 @@ pub(crate) struct StoredEventTimings {
     pub warning: Option<String>,
 }
 
-/// Distinguishes a strict Record lookup failure from optional index degradation.
+/// Distinguishes a strict Request lookup failure from optional index degradation.
 ///
 /// The Requests module API reports lookup failures as a missing detail, while an
 /// unsafe event-index structure is a server error rather than silently omitting
 /// its diagnostics.
-pub(crate) enum RecordDetailReadError {
+pub(crate) enum RequestDetailReadError {
     Lookup(anyhow::Error),
     EventIndex(anyhow::Error),
 }
@@ -533,7 +533,7 @@ impl RequestStore {
     ) -> Result<Self> {
         tenant::ensure_real_dir(aibox_root, "aibox root")?;
         let root = aibox_root.join("requests");
-        tenant::ensure_real_dir(&root, "Request Record collection")?;
+        tenant::ensure_real_dir(&root, "Request collection")?;
         restrict_dir(&root)?;
         Ok(Self {
             root,
@@ -553,7 +553,7 @@ impl RequestStore {
         }
     }
 
-    pub fn begin(&self, observed: ObservedRequest<'_>) -> Result<(NewRecord, RequestMetadata)> {
+    pub fn begin(&self, observed: ObservedRequest<'_>) -> Result<(NewRequest, RequestMetadata)> {
         let ObservedRequest {
             method,
             incoming_uri,
@@ -563,7 +563,7 @@ impl RequestStore {
             host_hint,
         } = observed;
         let _namespace = write_unpoisoned(&self.namespace);
-        tenant::real_dir_exists(&self.root, "Request Record collection")?;
+        tenant::real_dir_exists(&self.root, "Request collection")?;
         let id = Uuid::now_v7().to_string();
         let observed_at = utc_now();
         let origin = Instant::now();
@@ -572,9 +572,9 @@ impl RequestStore {
         let host = sanitize_host(&display_host);
         let directory_name = format!("active-{}-{host}-{id}", utc_basic_at(&observed_at)?);
         let directory = self.root.join(directory_name);
-        let locator = RecordLocator::new(directory.clone(), host, display_host);
+        let locator = RequestLocator::new(directory.clone(), host, display_host);
         fs::create_dir(&directory)
-            .with_context(|| format!("create Request Record {}", directory.display()))?;
+            .with_context(|| format!("create Request {}", directory.display()))?;
         restrict_dir(&directory)?;
         lock_unpoisoned(&self.active).insert(id.clone(), origin);
 
@@ -593,7 +593,7 @@ impl RequestStore {
             };
             let file = RequestFile {
                 schema_version: FORMAT_VERSION,
-                record_id: id.clone(),
+                request_id: id.clone(),
                 kind: "request".to_string(),
                 method: request.method.clone(),
                 upstream_url: request.upstream_url.clone(),
@@ -601,7 +601,7 @@ impl RequestStore {
             };
             let summary = SummaryMetadata {
                 schema_version: FORMAT_VERSION,
-                record_id: id.clone(),
+                request_id: id.clone(),
                 kind: "summary".to_string(),
                 observed_at,
                 request: SummaryRequestMetadata {
@@ -618,7 +618,7 @@ impl RequestStore {
                 outcome: None,
                 errors: Vec::new(),
                 warnings: Vec::new(),
-                assessment: RecordAssessment::active(0),
+                assessment: RequestAssessment::active(0),
             };
             atomic_write_json(&directory, REQUEST_JSON, &file)?;
             atomic_write_json(&directory, SUMMARY_JSON, &summary)?;
@@ -635,12 +635,12 @@ impl RequestStore {
             Ok(value) => value,
             Err(error) => {
                 lock_unpoisoned(&self.active).remove(&id);
-                let _ = remove_controlled_record_dir(&directory);
+                let _ = remove_controlled_request_dir(&directory);
                 return Err(error);
             }
         };
         Ok((
-            NewRecord {
+            NewRequest {
                 id,
                 directory,
                 locator,
@@ -660,13 +660,13 @@ impl RequestStore {
     /// terminal Summary.
     pub fn update_summary(
         &self,
-        locator: &RecordLocator,
+        locator: &RequestLocator,
         handle: &SummaryHandle,
         update: impl FnOnce(&mut SummaryMetadata) -> bool,
     ) -> Result<bool> {
         let _namespace = read_unpoisoned(&self.namespace);
         let directory = locator.path();
-        validate_record_ancestor(&self.root, &directory)?;
+        validate_request_ancestor(&self.root, &directory)?;
         let mut summary = lock_unpoisoned(&handle.inner);
         if summary.terminal {
             return Ok(false);
@@ -681,13 +681,13 @@ impl RequestStore {
 
     pub fn write_response(
         &self,
-        locator: &RecordLocator,
+        locator: &RequestLocator,
         handle: &SummaryHandle,
         metadata: &ResponseMetadata,
     ) -> Result<()> {
         let _namespace = write_unpoisoned(&self.namespace);
         let directory = locator.path();
-        validate_record_ancestor(&self.root, &directory)?;
+        validate_request_ancestor(&self.root, &directory)?;
         let mut summary = lock_unpoisoned(&handle.inner);
         if !summary.terminal {
             summary.response = Some(SummaryResponseMetadata {
@@ -697,11 +697,11 @@ impl RequestStore {
             refresh_assessment(&mut summary);
             atomic_write_json(&directory, SUMMARY_JSON, &*summary)?;
         }
-        let record_id = summary.record_id.clone();
+        let request_id = summary.request_id.clone();
         drop(summary);
         let file = ResponseFile {
             schema_version: FORMAT_VERSION,
-            record_id,
+            request_id,
             kind: "response".to_string(),
             http_version: metadata.http_version.clone(),
             status: metadata.status,
@@ -710,10 +710,10 @@ impl RequestStore {
         atomic_write_json(&directory, RESPONSE_JSON, &file)
     }
 
-    pub fn create_event_index(&self, record: &NewRecord) -> Result<fs::File> {
+    pub fn create_event_index(&self, request: &NewRequest) -> Result<fs::File> {
         let _namespace = read_unpoisoned(&self.namespace);
-        let directory = record.locator.path();
-        validate_record_ancestor(&self.root, &directory)?;
+        let directory = request.locator.path();
+        validate_request_ancestor(&self.root, &directory)?;
         create_private_file(&directory.join(RESPONSE_EVENTS_JSONL))
     }
 
@@ -721,41 +721,41 @@ impl RequestStore {
     ///
     /// The supplied path is valid only for the duration of `operation`; callers
     /// must not retain it after this method returns.
-    pub fn with_record_path<R>(
+    pub fn with_request_path<R>(
         &self,
-        locator: &RecordLocator,
+        locator: &RequestLocator,
         operation: impl FnOnce(&Path) -> R,
     ) -> Result<R> {
         let _namespace = read_unpoisoned(&self.namespace);
         let directory = locator.path();
-        validate_record_ancestor(&self.root, &directory)?;
+        validate_request_ancestor(&self.root, &directory)?;
         Ok(operation(&directory))
     }
 
-    /// Commit the terminal Summary and remove the Record from the active set.
+    /// Commit the terminal Summary and remove the Request from the active set.
     ///
-    /// Repeated calls preserve the first terminal outcome. Renaming the Record
+    /// Repeated calls preserve the first terminal outcome. Renaming the Request
     /// directory to its end-time ordering key is best-effort and cannot undo a
     /// successfully committed terminal Summary.
     pub fn finish(
         &self,
-        record: &NewRecord,
+        request: &NewRequest,
         started: Instant,
         measurements: &RuntimeMeasurements,
         outcome: Outcome,
         error: Option<ErrorMetadata>,
     ) -> Result<ResultMetadata> {
         let _namespace = write_unpoisoned(&self.namespace);
-        let directory = record.locator.path();
-        validate_record_ancestor(&self.root, &directory)?;
-        let at_ns = offset_ns(record.origin);
-        let mut summary = lock_unpoisoned(&record.summary.inner);
+        let directory = request.locator.path();
+        validate_request_ancestor(&self.root, &directory)?;
+        let at_ns = offset_ns(request.origin);
+        let mut summary = lock_unpoisoned(&request.summary.inner);
         if summary.terminal {
             let snapshot = summary.clone();
             drop(summary);
             let ended_at = summary_ended_at(&snapshot);
-            self.finalize_directory_unlocked(record, &ended_at);
-            lock_unpoisoned(&self.active).remove(&record.id);
+            self.finalize_directory_unlocked(request, &ended_at);
+            lock_unpoisoned(&self.active).remove(&request.id);
             let mut result = summary_to_result(&snapshot);
             result.request_bytes = measurements.request_bytes;
             result.response_bytes = measurements.response_bytes;
@@ -779,8 +779,8 @@ impl RequestStore {
         }
         refresh_assessment(&mut summary);
         if let Err(error) = atomic_write_json(&directory, SUMMARY_JSON, &*summary) {
-            if terminal_summary_matches(&directory, &record.id, outcome, &at_ns) {
-                self.warning("request record summary sync failed", Some(&record.id));
+            if terminal_summary_matches(&directory, &request.id, outcome, &at_ns) {
+                self.warning("request summary sync failed", Some(&request.id));
             } else {
                 *summary = previous;
                 return Err(error);
@@ -789,8 +789,8 @@ impl RequestStore {
         let snapshot = summary.clone();
         drop(summary);
         let ended_at = summary_ended_at(&snapshot);
-        self.finalize_directory_unlocked(record, &ended_at);
-        lock_unpoisoned(&self.active).remove(&record.id);
+        self.finalize_directory_unlocked(request, &ended_at);
+        lock_unpoisoned(&self.active).remove(&request.id);
         let total_ms = snapshot
             .timing
             .finished_at_ns
@@ -809,10 +809,10 @@ impl RequestStore {
             error,
         };
         if let Some(reporter) = &self.reporter {
-            reporter.record_finished(AbnormalRecordEvent {
-                id: &record.id,
+            reporter.request_finished(AbnormalRequestEvent {
+                id: &request.id,
                 method: &snapshot.request.method,
-                host: &record.locator.display_host,
+                host: &request.locator.display_host,
                 outcome,
                 assessment_level: snapshot.assessment.level,
                 ended_at: &result.ended_at,
@@ -823,16 +823,17 @@ impl RequestStore {
         Ok(result)
     }
 
-    fn finalize_directory_unlocked(&self, record: &NewRecord, ended_at: &str) {
-        let directory = record.locator.path();
+    fn finalize_directory_unlocked(&self, request: &NewRequest, ended_at: &str) {
+        let directory = request.locator.path();
         let target = match utc_basic_at(ended_at) {
-            Ok(timestamp) => self
-                .root
-                .join(format!("{timestamp}-{}-{}", record.locator.host, record.id)),
+            Ok(timestamp) => self.root.join(format!(
+                "{timestamp}-{}-{}",
+                request.locator.host, request.id
+            )),
             Err(_) => {
                 self.warning(
-                    "request record directory could not be finalized",
-                    Some(&record.id),
+                    "request directory could not be finalized",
+                    Some(&request.id),
                 );
                 return;
             }
@@ -842,12 +843,12 @@ impl RequestStore {
         }
         match rename_noreplace(&directory, &target) {
             Ok(()) => {
-                record.locator.set_path(target.clone());
+                request.locator.set_path(target.clone());
                 if tenant::sync_dir(&self.root).is_err() {
-                    self.warning("request record directory sync failed", Some(&record.id));
+                    self.warning("request directory sync failed", Some(&request.id));
                 }
             }
-            Err(_) => self.warning("request record directory rename failed", Some(&record.id)),
+            Err(_) => self.warning("request directory rename failed", Some(&request.id)),
         }
     }
 
@@ -856,31 +857,28 @@ impl RequestStore {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn scan(&self) -> Result<Vec<StoredRecord>> {
+    pub fn scan(&self) -> Result<Vec<StoredRequest>> {
         let _namespace = read_unpoisoned(&self.namespace);
         self.scan_unlocked()
     }
 
-    pub fn scan_summaries(&self) -> Result<Vec<StoredRecordSummary>> {
+    pub fn scan_summaries(&self) -> Result<Vec<StoredRequestSummary>> {
         let _namespace = read_unpoisoned(&self.namespace);
         self.scan_summaries_unlocked()
     }
 
-    fn record_directories(&self) -> Result<Vec<PathBuf>> {
-        if !tenant::real_dir_exists(&self.root, "Request Record collection")? {
+    fn request_directories(&self) -> Result<Vec<PathBuf>> {
+        if !tenant::real_dir_exists(&self.root, "Request collection")? {
             return Ok(Vec::new());
         }
         let mut directories = Vec::new();
         for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read Request Record collection {}", self.root.display()))?
+            .with_context(|| format!("read Request collection {}", self.root.display()))?
         {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => {
-                    self.warning(
-                        "request record collection entry could not be inspected",
-                        None,
-                    );
+                    self.warning("request collection entry could not be inspected", None);
                     continue;
                 }
             };
@@ -888,12 +886,12 @@ impl RequestStore {
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(_) => {
-                    self.warning("request record entry could not be inspected", None);
+                    self.warning("request entry could not be inspected", None);
                     continue;
                 }
             };
             if !metadata.file_type().is_dir() {
-                self.warning("unexpected request record entry ignored", None);
+                self.warning("unexpected request entry ignored", None);
                 continue;
             }
             directories.push(path);
@@ -901,53 +899,53 @@ impl RequestStore {
         Ok(directories)
     }
 
-    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRecordSummary>> {
-        let directories = self.record_directories()?;
+    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRequestSummary>> {
+        let directories = self.request_directories()?;
         let active = lock_unpoisoned(&self.active).clone();
-        let mut records = Vec::new();
+        let mut requests = Vec::new();
         for path in directories {
-            match read_record_summary(&path, &active) {
-                Ok(record) => records.push(record),
-                Err(_) => self.warning("incomplete or invalid request record ignored", None),
+            match read_request_summary(&path, &active) {
+                Ok(request) => requests.push(request),
+                Err(_) => self.warning("incomplete or invalid request ignored", None),
             }
         }
-        records.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
-        Ok(records)
+        requests.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
+        Ok(requests)
     }
 
-    fn scan_unlocked(&self) -> Result<Vec<StoredRecord>> {
-        let directories = self.record_directories()?;
+    fn scan_unlocked(&self) -> Result<Vec<StoredRequest>> {
+        let directories = self.request_directories()?;
         let active = lock_unpoisoned(&self.active).clone();
-        let mut records = Vec::new();
+        let mut requests = Vec::new();
         for path in directories {
-            match read_record(&path, &active) {
-                Ok(record) => records.push(record),
-                Err(_) => self.warning("incomplete or invalid request record ignored", None),
+            match read_request(&path, &active) {
+                Ok(request) => requests.push(request),
+                Err(_) => self.warning("incomplete or invalid request ignored", None),
             }
         }
-        records.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
-        Ok(records)
+        requests.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
+        Ok(requests)
     }
 
-    // Explicit record operations only inspect directory names carrying the
+    // Explicit request operations only inspect directory names carrying the
     // requested UUID. A malformed matching entry is an error, while unrelated
     // collection entries retain the tolerant listing behavior above.
-    fn find_unlocked(&self, id: &str) -> Result<StoredRecord> {
+    fn find_unlocked(&self, id: &str) -> Result<StoredRequest> {
         let mut ids = HashSet::new();
         ids.insert(id);
         self.find_many_unlocked(&ids)?
             .remove(id)
-            .with_context(|| format!("Request Record not found: {id}"))
+            .with_context(|| format!("Request not found: {id}"))
     }
 
-    fn find_many_unlocked(&self, ids: &HashSet<&str>) -> Result<HashMap<String, StoredRecord>> {
-        if !tenant::real_dir_exists(&self.root, "Request Record collection")? {
+    fn find_many_unlocked(&self, ids: &HashSet<&str>) -> Result<HashMap<String, StoredRequest>> {
+        if !tenant::real_dir_exists(&self.root, "Request collection")? {
             return Ok(HashMap::new());
         }
         let active = lock_unpoisoned(&self.active).clone();
-        let mut records = HashMap::with_capacity(ids.len());
+        let mut requests = HashMap::with_capacity(ids.len());
         for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read Request Record collection {}", self.root.display()))?
+            .with_context(|| format!("read Request collection {}", self.root.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -971,26 +969,26 @@ impl RequestStore {
                 continue;
             }
             let metadata = fs::symlink_metadata(&path)
-                .with_context(|| format!("inspect selected Request Record {}", path.display()))?;
+                .with_context(|| format!("inspect selected Request {}", path.display()))?;
             if !metadata.file_type().is_dir() {
                 bail!(
-                    "selected Request Record is not a real directory: {}",
+                    "selected Request is not a real directory: {}",
                     path.display()
                 );
             }
-            let record = read_record(&path, &active)
-                .with_context(|| format!("read selected Request Record {}", path.display()))?;
-            if record.request.id != candidate {
-                bail!("selected Request Record metadata id does not match its directory name");
+            let request = read_request(&path, &active)
+                .with_context(|| format!("read selected Request {}", path.display()))?;
+            if request.request.id != candidate {
+                bail!("selected Request metadata id does not match its directory name");
             }
-            if records.insert(candidate.to_string(), record).is_some() {
-                bail!("multiple Request Record directories match id {candidate}");
+            if requests.insert(candidate.to_string(), request).is_some() {
+                bail!("multiple Request directories match id {candidate}");
             }
         }
-        Ok(records)
+        Ok(requests)
     }
 
-    pub fn find(&self, id: &str) -> Result<StoredRecord> {
+    pub fn find(&self, id: &str) -> Result<StoredRequest> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         self.find_unlocked(id)
@@ -999,29 +997,29 @@ impl RequestStore {
     pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
-        let record = self.find_unlocked(id)?;
-        self.open_record_body_unlocked(&record, response, offset)
+        let request = self.find_unlocked(id)?;
+        self.open_request_body_unlocked(&request, response, offset)
     }
 
-    pub fn open_record_body(
+    pub fn open_request_body(
         &self,
-        record: &StoredRecord,
+        request: &StoredRequest,
         response: bool,
         offset: u64,
     ) -> Result<(fs::File, u64)> {
         let _namespace = read_unpoisoned(&self.namespace);
-        let current = self.find_unlocked(&record.request.id)?;
-        self.open_record_body_unlocked(&current, response, offset)
+        let current = self.find_unlocked(&request.request.id)?;
+        self.open_request_body_unlocked(&current, response, offset)
     }
 
-    fn open_record_body_unlocked(
+    fn open_request_body_unlocked(
         &self,
-        record: &StoredRecord,
+        request: &StoredRequest,
         response: bool,
         offset: u64,
     ) -> Result<(fs::File, u64)> {
-        validate_record_ancestor(&self.root, &record.directory)?;
-        let path = record.directory.join(if response {
+        validate_request_ancestor(&self.root, &request.directory)?;
+        let path = request.directory.join(if response {
             RESPONSE_BODY
         } else {
             REQUEST_BODY
@@ -1039,10 +1037,10 @@ impl RequestStore {
     pub fn read_event_timings(&self, id: &str, after_sequence: u64) -> Result<StoredEventTimings> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
-        let record = self.find_unlocked(id)?;
-        validate_record_ancestor(&self.root, &record.directory)?;
-        let path = record.directory.join(RESPONSE_EVENTS_JSONL);
-        if !tenant::real_file_exists(&path, "Request Record SSE event index")? {
+        let request = self.find_unlocked(id)?;
+        validate_request_ancestor(&self.root, &request.directory)?;
+        let path = request.directory.join(RESPONSE_EVENTS_JSONL);
+        if !tenant::real_file_exists(&path, "Request SSE event index")? {
             return Ok(StoredEventTimings {
                 available: false,
                 partial: false,
@@ -1052,7 +1050,7 @@ impl RequestStore {
             });
         }
 
-        let file = tenant::open_real_file(&path, "Request Record SSE event index")?;
+        let file = tenant::open_real_file(&path, "Request SSE event index")?;
         let mut reader = std::io::BufReader::new(file);
         let mut events = Vec::new();
         let mut warnings = Vec::new();
@@ -1068,14 +1066,14 @@ impl RequestStore {
             let terminated = line.last() == Some(&b'\n');
             if terminated {
                 line.pop();
-            } else if record.active {
+            } else if request.active {
                 break;
             }
             if line.is_empty() {
                 continue;
             }
             match serde_json::from_slice::<EventIndexLine>(&line) {
-                Ok(entry) if event_index_entry_valid(&entry, &record.request.id) => {
+                Ok(entry) if event_index_entry_valid(&entry, &request.request.id) => {
                     next_sequence = next_sequence.max(entry.sequence.saturating_add(1));
                     if entry.sequence >= after_sequence {
                         events.push(StoredEventTiming {
@@ -1112,48 +1110,48 @@ impl RequestStore {
     pub fn find_with_event_index_warnings(
         &self,
         id: &str,
-    ) -> std::result::Result<StoredRecord, RecordDetailReadError> {
+    ) -> std::result::Result<StoredRequest, RequestDetailReadError> {
         let _namespace = read_unpoisoned(&self.namespace);
-        validate_id(id).map_err(RecordDetailReadError::Lookup)?;
-        let mut record = self
+        validate_id(id).map_err(RequestDetailReadError::Lookup)?;
+        let mut request = self
             .find_unlocked(id)
-            .map_err(RecordDetailReadError::Lookup)?;
-        append_event_index_warnings(&record.directory, &mut record.summary, record.active)
-            .map_err(RecordDetailReadError::EventIndex)?;
-        Ok(record)
+            .map_err(RequestDetailReadError::Lookup)?;
+        append_event_index_warnings(&request.directory, &mut request.summary, request.active)
+            .map_err(RequestDetailReadError::EventIndex)?;
+        Ok(request)
     }
 
     pub fn delete_ids(&self, ids: &[String]) -> Result<usize> {
         let _namespace = write_unpoisoned(&self.namespace);
         if ids.is_empty() {
-            bail!("at least one Request Record id is required");
+            bail!("at least one Request id is required");
         }
         let unique: HashSet<_> = ids.iter().collect();
         if unique.len() != ids.len() {
-            bail!("Request Record ids must not be repeated");
+            bail!("Request IDs must not be repeated");
         }
         for id in ids {
             validate_id(id)?;
         }
         let active = lock_unpoisoned(&self.active).clone();
         if ids.iter().any(|id| active.contains_key(id)) {
-            bail!("active Request Records cannot be deleted");
+            bail!("active Requests cannot be deleted");
         }
         let requested: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        let records = self.find_many_unlocked(&requested)?;
+        let requests = self.find_many_unlocked(&requested)?;
         let mut selected = Vec::new();
         for id in ids {
-            let record = records
+            let request = requests
                 .get(id)
-                .with_context(|| format!("Request Record not found: {id}"))?;
-            if record.active {
-                bail!("active Request Records cannot be deleted");
+                .with_context(|| format!("Request not found: {id}"))?;
+            if request.active {
+                bail!("active Requests cannot be deleted");
             }
-            validate_record_ancestor(&self.root, &record.directory)?;
-            selected.push(record.directory.clone());
+            validate_request_ancestor(&self.root, &request.directory)?;
+            selected.push(request.directory.clone());
         }
         for path in &selected {
-            remove_controlled_record_dir(path)?;
+            remove_controlled_request_dir(path)?;
         }
         tenant::sync_dir(&self.root)?;
         Ok(selected.len())
@@ -1163,7 +1161,7 @@ impl RequestStore {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RequestFile {
     schema_version: u32,
-    record_id: String,
+    request_id: String,
     kind: String,
     method: String,
     upstream_url: Option<String>,
@@ -1173,65 +1171,58 @@ struct RequestFile {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ResponseFile {
     schema_version: u32,
-    record_id: String,
+    request_id: String,
     kind: String,
     http_version: String,
     status: u16,
     headers: Vec<RecordedHeader>,
 }
 
-fn read_record_summary(
+fn read_request_summary(
     path: &Path,
     active: &HashMap<String, Instant>,
-) -> Result<StoredRecordSummary> {
-    let summary: SummaryMetadata =
-        read_json(&path.join(SUMMARY_JSON), "Request Record summary metadata")?;
+) -> Result<StoredRequestSummary> {
+    let summary: SummaryMetadata = read_json(&path.join(SUMMARY_JSON), "Request summary metadata")?;
     validate_schema(summary.schema_version, &summary.kind, "summary")?;
-    validate_id(&summary.record_id)?;
-    let directory = parse_record_directory_name(path, &summary.record_id)?;
+    validate_id(&summary.request_id)?;
+    let directory = parse_request_directory_name(path, &summary.request_id)?;
     validate_summary(&summary)?;
-    let live_elapsed_ns = active_elapsed_ns(summary.terminal, active, &summary.record_id);
-    Ok(StoredRecordSummary {
-        sort_key: canonical_sort_key(&summary, &directory.host, &summary.record_id)?,
+    let live_elapsed_ns = active_elapsed_ns(summary.terminal, active, &summary.request_id);
+    Ok(StoredRequestSummary {
+        sort_key: canonical_sort_key(&summary, &directory.host, &summary.request_id)?,
         summary,
         active: live_elapsed_ns.is_some(),
         live_elapsed_ns,
     })
 }
 
-fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredRecord> {
+fn read_request(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredRequest> {
     let request_file: RequestFile =
-        read_json(&path.join(REQUEST_JSON), "Request Record request metadata")?;
+        read_json(&path.join(REQUEST_JSON), "Incoming HTTP Request metadata")?;
     validate_schema(request_file.schema_version, &request_file.kind, "request")?;
-    validate_id(&request_file.record_id)?;
-    let directory = parse_record_directory_name(path, &request_file.record_id)?;
-    let summary: SummaryMetadata =
-        read_json(&path.join(SUMMARY_JSON), "Request Record summary metadata")?;
+    validate_id(&request_file.request_id)?;
+    let directory = parse_request_directory_name(path, &request_file.request_id)?;
+    let summary: SummaryMetadata = read_json(&path.join(SUMMARY_JSON), "Request summary metadata")?;
     validate_schema(summary.schema_version, &summary.kind, "summary")?;
-    if summary.record_id != request_file.record_id {
-        bail!("Request Record metadata ids do not match");
+    if summary.request_id != request_file.request_id {
+        bail!("Request metadata ids do not match");
     }
     validate_summary(&summary)?;
     if summary.request.method != request_file.method
         || summary.request.upstream_url != request_file.upstream_url
     {
-        bail!("Request Record request metadata does not match its Summary projection");
+        bail!("Incoming HTTP Request metadata does not match its Summary projection");
     }
-    let _ = tenant::real_file_exists(
-        &path.join(RESPONSE_EVENTS_JSONL),
-        "Request Record SSE event index",
-    )?;
+    let _ = tenant::real_file_exists(&path.join(RESPONSE_EVENTS_JSONL), "Request SSE event index")?;
     if tenant::real_file_exists(path.join(RESULT_JSON).as_path(), "legacy result metadata")? {
         bail!("legacy result.json is unsupported");
     }
-    let response_file: Option<ResponseFile> = optional_json(
-        &path.join(RESPONSE_JSON),
-        "Request Record response metadata",
-    )?;
+    let response_file: Option<ResponseFile> =
+        optional_json(&path.join(RESPONSE_JSON), "Upstream Response metadata")?;
     if let Some(response) = &response_file {
         validate_schema(response.schema_version, &response.kind, "response")?;
-        if response.record_id != request_file.record_id {
-            bail!("Request Record response metadata id does not match");
+        if response.request_id != request_file.request_id {
+            bail!("Upstream Response metadata id does not match");
         }
     }
     match (&summary.response, &response_file) {
@@ -1239,15 +1230,15 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
         (Some(projected), Some(response))
             if projected.status == response.status
                 && projected.http_version == response.http_version => {}
-        _ => bail!("Request Record response metadata does not match its Summary projection"),
+        _ => bail!("Upstream Response metadata does not match its Summary projection"),
     }
     let request_body_bytes =
-        regular_file_length(&path.join(REQUEST_BODY), "Request Record request body")?;
+        regular_file_length(&path.join(REQUEST_BODY), "Incoming HTTP Request body")?;
     let response_body_bytes =
-        regular_file_length(&path.join(RESPONSE_BODY), "Request Record response body")?;
+        regular_file_length(&path.join(RESPONSE_BODY), "Upstream Response body")?;
     let request = RequestMetadata {
         format_version: FORMAT_VERSION,
-        id: request_file.record_id.clone(),
+        id: request_file.request_id.clone(),
         started_at: summary.observed_at.clone(),
         method: summary.request.method.clone(),
         incoming_uri: summary.request.incoming_uri.clone(),
@@ -1275,7 +1266,7 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
         result.response_bytes = response_body_bytes;
         result
     });
-    Ok(StoredRecord {
+    Ok(StoredRequest {
         directory: path.to_path_buf(),
         sort_key: canonical_sort_key(&summary, &directory.host, &request.id)?,
         request,
@@ -1292,12 +1283,12 @@ fn read_record(path: &Path, active: &HashMap<String, Instant>) -> Result<StoredR
 fn active_elapsed_ns(
     terminal: bool,
     active: &HashMap<String, Instant>,
-    record_id: &str,
+    request_id: &str,
 ) -> Option<String> {
     if terminal {
         None
     } else {
-        active.get(record_id).copied().map(offset_ns)
+        active.get(request_id).copied().map(offset_ns)
     }
 }
 
@@ -1306,31 +1297,31 @@ fn validate_schema(version: u32, kind: &str, expected: &str) -> Result<()> {
         bail!("unsupported Request schema version {version}");
     }
     if kind != expected {
-        bail!("Request Record metadata kind is not {expected}");
+        bail!("Request metadata kind is not {expected}");
     }
     Ok(())
 }
 
 fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
     if summary.terminal != summary.outcome.is_some() {
-        bail!("Request Record summary terminal and outcome fields are inconsistent");
+        bail!("Request summary terminal and outcome fields are inconsistent");
     }
     if summary.terminal && summary.timing.finished_at_ns.is_none() {
-        bail!("terminal Request Record summary has no finished timing");
+        bail!("terminal Request summary has no finished timing");
     }
     if summary.request.method.is_empty() || summary.request.http_version.is_empty() {
-        bail!("Request Record summary request projection is incomplete");
+        bail!("Request summary request projection is incomplete");
     }
     if summary
         .protocol
         .as_ref()
         .is_some_and(|protocol| protocol.token_usage.is_some() && !protocol.response_terminal)
     {
-        bail!("Request Record protocol summary has final Token Usage before a terminal response");
+        bail!("Request protocol summary has final Token Usage before a terminal response");
     }
     let expected_assessment = calculate_assessment(summary, !summary.terminal, false);
     if summary.assessment != expected_assessment {
-        bail!("Request Record summary assessment is inconsistent with its evidence");
+        bail!("Request summary assessment is inconsistent with its evidence");
     }
     let protocol_offsets = summary.protocol.as_ref().into_iter().flat_map(|protocol| {
         std::iter::once(protocol.first_token_at_ns.as_deref())
@@ -1369,7 +1360,7 @@ fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
     .chain(protocol_offsets)
     {
         if value.parse::<u128>().is_err() {
-            bail!("Request Record summary timing offset is not a decimal string");
+            bail!("Request summary timing offset is not a decimal string");
         }
     }
     Ok(())
@@ -1401,13 +1392,14 @@ fn summary_to_result(summary: &SummaryMetadata) -> ResultMetadata {
 }
 
 fn terminal_summary_matches(path: &Path, id: &str, outcome: Outcome, finished_at_ns: &str) -> bool {
-    read_json::<SummaryMetadata>(&path.join(SUMMARY_JSON), "Request Record summary metadata")
-        .is_ok_and(|summary| {
-            summary.record_id == id
+    read_json::<SummaryMetadata>(&path.join(SUMMARY_JSON), "Request summary metadata").is_ok_and(
+        |summary| {
+            summary.request_id == id
                 && summary.terminal
                 && summary.outcome == Some(outcome)
                 && summary.timing.finished_at_ns.as_deref() == Some(finished_at_ns)
-        })
+        },
+    )
 }
 
 fn summary_ended_at(summary: &SummaryMetadata) -> String {
@@ -1455,7 +1447,7 @@ fn error_phase(kind: ErrorKind) -> &'static str {
 #[derive(Deserialize)]
 struct EventIndexLine {
     schema_version: u32,
-    record_id: String,
+    request_id: String,
     kind: String,
     sequence: u64,
     body_start: u64,
@@ -1464,9 +1456,9 @@ struct EventIndexLine {
     completed_at_ns: String,
 }
 
-fn event_index_entry_valid(entry: &EventIndexLine, record_id: &str) -> bool {
+fn event_index_entry_valid(entry: &EventIndexLine, request_id: &str) -> bool {
     entry.schema_version == FORMAT_VERSION
-        && entry.record_id == record_id
+        && entry.request_id == request_id
         && entry.kind == "sse_event"
         && entry.body_start <= entry.body_end
         && entry.first_arrival_at_ns.parse::<u128>().is_ok()
@@ -1479,10 +1471,10 @@ fn append_event_index_warnings(
     active: bool,
 ) -> Result<()> {
     let index_path = path.join(RESPONSE_EVENTS_JSONL);
-    if !tenant::real_file_exists(&index_path, "Request Record SSE event index")? {
+    if !tenant::real_file_exists(&index_path, "Request SSE event index")? {
         return Ok(());
     }
-    let file = tenant::open_real_file(&index_path, "Request Record SSE event index")?;
+    let file = tenant::open_real_file(&index_path, "Request SSE event index")?;
     let mut reader = std::io::BufReader::new(file);
     let mut line_number = 0usize;
     loop {
@@ -1513,7 +1505,7 @@ fn append_event_index_warnings(
             continue;
         }
         let warning = match serde_json::from_slice::<EventIndexLine>(&line) {
-            Ok(entry) if event_index_entry_valid(&entry, &summary.record_id) => {
+            Ok(entry) if event_index_entry_valid(&entry, &summary.request_id) => {
                 let _ = entry.sequence;
                 continue;
             }
@@ -1567,44 +1559,44 @@ fn validate_regular_file(path: &Path, kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_record_ancestor(root: &Path, directory: &Path) -> Result<()> {
+fn validate_request_ancestor(root: &Path, directory: &Path) -> Result<()> {
     if directory.parent() != Some(root) {
-        bail!("Request Record is not a direct child of the Request collection");
+        bail!("Request is not a direct child of the Request collection");
     }
-    if !tenant::real_dir_exists(root, "Request Record collection")?
-        || !tenant::real_dir_exists(directory, "Request Record")?
+    if !tenant::real_dir_exists(root, "Request collection")?
+        || !tenant::real_dir_exists(directory, "Request")?
     {
-        bail!("Request Record disappeared: {}", directory.display());
+        bail!("Request disappeared: {}", directory.display());
     }
     Ok(())
 }
 
 fn validate_id(id: &str) -> Result<()> {
-    let parsed = Uuid::parse_str(id).with_context(|| format!("invalid Request Record id: {id}"))?;
+    let parsed = Uuid::parse_str(id).with_context(|| format!("invalid Request id: {id}"))?;
     if parsed.get_version_num() != 7 {
-        bail!("Request Record id is not UUID v7: {id}");
+        bail!("Request id is not UUID v7: {id}");
     }
     Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RecordDirectoryName {
+struct RequestDirectoryName {
     host: String,
 }
 
-fn parse_record_directory_name(path: &Path, id: &str) -> Result<RecordDirectoryName> {
+fn parse_request_directory_name(path: &Path, id: &str) -> Result<RequestDirectoryName> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .context("Request Record directory name is not valid UTF-8")?;
+        .context("Request directory name is not valid UTF-8")?;
     let suffix = format!("-{id}");
     let prefix = name
         .strip_suffix(&suffix)
-        .context("Request Record directory name does not match its UUID")?;
+        .context("Request directory name does not match its UUID")?;
     let prefix = prefix.strip_prefix("active-").unwrap_or(prefix);
     let (timestamp, host) = prefix
         .split_once('-')
-        .context("Request Record directory name has no host slug")?;
+        .context("Request directory name has no host slug")?;
     let timestamp = timestamp.as_bytes();
     let timestamp_is_valid = timestamp.len() == 20
         && timestamp[8] == b'T'
@@ -1621,9 +1613,9 @@ fn parse_record_directory_name(path: &Path, id: &str) -> Result<RecordDirectoryN
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
         });
     if !timestamp_is_valid || !host_is_valid {
-        bail!("Request Record directory name is not structurally valid");
+        bail!("Request directory name is not structurally valid");
     }
-    Ok(RecordDirectoryName {
+    Ok(RequestDirectoryName {
         host: host.to_string(),
     })
 }
@@ -1652,7 +1644,7 @@ fn create_private_file(path: &Path) -> Result<fs::File> {
     }
     let file = options
         .open(path)
-        .with_context(|| format!("create private Request Record file {}", path.display()))?;
+        .with_context(|| format!("create private Request file {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1666,15 +1658,14 @@ fn atomic_write_json(path: &Path, name: &str, value: &impl Serialize) -> Result<
     let final_path = path.join(name);
     let result = (|| -> Result<()> {
         let mut file = create_private_file(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, value).with_context(|| {
-            format!("serialize Request Record metadata {}", final_path.display())
-        })?;
+        serde_json::to_writer_pretty(&mut file, value)
+            .with_context(|| format!("serialize Request metadata {}", final_path.display()))?;
         file.write_all(b"\n")?;
         file.flush()?;
         file.sync_all()?;
         fs::rename(&temporary, &final_path).with_context(|| {
             format!(
-                "publish Request Record metadata {} as {}",
+                "publish Request metadata {} as {}",
                 temporary.display(),
                 final_path.display()
             )
@@ -1687,18 +1678,18 @@ fn atomic_write_json(path: &Path, name: &str, value: &impl Serialize) -> Result<
     result
 }
 
-fn remove_controlled_record_dir(path: &Path) -> Result<()> {
-    let files = validate_controlled_record_dir(path)?;
+fn remove_controlled_request_dir(path: &Path) -> Result<()> {
+    let files = validate_controlled_request_dir(path)?;
     for file in files {
         fs::remove_file(&file)
-            .with_context(|| format!("delete Request Record file {}", file.display()))?;
+            .with_context(|| format!("delete Request file {}", file.display()))?;
     }
-    fs::remove_dir(path).with_context(|| format!("delete Request Record {}", path.display()))
+    fs::remove_dir(path).with_context(|| format!("delete Request {}", path.display()))
 }
 
-fn validate_controlled_record_dir(path: &Path) -> Result<Vec<PathBuf>> {
-    if !tenant::real_dir_exists(path, "Request Record")? {
-        bail!("Request Record disappeared: {}", path.display());
+fn validate_controlled_request_dir(path: &Path) -> Result<Vec<PathBuf>> {
+    if !tenant::real_dir_exists(path, "Request")? {
+        bail!("Request disappeared: {}", path.display());
     }
     let mut files = Vec::new();
     for entry in fs::read_dir(path)? {
@@ -1706,7 +1697,7 @@ fn validate_controlled_record_dir(path: &Path) -> Result<Vec<PathBuf>> {
         let metadata = fs::symlink_metadata(entry.path())?;
         if !metadata.file_type().is_file() {
             bail!(
-                "refusing to delete Request Record with unsafe entry: {}",
+                "refusing to delete Request with unsafe entry: {}",
                 entry.path().display()
             );
         }
@@ -1729,7 +1720,7 @@ pub(crate) fn utc_now() -> String {
     let format = time::format_description::parse_borrowed::<1>(
         "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z",
     )
-    .expect("static Request Record timestamp format is valid");
+    .expect("static Request timestamp format is valid");
     OffsetDateTime::now_utc()
         .format(&format)
         .unwrap_or_else(|_| "1970-01-01T00:00:00.000000000Z".to_string())
@@ -1746,14 +1737,14 @@ pub(crate) fn anchored_at(observed_at: &str, offset_ns: &str) -> Option<String> 
 
 fn utc_basic_at(timestamp: &str) -> Result<String> {
     let observed = OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339)
-        .with_context(|| format!("parse Request Record timestamp {timestamp}"))?;
+        .with_context(|| format!("parse Request timestamp {timestamp}"))?;
     let format = time::format_description::parse_borrowed::<1>(
         "[year][month][day]T[hour][minute][second].[subsecond digits:3]Z",
     )
     .expect("static UTC filename format is valid");
     observed
         .format(&format)
-        .context("format Request Record filename timestamp")
+        .context("format Request filename timestamp")
 }
 
 fn rename_noreplace(source: &Path, target: &Path) -> Result<()> {
@@ -1781,7 +1772,7 @@ fn rename_noreplace(source: &Path, target: &Path) -> Result<()> {
     )))]
     {
         let _ = (source, target);
-        bail!("atomic no-clobber Request Record rename is unsupported on this platform")
+        bail!("atomic no-clobber Request rename is unsupported on this platform")
     }
 }
 

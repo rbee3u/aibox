@@ -33,15 +33,7 @@ impl BuildCache {
     }
 }
 
-/// Build `dockerfile` into `image` using `cache`.
-///
-/// The Dockerfile is piped in on stdin with an empty temporary build context.
-/// It must therefore be context-free and cannot use `COPY` or `ADD` for local
-/// sources.
-pub fn build_image(dockerfile: &str, image: &str, cache: BuildCache) -> Result<()> {
-    build_image_with(&DockerCli::system(), dockerfile, image, cache)
-}
-
+#[cfg(test)]
 pub(crate) fn build_image_with(
     docker: &DockerCli,
     dockerfile: &str,

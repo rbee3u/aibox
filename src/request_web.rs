@@ -1,27 +1,28 @@
 //! Embedded Console assets and the Requests module JSON/body API.
 //!
-//! List handlers read only the materialized Request Record Summary while detail
+//! List handlers read only the materialized Request Summary while detail
 //! reads stay strict over raw metadata, following
-//! `docs/adr/0009-request-record-evidence-and-projections.md`. Bodies stream from
+//! `docs/adr/0009-request-evidence-and-projections.md`. Bodies stream from
 //! disk as recorded; the decoded variants only undo a recorded content coding.
-//! Nothing here redacts, truncates, or expires a Request Record.
+//! Nothing here redacts, truncates, or expires a Request.
 
 use crate::request::AppState;
 use crate::request_assessment::{diagnostic_findings, effective_assessment};
 use crate::request_interpretation::{
     BodyContentCoding, ProtocolSummary, body_content_coding, timeline_end_at_ns,
 };
-use crate::request_proxy;
 use crate::request_store::{
-    AssessmentFinding, AssessmentLevel, AssessmentSource, FORMAT_VERSION, RecordAssessment,
-    RecordDetailReadError, RecordedHeader, RequestMetadata, RequestStore, ResponseMetadata,
-    ResponseSource, ResultMetadata, StoredRecordSummary, SummaryMetadata, anchored_at,
+    AssessmentFinding, AssessmentLevel, AssessmentSource, FORMAT_VERSION, RecordedHeader,
+    RequestAssessment, RequestDetailReadError, RequestMetadata, RequestStore, ResponseMetadata,
+    ResponseSource, ResultMetadata, StoredRequestSummary, SummaryMetadata, anchored_at,
 };
 use anyhow::Context as _;
 use axum::Json;
+use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{HeaderValue, Response, StatusCode, header};
+use axum::routing::{get, post};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -35,6 +36,34 @@ const HTML: &str = include_str!("../assets/console.html");
 const CSS: &str = include_str!("../assets/console.css");
 const JS: &str = include_str!("../assets/console.js");
 const CSP_NONCE_PLACEHOLDER: &str = "__AIBOX_CSP_NONCE__";
+
+pub(crate) fn api_router<S>() -> Router<S>
+where
+    AppState: FromRef<S>,
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/_aibox/api/requests", get(list_requests))
+        .route("/_aibox/api/requests/delete", post(delete_requests))
+        .route("/_aibox/api/requests/{id}", get(request_detail))
+        .route("/_aibox/api/requests/{id}/request-body", get(request_body))
+        .route(
+            "/_aibox/api/requests/{id}/response-body",
+            get(response_body),
+        )
+        .route(
+            "/_aibox/api/requests/{id}/request-body-decoded",
+            get(decoded_request_body),
+        )
+        .route(
+            "/_aibox/api/requests/{id}/response-body-decoded",
+            get(decoded_response_body),
+        )
+        .route(
+            "/_aibox/api/requests/{id}/response-event-timings",
+            get(response_event_timings),
+        )
+}
 
 pub(crate) async fn index(csp_nonce: &str) -> Response<Body> {
     content(
@@ -50,10 +79,6 @@ pub(crate) async fn css() -> Response<Body> {
 
 pub(crate) async fn js() -> Response<Body> {
     content(StatusCode::OK, "application/javascript; charset=utf-8", JS)
-}
-
-pub(crate) async fn not_found() -> Response<Body> {
-    request_proxy::bare_error(StatusCode::NOT_FOUND, "Requests module route not found")
 }
 
 fn content(
@@ -75,7 +100,7 @@ pub(crate) struct ListQuery {
 }
 
 #[derive(Serialize)]
-struct RecordSummary {
+struct RequestSummary {
     id: String,
     started_at: String,
     ended_at: Option<String>,
@@ -88,63 +113,63 @@ struct RecordSummary {
     state: String,
     total_ms: Option<u64>,
     protocol: Option<ProtocolSummary>,
-    assessment: RecordAssessment,
+    assessment: RequestAssessment,
 }
 
 #[derive(Serialize)]
-struct RecordList {
-    records: Vec<RecordSummary>,
+struct RequestList {
+    requests: Vec<RequestSummary>,
     total: usize,
     deletable_count: usize,
     has_next: bool,
 }
 
-pub(crate) async fn list_records(
+pub(crate) async fn list_requests(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Response<Body> {
     let store = state.store.clone();
-    match tokio::task::spawn_blocking(move || list_records_inner(&store, query.page)).await {
+    match tokio::task::spawn_blocking(move || list_requests_inner(&store, query.page)).await {
         Ok(Ok(value)) => json_response(StatusCode::OK, &value),
         Ok(Err(error)) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("scan Request Records: {error}"),
+            &format!("scan Requests: {error}"),
         ),
     }
 }
 
-fn list_records_inner(store: &RequestStore, page: Option<u64>) -> anyhow::Result<RecordList> {
+fn list_requests_inner(store: &RequestStore, page: Option<u64>) -> anyhow::Result<RequestList> {
     let page = page.unwrap_or(1);
     if page == 0 {
-        anyhow::bail!("Request Record page must be a positive integer");
+        anyhow::bail!("Request page must be a positive integer");
     }
     let start = usize::try_from(page - 1)
         .ok()
         .and_then(|page| page.checked_mul(PAGE_SIZE))
-        .context("Request Record page is too large")?;
-    let records = store.scan_summaries()?;
-    let total = records.len();
-    let deletable_count = records.iter().filter(|record| !record.active).count();
+        .context("Request page is too large")?;
+    let requests = store.scan_summaries()?;
+    let total = requests.len();
+    let deletable_count = requests.iter().filter(|request| !request.active).count();
     let has_next = start
         .checked_add(PAGE_SIZE)
         .is_some_and(|next| next < total);
-    let records = records
+    let requests = requests
         .iter()
         .skip(start)
         .take(PAGE_SIZE)
         .map(summary)
         .collect();
-    Ok(RecordList {
-        records,
+    Ok(RequestList {
+        requests,
         total,
         deletable_count,
         has_next,
     })
 }
 
-/// Name the display state of a Record. A terminal Record carries an Outcome,
-/// so a non-active Record without one was interrupted before it finished.
+/// Name the display state of a Request. A terminal Request carries an Outcome,
+/// so a non-active Request without one was interrupted before it finished.
 fn state_name(active: bool, terminal: bool) -> &'static str {
     if active {
         "active"
@@ -155,11 +180,11 @@ fn state_name(active: bool, terminal: bool) -> &'static str {
     }
 }
 
-fn summary(record: &StoredRecordSummary) -> RecordSummary {
-    let value = &record.summary;
-    let state = state_name(record.active, value.outcome.is_some());
+fn summary(request: &StoredRequestSummary) -> RequestSummary {
+    let value = &request.summary;
+    let state = state_name(request.active, value.outcome.is_some());
     let outcome = match value.outcome {
-        Some(outcome) if !record.active => outcome.as_str(),
+        Some(outcome) if !request.active => outcome.as_str(),
         _ => state,
     };
     let ended_at = value
@@ -172,8 +197,8 @@ fn summary(record: &StoredRecordSummary) -> RecordSummary {
                 .and_then(|offset| anchored_at(&value.observed_at, offset))
         })
         .flatten();
-    RecordSummary {
-        id: value.record_id.clone(),
+    RequestSummary {
+        id: value.request_id.clone(),
         started_at: value.observed_at.clone(),
         ended_at,
         method: value.request.method.clone(),
@@ -186,8 +211,8 @@ fn summary(record: &StoredRecordSummary) -> RecordSummary {
             .map(|response| response.http_version.clone()),
         outcome: outcome.to_string(),
         state: state.to_string(),
-        total_ms: if record.active {
-            record.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms)
+        total_ms: if request.active {
+            request.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms)
         } else {
             value
                 .timing
@@ -196,7 +221,7 @@ fn summary(record: &StoredRecordSummary) -> RecordSummary {
                 .and_then(elapsed_ns_ms)
         },
         protocol: value.protocol.clone(),
-        assessment: effective_assessment(value, record.active),
+        assessment: effective_assessment(value, request.active),
     }
 }
 
@@ -230,12 +255,12 @@ impl From<ResponseMetadata> for ResponseDetail {
 }
 
 #[derive(Serialize)]
-struct RecordDetail {
+struct RequestDetail {
     request: RequestMetadata,
     response: Option<ResponseDetail>,
     result: Option<ResultMetadata>,
     summary: SummaryMetadata,
-    assessment: RecordAssessment,
+    assessment: RequestAssessment,
     diagnostics: DiagnosticGroups,
     state: String,
     request_body_bytes: u64,
@@ -274,7 +299,7 @@ fn diagnostic_groups(summary: &SummaryMetadata, interrupted: bool) -> Diagnostic
     groups
 }
 
-pub(crate) async fn record_detail(
+pub(crate) async fn request_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
@@ -283,21 +308,21 @@ pub(crate) async fn record_detail(
     let lookup =
         tokio::task::spawn_blocking(move || store.find_with_event_index_warnings(&lookup_id)).await;
     match lookup {
-        Ok(Ok(record)) => {
-            let terminal = record.result.is_some();
-            let state = state_name(record.active, terminal);
-            let live_total_ms = record.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
-            let interrupted = !record.active && !terminal;
-            let assessment = effective_assessment(&record.summary, record.active);
-            let diagnostics = diagnostic_groups(&record.summary, interrupted);
-            let timeline_end_at_ns = timeline_end_at_ns(&record, record.live_elapsed_ns.clone());
-            let response_headers_at = record
+        Ok(Ok(request)) => {
+            let terminal = request.result.is_some();
+            let state = state_name(request.active, terminal);
+            let live_total_ms = request.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
+            let interrupted = !request.active && !terminal;
+            let assessment = effective_assessment(&request.summary, request.active);
+            let diagnostics = diagnostic_groups(&request.summary, interrupted);
+            let timeline_end_at_ns = timeline_end_at_ns(&request, request.live_elapsed_ns.clone());
+            let response_headers_at = request
                 .summary
                 .timing
                 .upstream_response_headers_at_ns
                 .as_deref()
-                .and_then(|offset| anchored_at(&record.summary.observed_at, offset));
-            let response = record.response.map(|metadata| {
+                .and_then(|offset| anchored_at(&request.summary.observed_at, offset));
+            let response = request.response.map(|metadata| {
                 let mut detail = ResponseDetail::from(metadata);
                 if let Some(headers_at) = &response_headers_at {
                     detail.headers_at = headers_at.clone();
@@ -306,30 +331,30 @@ pub(crate) async fn record_detail(
             });
             json_response(
                 StatusCode::OK,
-                &RecordDetail {
-                    request: record.request,
+                &RequestDetail {
+                    request: request.request,
                     response,
-                    result: record.result,
-                    summary: record.summary,
+                    result: request.result,
+                    summary: request.summary,
                     assessment,
                     diagnostics,
                     state: state.to_string(),
-                    request_body_bytes: record.request_body_bytes,
-                    response_body_bytes: record.response_body_bytes,
+                    request_body_bytes: request.request_body_bytes,
+                    response_body_bytes: request.response_body_bytes,
                     live_total_ms,
                     timeline_end_at_ns,
                 },
             )
         }
-        Ok(Err(RecordDetailReadError::Lookup(error))) => {
+        Ok(Err(RequestDetailReadError::Lookup(error))) => {
             json_error(StatusCode::NOT_FOUND, &error.to_string())
         }
-        Ok(Err(RecordDetailReadError::EventIndex(error))) => {
+        Ok(Err(RequestDetailReadError::EventIndex(error))) => {
             json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
         }
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("read Request Record detail: {error}"),
+            &format!("read Request detail: {error}"),
         ),
     }
 }
@@ -421,30 +446,30 @@ async fn body_response(
 async fn decoded_body_response(store: &RequestStore, id: &str, response: bool) -> Response<Body> {
     let lookup_store = store.clone();
     let lookup_id = id.to_string();
-    let record = match tokio::task::spawn_blocking(move || lookup_store.find(&lookup_id)).await {
-        Ok(Ok(record)) => record,
+    let request = match tokio::task::spawn_blocking(move || lookup_store.find(&lookup_id)).await {
+        Ok(Ok(request)) => request,
         Ok(Err(error)) => return json_error(StatusCode::NOT_FOUND, &error.to_string()),
         Err(error) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("read Request Record for body decoding: {error}"),
+                &format!("read Request for body decoding: {error}"),
             );
         }
     };
     let completed = if response {
-        record
+        request
             .summary
             .timing
             .upstream_response_body_completed_at_ns
             .is_some()
     } else {
-        record
+        request
             .summary
             .timing
             .upstream_request_body_completed_at_ns
             .is_some()
     };
-    if record.active && !completed {
+    if request.active && !completed {
         return json_error(
             StatusCode::CONFLICT,
             if response {
@@ -455,13 +480,13 @@ async fn decoded_body_response(store: &RequestStore, id: &str, response: bool) -
         );
     }
     let headers = if response {
-        record
+        request
             .response
             .as_ref()
             .map(|metadata| metadata.headers.as_slice())
             .unwrap_or_default()
     } else {
-        &record.request.headers
+        &request.request.headers
     };
     let coding = match body_content_coding(headers) {
         Ok(coding) => coding,
@@ -469,7 +494,7 @@ async fn decoded_body_response(store: &RequestStore, id: &str, response: bool) -
     };
     let body_store = store.clone();
     let opened =
-        tokio::task::spawn_blocking(move || body_store.open_record_body(&record, response, 0))
+        tokio::task::spawn_blocking(move || body_store.open_request_body(&request, response, 0))
             .await;
     let (file, length) = match opened {
         Ok(Ok(value)) => value,
@@ -591,7 +616,7 @@ pub(crate) async fn response_event_timings(
         Ok(Err(error)) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("read Request Record SSE event timings: {error}"),
+            &format!("read Request SSE event timings: {error}"),
         ),
     }
 }
@@ -601,7 +626,7 @@ pub(crate) struct DeleteRequest {
     ids: Vec<String>,
 }
 
-pub(crate) async fn delete_records(
+pub(crate) async fn delete_requests(
     State(state): State<AppState>,
     Json(request): Json<DeleteRequest>,
 ) -> Response<Body> {
@@ -619,7 +644,7 @@ pub(crate) async fn delete_records(
         }
         Err(error) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("delete Request Records: {error}"),
+            &format!("delete Requests: {error}"),
         ),
     }
 }
@@ -650,23 +675,23 @@ mod tests {
     use std::io::Write as _;
     use uuid::Uuid;
 
-    fn finished_record(
+    fn finished_request(
         store: &RequestStore,
         incoming_uri: &str,
         request_body: &[u8],
         response_body: &[u8],
     ) -> String {
-        let (mut record, _) = store
+        let (mut request, _) = store
             .begin(ObservedRequest::test("POST", incoming_uri))
             .unwrap();
-        record.request_body.write_all(request_body).unwrap();
-        record.request_body.flush().unwrap();
-        record.response_body.write_all(response_body).unwrap();
-        record.response_body.flush().unwrap();
-        let id = record.id.clone();
+        request.request_body.write_all(request_body).unwrap();
+        request.request_body.flush().unwrap();
+        request.response_body.write_all(response_body).unwrap();
+        request.response_body.flush().unwrap();
+        let id = request.id.clone();
         store
             .finish(
-                &record,
+                &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Rejected,
@@ -689,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn record_summaries_distinguish_active_interrupted_and_completed_state() {
+    fn request_summaries_distinguish_active_interrupted_and_completed_state() {
         let temp = tempfile::tempdir().unwrap();
         let first_process = RequestStore::open(temp.path()).unwrap();
         let (interrupted, _) = first_process
@@ -715,7 +740,7 @@ mod tests {
         let (active, _) = store
             .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
-        let list = list_records_inner(&store, None).unwrap();
+        let list = list_requests_inner(&store, None).unwrap();
 
         assert_eq!(list.total, 3);
         assert_eq!(list.deletable_count, 2);
@@ -730,30 +755,34 @@ mod tests {
                 false,
             ),
         ] {
-            let record = list.records.iter().find(|record| record.id == id).unwrap();
+            let request = list
+                .requests
+                .iter()
+                .find(|request| request.id == id)
+                .unwrap();
             assert_eq!(
-                (record.state.as_str(), record.outcome.as_str()),
+                (request.state.as_str(), request.outcome.as_str()),
                 (state, outcome)
             );
-            assert_eq!(record.total_ms.is_some(), has_duration);
-            assert_eq!(record.ended_at.is_some(), has_end_time);
-            assert!(record.http_version.is_none());
-            assert!(record.protocol.is_some());
+            assert_eq!(request.total_ms.is_some(), has_duration);
+            assert_eq!(request.ended_at.is_some(), has_end_time);
+            assert!(request.http_version.is_none());
+            assert!(request.protocol.is_some());
             let expected_assessment = match state {
                 "active" => "active",
                 "interrupted" => "warning",
                 _ => "error",
             };
             assert_eq!(
-                serde_json::to_value(&record.assessment).unwrap()["level"],
+                serde_json::to_value(&request.assessment).unwrap()["level"],
                 expected_assessment
             );
         }
 
         let completed_summary = list
-            .records
+            .requests
             .iter()
-            .find(|record| record.id == completed_id)
+            .find(|request| request.id == completed_id)
             .unwrap();
         let completed_detail = store.find(&completed_id).unwrap();
         assert_eq!(
@@ -790,11 +819,11 @@ mod tests {
                 None,
             )
             .unwrap();
-        let responded_summary = list_records_inner(&store, None)
+        let responded_summary = list_requests_inner(&store, None)
             .unwrap()
-            .records
+            .requests
             .into_iter()
-            .find(|record| record.id == responded.id)
+            .find(|request| request.id == responded.id)
             .unwrap();
         assert_eq!(responded_summary.status, Some(204));
         assert_eq!(responded_summary.http_version.as_deref(), Some("HTTP/2"));
@@ -807,7 +836,7 @@ mod tests {
         let state = AppState::for_test(temp.path()).unwrap();
         let mut ids = Vec::new();
         for (status, provider_error) in [(401, false), (200, true)] {
-            let (record, _) = state
+            let (request, _) = state
                 .store
                 .begin(ObservedRequest {
                     upstream_url: Some("https://api.example.test/v1/responses"),
@@ -818,8 +847,8 @@ mod tests {
             state
                 .store
                 .write_response(
-                    &record.locator,
-                    &record.summary,
+                    &request.locator,
+                    &request.summary,
                     &ResponseMetadata {
                         format_version: FORMAT_VERSION,
                         source: ResponseSource::Upstream,
@@ -833,7 +862,7 @@ mod tests {
             if provider_error {
                 state
                     .store
-                    .update_summary(&record.locator, &record.summary, |summary| {
+                    .update_summary(&request.locator, &request.summary, |summary| {
                         summary
                             .protocol
                             .as_mut()
@@ -853,19 +882,23 @@ mod tests {
             state
                 .store
                 .finish(
-                    &record,
+                    &request,
                     std::time::Instant::now(),
                     &RuntimeMeasurements::default(),
                     Outcome::Completed,
                     None,
                 )
                 .unwrap();
-            ids.push((record.id, status, provider_error));
+            ids.push((request.id, status, provider_error));
         }
 
-        let list = list_records_inner(&state.store, None).unwrap();
+        let list = list_requests_inner(&state.store, None).unwrap();
         for (id, status, provider_error) in ids {
-            let row = list.records.iter().find(|record| record.id == id).unwrap();
+            let row = list
+                .requests
+                .iter()
+                .find(|request| request.id == id)
+                .unwrap();
             assert_eq!(row.status, Some(status));
             assert_eq!(row.assessment.level, AssessmentLevel::Error);
             assert_eq!(
@@ -877,7 +910,7 @@ mod tests {
                 }
             );
 
-            let response = record_detail(State(state.clone()), Path(id)).await;
+            let response = request_detail(State(state.clone()), Path(id)).await;
             assert_eq!(response.status(), StatusCode::OK);
             let detail = response_json(response).await;
             assert_eq!(detail["response"]["status"], status);
@@ -901,31 +934,31 @@ mod tests {
     }
 
     #[test]
-    fn record_list_returns_persisted_protocol_without_interpreting_bodies() {
+    fn request_list_returns_persisted_protocol_without_interpreting_bodies() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (mut record, _) = store
+        let (mut request, _) = store
             .begin(ObservedRequest {
                 upstream_url: Some("https://example.test/v1/responses"),
                 host_hint: Some("example.test"),
                 ..ObservedRequest::test("POST", "/https://example.test/v1/responses")
             })
             .unwrap();
-        record.request_body.write_all(b"not request json").unwrap();
-        record
+        request.request_body.write_all(b"not request json").unwrap();
+        request
             .response_body
             .write_all(b"not response json")
             .unwrap();
         store
-            .update_summary(&record.locator, &record.summary, |summary| {
+            .update_summary(&request.locator, &request.summary, |summary| {
                 summary.protocol.as_mut().unwrap().model.requested =
                     Some("persisted-list-model".to_string());
                 true
             })
             .unwrap();
 
-        let list = list_records_inner(&store, None).unwrap();
-        let protocol = list.records[0].protocol.as_ref().unwrap();
+        let list = list_requests_inner(&store, None).unwrap();
+        let protocol = list.requests[0].protocol.as_ref().unwrap();
         assert_eq!(
             protocol.model.requested.as_deref(),
             Some("persisted-list-model")
@@ -934,40 +967,40 @@ mod tests {
     }
 
     #[test]
-    fn record_list_does_not_parse_the_optional_event_timing_index() {
+    fn request_list_does_not_parse_the_optional_event_timing_index() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (request, _) = store
             .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
-        let mut index = store.create_event_index(&record).unwrap();
+        let mut index = store.create_event_index(&request).unwrap();
         writeln!(index, "not json").unwrap();
         index.flush().unwrap();
 
-        let list = list_records_inner(&store, None).unwrap();
-        assert_eq!(list.records.len(), 1);
+        let list = list_requests_inner(&store, None).unwrap();
+        assert_eq!(list.requests.len(), 1);
     }
 
     #[tokio::test]
     async fn active_durations_do_not_depend_on_the_wall_clock_anchor() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let (record, _) = state
+        let (request, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
         state
             .store
-            .update_summary(&record.locator, &record.summary, |summary| {
+            .update_summary(&request.locator, &request.summary, |summary| {
                 summary.observed_at = "9999-01-01T00:00:00Z".to_string();
                 true
             })
             .unwrap();
 
-        let list = list_records_inner(&state.store, None).unwrap();
-        let list_total_ms = list.records[0].total_ms.unwrap();
+        let list = list_requests_inner(&state.store, None).unwrap();
+        let list_total_ms = list.requests[0].total_ms.unwrap();
 
-        let response = record_detail(State(state), Path(record.id)).await;
+        let response = request_detail(State(state), Path(request.id)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         let detail_total_ms = json["live_total_ms"].as_u64().unwrap();
@@ -981,18 +1014,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_detail_adds_event_timing_index_diagnostics_on_demand() {
+    async fn request_detail_adds_event_timing_index_diagnostics_on_demand() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let (record, _) = state
+        let (request, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
-        let mut index = state.store.create_event_index(&record).unwrap();
+        let mut index = state.store.create_event_index(&request).unwrap();
         writeln!(index, "not json").unwrap();
         index.flush().unwrap();
 
-        let response = record_detail(State(state), Path(record.id)).await;
+        let response = request_detail(State(state), Path(request.id)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         let warnings = json["summary"]["warnings"].as_array().unwrap();
@@ -1005,24 +1038,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_detail_ignores_only_an_active_unterminated_event_index_tail() {
+    async fn request_detail_ignores_only_an_active_unterminated_event_index_tail() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let (record, _) = state
+        let (request, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
-        let mut index = state.store.create_event_index(&record).unwrap();
+        let mut index = state.store.create_event_index(&request).unwrap();
         write!(index, "{{\"schema_version\":").unwrap();
         index.flush().unwrap();
 
-        let response = record_detail(State(state.clone()), Path(record.id.clone())).await;
+        let response = request_detail(State(state.clone()), Path(request.id.clone())).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert!(json["summary"]["warnings"].as_array().unwrap().is_empty());
 
-        state.store.abandon_active(&record.id);
-        let response = record_detail(State(state), Path(record.id)).await;
+        state.store.abandon_active(&request.id);
+        let response = request_detail(State(state), Path(request.id)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert_eq!(json["summary"]["warnings"].as_array().unwrap().len(), 1);
@@ -1048,7 +1081,7 @@ mod tests {
     async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let (mut record, _) = state
+        let (mut request, _) = state
             .store
             .begin(ObservedRequest {
                 upstream_url: Some("https://example.test/v1/responses"),
@@ -1056,25 +1089,25 @@ mod tests {
                 ..ObservedRequest::test("POST", "/https://example.test/v1/responses")
             })
             .unwrap();
-        record.request_body.write_all(b"not request json").unwrap();
-        record
+        request.request_body.write_all(b"not request json").unwrap();
+        request
             .response_body
             .write_all(b"not response json")
             .unwrap();
         state
             .store
-            .update_summary(&record.locator, &record.summary, |summary| {
+            .update_summary(&request.locator, &request.summary, |summary| {
                 let protocol = summary.protocol.as_mut().unwrap();
                 protocol.model.requested = Some("persisted-model".to_string());
                 protocol.response_terminal = true;
                 true
             })
             .unwrap();
-        let id = record.id.clone();
+        let id = request.id.clone();
         state
             .store
             .finish(
-                &record,
+                &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Completed,
@@ -1082,7 +1115,7 @@ mod tests {
             )
             .unwrap();
 
-        let response = record_detail(State(state), Path(id)).await;
+        let response = request_detail(State(state), Path(id)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert_eq!(json["state"], "completed");
@@ -1111,7 +1144,7 @@ mod tests {
     async fn body_api_streams_exact_offsets_and_reports_invalid_ranges() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let id = finished_record(&store, "/body", b"abc\0\xff", b"response");
+        let id = finished_request(&store, "/body", b"abc\0\xff", b"response");
 
         for (response_body, offset, expected, length, next_offset) in [
             (false, 2, &b"c\0\xff"[..], "3", "5"),
@@ -1139,7 +1172,7 @@ mod tests {
     async fn decoded_body_api_handles_identity_and_zstd_without_changing_raw_bytes() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let identity_id = finished_record(&store, "/identity", b"plain request", b"");
+        let identity_id = finished_request(&store, "/identity", b"plain request", b"");
         let identity = decoded_body_response(&store, &identity_id, false).await;
         assert_eq!(identity.status(), StatusCode::OK);
         assert_eq!(
@@ -1151,21 +1184,21 @@ mod tests {
         let response_source = br#"{"result":"compressed-response"}"#;
         let request_compressed = zstd::stream::encode_all(request_source.as_slice(), 0).unwrap();
         let response_compressed = zstd::stream::encode_all(response_source.as_slice(), 0).unwrap();
-        let (mut record, _) = store
+        let (mut request, _) = store
             .begin(ObservedRequest {
                 headers: vec![recorded_header("content-encoding", " ZsTd ")],
                 ..ObservedRequest::test("POST", "/zstd")
             })
             .unwrap();
-        record.request_body.write_all(&request_compressed).unwrap();
-        record
+        request.request_body.write_all(&request_compressed).unwrap();
+        request
             .response_body
             .write_all(&response_compressed)
             .unwrap();
         store
             .write_response(
-                &record.locator,
-                &record.summary,
+                &request.locator,
+                &request.summary,
                 &ResponseMetadata {
                     format_version: FORMAT_VERSION,
                     source: ResponseSource::Upstream,
@@ -1176,10 +1209,10 @@ mod tests {
                 },
             )
             .unwrap();
-        let id = record.id.clone();
+        let id = request.id.clone();
         store
             .finish(
-                &record,
+                &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Completed,
@@ -1270,18 +1303,18 @@ mod tests {
     async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let (record, _) = state
+        let (request, _) = state
             .store
             .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
-        let mut index = state.store.create_event_index(&record).unwrap();
+        let mut index = state.store.create_event_index(&request).unwrap();
         for (sequence, completed_at_ns) in [(0, "1000000"), (1, "2500000")] {
             writeln!(
                 index,
                 "{}",
                 json!({
                     "schema_version": FORMAT_VERSION,
-                    "record_id": record.id,
+                    "request_id": request.id,
                     "kind": "sse_event",
                     "sequence": sequence,
                     "body_start": sequence * 10,
@@ -1294,11 +1327,11 @@ mod tests {
         }
         writeln!(index, "not json").unwrap();
         index.flush().unwrap();
-        let id = record.id.clone();
+        let id = request.id.clone();
         state
             .store
             .finish(
-                &record,
+                &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Completed,
@@ -1325,14 +1358,14 @@ mod tests {
     fn active_event_timing_reader_ignores_an_unterminated_tail() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
-        let (record, _) = store
+        let (request, _) = store
             .begin(ObservedRequest::test("GET", "/events"))
             .unwrap();
-        let mut index = store.create_event_index(&record).unwrap();
+        let mut index = store.create_event_index(&request).unwrap();
         write!(index, "{{\"schema_version\":1").unwrap();
         index.flush().unwrap();
 
-        let timings = store.read_event_timings(&record.id, 0).unwrap();
+        let timings = store.read_event_timings(&request.id, 0).unwrap();
         assert!(timings.available);
         assert!(!timings.partial);
         assert!(timings.events.is_empty());
@@ -1342,7 +1375,7 @@ mod tests {
     async fn event_timing_api_reports_a_missing_index_as_unavailable() {
         let temp = tempfile::tempdir().unwrap();
         let state = AppState::for_test(temp.path()).unwrap();
-        let id = finished_record(&state.store, "/without-events", b"", b"");
+        let id = finished_request(&state.store, "/without-events", b"", b"");
 
         let response = response_event_timings(
             State(state),
@@ -1367,7 +1400,7 @@ mod tests {
             .begin(ObservedRequest::test("GET", "/active"))
             .unwrap();
 
-        let conflict = delete_records(
+        let conflict = delete_requests(
             State(state.clone()),
             Json(DeleteRequest {
                 ids: vec![active.id.clone()],
@@ -1386,8 +1419,8 @@ mod tests {
                 None,
             )
             .unwrap();
-        let second = finished_record(&state.store, "/delete-selected", b"", b"");
-        let deleted = delete_records(
+        let second = finished_request(&state.store, "/delete-selected", b"", b"");
+        let deleted = delete_requests(
             State(state),
             Json(DeleteRequest {
                 ids: vec![active.id, second],
@@ -1403,25 +1436,25 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
         for _ in 0..51 {
-            finished_record(&store, "/bad", b"", b"");
+            finished_request(&store, "/bad", b"", b"");
         }
-        let first = list_records_inner(&store, None).unwrap();
+        let first = list_requests_inner(&store, None).unwrap();
         assert_eq!(first.total, 51);
-        assert_eq!(first.records.len(), 50);
+        assert_eq!(first.requests.len(), 50);
         assert!(first.has_next);
-        let second = list_records_inner(&store, Some(2)).unwrap();
-        assert_eq!(second.records.len(), 1);
+        let second = list_requests_inner(&store, Some(2)).unwrap();
+        assert_eq!(second.requests.len(), 1);
         assert!(!second.has_next);
 
-        finished_record(&store, "/new", b"", b"");
-        let recomputed_second = list_records_inner(&store, Some(2)).unwrap();
+        finished_request(&store, "/new", b"", b"");
+        let recomputed_second = list_requests_inner(&store, Some(2)).unwrap();
         assert_eq!(recomputed_second.total, 52);
-        assert_eq!(recomputed_second.records.len(), 2);
-        assert_eq!(recomputed_second.records[1].id, second.records[0].id);
+        assert_eq!(recomputed_second.requests.len(), 2);
+        assert_eq!(recomputed_second.requests[1].id, second.requests[0].id);
         assert!(
-            list_records_inner(&store, Some(3))
+            list_requests_inner(&store, Some(3))
                 .unwrap()
-                .records
+                .requests
                 .is_empty()
         );
     }
@@ -1434,10 +1467,10 @@ mod tests {
         std::fs::write(store.root(), b"not a directory").unwrap();
 
         for (page, expected) in [
-            (0, "Request Record page must be a positive integer"),
-            (u64::MAX, "Request Record page is too large"),
+            (0, "Request page must be a positive integer"),
+            (u64::MAX, "Request page is too large"),
         ] {
-            let error = list_records_inner(&store, Some(page))
+            let error = list_requests_inner(&store, Some(page))
                 .err()
                 .expect("invalid page must be rejected before scanning");
             assert_eq!(error.to_string(), expected, "page={page}");
@@ -1445,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    fn record_list_uses_terminal_end_order() {
+    fn request_list_uses_terminal_end_order() {
         let temp = tempfile::tempdir().unwrap();
         let store = RequestStore::open(temp.path()).unwrap();
         let (first, _) = store.begin(ObservedRequest::test("GET", "/first")).unwrap();
@@ -1453,10 +1486,10 @@ mod tests {
             .begin(ObservedRequest::test("GET", "/second"))
             .unwrap();
 
-        for record in [&second, &first] {
+        for request in [&second, &first] {
             store
                 .finish(
-                    record,
+                    request,
                     std::time::Instant::now(),
                     &RuntimeMeasurements::default(),
                     Outcome::Completed,
@@ -1465,9 +1498,9 @@ mod tests {
                 .unwrap();
         }
 
-        let records = list_records_inner(&store, None).unwrap().records;
-        assert_eq!(records[0].id, first.id);
-        assert_eq!(records[1].id, second.id);
-        assert!(records.iter().all(|record| record.ended_at.is_some()));
+        let requests = list_requests_inner(&store, None).unwrap().requests;
+        assert_eq!(requests[0].id, first.id);
+        assert_eq!(requests[1].id, second.id);
+        assert!(requests.iter().all(|request| request.ended_at.is_some()));
     }
 }

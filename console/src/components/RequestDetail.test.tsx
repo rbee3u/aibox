@@ -10,17 +10,17 @@ import {
   withIncompleteRequestBody,
   withRequestEncoding,
 } from "../test/fixtures";
-import type { RecordDetail as RecordDetailData, TokenUsage } from "../types";
-import { RecordDetail } from "./RecordDetail";
-import styles from "./RecordDetail.module.css";
+import type { RequestDetail as RequestDetailData, TokenUsage } from "../types";
+import { RequestDetail } from "./RequestDetail";
+import styles from "./RequestDetail.module.css";
 
-type RecordDetailProps = ComponentProps<typeof RecordDetail>;
+type RequestDetailProps = ComponentProps<typeof RequestDetail>;
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
 
 function detailProps(
-  detail: RecordDetailProps["detail"],
-  overrides: Partial<Omit<RecordDetailProps, "detail">> = {},
-): RecordDetailProps {
+  detail: RequestDetailProps["detail"],
+  overrides: Partial<Omit<RequestDetailProps, "detail">> = {},
+): RequestDetailProps {
   return {
     detail,
     bodies: { request: [], response: [] },
@@ -39,16 +39,16 @@ function detailProps(
 }
 
 function renderDetail(
-  detail: RecordDetailProps["detail"],
-  overrides: Partial<Omit<RecordDetailProps, "detail">> = {},
+  detail: RequestDetailProps["detail"],
+  overrides: Partial<Omit<RequestDetailProps, "detail">> = {},
 ) {
-  return render(<RecordDetail {...detailProps(detail, overrides)} />);
+  return render(<RequestDetail {...detailProps(detail, overrides)} />);
 }
 
 function renderRequestBody(
-  detail: RecordDetailProps["detail"],
+  detail: RequestDetailProps["detail"],
   body: Uint8Array,
-  overrides: Partial<Omit<RecordDetailProps, "detail" | "bodies" | "bodyStatus" | "tab">> = {},
+  overrides: Partial<Omit<RequestDetailProps, "detail" | "bodies" | "bodyStatus" | "tab">> = {},
 ) {
   return renderDetail(detail, {
     bodies: { request: [body], response: [] },
@@ -71,7 +71,7 @@ function terms(scope: HTMLElement): string[] {
     .map((term) => term.textContent ?? "");
 }
 
-function withTokenUsage(detail: RecordDetailData, tokenUsage: TokenUsage): RecordDetailData {
+function withTokenUsage(detail: RequestDetailData, tokenUsage: TokenUsage): RequestDetailData {
   return {
     ...detail,
     summary: {
@@ -81,7 +81,7 @@ function withTokenUsage(detail: RecordDetailData, tokenUsage: TokenUsage): Recor
   };
 }
 
-describe("RecordDetail", () => {
+describe("RequestDetail", () => {
   it("renders Claude cache fallback and each diagnostic group", () => {
     const detail = {
       ...completedDetail,
@@ -224,7 +224,7 @@ describe("RecordDetail", () => {
     expect(definitionValue(breakdown, "1h")).toHaveTextContent("20");
 
     rerender(
-      <RecordDetail
+      <RequestDetail
         {...detailProps({
           ...detail,
           summary: {
@@ -307,7 +307,7 @@ describe("RecordDetail", () => {
     }
   });
 
-  it("shows no End Time while a Record is active", () => {
+  it("shows no End Time while a Request is active", () => {
     renderDetail(activeDetail);
 
     const timingSection = screen.getByRole("region", { name: "Timing" });
@@ -345,7 +345,7 @@ describe("RecordDetail", () => {
         },
       },
     };
-    rerender(<RecordDetail {...detailProps(active)} />);
+    rerender(<RequestDetail {...detailProps(active)} />);
     modelSummary = screen.getByRole("region", { name: "Model" });
     expect(within(modelSummary).getByTitle("Model Detecting…")).toHaveTextContent("Detecting…");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
@@ -367,7 +367,7 @@ describe("RecordDetail", () => {
         protocol: { ...completedDetail.summary.protocol, token_usage: null },
       },
     };
-    rerender(<RecordDetail {...detailProps(terminalWithoutUsage)} />);
+    rerender(<RequestDetail {...detailProps(terminalWithoutUsage)} />);
     expect(
       screen.getByText("The completed response did not report token usage."),
     ).toBeInTheDocument();
@@ -383,7 +383,7 @@ describe("RecordDetail", () => {
         },
       },
     };
-    rerender(<RecordDetail {...detailProps(failedWithoutUsage)} />);
+    rerender(<RequestDetail {...detailProps(failedWithoutUsage)} />);
     expect(
       screen.getByText("Token usage was not reported before this request ended."),
     ).toBeInTheDocument();
@@ -400,7 +400,7 @@ describe("RecordDetail", () => {
         },
       },
     };
-    rerender(<RecordDetail {...detailProps(activeWithoutUsage)} />);
+    rerender(<RequestDetail {...detailProps(activeWithoutUsage)} />);
     expect(
       screen.getByText("Waiting for the upstream API to report token usage."),
     ).toBeInTheDocument();
@@ -432,7 +432,7 @@ describe("RecordDetail", () => {
     expect(screen.getByRole("button", { name: "Session ID copied" })).toBeInTheDocument();
 
     rerender(
-      <RecordDetail
+      <RequestDetail
         {...detailProps({
           ...detail,
           summary: { ...detail.summary, coding_agent_session_id: "different-session" },
@@ -493,7 +493,7 @@ describe("RecordDetail", () => {
     ).toBeInTheDocument();
 
     rerender(
-      <RecordDetail
+      <RequestDetail
         {...detailProps(
           withTokenUsage(detail, {
             ...detail.summary.protocol!.token_usage!,
@@ -521,7 +521,7 @@ describe("RecordDetail", () => {
     expect(within(tokenUsage).queryByText("Reasoning")).not.toBeInTheDocument();
 
     rerender(
-      <RecordDetail
+      <RequestDetail
         {...detailProps(
           withTokenUsage(detail, {
             total_input_tokens: null,

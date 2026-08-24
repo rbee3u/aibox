@@ -242,6 +242,26 @@ fn embedded_dockerfile_does_not_require_build_context() {
     }
 }
 
+#[test]
+fn embedded_runtime_image_does_not_install_tenant_runtime_components() {
+    for forbidden in [
+        "NODE_VERSION",
+        "CODEX_VERSION",
+        "CLAUDE_CODE_VERSION",
+        "@openai/codex",
+        "@anthropic-ai/claude-code",
+        "/etc/profile.d/aibox-path.sh",
+        "ENV GOPATH=",
+        "ENV GOROOT=",
+        "python3-pip",
+        "python3-venv",
+        "astral.sh/uv/install.sh",
+        "/usr/local/bin/uv",
+    ] {
+        assert!(!DOCKERFILE.contains(forbidden), "found {forbidden:?}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn build_image_uses_stdin_empty_context_and_cache_flags() {

@@ -1,6 +1,5 @@
 import { Box, Menu } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createRequestApi } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfigPage } from "./ConfigPage";
 import { OperationPanel } from "./OperationPanel";
 import { SessionPage } from "./SessionPage";
@@ -164,10 +163,6 @@ export function App() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [closeMobileNavigation, mobileLayout, mobileOpen]);
-  const requestApi = useMemo(
-    () => (api ? createRequestApi(fetch, api.bootstrap.csrf_token) : null),
-    [api],
-  );
   const active = route.module;
   const activeModule = modules.find((module) => module.id === active)!;
   const commitLocation = useCallback(
@@ -350,9 +345,9 @@ export function App() {
               onLocationChange={updatePageLocation}
             />
           )}
-          {requestApi && active === "requests" && (
+          {api && active === "requests" && (
             <RequestsPage
-              api={requestApi}
+              api={api.requests}
               search={route.search}
               onLocationChange={updateRequestsLocation}
             />

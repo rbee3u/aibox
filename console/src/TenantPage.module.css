@@ -361,12 +361,15 @@
   min-width: 0;
 }
 
-.componentRowSelect {
+.componentRow > .componentRowSelect {
   display: grid;
+  width: 100%;
   min-width: 0;
   grid-column: 1 / span 2;
   grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
+  justify-content: stretch;
+  justify-self: stretch;
   gap: 10px;
   padding: 4px 0;
   border-color: transparent;

@@ -47,7 +47,7 @@ Workspace as well as Extra Mounts:
   would expose host-only aibox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
-a bind source. Named Config catalogs, Request Records, and internal lifecycle
+a bind source. Named Config catalogs, Requests, and internal lifecycle
 staging directories stay host-only.
 
 Mounting another Tenant Home is allowed, but doing so exposes its Coding
@@ -64,10 +64,10 @@ Each Run:
 - mounts the selected Workspace at `/workspace`;
 - adds only the extra mounts supplied on the command line.
 
-Rust and Go Component installation also uses a disposable, cleanup-aware
-container, but mounts only the selected Tenant Home at `/home/aibox`; it does
-not mount a Workspace or accept Extra Mounts. The installer retains normal
-network access to official toolchain distribution services.
+Runtime and toolchain Component installation also uses a disposable,
+cleanup-aware container, but mounts only the selected Tenant Home at
+`/home/aibox`; it does not mount a Workspace or accept Extra Mounts. The
+installer retains normal network access to official distribution services.
 
 On Linux, the container runs with the invoking uid and gid so Workspace files
 retain host ownership. aibox also maps `host.docker.internal` to Docker's host
@@ -91,7 +91,7 @@ services, and remain the user's responsibility.
 
 ## Cleanup
 
-Runs and toolchain installations use disposable Docker containers. aibox tracks
+Runs and Component installations use disposable Docker containers. aibox tracks
 the Docker child and container id, and keeps cleanup armed until it has checked
 that the container did not outlive the Docker client.
 
@@ -110,7 +110,7 @@ container that aibox must kill, aibox changes that successful status to a
 failure; an existing failure status is preserved.
 
 One aibox process supports one active container operation at a time: either a
-Run or a Rust/Go Component installation.
+Run or a Component installation.
 
 ## Request Proxy
 
@@ -118,20 +118,20 @@ The Request Proxy is an always-on part of the foreground aibox Service. It does
 not start Docker and may run alongside a separate `aibox run` process:
 
 ```sh
-aibox serve
-aibox serve --listen 127.0.0.1:8080
-aibox serve --listen 0.0.0.0:9923
+aibox console
+aibox console --listen 127.0.0.1:8080
+aibox console --listen 0.0.0.0:9923
 ```
 
 The foreground command prints its Listen and Console addresses;
 runtime events include RFC 3339 UTC timestamps. Runtime output is intentionally
 concise: safe internal warnings and Error-assessed abnormal Request Outcomes
-include only a 12-character Record ID, method, upstream host, fixed reason, UTC
+include only a 12-character Request ID, method, upstream host, fixed reason, UTC
 time, and duration. It never prints request paths, headers, bodies, prompts,
 credentials, or raw upstream errors.
-Completed Records are not printed merely because an upstream returned HTTP
+Completed Requests are not printed merely because an upstream returned HTTP
 4xx/5xx or a Provider diagnostic was recorded; inspect those details in the
-Requests module. Ctrl-C exits successfully after active Records are finalized;
+Requests module. Ctrl-C exits successfully after active Requests are finalized;
 SIGTERM exits 143. A second signal forces exit using its conventional signal
 exit code.
 
@@ -189,7 +189,7 @@ recognized terminal signal from Claude Messages, OpenAI Responses, or OpenAI
 Chat Completions completes the Request Outcome even when the client closes
 immediately after consuming that signal.
 
-Each direct child of `$AIBOX_ROOT/requests/` is one Request Record:
+Each direct child of `$AIBOX_ROOT/requests/` is one Request:
 
 ```text
 active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
@@ -203,9 +203,9 @@ active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
   summary.json
 ```
 
-The UUID is the Record identity. The directory name is a materialized ordering
+The UUID is the Request identity. The directory name is a materialized ordering
 hint: `active-` means only that a terminal name has not been successfully
-materialized, not that the Record is necessarily active. `summary.json` is the
+materialized, not that the Request is necessarily active. `summary.json` is the
 lifecycle authority. A process interruption can leave a non-terminal Summary,
 and a rename or directory-sync failure can leave a terminal Summary under an
 `active-` name; the latter is warned without changing its Outcome or End Time.
@@ -213,19 +213,19 @@ Safe older unprefixed names remain readable without migration. New names use
 UTC-basic millisecond timestamps derived from the Summary's canonical start or
 end time.
 
-The collection and Record directories are mode `0700`; files are `0600`.
+The collection and Request directories are mode `0700`; files are `0600`.
 Metadata stores the upstream URL, base64 lossless header values, upstream
 status and HTTP version, nanosecond timing checkpoints, outcome, and
-diagnostics. Request Record format v3 makes `summary.json` the complete Request
-Record Summary used by list reads: request and response list fields, lifecycle,
-Record Assessment, the optional Coding Agent Session ID reported by a
+diagnostics. Request format v4 makes `summary.json` the complete Request
+Summary used by list reads: request and response list fields, lifecycle,
+Request Assessment, the optional Coding Agent Session ID reported by a
 recognized model request, and the optional Model Protocol Summary. The latter
 contains protocol family, response terminality, requested/effective model and
 reasoning effort, requested/observed response mode, First Token, final Token
 Usage, and provider diagnostics. Body files contain the exact
 application-visible bytes;
 their current lengths are derived rather than persisted. `summary.json` exists
-from Record creation and remains non-terminal if the process is interrupted. A
+from Request creation and remains non-terminal if the process is interrupted. A
 recognized identity-coded event-stream response also has a best-effort JSONL
 index whose byte ranges point back into `response.body`. Recognition normally
 uses `Content-Type: text/event-stream`; a successful recognized model request
@@ -240,15 +240,17 @@ List scanning opens only each real `summary.json`; it does not inspect raw
 request/response metadata, Bodies, or the SSE index. A valid Summary therefore
 keeps its list row visible when separate raw evidence is malformed or unsafe.
 Detail reads remain strict over that evidence and fail rather than following or
-repairing it. Version-2 Request Records are unsupported; there is no migration,
-backfill, or read-time reconstruction of a v3 Summary.
+repairing it. Format v3 Requests are unsupported: they are not read, migrated,
+rewritten, or deleted by the Service. Before the first start of an upgraded
+Service, stop the old Service, optionally back up the collection, and manually
+remove `$AIBOX_ROOT/requests`; the new Service recreates an empty collection.
 
 Every terminal Request Outcome, including rejection, upstream failure, client
 disconnect, recording failure, and server shutdown, has a Request End Time
 derived from the Summary start anchor and terminal monotonic offset. Active and
-interrupted Records do not. The Requests module orders canonical directory
-basenames by descending ASCII order: active and interrupted Records first by
-start time, then terminal Records by End Time, with host and UUID breaking
+interrupted Requests do not. The Requests module orders canonical directory
+basenames by descending ASCII order: active and interrupted Requests first by
+start time, then terminal Requests by End Time, with host and UUID breaking
 millisecond ties. A terminal Summary stranded under an `active-` name is ordered by the
 terminal name it should have received.
 
@@ -289,8 +291,8 @@ releases its buffered Event while raw forwarding and recording continue
 unchanged. This keeps a malformed or extreme event from making the host-side
 diagnostic parser retain an unbounded copy of the stream.
 
-Record Assessment classifies active Records as Active and clean terminal
-Records as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,
+Request Assessment classifies active Requests as Active and clean terminal
+Requests as OK. Recording, proxy/transport, HTTP 4xx/5xx, Provider Error,
 `response.failed`, `response.incomplete`, and incomplete or filtered Chat
 Completions evidence is Error. Client
 disconnect or request upload abort, process interruption, a missing recognized
@@ -321,7 +323,7 @@ error response is returned to the client but is not written as upstream data.
 There is no size limit, retention policy, redaction, database, or cross-process
 lock. Authorization values, API keys, prompts, tool data, and model output are
 stored in full and remain after the Service exits. Use the Requests module's
-single-record or selected delete action when debugging ends. An active Record
+single-Request or selected delete action when debugging ends. An active Request
 cannot be deleted. Selected deletion strictly validates every target before
 deleting any of them.
 
@@ -337,22 +339,22 @@ and [Docker host networking](https://docs.docker.com/desktop/features/networking
 
 ## Building the Shared Image
 
-Build the bundled image after installing aibox:
+After installing aibox, start `aibox console`, open Console Overview, and choose
+**Build** to build the bundled image. **Build without cache** reruns every layer
+and pulls a fresh Debian base image.
 
-```sh
-aibox build
-aibox build --force
-```
-
-The image contains both Codex and Claude. `--force` disables Docker's build
-cache and pulls a fresh Debian base. The build uses an embedded, context-free
+The image is a shared OS substrate without callable application language
+runtimes or Coding Agents. The build uses an embedded, context-free
 [Dockerfile](../assets/aibox.Dockerfile), which is the source of truth for
-installed packages and pinned Coding Agent versions.
+image-owned packages.
 
-The image includes common Unix development and diagnostic tools, Python with
-pip/venv/uv, and Node.js with npm. Rust and Go are installed on demand into a
-persistent Managed Tenant; see
-[Tenant Components](tenants.md#tenant-components).
+The image includes common Unix development and diagnostic tools plus the
+download, checksum, extraction, and compilation tools needed by Tenant
+Component installers. Python/uv, Node.js, Codex, Claude, Rust, and Go are
+installed explicitly into a persistent Managed Tenant; see [Tenant
+Components](tenants.md#tenant-components). A system diagnostic such as GDB may
+retain a transitive `libpython` ABI dependency, but the image provides no
+callable `python`, `pip`, `uv`, or `uvx` command.
 
 For complete output, an installed Claude status-line Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the
@@ -361,10 +363,12 @@ Home as `~`), branch, compact context-window size, and context-used percentage
 in that order. The Codex status line uses native TUI support and adds no image
 dependency.
 
-Both toolchain installers require `HOME=/home/aibox`, no incompatible
-`ENTRYPOINT`, Bash, curl, and standard Unix command-line utilities including
-`mktemp`. Rust requires Python 3.11 or newer (for `tomllib`), `sed`, and `grep`;
-Go requires Python 3.9 or newer, `dpkg`, tar, and `sha256sum`.
+Component installers require `HOME=/home/aibox`, no incompatible `ENTRYPOINT`,
+Bash, curl, and standard Unix command-line utilities including `mktemp`. Node
+uses tar, xz, jq, and `sha256sum`; Python bootstraps the official standalone uv
+installer, which downloads hash-verified Astral CPython builds; Rust resolves
+stable versions through rustup and shell tools; Go uses `jq`, `dpkg`, tar, and
+`sha256sum`. None of these installers requires an image-owned Python.
 
 On Linux, aibox overrides the image user with the invoking host uid and gid.
 Executables and required image files must therefore be readable and executable

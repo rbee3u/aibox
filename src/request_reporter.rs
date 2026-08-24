@@ -17,7 +17,7 @@ struct ReporterState {
     warned: HashSet<String>,
 }
 
-pub(crate) struct AbnormalRecordEvent<'a> {
+pub(crate) struct AbnormalRequestEvent<'a> {
     pub(crate) id: &'a str,
     pub(crate) method: &'a str,
     pub(crate) host: &'a str,
@@ -43,8 +43,8 @@ impl RequestReporter {
         }
     }
 
-    pub(crate) fn record_finished(&self, event: AbnormalRecordEvent<'_>) {
-        if !should_report_record(event.outcome, event.assessment_level) {
+    pub(crate) fn request_finished(&self, event: AbnormalRequestEvent<'_>) {
+        if !should_report_request(event.outcome, event.assessment_level) {
             return;
         }
         let reason = event
@@ -116,7 +116,7 @@ impl RequestReporter {
     }
 }
 
-fn should_report_record(outcome: Outcome, assessment_level: AssessmentLevel) -> bool {
+fn should_report_request(outcome: Outcome, assessment_level: AssessmentLevel) -> bool {
     assessment_level == AssessmentLevel::Error
         && !matches!(outcome, Outcome::Completed | Outcome::ServerShutdown)
 }
@@ -160,7 +160,7 @@ fn outcome_reason(outcome: Outcome) -> &'static str {
         Outcome::Rejected => "request rejected",
         Outcome::UpstreamError => "upstream request failed",
         Outcome::ClientDisconnected => "client disconnected",
-        Outcome::RecordingFailed => "request record could not be finalized",
+        Outcome::RecordingFailed => "request could not be finalized",
         Outcome::ServerShutdown => "server shutdown",
         Outcome::Completed => "completed",
     }
@@ -178,7 +178,7 @@ fn error_reason(kind: ErrorKind) -> &'static str {
         ErrorKind::NonPublicTarget => "target is not publicly reachable",
         ErrorKind::RecordingFailed
         | ErrorKind::RequestRecordingFailed
-        | ErrorKind::ResponseRecordingFailed => "request record could not be written",
+        | ErrorKind::ResponseRecordingFailed => "request could not be written",
         ErrorKind::RequestBodyFailed => "request body failed",
         ErrorKind::ServerShutdown => "server shutdown",
         ErrorKind::UpgradeNotSupported => "protocol upgrade is not supported",
@@ -198,24 +198,24 @@ mod tests {
     }
 
     #[test]
-    fn record_events_report_only_error_assessed_abnormal_outcomes() {
-        assert!(!should_report_record(
+    fn request_events_report_only_error_assessed_abnormal_outcomes() {
+        assert!(!should_report_request(
             Outcome::ClientDisconnected,
             AssessmentLevel::Ok
         ));
-        assert!(!should_report_record(
+        assert!(!should_report_request(
             Outcome::ClientDisconnected,
             AssessmentLevel::Warning
         ));
-        assert!(should_report_record(
+        assert!(should_report_request(
             Outcome::ClientDisconnected,
             AssessmentLevel::Error
         ));
-        assert!(!should_report_record(
+        assert!(!should_report_request(
             Outcome::Completed,
             AssessmentLevel::Error
         ));
-        assert!(!should_report_record(
+        assert!(!should_report_request(
             Outcome::ServerShutdown,
             AssessmentLevel::Error
         ));

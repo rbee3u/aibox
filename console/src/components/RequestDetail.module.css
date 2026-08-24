@@ -13,7 +13,7 @@
   align-items: baseline;
   gap: 16px;
   min-height: 50px;
-  padding: 13px 24px 8px var(--record-header-padding-left, 24px);
+  padding: 13px 24px 8px var(--request-header-padding-left, 24px);
   background: var(--bg-shell);
 }
 .requestOverview {

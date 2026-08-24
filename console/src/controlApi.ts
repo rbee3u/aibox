@@ -1,5 +1,6 @@
 import { HttpError, readHttpError } from "./httpError";
 import { tenantBody, tenantQuery, type TenantSelection } from "./tenantSelection";
+import type { BodyKind, EventTimingIndex, RequestDetail, RequestList, RequestsApi } from "./types";
 
 export { tenantSelectionValue } from "./tenantSelection";
 export type { TenantSelection } from "./tenantSelection";
@@ -107,7 +108,8 @@ export type TenantRow =
   | (TenantRowBase & { kind: "host"; name: null })
   | (TenantRowBase & { kind: "managed"; name: string });
 
-export type ComponentKind = "claude-statusline" | "codex-statusline" | "rust" | "go";
+export type ComponentKind =
+  "node" | "codex" | "claude" | "python" | "claude-statusline" | "codex-statusline" | "rust" | "go";
 export type ComponentStatus =
   "not-installed" | "installed" | "incomplete" | "modified" | "unmanaged";
 
@@ -403,6 +405,7 @@ export interface ConnectedControlApi {
   tenants: TenantApi;
   configs: ConfigApi;
   sessions: SessionApi;
+  requests: RequestsApi;
   operations: OperationApi;
 }
 
@@ -424,12 +427,17 @@ export class ControlApi {
   }
 
   async get<T>(path: string, signal?: AbortSignal): Promise<T> {
-    const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
-    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
+    const response = await this.getResponse(path, signal);
     return (await response.json()) as T;
   }
 
-  async post<T>(path: string, body: object = {}): Promise<T> {
+  async getResponse(path: string, signal?: AbortSignal): Promise<Response> {
+    const response = await this.fetchImpl.call(window, path, { cache: "no-store", signal });
+    if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
+    return response;
+  }
+
+  async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     const response = await this.fetchImpl.call(window, path, {
       method: "POST",
       cache: "no-store",
@@ -438,6 +446,7 @@ export class ControlApi {
         "X-Aibox-Csrf": this.bootstrap.csrf_token,
       },
       body: JSON.stringify(body),
+      signal,
     });
     if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
     return (await response.json()) as T;
@@ -508,6 +517,7 @@ export function composeControlApi(client: ControlApi): ConnectedControlApi {
     config: target.config,
     file: target.file,
   });
+  const requestPath = (id: string) => `/_aibox/api/requests/${encodeURIComponent(id)}`;
 
   return {
     bootstrap: client.bootstrap,
@@ -620,6 +630,46 @@ export function composeControlApi(client: ControlApi): ConnectedControlApi {
           all: false,
           confirmation: "",
         }),
+    },
+    requests: {
+      listRequests: (page = 1, signal) => {
+        const query = page === 1 ? "" : `?page=${page}`;
+        return client.get<RequestList>(`/_aibox/api/requests${query}`, signal);
+      },
+      getRequest: (id, signal) => client.get<RequestDetail>(requestPath(id), signal),
+      loadBody: async (id, kind: BodyKind, offset, signal) => {
+        const response = await client.getResponse(
+          `${requestPath(id)}/${kind}-body?offset=${offset}`,
+          signal,
+        );
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const header = response.headers.get("X-Aibox-Request-Next-Offset");
+        const fallbackOffset = offset + bytes.length;
+        const advertisedOffset = header === null ? null : Number(header);
+        const nextOffset =
+          advertisedOffset !== null &&
+          Number.isSafeInteger(advertisedOffset) &&
+          advertisedOffset === fallbackOffset
+            ? advertisedOffset
+            : fallbackOffset;
+        return { bytes, nextOffset };
+      },
+      loadDecodedBody: async (id, kind: BodyKind, signal) => {
+        const response = await client.getResponse(
+          `${requestPath(id)}/${kind}-body-decoded`,
+          signal,
+        );
+        return new Uint8Array(await response.arrayBuffer());
+      },
+      loadEventTimings: (id, afterSequence, signal) =>
+        client.get<EventTimingIndex>(
+          `${requestPath(id)}/response-event-timings?after_sequence=${afterSequence}`,
+          signal,
+        ),
+      deleteRequests: (ids, signal) =>
+        client
+          .post<{ deleted: number }>("/_aibox/api/requests/delete", { ids }, signal)
+          .then((value) => value.deleted),
     },
     operations: {
       current: () =>

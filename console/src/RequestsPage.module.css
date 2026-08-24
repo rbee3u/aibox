@@ -155,7 +155,7 @@
 
 .detailColumn {
   position: relative;
-  --record-header-padding-left: 24px;
+  --request-header-padding-left: 24px;
 }
 
 .detailBack {
@@ -201,7 +201,7 @@
   }
 
   .detailColumn {
-    --record-header-padding-left: 56px;
+    --request-header-padding-left: 56px;
     display: none;
   }
 

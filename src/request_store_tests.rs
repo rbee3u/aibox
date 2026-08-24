@@ -20,20 +20,20 @@ fn console_host_is_safe_and_keeps_ports_and_ipv6_brackets() {
 }
 
 #[test]
-fn host_slug_and_flat_record_layout_are_safe() {
+fn host_slug_and_flat_request_layout_are_safe() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, request) = store
+    let (new_request, request_metadata) = store
         .begin(ObservedRequest {
             upstream_url: Some("https://example.com/v1"),
             host_hint: Some("example.com"),
             ..ObservedRequest::test("POST", "/https://example.com/v1")
         })
         .unwrap();
-    assert_eq!(record.directory.parent(), Some(store.root()));
-    assert_eq!(request.format_version, FORMAT_VERSION);
+    assert_eq!(new_request.directory.parent(), Some(store.root()));
+    assert_eq!(request_metadata.format_version, FORMAT_VERSION);
     assert!(
-        record
+        new_request
             .directory
             .file_name()
             .unwrap()
@@ -41,7 +41,7 @@ fn host_slug_and_flat_record_layout_are_safe() {
             .starts_with("active-")
     );
     assert!(
-        record
+        new_request
             .directory
             .file_name()
             .unwrap()
@@ -53,32 +53,32 @@ fn host_slug_and_flat_record_layout_are_safe() {
         0o700
     );
     assert_eq!(
-        fs::metadata(record.directory.join(REQUEST_BODY))
+        fs::metadata(new_request.directory.join(REQUEST_BODY))
             .unwrap()
             .permissions()
             .mode()
             & 0o777,
         0o600
     );
-    assert!(record.directory.join(SUMMARY_JSON).exists());
-    assert!(!record.directory.join(RESULT_JSON).exists());
+    assert!(new_request.directory.join(SUMMARY_JSON).exists());
+    assert!(!new_request.directory.join(RESULT_JSON).exists());
 }
 
 #[test]
 fn summary_is_terminal_and_legacy_result_is_derived() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
+    let (request, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
     store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::Rejected,
             None,
         )
         .unwrap();
-    let found = store.find(&record.id).unwrap();
+    let found = store.find(&request.id).unwrap();
     assert!(found.summary.terminal);
     let result = found.result.unwrap();
     assert_eq!(result.outcome, Outcome::Rejected);
@@ -86,7 +86,7 @@ fn summary_is_terminal_and_legacy_result_is_derived() {
     let terminal_name = found.directory.file_name().unwrap().to_string_lossy();
     assert!(!terminal_name.starts_with("active-"));
     assert_eq!(terminal_name, found.sort_key);
-    assert_eq!(record.locator.path(), found.directory);
+    assert_eq!(request.locator.path(), found.directory);
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn every_terminal_outcome_has_an_end_time_and_terminal_directory() {
         Outcome::RecordingFailed,
         Outcome::ServerShutdown,
     ] {
-        let (record, _) = store
+        let (request, _) = store
             .begin(ObservedRequest {
                 host_hint: Some("example.test"),
                 ..ObservedRequest::test("GET", "/outcome")
@@ -109,14 +109,14 @@ fn every_terminal_outcome_has_an_end_time_and_terminal_directory() {
             .unwrap();
         let result = store
             .finish(
-                &record,
+                &request,
                 Instant::now(),
                 &RuntimeMeasurements::default(),
                 outcome,
                 None,
             )
             .unwrap();
-        let stored = store.find(&record.id).unwrap();
+        let stored = store.find(&request.id).unwrap();
         assert_eq!(stored.result.as_ref().unwrap().ended_at, result.ended_at);
         assert_eq!(stored.result.as_ref().unwrap().outcome, outcome);
         assert!(
@@ -134,20 +134,20 @@ fn every_terminal_outcome_has_an_end_time_and_terminal_directory() {
 fn terminal_summary_is_immutable_to_late_checkpoints() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store.begin(ObservedRequest::test("GET", "/late")).unwrap();
+    let (request, _) = store.begin(ObservedRequest::test("GET", "/late")).unwrap();
     store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::Completed,
             None,
         )
         .unwrap();
-    let before = serde_json::to_value(store.find(&record.id).unwrap().summary).unwrap();
+    let before = serde_json::to_value(store.find(&request.id).unwrap().summary).unwrap();
 
     let changed = store
-        .update_summary(&record.locator, &record.summary, |summary| {
+        .update_summary(&request.locator, &request.summary, |summary| {
             summary.timing.upstream_request_body_completed_at_ns = Some("999".to_string());
             true
         })
@@ -155,7 +155,7 @@ fn terminal_summary_is_immutable_to_late_checkpoints() {
 
     assert!(!changed);
     assert_eq!(
-        serde_json::to_value(store.find(&record.id).unwrap().summary).unwrap(),
+        serde_json::to_value(store.find(&request.id).unwrap().summary).unwrap(),
         before
     );
 }
@@ -164,15 +164,15 @@ fn terminal_summary_is_immutable_to_late_checkpoints() {
 fn response_metadata_publication_excludes_detail_readers() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (captured_request, _) = store
         .begin(ObservedRequest::test("GET", "/response"))
         .unwrap();
     let reader = read_unpoisoned(&store.namespace);
     let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(0);
     let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(0);
     let writer_store = store.clone();
-    let locator = record.locator.clone();
-    let summary = record.summary.clone();
+    let locator = captured_request.locator.clone();
+    let summary = captured_request.summary.clone();
     let writer = std::thread::spawn(move || {
         started_sender.send(()).unwrap();
         let result = writer_store.write_response(
@@ -203,7 +203,12 @@ fn response_metadata_publication_excludes_detail_readers() {
     writer.join().unwrap();
 
     assert_eq!(
-        store.find(&record.id).unwrap().response.unwrap().status,
+        store
+            .find(&captured_request.id)
+            .unwrap()
+            .response
+            .unwrap()
+            .status,
         200
     );
 }
@@ -212,20 +217,20 @@ fn response_metadata_publication_excludes_detail_readers() {
 fn safe_unprefixed_nonterminal_directory_remains_readable_without_migration() {
     let temp = tempfile::tempdir().unwrap();
     let first = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = first
+    let (request, _) = first
         .begin(ObservedRequest {
             host_hint: Some("legacy.test"),
             ..ObservedRequest::test("GET", "/legacy")
         })
         .unwrap();
-    let active_name = record.directory.file_name().unwrap().to_string_lossy();
+    let active_name = request.directory.file_name().unwrap().to_string_lossy();
     let legacy_name = active_name.strip_prefix("active-").unwrap();
     let legacy_path = first.root().join(legacy_name);
-    fs::rename(&record.directory, &legacy_path).unwrap();
+    fs::rename(&request.directory, &legacy_path).unwrap();
     drop(first);
 
     let reopened = RequestStore::open(temp.path()).unwrap();
-    let stored = reopened.find(&record.id).unwrap();
+    let stored = reopened.find(&request.id).unwrap();
     assert!(!stored.active);
     assert!(stored.result.is_none());
     assert_eq!(stored.directory, legacy_path);
@@ -236,27 +241,27 @@ fn safe_unprefixed_nonterminal_directory_remains_readable_without_migration() {
 fn terminal_summary_under_active_name_stays_terminal_and_uses_expected_sort_key() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest {
             host_hint: Some("example.test"),
             ..ObservedRequest::test("GET", "/stranded")
         })
         .unwrap();
-    let active_path = record.directory.clone();
+    let active_path = request.directory.clone();
     store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::UpstreamError,
             None,
         )
         .unwrap();
-    let terminal_path = record.locator.path();
+    let terminal_path = request.locator.path();
     fs::rename(&terminal_path, &active_path).unwrap();
 
     let reopened = RequestStore::open(temp.path()).unwrap();
-    let stored = reopened.find(&record.id).unwrap();
+    let stored = reopened.find(&request.id).unwrap();
     assert_eq!(stored.result.unwrap().outcome, Outcome::UpstreamError);
     assert!(
         stored
@@ -273,30 +278,30 @@ fn terminal_summary_under_active_name_stays_terminal_and_uses_expected_sort_key(
 fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest {
             host_hint: Some("example.test"),
             ..ObservedRequest::test("GET", "/collision")
         })
         .unwrap();
-    let active_path = record.directory.clone();
+    let active_path = request.directory.clone();
     let first = store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::ServerShutdown,
             None,
         )
         .unwrap();
-    let target = record.locator.path();
+    let target = request.locator.path();
     fs::rename(&target, &active_path).unwrap();
-    record.locator.set_path(active_path.clone());
+    request.locator.set_path(active_path.clone());
     fs::create_dir(&target).unwrap();
 
     let repeated = store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::Completed,
@@ -310,11 +315,11 @@ fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
     assert!(target.exists());
     let listed = store.scan().unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].request.id, record.id);
+    assert_eq!(listed[0].request.id, request.id);
     assert!(!listed[0].active);
-    let error = format!("{:#}", store.find(&record.id).unwrap_err());
+    let error = format!("{:#}", store.find(&request.id).unwrap_err());
     assert!(
-        error.contains("Request Record request metadata does not exist"),
+        error.contains("Incoming HTTP Request metadata does not exist"),
         "the preserved collision directory must remain visibly invalid: {error}"
     );
 }
@@ -352,7 +357,10 @@ fn normal_directory_order_matches_scanned_sort_keys_exactly() {
         .unwrap();
 
     let scan = store.scan().unwrap();
-    let scanned: Vec<_> = scan.iter().map(|record| record.sort_key.clone()).collect();
+    let scanned: Vec<_> = scan
+        .iter()
+        .map(|request| request.sort_key.clone())
+        .collect();
     let mut names: Vec<_> = fs::read_dir(store.root())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -599,17 +607,17 @@ fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
     let store = RequestStore::open(temp.path()).unwrap();
     let outside = temp.path().join("outside");
     fs::write(&outside, b"outside").unwrap();
-    let mut corrupted_records = Vec::new();
+    let mut corrupted_requests = Vec::new();
     for corruption in ["request_metadata", "response_metadata", "request_body"] {
-        let (mut record, _) = store
+        let (mut request, _) = store
             .begin(ObservedRequest::test("GET", "/corrupt"))
             .unwrap();
-        record.request_body.write_all(b"raw request").unwrap();
-        record.response_body.write_all(b"raw response").unwrap();
+        request.request_body.write_all(b"raw request").unwrap();
+        request.response_body.write_all(b"raw response").unwrap();
         store
             .write_response(
-                &record.locator,
-                &record.summary,
+                &request.locator,
+                &request.summary,
                 &ResponseMetadata {
                     format_version: FORMAT_VERSION,
                     source: ResponseSource::Upstream,
@@ -622,14 +630,14 @@ fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
             .unwrap();
         store
             .finish(
-                &record,
+                &request,
                 Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Completed,
                 None,
             )
             .unwrap();
-        let directory = record.locator.path();
+        let directory = request.locator.path();
         match corruption {
             "request_metadata" => {
                 fs::write(directory.join(REQUEST_JSON), b"not json").unwrap();
@@ -644,19 +652,19 @@ fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
             }
             _ => unreachable!(),
         }
-        corrupted_records.push((corruption, record.id));
+        corrupted_requests.push((corruption, request.id));
     }
 
     assert_eq!(
         store.scan_summaries().unwrap().len(),
-        corrupted_records.len()
+        corrupted_requests.len()
     );
-    for (corruption, id) in corrupted_records {
+    for (corruption, id) in corrupted_requests {
         let error = format!("{:#}", store.find(&id).unwrap_err());
         let expected = match corruption {
-            "request_metadata" => "parse Request Record request metadata",
-            "response_metadata" => "Request Record response metadata is not a regular file",
-            "request_body" => "Request Record request body is not a regular file",
+            "request_metadata" => "parse Incoming HTTP Request metadata",
+            "response_metadata" => "Upstream Response metadata is not a regular file",
+            "request_body" => "Incoming HTTP Request body is not a regular file",
             _ => unreachable!(),
         };
         assert!(
@@ -686,7 +694,7 @@ fn recorded_headers_drop_connection_named_fields() {
 fn persisted_metadata_uses_the_stable_schema_names() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (captured_request, _) = store
         .begin(ObservedRequest {
             upstream_url: Some("https://example.com/v1/responses"),
             http_version: "HTTP/2",
@@ -700,8 +708,8 @@ fn persisted_metadata_uses_the_stable_schema_names() {
         .unwrap();
     store
         .write_response(
-            &record.locator,
-            &record.summary,
+            &captured_request.locator,
+            &captured_request.summary,
             &ResponseMetadata {
                 format_version: FORMAT_VERSION,
                 source: ResponseSource::Upstream,
@@ -712,19 +720,22 @@ fn persisted_metadata_uses_the_stable_schema_names() {
             },
         )
         .unwrap();
-    let request: serde_json::Value =
-        serde_json::from_reader(fs::File::open(record.directory.join(REQUEST_JSON)).unwrap())
-            .unwrap();
-    let response: serde_json::Value =
-        serde_json::from_reader(fs::File::open(record.directory.join(RESPONSE_JSON)).unwrap())
-            .unwrap();
-    let summary: serde_json::Value =
-        serde_json::from_reader(fs::File::open(record.directory.join(SUMMARY_JSON)).unwrap())
-            .unwrap();
-    assert_eq!(request["schema_version"], FORMAT_VERSION);
-    assert_eq!(request["record_id"], record.id);
-    assert_eq!(request["kind"], "request");
-    assert!(request.get("format_version").is_none());
+    let request_metadata: serde_json::Value = serde_json::from_reader(
+        fs::File::open(captured_request.directory.join(REQUEST_JSON)).unwrap(),
+    )
+    .unwrap();
+    let response: serde_json::Value = serde_json::from_reader(
+        fs::File::open(captured_request.directory.join(RESPONSE_JSON)).unwrap(),
+    )
+    .unwrap();
+    let summary: serde_json::Value = serde_json::from_reader(
+        fs::File::open(captured_request.directory.join(SUMMARY_JSON)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(request_metadata["schema_version"], FORMAT_VERSION);
+    assert_eq!(request_metadata["request_id"], captured_request.id);
+    assert_eq!(request_metadata["kind"], "request");
+    assert!(request_metadata.get("format_version").is_none());
     assert_eq!(response["kind"], "response");
     assert!(response.get("source").is_none());
     assert_eq!(summary["kind"], "summary");
@@ -740,15 +751,15 @@ fn persisted_metadata_uses_the_stable_schema_names() {
     assert_eq!(summary["protocol"]["family"], "openai_responses");
     assert_eq!(summary["protocol"]["response_terminal"], false);
     assert!(summary["protocol"]["model"]["requested"].is_null());
-    assert!(record.directory.join(RESPONSE_BODY).is_file());
-    assert!(!record.directory.join(RESULT_JSON).exists());
+    assert!(captured_request.directory.join(RESPONSE_BODY).is_file());
+    assert!(!captured_request.directory.join(RESULT_JSON).exists());
 }
 
 #[test]
-fn chat_completions_uses_the_existing_v3_protocol_projection() {
+fn chat_completions_uses_the_v4_protocol_projection() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest {
             upstream_url: Some("https://example.com/v1/chat/completions"),
             headers: vec![RecordedHeader {
@@ -761,7 +772,7 @@ fn chat_completions_uses_the_existing_v3_protocol_projection() {
         .unwrap();
 
     let summary: serde_json::Value =
-        serde_json::from_reader(fs::File::open(record.directory.join(SUMMARY_JSON)).unwrap())
+        serde_json::from_reader(fs::File::open(request.directory.join(SUMMARY_JSON)).unwrap())
             .unwrap();
     assert_eq!(summary["schema_version"], FORMAT_VERSION);
     assert_eq!(summary["coding_agent_session_id"], "chat-session");
@@ -769,20 +780,44 @@ fn chat_completions_uses_the_existing_v3_protocol_projection() {
 }
 
 #[test]
-fn version_two_summaries_are_unsupported() {
-    let error = validate_schema(2, "summary", "summary").unwrap_err();
+fn version_three_summaries_are_unsupported() {
+    let error = validate_schema(3, "summary", "summary").unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("unsupported Request schema version 2")
+            .contains("unsupported Request schema version 3")
     );
+}
+
+#[test]
+fn version_three_requests_are_ignored_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    let (request, _) = store
+        .begin(ObservedRequest::test("GET", "/legacy"))
+        .unwrap();
+    let summary_path = request.directory.join(SUMMARY_JSON);
+    let mut summary: serde_json::Value =
+        serde_json::from_reader(fs::File::open(&summary_path).unwrap()).unwrap();
+    let summary = summary.as_object_mut().unwrap();
+    summary.insert("schema_version".to_string(), 3.into());
+    let request_id = summary.remove("request_id").unwrap();
+    summary.insert("record_id".to_string(), request_id);
+    fs::write(&summary_path, serde_json::to_vec_pretty(summary).unwrap()).unwrap();
+    let before = fs::read(&summary_path).unwrap();
+
+    let restarted = RequestStore::open(temp.path()).unwrap();
+    assert!(restarted.scan_summaries().unwrap().is_empty());
+    assert!(restarted.find(&request.id).is_err());
+    assert_eq!(fs::read(&summary_path).unwrap(), before);
+    assert!(request.directory.is_dir());
 }
 
 #[test]
 fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest {
             upstream_url: Some("https://example.com/v1/responses"),
             http_version: "HTTP/2",
@@ -791,14 +826,14 @@ fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
         })
         .unwrap();
     store
-        .update_summary(&record.locator, &record.summary, |summary| {
+        .update_summary(&request.locator, &request.summary, |summary| {
             summary.protocol.as_mut().unwrap().model.requested = Some("gpt-requested".to_string());
             true
         })
         .unwrap();
 
     let restarted = RequestStore::open(temp.path()).unwrap();
-    let found = restarted.find(&record.id).unwrap();
+    let found = restarted.find(&request.id).unwrap();
     assert_eq!(
         found
             .summary
@@ -811,7 +846,7 @@ fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
         Some("gpt-requested")
     );
 
-    let summary_path = record.directory.join(SUMMARY_JSON);
+    let summary_path = request.directory.join(SUMMARY_JSON);
     let mut legacy: serde_json::Value =
         serde_json::from_reader(fs::File::open(&summary_path).unwrap()).unwrap();
     legacy.as_object_mut().unwrap().remove("protocol");
@@ -821,7 +856,7 @@ fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
     let legacy_store = RequestStore::open(temp.path()).unwrap();
     assert!(
         legacy_store
-            .find(&record.id)
+            .find(&request.id)
             .unwrap()
             .summary
             .protocol
@@ -834,7 +869,7 @@ fn protocol_checkpoints_survive_restart_without_lazy_backfill() {
 fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest {
             upstream_url: Some("https://example.com/v1/responses"),
             http_version: "HTTP/2",
@@ -843,8 +878,8 @@ fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
         })
         .unwrap();
     let barrier = Arc::new(std::sync::Barrier::new(3));
-    let locator = record.locator.clone();
-    let summary = record.summary.clone();
+    let locator = request.locator.clone();
+    let summary = request.summary.clone();
     let first_store = store.clone();
     let first_barrier = barrier.clone();
     let first = std::thread::spawn(move || {
@@ -856,8 +891,8 @@ fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
             })
             .unwrap();
     });
-    let locator = record.locator.clone();
-    let summary = record.summary.clone();
+    let locator = request.locator.clone();
+    let summary = request.summary.clone();
     let second_store = store;
     let second_barrier = barrier.clone();
     let second = std::thread::spawn(move || {
@@ -876,7 +911,7 @@ fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
 
     let persisted = RequestStore::open(temp.path())
         .unwrap()
-        .find(&record.id)
+        .find(&request.id)
         .unwrap()
         .summary;
     assert_eq!(
@@ -896,11 +931,11 @@ fn concurrent_summary_updates_publish_a_single_monotonic_snapshot() {
 fn missing_terminal_metadata_is_interrupted_unless_currently_active() {
     let temp = tempfile::tempdir().unwrap();
     let first = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = first.begin(ObservedRequest::test("GET", "/bad")).unwrap();
-    assert!(first.find(&record.id).unwrap().active);
+    let (request, _) = first.begin(ObservedRequest::test("GET", "/bad")).unwrap();
+    assert!(first.find(&request.id).unwrap().active);
     let restarted = RequestStore::open(temp.path()).unwrap();
-    assert!(!restarted.find(&record.id).unwrap().active);
-    assert!(restarted.find(&record.id).unwrap().result.is_none());
+    assert!(!restarted.find(&request.id).unwrap().active);
+    assert!(restarted.find(&request.id).unwrap().result.is_none());
 }
 
 #[test]
@@ -909,48 +944,45 @@ fn collection_ignores_unknown_and_misnamed_direct_children() {
     let store = RequestStore::open(temp.path()).unwrap();
     fs::write(store.root().join("unknown-file"), b"leave me alone").unwrap();
     fs::create_dir(store.root().join("unknown-directory")).unwrap();
-    let (record, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
-    let id = record.id.clone();
+    let (request, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
+    let id = request.id.clone();
     let renamed = store.root().join(format!("wrong-name-{id}"));
-    fs::rename(&record.directory, &renamed).unwrap();
+    fs::rename(&request.directory, &renamed).unwrap();
     assert!(store.scan().unwrap().is_empty());
     let find_error = format!("{:#}", store.find(&id).unwrap_err());
     assert!(
-        find_error.contains("Request Record directory name is not structurally valid"),
+        find_error.contains("Request directory name is not structurally valid"),
         "{find_error}"
     );
     store.abandon_active(&id);
     let delete_error = format!("{:#}", store.delete_ids(&[id]).unwrap_err());
     assert!(
-        delete_error.contains("Request Record directory name is not structurally valid"),
+        delete_error.contains("Request directory name is not structurally valid"),
         "{delete_error}"
     );
     assert!(renamed.exists());
 }
 
 #[test]
-fn explicit_lookup_rejects_duplicate_record_directories() {
+fn explicit_lookup_rejects_duplicate_request_directories() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest::test("GET", "/duplicate"))
         .unwrap();
-    let original_name = record.directory.file_name().unwrap().to_str().unwrap();
+    let original_name = request.directory.file_name().unwrap().to_str().unwrap();
     let duplicate = store.root().join(original_name.replace(
-        &format!("-invalid-{}", record.id),
-        &format!("-duplicate-{}", record.id),
+        &format!("-invalid-{}", request.id),
+        &format!("-duplicate-{}", request.id),
     ));
     fs::create_dir(&duplicate).unwrap();
-    for entry in fs::read_dir(&record.directory).unwrap() {
+    for entry in fs::read_dir(&request.directory).unwrap() {
         let entry = entry.unwrap();
         fs::copy(entry.path(), duplicate.join(entry.file_name())).unwrap();
     }
 
-    let error = store.find(&record.id).unwrap_err().to_string();
-    assert!(
-        error.contains("multiple Request Record directories"),
-        "{error}"
-    );
+    let error = store.find(&request.id).unwrap_err().to_string();
+    assert!(error.contains("multiple Request directories"), "{error}");
 }
 
 #[cfg(unix)]
@@ -981,10 +1013,10 @@ fn opening_and_scanning_never_follow_symlinked_request_paths() {
     let target = outside_body.path().join("request.body");
     fs::write(&target, b"secret").unwrap();
     let store = RequestStore::open(root.path()).unwrap();
-    let (record, _) = store
+    let (request, _) = store
         .begin(ObservedRequest::test("POST", "/unsafe"))
         .unwrap();
-    let body = record.directory.join(REQUEST_BODY);
+    let body = request.directory.join(REQUEST_BODY);
     fs::remove_file(&body).unwrap();
     symlink(&target, &body).unwrap();
 
@@ -994,7 +1026,7 @@ fn opening_and_scanning_never_follow_symlinked_request_paths() {
 
 #[cfg(unix)]
 #[test]
-fn deletion_rejects_symlinked_record_entries_without_touching_targets() {
+fn deletion_rejects_symlinked_request_entries_without_touching_targets() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().unwrap();
@@ -1002,20 +1034,20 @@ fn deletion_rejects_symlinked_record_entries_without_touching_targets() {
     let target = outside.path().join("secret");
     fs::write(&target, b"keep").unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let (record, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
+    let (request, _) = store.begin(ObservedRequest::test("GET", "/bad")).unwrap();
     store
         .finish(
-            &record,
+            &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
             Outcome::Rejected,
             None,
         )
         .unwrap();
-    let terminal_directory = record.locator.path();
+    let terminal_directory = request.locator.path();
     symlink(&target, terminal_directory.join("unsafe-link")).unwrap();
     let error = store
-        .delete_ids(std::slice::from_ref(&record.id))
+        .delete_ids(std::slice::from_ref(&request.id))
         .unwrap_err()
         .to_string();
     assert!(error.contains("unsafe entry"), "{error}");
@@ -1028,11 +1060,11 @@ fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anyth
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
     let make_finished = |uri| {
-        let (record, _) = store.begin(ObservedRequest::test("GET", uri)).unwrap();
-        let id = record.id.clone();
+        let (request, _) = store.begin(ObservedRequest::test("GET", uri)).unwrap();
+        let id = request.id.clone();
         store
             .finish(
-                &record,
+                &request,
                 Instant::now(),
                 &RuntimeMeasurements::default(),
                 Outcome::Rejected,
@@ -1065,11 +1097,11 @@ fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anyth
         assert!(error.contains(expected), "{ids:?}: {error}");
         assert!(
             store.find(&first).is_ok(),
-            "{ids:?} removed the first record"
+            "{ids:?} removed the first request"
         );
         assert!(
             store.find(&second).is_ok(),
-            "{ids:?} removed the second record"
+            "{ids:?} removed the second request"
         );
     }
 

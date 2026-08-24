@@ -47,6 +47,10 @@ type ComponentRemoveTarget = {
   tenantLabel: string;
 };
 const COMPONENT_LABELS: Record<string, string> = {
+  node: "Node.js runtime",
+  codex: "Codex CLI",
+  claude: "Claude Code",
+  python: "Python toolchain",
   "claude-statusline": "Claude status line",
   "codex-statusline": "Codex status line",
   rust: "Rust toolchain",
@@ -58,7 +62,7 @@ function componentLabel(kind: string): string {
 function componentPresentation(row: ComponentRow): {
   statusLabel: string;
   statusClass: string;
-  primaryAction: "Install" | "Repair" | "Restore" | "Retry inspection" | null;
+  primaryAction: "Install" | "Update" | "Repair" | "Restore" | "Retry inspection" | null;
   canRemove: boolean;
   detail: string;
 } {
@@ -84,7 +88,7 @@ function componentPresentation(row: ComponentRow): {
       return {
         statusLabel: "Installed",
         statusClass: styles.goodStatus,
-        primaryAction: null,
+        primaryAction: row.supports_version ? "Update" : null,
         canRemove: true,
         detail: row.version ? `Installed version ${row.version}.` : "Installed and healthy.",
       };
@@ -109,8 +113,8 @@ function componentPresentation(row: ComponentRow): {
         statusLabel: "Unmanaged",
         statusClass: styles.warnStatus,
         primaryAction: null,
-        canRemove: true,
-        detail: "Detected state is not owned by AIBox and will not be overwritten.",
+        canRemove: false,
+        detail: "Detected state is not owned by AIBox and will not be overwritten or deleted.",
       };
     default:
       return {
@@ -383,7 +387,7 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
         tenantSelection(selected),
         row.kind,
         install,
-        versions[row.kind] || null,
+        versions[row.kind]?.trim() || null,
       );
       if ("id" in result) onOperation?.(result);
       await loadComponents();
@@ -633,6 +637,7 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
                   const supportsVersion =
                     row.supports_version &&
                     (presentation.primaryAction === "Install" ||
+                      presentation.primaryAction === "Update" ||
                       presentation.primaryAction === "Repair" ||
                       presentation.primaryAction === "Restore");
                   return (
@@ -664,7 +669,7 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
                       {supportsVersion && (
                         <TextInput
                           aria-label={`${label} version`}
-                          placeholder="stable"
+                          placeholder="latest"
                           value={versions[row.kind] ?? ""}
                           onChange={(event) =>
                             setVersions((value) => ({ ...value, [row.kind]: event.target.value }))
@@ -703,7 +708,7 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
                             }
                           >
                             <Trash2 size={14} />
-                            {row.status === "unmanaged" ? "Remove detected state" : "Remove"}
+                            Remove
                           </button>
                         )}
                       </div>
@@ -831,8 +836,8 @@ export function TenantPage({ api, operation, search, onLocationChange, onOperati
                 <strong>{componentPresentation(componentRemoveTarget.row).statusLabel}</strong>
               </p>
               <p>
-                Existing Component-owned state will be deleted. Cargo and GOPATH user state is
-                preserved for toolchains.
+                Existing Component-owned state will be deleted. Workspace environments and
+                user-owned package, cache, credential, and configuration state are preserved.
               </p>
             </div>
           }

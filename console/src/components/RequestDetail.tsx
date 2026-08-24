@@ -8,16 +8,16 @@ import type {
   DecodedBodyState,
   DetailTab,
   EventTimingIndex,
-  RecordDetail as RecordDetailData,
+  RequestDetail as RequestDetailData,
 } from "../types";
 import { bodyHeaders } from "../bodyPresentation";
 import { createBodyViewMemory, type BodyViewMemory } from "../bodyViewMemory";
 import { elapsedNsMs, resolveRequestedEffective, timingStages, tokenCount } from "../summary";
 import { useClipboardFeedback } from "../useClipboardFeedback";
-import { decodeHeader, duration, formatTimestamp, recordDetailUrl } from "../utils";
+import { decodeHeader, duration, formatTimestamp, requestDetailUrl } from "../utils";
 import { BodyViewer } from "./BodyViewer";
-import styles from "./RecordDetail.module.css";
-import { RecordHeadlineStatus } from "./RecordStatus";
+import styles from "./RequestDetail.module.css";
+import { RecordHeadlineStatus } from "./RequestStatus";
 import { assessmentPrimaryLabel } from "./statusPresentation";
 
 const TABS: Array<{ value: DetailTab; label: string }> = [
@@ -26,8 +26,8 @@ const TABS: Array<{ value: DetailTab; label: string }> = [
   { value: "response", label: "Response" },
 ];
 
-interface RecordDetailProps {
-  detail: RecordDetailData;
+interface RequestDetailProps {
+  detail: RequestDetailData;
   bodies: Record<BodyKind, Uint8Array[]>;
   bodyStatus: Record<BodyKind, BodyLoadStatus>;
   decodedBodies: Record<BodyKind, DecodedBodyState>;
@@ -38,7 +38,7 @@ interface RecordDetailProps {
   loadingBody: boolean;
 }
 
-export function RecordDetail({
+export function RequestDetail({
   detail,
   bodies,
   bodyStatus,
@@ -48,7 +48,7 @@ export function RecordDetail({
   onTabChange,
   onDownload,
   loadingBody,
-}: RecordDetailProps) {
+}: RequestDetailProps) {
   const [bodyViews, setBodyViews] = useState<Record<BodyKind, BodyViewMemory>>({
     request: createBodyViewMemory(),
     response: createBodyViewMemory(),
@@ -56,8 +56,8 @@ export function RecordDetail({
   const tabRefs = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({});
   const request = detail.request;
   const response = detail.response;
-  const [origin, path] = recordDetailUrl(request);
-  const panelId = `record-panel-${request.id}`;
+  const [origin, path] = requestDetailUrl(request);
+  const panelId = `request-panel-${request.id}`;
 
   function selectAdjacentTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
@@ -73,7 +73,7 @@ export function RecordDetail({
   }
 
   return (
-    <section className={styles.panel} aria-label="Request Record details">
+    <section className={styles.panel} aria-label="Request details">
       <div className={styles.header}>
         <div className={styles.requestOverview}>
           <span className={styles.method}>{request.method}</span>
@@ -88,14 +88,14 @@ export function RecordDetail({
           assessment={detail.assessment}
         />
       </div>
-      <div className={styles.tabs} role="tablist" aria-label="Record data">
+      <div className={styles.tabs} role="tablist" aria-label="Request data">
         {TABS.map(({ value, label }, index) => (
           <button
             ref={(element) => {
               tabRefs.current[value] = element;
             }}
             key={value}
-            id={`record-tab-${request.id}-${value}`}
+            id={`request-tab-${request.id}-${value}`}
             type="button"
             role="tab"
             aria-controls={panelId}
@@ -113,14 +113,14 @@ export function RecordDetail({
         id={panelId}
         className={styles.tabPanel}
         role="tabpanel"
-        aria-labelledby={`record-tab-${request.id}-${tab}`}
+        aria-labelledby={`request-tab-${request.id}-${tab}`}
       >
         {tab === "summary" ? (
           <Summary detail={detail} />
         ) : tab === "response" && !response ? (
           <div className={styles.noResponse}>
             <h2>No response received</h2>
-            <p>The Request Record does not contain response metadata.</p>
+            <p>The Request does not contain response metadata.</p>
           </div>
         ) : (
           <MessageData
@@ -141,7 +141,7 @@ export function RecordDetail({
   );
 }
 
-function Summary({ detail }: { detail: RecordDetailData }) {
+function Summary({ detail }: { detail: RequestDetailData }) {
   const [copiedSessionId, copySessionIdText] = useClipboardFeedback<string>();
   const total = detail.result?.total_ms ?? detail.live_total_ms;
   const protocol = detail.summary.protocol;
@@ -164,8 +164,8 @@ function Summary({ detail }: { detail: RecordDetailData }) {
 
   return (
     <div className={styles.summary}>
-      <section className={styles.modelSummary} aria-labelledby="record-model-title">
-        <h2 id="record-model-title">Model</h2>
+      <section className={styles.modelSummary} aria-labelledby="request-model-title">
+        <h2 id="request-model-title">Model</h2>
         <div className={styles.modelHeadline}>
           <p className={styles.modelName} title={`Model ${model}`}>
             <span className={styles.modelValue}>{model}</span>
@@ -203,8 +203,8 @@ function Summary({ detail }: { detail: RecordDetailData }) {
         </dl>
         <TokenUsageGroup detail={detail} />
       </section>
-      <section aria-labelledby="record-timing-title">
-        <h2 id="record-timing-title">Timing</h2>
+      <section aria-labelledby="request-timing-title">
+        <h2 id="request-timing-title">Timing</h2>
         <dl className={`${styles.metricGrid} ${styles.timingMetrics}`}>
           <Metric label="First token" value={duration(firstToken)} />
           <Metric label="Duration" value={duration(total)} />
@@ -244,8 +244,8 @@ function Summary({ detail }: { detail: RecordDetailData }) {
           <p className={styles.sectionState}>Timing stages are not available yet.</p>
         )}
       </section>
-      <section className={styles.diagnostics} aria-labelledby="record-diagnostics-title">
-        <h2 id="record-diagnostics-title">Diagnostics</h2>
+      <section className={styles.diagnostics} aria-labelledby="request-diagnostics-title">
+        <h2 id="request-diagnostics-title">Diagnostics</h2>
         {hasDiagnostics ? (
           <div className={styles.diagnosticGroups}>
             <DiagnosticGroup title="Proxy / transport" entries={diagnostics.request} tone="error" />
@@ -261,7 +261,7 @@ function Summary({ detail }: { detail: RecordDetailData }) {
   );
 }
 
-function TokenUsageGroup({ detail }: { detail: RecordDetailData }) {
+function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
   const protocol = detail.summary.protocol;
   const usage = protocol?.token_usage ?? null;
   const claude = protocol?.family === "claude_messages";
@@ -307,8 +307,8 @@ function TokenUsageGroup({ detail }: { detail: RecordDetailData }) {
     usage?.output_tokens,
   ].some((value) => value != null);
   return (
-    <section className={styles.usageGroup} aria-labelledby="record-token-title">
-      <h3 id="record-token-title" className={styles.usageHeading}>
+    <section className={styles.usageGroup} aria-labelledby="request-token-title">
+      <h3 id="request-token-title" className={styles.usageHeading}>
         Token usage
       </h3>
       {hasUsageData ? (
@@ -417,7 +417,7 @@ function DiagnosticGroup({
   );
 }
 
-function usageStateMessage(detail: RecordDetailData): string {
+function usageStateMessage(detail: RequestDetailData): string {
   const protocol = detail.summary.protocol;
   if (!protocol || protocol.family === "unknown") {
     return "Token usage is unavailable for this protocol.";
@@ -456,7 +456,7 @@ function MessageData({
   onDownload,
 }: {
   kind: BodyKind;
-  detail: RecordDetailData;
+  detail: RequestDetailData;
   bodyChunks: Uint8Array[];
   bodyStatus: BodyLoadStatus;
   decoded: DecodedBodyState;

@@ -6,7 +6,7 @@ const error: NotificationItemData = {
   id: 1,
   source: "list",
   tone: "error",
-  title: "Couldn’t load request records",
+  title: "Couldn’t load requests",
   message: "scan failed",
   actionLabel: "Retry",
 };

@@ -21,7 +21,7 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   container cleanup under wrapper control.
 - [0008: Global trusted Request Proxy](0008-global-trusted-request-service.md)
   separates the Request Proxy from Tenants on one explicitly trusted listener.
-- [0009: Request Record evidence and projections](0009-request-record-evidence-and-projections.md)
+- [0009: Request evidence and projections](0009-request-evidence-and-projections.md)
   keeps raw diagnostic evidence beside stable materialized views.
 - [0010: Foreground Service and Console](0010-foreground-service-and-console.md)
   moves management into one Root-local foreground Service while preserving Run.
@@ -32,7 +32,7 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
 - [0013: Last Application and Config Drift](0013-last-application-and-config-drift.md)
   records diagnostic application provenance without reconciliation.
 - [0014: Fixed Runtime Image](0014-fixed-runtime-image.md) keeps every Run,
-  build, and toolchain installer on `aibox:latest`.
+  Console build, and Component installer on `aibox:latest`.
 - [0015: Named-only Visual Config Editing](0015-visual-and-raw-config-editors.md)
   keeps Visual editing on fixed Config Fields while preserving native Raw data.
 - [0016: Session conversation projection](0016-session-conversation-projection.md)
@@ -45,3 +45,6 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
 - [0019: Native Console UI primitives](0019-native-console-ui-primitives.md)
   keeps ordinary controls native and AIBox-owned without a general visual or
   headless UI framework.
+- [0020: Tenant-local mutable runtimes](0020-tenant-local-mutable-runtimes.md)
+  keeps application language runtimes and Coding Agent executables out of the
+  Runtime Image so each Managed Tenant can upgrade them independently.

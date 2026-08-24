@@ -28,11 +28,13 @@ supports Linux `amd64` and `arm64`.
 git clone https://github.com/rbee3u/aibox.git
 cd aibox
 cargo install --locked --path .
-aibox serve
+aibox console
 ```
 
 Open `http://127.0.0.1:9923/`. Build the Runtime Image from Overview, then keep
-the Service running while using the Console or Request Proxy.
+the Service running while using the Console or Request Proxy. In Tenants, open
+the `default` Tenant's Components and install Codex, Claude, or both before the
+first corresponding Run.
 
 From another terminal in a Workspace directory, start Codex or Claude and
 follow the Coding Agent's sign-in flow:
@@ -51,7 +53,7 @@ aibox run --agent claude -- "review the current changes"
 ```
 
 aibox parses only the left side and forwards the right side unchanged. The
-public CLI is `aibox serve [--listen IP:PORT]`, `aibox run`, and `aibox build`.
+public CLI is `aibox console [--listen IP:PORT]` and `aibox run`. Runtime Image,
 Tenant, Component, Config, and Session management lives in the Console.
 
 ## Filesystem Boundary
@@ -77,7 +79,7 @@ cleanup behavior.
 
 ## Tenants
 
-`aibox serve` creates or repairs the protected Default Managed Tenant baseline
+`aibox console` creates or repairs the protected Default Managed Tenant baseline
 before it starts listening. Running without a Service retains the same fallback:
 the first validated Run can initialize `default` before Docker starts, even if
 Docker later fails or the Coding Agent exits nonzero. Use a different Tenant
@@ -89,7 +91,7 @@ aibox run --tenant work
 
 Create `work` first from the Console's Tenants module.
 
-Tenant Homes, Named Configs, and Request Records persist under `$HOME/.aibox`.
+Tenant Homes, Named Configs, and Requests persist under `$HOME/.aibox`.
 `AIBOX_ROOT` selects another location, which must be a directory dedicated to
 aibox because Tenant deletion removes subtrees from it.
 
@@ -100,15 +102,18 @@ protected from deletion. The real host Home is the separate Host Tenant. Read
 
 ## Components
 
-Install optional status lines or Tenant-local toolchains from a Tenant's
-Components view without changing the Tenant baseline.
+Install or update Tenant-local Coding Agents, Node.js, Python, language
+toolchains, and optional status lines from a Tenant's Components view.
 
-Omitting a Rust or Go version installs the current stable release. Toolchain
-installation uses the shared Docker image and requires a built Runtime Image;
-status lines directly edit their native Current Config values; Host statusline
-Components are available through `--host`, while Rust and Go remain Managed
-Tenant-only. See
-[Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
+Omitting a version installs the current stable release; an exact `X.Y.Z`
+selects that release. Runtime installation uses the shared Docker image and
+requires a built Runtime Image, but upgrades do not rebuild it. Codex and
+Claude use their official standalone/native installers and do not depend on
+Node.js. The Python toolchain bundles uv/uvx, one active CPython, pip, and venv;
+it is independent from Node, Rust, and Go. Status lines directly edit native
+Current Config values; Host statusline Components are available through the
+Host Tenant, while runtime and toolchain Components remain Managed Tenant-only.
+See [Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
 replacement semantics.
 
 ## Configs
@@ -161,11 +166,16 @@ Start the foreground Service, then open the Requests module at
 `http://127.0.0.1:9923/_aibox/ui/requests`:
 
 ```sh
-aibox serve
+aibox console
 ```
 
-The Service prints its listener and Console address. Request Records persist
+The Service prints its listener and Console address. Requests persist
 under `$AIBOX_ROOT/requests/` (`$HOME/.aibox/requests/` by default).
+
+Request storage format v4 does not read or migrate format v3. Before the first
+start of an upgraded Service, stop the old Service, optionally back up the
+Requests directory, and manually remove `$AIBOX_ROOT/requests`. The new Service
+recreates an empty directory.
 
 Console development commands and the embedded asset workflow are documented in
 [Console UI Development](docs/console-ui.md).
@@ -200,17 +210,16 @@ For Claude, select its Current Config and set the native base URL:
 ```
 
 Docker Desktop supplies `host.docker.internal`. Native Linux Docker usually
-needs `aibox serve --listen 0.0.0.0:9923`. Reachable clients may use the
+needs `aibox console --listen 0.0.0.0:9923`. Reachable clients may use the
 Request Proxy, while Console and Control API routes still require a loopback
 TCP peer. See
 [Request Proxy](docs/sandbox.md#request-proxy) for the complete behavior.
 
 ## CLI Surface
 
-`aibox serve` starts the foreground Service and embedded Console. `aibox run`
-starts a transient Coding Agent Run. `aibox build` builds the fixed
-`aibox:latest` Runtime Image and accepts `--force` to bypass the Docker cache.
-All other lifecycle and diagnostic workflows are available in the Console.
+`aibox console` starts the foreground Service and embedded Console. `aibox run`
+starts a transient Coding Agent Run. Runtime Image construction and all other
+lifecycle and diagnostic workflows are available only in the Console.
 
 ## Learn More
 
@@ -222,8 +231,8 @@ All other lifecycle and diagnostic workflows are available in the Console.
   credentials, one-time application, and filesystem behavior.
 - [Sandbox and Mounts](docs/sandbox.md): mount rules, security boundary,
   cleanup, Request Proxy behavior, and the fixed Runtime Image.
-- [Embedded Dockerfile](assets/aibox.Dockerfile): installed packages and pinned
-  Coding Agent versions.
+- [Embedded Dockerfile](assets/aibox.Dockerfile): the shared base packages in
+  the fixed Runtime Image.
 
 ## Development
 

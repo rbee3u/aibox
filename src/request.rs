@@ -1,4 +1,4 @@
-//! Shared Request state plus the socket-free legacy router used by API and
+//! Shared Request state plus the socket-free test router used by API and
 //! proxy tests. The foreground listener and combined routing live in
 //! [`crate::service`].
 //!
@@ -19,7 +19,7 @@ use axum::Router;
 #[cfg(test)]
 use axum::extract::State;
 #[cfg(test)]
-use axum::routing::{get, post};
+use axum::routing::get;
 #[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 #[cfg(test)]
@@ -61,7 +61,7 @@ impl AppState {
 }
 
 #[cfg(test)]
-fn request_viewer_url(listen: SocketAddr) -> String {
+fn console_url(listen: SocketAddr) -> String {
     let ip = match listen.ip() {
         IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
         IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
@@ -72,51 +72,17 @@ fn request_viewer_url(listen: SocketAddr) -> String {
 
 #[cfg(test)]
 fn router(state: AppState) -> Router {
-    let request_viewer = Router::new()
-        .route("/", get(request_viewer_index))
-        .route("/_aibox/requests/app.css", get(request_web::css))
-        .route("/_aibox/requests/app.js", get(request_web::js))
-        .route(
-            "/_aibox/requests/api/records",
-            get(request_web::list_records),
-        )
-        .route(
-            "/_aibox/requests/api/records/delete",
-            post(request_web::delete_records),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}",
-            get(request_web::record_detail),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/request-body",
-            get(request_web::request_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-body",
-            get(request_web::response_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/request-body-decoded",
-            get(request_web::decoded_request_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-body-decoded",
-            get(request_web::decoded_response_body),
-        )
-        .route(
-            "/_aibox/requests/api/records/{id}/response-event-timings",
-            get(request_web::response_event_timings),
-        )
-        .route("/_aibox/requests/{*path}", get(request_web::not_found));
+    let management = Router::new()
+        .route("/", get(console_index))
+        .merge(request_web::api_router());
     Router::new()
-        .merge(request_viewer)
+        .merge(management)
         .fallback(proxy_fallback)
         .with_state(state)
 }
 
 #[cfg(test)]
-async fn request_viewer_index() -> axum::response::Response {
+async fn console_index() -> axum::response::Response {
     request_web::index("test-csp-nonce").await
 }
 
@@ -131,7 +97,7 @@ async fn proxy_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request_store::{Outcome, StoredRecord};
+    use crate::request_store::{Outcome, StoredRequest};
     use axum::body::Body;
     use axum::http::{HeaderValue, Request, Response, StatusCode, header};
     use axum::routing::{get, post};
@@ -141,14 +107,14 @@ mod tests {
     use tower::ServiceExt as _;
 
     #[test]
-    fn request_viewer_url_maps_wildcards_to_clickable_loopback_addresses() {
+    fn console_url_maps_wildcards_to_clickable_loopback_addresses() {
         for (listen, expected) in [
             ("127.0.0.1:9923", "http://127.0.0.1:9923/"),
             ("0.0.0.0:8080", "http://127.0.0.1:8080/"),
             ("[::]:9923", "http://[::1]:9923/"),
             ("192.0.2.10:9923", "http://192.0.2.10:9923/"),
         ] {
-            assert_eq!(request_viewer_url(listen.parse().unwrap()), expected);
+            assert_eq!(console_url(listen.parse().unwrap()), expected);
         }
     }
 
@@ -160,15 +126,7 @@ mod tests {
 
         for (path, content_type) in [
             ("/", "text/html; charset=utf-8"),
-            ("/_aibox/requests/app.css", "text/css; charset=utf-8"),
-            (
-                "/_aibox/requests/app.js",
-                "application/javascript; charset=utf-8",
-            ),
-            (
-                "/_aibox/requests/api/records",
-                "application/json; charset=utf-8",
-            ),
+            ("/_aibox/api/requests", "application/json; charset=utf-8"),
         ] {
             let request = Request::builder().uri(path).body(Body::empty()).unwrap();
             let response = service.clone().oneshot(request).await.unwrap();
@@ -199,6 +157,54 @@ mod tests {
             .unwrap();
         let response = service.oneshot(unconstrained_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn requests_router_exposes_the_complete_control_api_surface() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(root.path()).unwrap();
+        let service = router(state);
+
+        for path in [
+            "/_aibox/api/requests/request%2Fid",
+            "/_aibox/api/requests/request%2Fid/request-body?offset=1",
+            "/_aibox/api/requests/request%2Fid/response-body?offset=1",
+            "/_aibox/api/requests/request%2Fid/request-body-decoded",
+            "/_aibox/api/requests/request%2Fid/response-body-decoded",
+            "/_aibox/api/requests/request%2Fid/response-event-timings?after_sequence=1",
+        ] {
+            let response = service
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+
+        let invalid_page = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/_aibox/api/requests?page=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid_page.status(), StatusCode::BAD_REQUEST);
+
+        let empty_delete = service
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/_aibox/api/requests/delete")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"ids":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty_delete.status(), StatusCode::BAD_REQUEST);
     }
 
     async fn echo(request: Request<Body>) -> Response<Body> {
@@ -257,17 +263,17 @@ mod tests {
         (state, upstream, proxy_address, upstream_task, proxy_task)
     }
 
-    async fn wait_for_terminal(state: &AppState) -> StoredRecord {
+    async fn wait_for_terminal(state: &AppState) -> StoredRequest {
         for _ in 0..100 {
-            let records = state.store.scan().unwrap();
-            if let Some(record) = records.into_iter().next()
-                && record.result.is_some()
+            let requests = state.store.scan().unwrap();
+            if let Some(request) = requests.into_iter().next()
+                && request.result.is_some()
             {
-                return record;
+                return request;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("Request Record did not reach a terminal state");
+        panic!("Request did not reach a terminal state");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -305,13 +311,13 @@ mod tests {
         );
         assert_eq!(response.bytes().await.unwrap(), raw);
 
-        let record = wait_for_terminal(&state).await;
+        let request = wait_for_terminal(&state).await;
         assert_eq!(
-            record.request.upstream_url.as_deref(),
+            request.request.upstream_url.as_deref(),
             Some(target.as_str())
         );
         assert_eq!(
-            record
+            request
                 .request
                 .headers
                 .iter()
@@ -320,14 +326,14 @@ mod tests {
             2
         );
         assert_eq!(
-            std::fs::read(record.directory.join("request.body")).unwrap(),
+            std::fs::read(request.directory.join("request.body")).unwrap(),
             raw
         );
         assert_eq!(
-            std::fs::read(record.directory.join("response.body")).unwrap(),
+            std::fs::read(request.directory.join("response.body")).unwrap(),
             raw
         );
-        assert_eq!(record.result.unwrap().outcome, Outcome::Completed);
+        assert_eq!(request.result.unwrap().outcome, Outcome::Completed);
 
         let redirect_url = format!("http://{proxy_address}/http://{upstream}/v1/redirect");
         assert_eq!(

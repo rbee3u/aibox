@@ -1,6 +1,6 @@
-//! Classifying one Request Record into its display Record Assessment.
+//! Classifying one Request into its display Request Assessment.
 //!
-//! A Record Assessment is a presentation label derived from independent evidence
+//! A Request Assessment is a presentation label derived from independent evidence
 //! — Request Outcome, HTTP status, Provider Error, and protocol diagnostics — not
 //! a replacement for it. Active takes temporary visual precedence, every finding
 //! stays separately available for Diagnostics, and one prioritized primary
@@ -9,15 +9,15 @@
 //! [`refresh_assessment`] materializes the value into the Summary on the write
 //! path so lists never recompute it, while [`effective_assessment`] re-derives
 //! the interrupted case at read time. See
-//! `docs/adr/0009-request-record-evidence-and-projections.md`.
+//! `docs/adr/0009-request-evidence-and-projections.md`.
 
 use crate::request_interpretation::{ProtocolFamily, ResponseModeValue};
 use crate::request_store::{
     AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, Outcome,
-    RecordAssessment, SummaryMetadata,
+    RequestAssessment, SummaryMetadata,
 };
 
-pub(crate) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RecordAssessment {
+pub(crate) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RequestAssessment {
     calculate_assessment(summary, active, !summary.terminal && !active)
 }
 
@@ -38,8 +38,7 @@ pub(crate) fn diagnostic_findings(
                 level: AssessmentLevel::Warning,
                 source: AssessmentSource::Request,
                 kind: "interrupted".to_string(),
-                message: "Request Proxy stopped before the Request Record was finalized"
-                    .to_string(),
+                message: "Request Proxy stopped before the Request was finalized".to_string(),
                 phase: None,
                 at_ns: None,
             },
@@ -194,18 +193,18 @@ pub(crate) fn calculate_assessment(
     summary: &SummaryMetadata,
     active: bool,
     interrupted: bool,
-) -> RecordAssessment {
+) -> RequestAssessment {
     let findings = diagnostic_findings(summary, interrupted);
     if active {
-        return RecordAssessment::active(findings.len());
+        return RequestAssessment::active(findings.len());
     }
     let Some(primary) = findings
         .iter()
         .min_by_key(|finding| finding_sort_key(finding))
     else {
-        return RecordAssessment::ok();
+        return RequestAssessment::ok();
     };
-    RecordAssessment {
+    RequestAssessment {
         level: primary.level,
         primary: Some(AssessmentPrimary {
             source: primary.source,
@@ -269,7 +268,7 @@ fn outcome_fallback_message(outcome: Outcome) -> &'static str {
         Outcome::Rejected => "The proxy rejected the upstream request",
         Outcome::UpstreamError => "The upstream request or response failed",
         Outcome::ClientDisconnected => "The client disconnected before the proxy attempt completed",
-        Outcome::RecordingFailed => "The Request Record could not be recorded completely",
+        Outcome::RecordingFailed => "The Request could not be recorded completely",
         Outcome::ServerShutdown => "Request Proxy stopped before the attempt completed",
     }
 }

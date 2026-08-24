@@ -8,7 +8,7 @@ or select the Host Tenant.
 
 A **Managed Tenant** is an aibox-managed, runnable identity with a Tenant Home.
 The **Default Managed Tenant** is the protected Managed Tenant named `default`.
-After taking the Service Lock, `aibox serve` creates or repairs its Tenant Home
+After taking the Service Lock, `aibox console` creates or repairs its Tenant Home
 baseline and fails before listening if the baseline cannot be established
 safely. A validated Run can still initialize a missing Managed Tenant when no
 Service has done so, even when Docker or the Coding Agent later exits nonzero. A
@@ -24,7 +24,7 @@ is selected by the Console for host-side Config, Session, and statusline work.
 It cannot Run and is never included in the Managed Tenant list or deletion
 selection. `host` and the Host Tenant are distinct identities.
 
-Tenant Homes, Named Config catalogs, and Request Records live below the
+Tenant Homes, Named Config catalogs, and Requests live below the
 dedicated `$AIBOX_ROOT` (default `$HOME/.aibox`). Do not point that root at a
 general-purpose directory: deletion is structurally scoped but removes selected
 Tenant and catalog subtrees. A Managed Tenant exists exactly when
@@ -44,11 +44,11 @@ $AIBOX_ROOT/
   codex/<name>/
   claude/__host/                  # Host Tenant catalog
   codex/__host/
-  requests/<record>/              # global Request Records
+  requests/<request>/             # global Requests
 ```
 
 Only `tenants/<name>` subtrees may be mounted from inside `$AIBOX_ROOT`. Named
-Config catalogs, Request Records, and lifecycle staging remain host-only.
+Config catalogs, Requests, and lifecycle staging remain host-only.
 Unknown collection entries are ignored during listing; explicitly selected
 unsafe entries are rejected.
 
@@ -113,31 +113,84 @@ separate Component registry. Tenant initialization installs no Components.
 
 The fixed catalog is:
 
+- `codex`, the official standalone OpenAI Codex executable;
+- `claude`, the official native Claude Code executable;
 - `claude-statusline`, a script plus native Claude `settings.json.statusLine`;
 - `codex-statusline`, native Codex `tui.status_line` values;
+- `node`, a Tenant-local Node.js runtime and npm installation;
+- `python`, a Tenant-local Python toolchain containing uv/uvx, one active
+  stable CPython, pip, and venv;
 - `rust`, a Managed Tenant-local stable Rust toolchain;
 - `go`, a Managed Tenant-local stable Go toolchain.
 
-Host Tenant Components contain only the two statuslines. Rust and Go are
-Managed Tenant-only and install through a cleanup-aware container that mounts
-only the selected Tenant Home. Statusline installation edits native Current
-Config directly and preserves unrelated settings. Config Application does not
-own or remove statusline fields.
+Host Tenant Components contain only the two statuslines. Runtime and toolchain
+Components are Managed Tenant-only and install through a cleanup-aware
+container that mounts only the selected Tenant Home. Statusline installation
+edits native Current Config directly and preserves unrelated settings. Config
+Application does not own or remove statusline fields.
+
+Versioned Components have one active version. An empty version selects the
+current stable release; `X.Y.Z` installs, upgrades, or downgrades to that exact
+release. Updating does not rebuild the Runtime Image. Node.js stores releases
+under `.node`, Codex uses its official `.codex/packages/standalone` layout, and
+Claude uses its official `.local/share/claude/versions` layout. Python stores
+uv releases, uv-managed CPython releases, and atomic generations under
+`.python`; the displayed Component version is CPython's version, not uv's.
+Codex and Claude are native executables and do not depend on Node. Python,
+Node, Rust, and Go are independent Components and never install one another.
+Building a native Node addon with node-gyp requires installing Python
+separately. Old Python and uv releases remain until full Python Component
+removal so existing virtual environments can retain immutable interpreter
+paths.
+
+An empty Python version first obtains the current stable uv and then installs
+the latest stable CPython known to that uv release. An exact `X.Y.Z` selects
+that stable CPython release. Users can explicitly run `uv python install
+X.Y.Z` to add another managed interpreter, but it does not create another
+Component or change the active Component generation. Normal `uv run` and `uv
+venv` operations cannot download an interpreter implicitly.
 
 Inspection reports `installed`, `incomplete`, `modified`, `unmanaged`, or
 `not-installed`. Partial recognizable state is `incomplete` and can be repaired
-by installation. Unmanaged toolchains are not claimed or replaced
-automatically. Explicit removal deletes only a Component's owned paths, keeps
-Cargo and GOPATH user state, and confirms before deleting existing state.
+by installation. Unmanaged runtime state is not claimed or replaced
+automatically. Unmanaged state has no Console removal action. Explicit removal
+deletes only a Component's launcher and owned release paths and confirms before
+deleting existing state. Python removal deletes `.python` and its aibox-owned
+launchers but preserves uv configuration/cache/tools, pip user state, and
+Workspace `.venv` directories. Other removals keep Coding Agent configuration,
+credentials, Transcripts, npm user state, Cargo, and GOPATH.
 
-The shared Runtime Image must already exist before a Rust or Go installation
-needs to start its installer. It is always the fixed `aibox:latest` image; build
-it with `aibox build` or from Console Overview.
+The shared Runtime Image must already exist before a runtime or toolchain
+installer can start. It is always the fixed `aibox:latest` image and is built
+only from Console Overview. After upgrading from an image that contained
+Node.js, Python/uv, and the Coding Agents, rebuild it once there to remove those
+old copies. No image-owned Python or Agent is copied into Tenant Homes;
+explicitly install every required Component in each Tenant after the rebuild.
+
+### Tenant Environment
+
+Tenant initialization creates and repairs the aibox-owned
+`.config/aibox/env.sh`. It supplies HOME-local defaults for Cargo, rustup,
+GOROOT, GOPATH, npm's global prefix, and uv's Python install/bin directories. It
+adds Component binary directories without discarding or duplicating the user's
+PATH, disables Claude's background auto-updater, requires uv-managed Python,
+and permits only explicit interpreter downloads. Users should put their own
+exports in `.bash_profile` or `.bashrc`; aibox never creates or modifies either
+file. User-defined uv storage paths are preserved, while the managed-only and
+manual-download policies are unconditional.
+
+A Run starts login Bash, which reads `.bash_profile` using standard Bash
+semantics. The user may source `.bashrc` from that file when desired. aibox then
+loads its environment file and starts the selected Agent from `.local/bin`.
+Environment and Component changes take effect on the next Run. A missing,
+incomplete, or unmanaged selected Agent Component stops the Run with an
+instruction to resolve it in the Console; there is no first-Run install or
+Runtime Image fallback.
 
 ## Concurrency
 
 Tenant lifecycle can recover its own interrupted filesystem work, but aibox does
 not coordinate separate processes editing the same Tenant or Coding Agent state.
-One process supports only one active container operation: a Run or a toolchain
+One process supports only one active container operation: a Run or a Component
 installation. See [Configs](configs.md) for per-file application and edit
 behavior.

@@ -20,39 +20,23 @@ archive=$(mktemp)
 extract=$(mktemp -d)
 trap 'rm -f "$metadata" "$archive"; rm -rf "$extract"' EXIT
 curl -fsSL 'https://go.dev/dl/?mode=json&include=all' -o "$metadata"
-read -r version filename sha256 < <(
-    python3 - "$metadata" "$requested" "$arch" <<'PY'
-import json
-import pathlib
-import sys
-
-releases = json.loads(pathlib.Path(sys.argv[1]).read_text())
-requested = sys.argv[2]
-arch = sys.argv[3]
-release = next(
-    (item for item in releases if item["version"] == f"go{requested}"),
-    None,
-) if requested else next((item for item in releases if item.get("stable")), None)
-if release is None:
-    raise SystemExit("requested stable Go version was not found")
-archive_file = next(
-    (
-        item
-        for item in release["files"]
-        if item["os"] == "linux"
-        and item["arch"] == arch
-        and item["kind"] == "archive"
-    ),
-    None,
-)
-if archive_file is None:
-    raise SystemExit("no official Go archive for this architecture")
-print(
-    release["version"].removeprefix("go"),
-    archive_file["filename"],
-    archive_file["sha256"],
-)
-PY
+IFS=$'\t' read -r version filename sha256 < <(
+    jq -er --arg requested "$requested" --arg arch "$arch" '
+        (if $requested == ""
+         then [.[] | select(.stable == true)][0]
+         else [.[] | select(.version == ("go" + $requested))][0]
+         end) as $release
+        | if $release == null
+          then error("requested stable Go version was not found")
+          else $release
+          end
+        | ([.files[]
+            | select(.os == "linux" and .arch == $arch and .kind == "archive")][0]) as $file
+        | if $file == null
+          then error("no official Go archive for this architecture")
+          else [(.version | ltrimstr("go")), $file.filename, $file.sha256] | @tsv
+          end
+    ' "$metadata"
 )
 
 if [[ -x $HOME/.goroot/bin/go \

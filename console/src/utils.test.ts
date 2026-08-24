@@ -7,8 +7,8 @@ import {
   duration,
   formatTimestamp,
   mergeEventTimings,
-  recordDetailUrl,
-  recordUrl,
+  requestDetailUrl,
+  requestUrl,
 } from "./utils";
 
 describe("request display utilities", () => {
@@ -71,15 +71,15 @@ describe("request display utilities", () => {
   });
 
   it("derives list labels", () => {
-    expect(recordUrl({ upstream_url: "https://api.example/v1?a=1", incoming_uri: "/raw" })).toEqual(
-      {
-        host: "api.example",
-        path: "/v1",
-        label: "api.example/v1",
-        title: "https://api.example/v1?a=1",
-      },
-    );
-    expect(recordUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual({
+    expect(
+      requestUrl({ upstream_url: "https://api.example/v1?a=1", incoming_uri: "/raw" }),
+    ).toEqual({
+      host: "api.example",
+      path: "/v1",
+      label: "api.example/v1",
+      title: "https://api.example/v1?a=1",
+    });
+    expect(requestUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual({
       host: "invalid target",
       path: "/raw",
       label: "invalid target /raw",
@@ -89,12 +89,12 @@ describe("request display utilities", () => {
 
   it("derives detail labels while preserving the full origin", () => {
     expect(
-      recordDetailUrl({
+      requestDetailUrl({
         upstream_url: "https://api.example/v1?a=1",
         incoming_uri: "/raw",
       }),
     ).toEqual(["https://api.example", "/v1?a=1"]);
-    expect(recordDetailUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
+    expect(requestDetailUrl({ upstream_url: null, incoming_uri: "/raw" })).toEqual([
       "invalid target",
       "/raw",
     ]);

@@ -351,7 +351,7 @@ export function OverviewPage({ api, operation, onNavigate, onOperation }: Overvi
       });
     if (overview?.requests.error || overview?.requests.warning)
       items.push({
-        label: "Request Records",
+        label: "Requests",
         detail: requestAttentionDetail(overview),
         tone: overview.requests.error ? "error" : "warning",
         target: { module: "requests" },

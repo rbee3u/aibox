@@ -1,11 +1,16 @@
-import type { AssessmentPrimary, RecordAssessment, RecordState, ResponseMetadata } from "../types";
+import type {
+  AssessmentPrimary,
+  RequestAssessment,
+  RequestState,
+  ResponseMetadata,
+} from "../types";
 
-export type RecordStatusTone = "active" | "error" | "neutral" | "success" | "warning";
+export type RequestStatusTone = "active" | "error" | "neutral" | "success" | "warning";
 
 interface StatusPresentationInput {
   status: number | null;
-  state: RecordState;
-  assessment: RecordAssessment;
+  state: RequestState;
+  assessment: RequestAssessment;
 }
 
 export interface AssessmentPresentation {
@@ -15,16 +20,16 @@ export interface AssessmentPresentation {
   additionalIssues: number;
 }
 
-interface RecordStatusPresentation {
+interface RequestStatusPresentation {
   label: string;
-  tone: RecordStatusTone;
+  tone: RequestStatusTone;
   issue: AssessmentPresentation | null;
   phase: "Streaming" | null;
 }
 
 interface RecordHeadlinePresentation {
   statusText: string | null;
-  tone: RecordStatusTone;
+  tone: RequestStatusTone;
   tag: AssessmentPresentation | { label: "Waiting" | "Streaming"; tone: "active" } | null;
 }
 
@@ -43,7 +48,7 @@ const ERROR_KIND_LABELS: Record<string, string> = {
   non_public_target: "Target blocked",
   recording_failed: "Recording failed",
   request_body_failed: "Request body failed",
-  request_recording_failed: "Request Recording failed",
+  request_recording_failed: "Requesting failed",
   response_incomplete: "Response incomplete",
   response_recording_failed: "Response recording failed",
   server_shutdown: "Server shutdown",
@@ -64,14 +69,14 @@ export function assessmentPrimaryLabel(primary: AssessmentPrimary): string {
   return httpStatus ? `HTTP ${httpStatus}` : errorKindLabel(primary.kind);
 }
 
-export function statusTone(status: number): RecordStatusTone {
+export function statusTone(status: number): RequestStatusTone {
   if (status >= 200 && status < 300) return "success";
   if (status >= 100 && status < 400) return "neutral";
   return "error";
 }
 
 export function assessmentPresentation(
-  assessment: RecordAssessment,
+  assessment: RequestAssessment,
 ): AssessmentPresentation | null {
   if ((assessment.level !== "error" && assessment.level !== "warning") || !assessment.primary) {
     return null;
@@ -85,14 +90,14 @@ export function assessmentPresentation(
 }
 
 export function assessmentIssueText(issue: AssessmentPresentation): string {
-  return `Record ${issue.tone}: ${issue.label}. ${issue.message}`;
+  return `Request ${issue.tone}: ${issue.label}. ${issue.message}`;
 }
 
-export function recordStatusPresentation({
+export function requestStatusPresentation({
   status,
   state,
   assessment,
-}: StatusPresentationInput): RecordStatusPresentation {
+}: StatusPresentationInput): RequestStatusPresentation {
   const active = state === "active";
   const issue = active ? null : assessmentPresentation(assessment);
   if (status === null) {
@@ -112,10 +117,10 @@ export function recordStatusPresentation({
   };
 }
 
-export function recordHeadlinePresentation(
+export function requestHeadlinePresentation(
   response: ResponseMetadata | null,
-  state: RecordState,
-  assessment: RecordAssessment,
+  state: RequestState,
+  assessment: RequestAssessment,
 ): RecordHeadlinePresentation {
   const active = state === "active";
   if (!response) {

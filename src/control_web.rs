@@ -35,8 +35,7 @@ pub(crate) fn router() -> Router<ServiceState> {
         .route("/_aibox/ui/app.css", get(request_web::css))
         .route("/_aibox/ui/app.js", get(request_web::js))
         .route("/_aibox/ui/{*path}", get(index))
-        .route("/_aibox/requests/app.css", get(request_web::css))
-        .route("/_aibox/requests/app.js", get(request_web::js))
+        .merge(request_web::api_router())
         .route("/_aibox/api/bootstrap", get(bootstrap))
         .route("/_aibox/api/overview", get(overview))
         .route("/_aibox/api/topology", get(topology))
@@ -177,14 +176,14 @@ async fn overview(State(state): State<ServiceState>) -> Response<Body> {
                 },
             ),
         };
-        let records = request.scan_summaries()?;
+        let captured_requests = request.scan_summaries()?;
         let mut requests = RequestOverview {
-            total: records.len(),
+            total: captured_requests.len(),
             bytes: directory_size(request.root())?,
             ..RequestOverview::default()
         };
-        for record in records {
-            match effective_assessment(&record.summary, record.active).level {
+        for captured_request in captured_requests {
+            match effective_assessment(&captured_request.summary, captured_request.active).level {
                 AssessmentLevel::Active => requests.active += 1,
                 AssessmentLevel::Warning => requests.warning += 1,
                 AssessmentLevel::Error => requests.error += 1,

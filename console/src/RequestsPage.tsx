@@ -1,32 +1,32 @@
 import { ArrowLeftRight, ChevronLeft, CircleAlert, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { requestWasCancelled } from "./api";
+import { requestWasCancelled } from "./requestErrors";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { EmptyState } from "./components/EmptyState";
 import { NotificationCenter, type NotificationItemData } from "./components/NotificationCenter";
-import { RecordDetail } from "./components/RecordDetail";
-import { RecordList } from "./components/RecordList";
+import { RequestDetail } from "./components/RequestDetail";
+import { RequestList } from "./components/RequestList";
 import { useFailureNotifications } from "./useFailureNotifications";
-import { useRecordInspection, type InspectionFailure } from "./useRecordInspection";
-import type { RecordList as RecordListData, RecordSummary, RequestApi } from "./types";
+import { useRequestInspection, type InspectionFailure } from "./useRequestInspection";
+import type { RequestList as RequestListData, RequestSummary, RequestsApi } from "./types";
 import type { DetailTab } from "./types";
 import styles from "./RequestsPage.module.css";
 
 interface RequestsPageProps {
-  api: RequestApi;
+  api: RequestsApi;
   search: string;
   onLocationChange: (query: URLSearchParams, replace?: boolean) => void;
 }
-type Dialog = { kind: "batch"; ids: string[] } | { kind: "record"; id: string } | null;
-type Deletion = { kind: "batch" } | { kind: "record"; id: string } | null;
+type Dialog = { kind: "batch"; ids: string[] } | { kind: "request"; id: string } | null;
+type Deletion = { kind: "batch" } | { kind: "request"; id: string } | null;
 
 const LIST_POLL_INTERVAL_MS = 5000;
-const RECORDS_PER_PAGE = 50;
+const REQUESTS_PER_PAGE = 50;
 const DETAIL_TABS: readonly DetailTab[] = ["summary", "request", "response"];
 
 interface RequestsLocation {
   page: number;
-  record: string | null;
+  request: string | null;
   tab: DetailTab;
 }
 
@@ -35,20 +35,20 @@ export function parseRequestsLocation(search: string): RequestsLocation {
   const requestedPage = params.get("page");
   const parsedPage = requestedPage && /^\d+$/.test(requestedPage) ? Number(requestedPage) : 1;
   const page = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
-  const record = params.get("record")?.trim() || null;
+  const request = params.get("request")?.trim() || null;
   const requestedTab = params.get("tab");
   const tab =
-    record && DETAIL_TABS.includes(requestedTab as DetailTab)
+    request && DETAIL_TABS.includes(requestedTab as DetailTab)
       ? (requestedTab as DetailTab)
       : "summary";
-  return { page, record, tab };
+  return { page, request, tab };
 }
 
 export function serializeRequestsLocation(value: RequestsLocation): string {
   const params = new URLSearchParams();
   if (value.page > 1) params.set("page", String(value.page));
-  if (value.record) params.set("record", value.record);
-  if (value.record && value.tab !== "summary") params.set("tab", value.tab);
+  if (value.request) params.set("request", value.request);
+  if (value.request && value.tab !== "summary") params.set("tab", value.tab);
   const query = params.toString();
   return query ? `?${query}` : "";
 }
@@ -66,8 +66,8 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   );
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
-  const [list, setList] = useState<RecordListData>({
-    records: [],
+  const [list, setList] = useState<RequestListData>({
+    requests: [],
     total: 0,
     deletable_count: 0,
     has_next: false,
@@ -85,7 +85,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   const [focusAfterInspection, setFocusAfterInspection] = useState<string | null | undefined>(
     undefined,
   );
-  const [detailOpen, setDetailOpen] = useState(initialLocation.record !== null);
+  const [detailOpen, setDetailOpen] = useState(initialLocation.request !== null);
   const routeApplied = useRef(false);
   const detailBackButton = useRef<HTMLButtonElement>(null);
   const listController = useRef<AbortController | null>(null);
@@ -93,7 +93,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   const pageNavigation = useRef(false);
   const failedListPage = useRef<number | null>(null);
   const initialLoadPending = useRef(true);
-  const deletingRecordId = deletion?.kind === "record" ? deletion.id : null;
+  const deletingRequestId = deletion?.kind === "request" ? deletion.id : null;
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
 
@@ -101,7 +101,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     (failure: InspectionFailure) => {
       const title =
         failure.kind === "detail"
-          ? "Couldn’t load record"
+          ? "Couldn’t load request"
           : failure.kind === "body"
             ? "Couldn’t load Body"
             : "Couldn’t download Body";
@@ -109,7 +109,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       if (failure.kind === "detail" && failure.retryable === false) {
         setDetailOpen(false);
         setFocusAfterInspection(null);
-        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       }
     },
     [reportFailure, updateLocation],
@@ -118,7 +118,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     () => resolveFailure("inspection"),
     [resolveFailure],
   );
-  const inspection = useRecordInspection({
+  const inspection = useRequestInspection({
     api,
     initialTab: initialLocation.tab,
     paused: dialogOpen,
@@ -129,7 +129,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     bodies,
     bodyStatus,
     clearCurrentRecord,
-    clearRecordIfCurrent,
+    clearRequestIfCurrent,
     currentId,
     decodedBodies,
     detail,
@@ -139,7 +139,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     loadingBody,
     loadingDetail,
     retryFailure: retryInspectionFailure,
-    selectRecord,
+    selectRequest,
     setTab,
     tab,
   } = inspection;
@@ -160,24 +160,24 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     (id: string) => {
       setFocusAfterInspection(undefined);
       setDetailOpen(true);
-      updateLocation({ page: pageRef.current, record: id, tab: "summary" });
-      void selectRecord(id);
+      updateLocation({ page: pageRef.current, request: id, tab: "summary" });
+      void selectRequest(id);
     },
-    [selectRecord, updateLocation],
+    [selectRequest, updateLocation],
   );
 
   const returnToList = useCallback(() => {
     setFocusAfterInspection(currentId);
     setDetailOpen(false);
     clearCurrentRecord();
-    updateLocation({ page: pageRef.current, record: null, tab: "summary" });
+    updateLocation({ page: pageRef.current, request: null, tab: "summary" });
   }, [clearCurrentRecord, currentId, updateLocation]);
 
   const selectTab = useCallback(
     (next: DetailTab) => {
       if (next === tab) return;
       setTab(next);
-      if (currentId) updateLocation({ page: pageRef.current, record: currentId, tab: next });
+      if (currentId) updateLocation({ page: pageRef.current, request: currentId, tab: next });
     },
     [currentId, setTab, tab, updateLocation],
   );
@@ -201,7 +201,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   }
 
   const loadPage = useCallback(
-    async (pageToLoad: number, background = false): Promise<RecordListData | null> => {
+    async (pageToLoad: number, background = false): Promise<RequestListData | null> => {
       if (background && (pageNavigation.current || deletionInProgress.current)) return null;
       const targetPage = Math.max(1, pageToLoad);
       listController.current?.abort();
@@ -212,7 +212,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
         setLoadingList(true);
       }
       try {
-        const payload = await api.listRecords(targetPage, controller.signal);
+        const payload = await api.listRequests(targetPage, controller.signal);
         if (listController.current !== controller || controller.signal.aborted) return null;
         setList(payload);
         setPage(targetPage);
@@ -232,7 +232,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
           !requestWasCancelled(cause, controller.signal)
         ) {
           if (!background || failedListPage.current === null) failedListPage.current = targetPage;
-          reportFailure("list", "Couldn’t load request records", cause, true);
+          reportFailure("list", "Couldn’t load requests", cause, true);
         }
         return null;
       } finally {
@@ -251,10 +251,10 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   const navigatePage = useCallback(
     (nextPage: number) => {
       const target = Math.max(1, nextPage);
-      updateLocation({ page: target, record: currentId, tab });
+      updateLocation({ page: target, request: currentId, tab });
       void loadPage(target).then((payload) => {
         if (payload || failedListPage.current !== target) return;
-        updateLocation({ page: pageRef.current, record: currentId, tab }, true);
+        updateLocation({ page: pageRef.current, request: currentId, tab }, true);
       });
     },
     [currentId, loadPage, tab, updateLocation],
@@ -266,11 +266,11 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       while (true) {
         const payload = await loadPage(candidate, background);
         if (!payload) return null;
-        if (payload.records.length > 0 || candidate === 1) return { page: candidate, payload };
-        const lastPage = Math.max(1, Math.ceil(payload.total / RECORDS_PER_PAGE));
+        if (payload.requests.length > 0 || candidate === 1) return { page: candidate, payload };
+        const lastPage = Math.max(1, Math.ceil(payload.total / REQUESTS_PER_PAGE));
         candidate = Math.min(candidate - 1, lastPage);
         updateLocation(
-          { page: candidate, record: currentIdRef.current, tab: tabRef.current },
+          { page: candidate, request: currentIdRef.current, tab: tabRef.current },
           true,
         );
       }
@@ -294,7 +294,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       const refreshed = await refreshWithFallback(targetPage);
       if (!refreshed) return;
       updateLocation(
-        { page: refreshed.page, record: currentIdRef.current, tab: tabRef.current },
+        { page: refreshed.page, request: currentIdRef.current, tab: tabRef.current },
         true,
       );
     } finally {
@@ -326,10 +326,10 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
     if (routeApplied.current) return;
     routeApplied.current = true;
     const route = initialLocation;
-    if (route.record) {
-      void selectRecord(route.record, route.tab);
+    if (route.request) {
+      void selectRequest(route.request, route.tab);
     }
-  }, [initialLocation, selectRecord]);
+  }, [initialLocation, selectRequest]);
 
   useEffect(() => {
     if (appliedSearch.current === search) return;
@@ -341,18 +341,18 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       return;
     }
     if (route.page !== pageRef.current) void loadPage(route.page);
-    if (route.record && route.record !== currentId) {
+    if (route.request && route.request !== currentId) {
       // The App-owned history snapshot is an external navigation input for this page.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDetailOpen(true);
-      void selectRecord(route.record, route.tab);
-    } else if (!route.record && currentId) {
+      void selectRequest(route.request, route.tab);
+    } else if (!route.request && currentId) {
       setDetailOpen(false);
       clearCurrentRecord();
-    } else if (route.record && route.tab !== tab) {
+    } else if (route.request && route.tab !== tab) {
       setTab(route.tab);
     }
-  }, [clearCurrentRecord, currentId, loadPage, search, selectRecord, setTab, tab, updateLocation]);
+  }, [clearCurrentRecord, currentId, loadPage, search, selectRequest, setTab, tab, updateLocation]);
 
   const selectedIds = [...selected];
 
@@ -372,9 +372,9 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   function togglePageSelection() {
     setSelected((current) => {
       const next = new Set(current);
-      const deletableIds = list.records
-        .filter((record) => record.state !== "active")
-        .map((record) => record.id);
+      const deletableIds = list.requests
+        .filter((request) => request.state !== "active")
+        .map((request) => request.id);
       const pageSelected = deletableIds.length > 0 && deletableIds.every((id) => current.has(id));
       deletableIds.forEach((id) => {
         if (pageSelected) {
@@ -391,7 +391,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
 
   async function confirmDelete() {
     if (!dialog) return;
-    if (dialog.kind === "record") {
+    if (dialog.kind === "request") {
       await deleteRecord(dialog.id);
       return;
     }
@@ -402,7 +402,7 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       Number.MAX_SAFE_INTEGER,
     );
     try {
-      const deletedCount = await api.deleteRecords(dialog.ids);
+      const deletedCount = await api.deleteRequests(dialog.ids);
       const deletedIds = dialog.ids;
       setList((current) =>
         removeDeletedFromList(current, deletedIds, deletedCount, pageRef.current),
@@ -413,14 +413,15 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       if (currentId && deletedIds.includes(currentId)) {
         setDetailOpen(false);
         clearCurrentRecord();
-        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       }
       setDialog(null);
       resolveFailure("action");
       await refreshWithFallback(targetPage);
       setFocusAfterDelete(null);
     } catch (cause) {
-      const title = dialog.ids.length === 1 ? "Couldn’t delete record" : "Couldn’t delete records";
+      const title =
+        dialog.ids.length === 1 ? "Couldn’t delete request" : "Couldn’t delete requests";
       setDialog(null);
       reportFailure("action", title, cause);
     } finally {
@@ -429,25 +430,25 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
   }
 
   async function deleteRecord(id: string) {
-    if (!beginDeletion({ kind: "record", id })) return;
+    if (!beginDeletion({ kind: "request", id })) return;
     const originPage = pageRef.current;
-    const originRecords = list.records;
+    const originRequests = list.requests;
     resolveFailure("action");
     try {
-      await api.deleteRecords([id]);
+      await api.deleteRequests([id]);
       if (currentId === id) {
         setDetailOpen(false);
         clearCurrentRecord();
-        updateLocation({ page: pageRef.current, record: null, tab: "summary" }, true);
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       } else {
-        clearRecordIfCurrent(id);
+        clearRequestIfCurrent(id);
       }
       setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
       setFocusAfterDelete(
         focusTargetAfterDelete(
-          originRecords,
+          originRequests,
           id,
-          originRecords.filter((record) => record.id !== id),
+          originRequests.filter((request) => request.id !== id),
           false,
         ),
       );
@@ -455,15 +456,15 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       if (refreshed) {
         setFocusAfterDelete(
           focusTargetAfterDelete(
-            originRecords,
+            originRequests,
             id,
-            refreshed.payload.records,
+            refreshed.payload.requests,
             refreshed.page !== originPage,
           ),
         );
       }
     } catch (cause) {
-      reportFailure("action", "Couldn’t delete record", cause);
+      reportFailure("action", "Couldn’t delete request", cause);
     } finally {
       setDialog(null);
       finishDeletion();
@@ -485,11 +486,11 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
         className={`${styles.main} ${detailOpen && currentId !== null ? styles.detailOpen : ""}`}
       >
         <div className={styles.listColumn}>
-          <RecordList
-            records={list.records}
+          <RequestList
+            requests={list.requests}
             total={list.total}
             page={page}
-            totalPages={Math.max(1, Math.ceil(list.total / RECORDS_PER_PAGE))}
+            totalPages={Math.max(1, Math.ceil(list.total / REQUESTS_PER_PAGE))}
             hasPrevious={page > 1}
             hasNext={list.has_next}
             selectionMode={selectionMode}
@@ -510,8 +511,8 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
             deletableCount={list.deletable_count}
             onRefresh={() => void refreshPage()}
             onDeleteSelected={() => setDialog({ kind: "batch", ids: selectedIds })}
-            onDeleteRecord={(id) => setDialog({ kind: "record", id })}
-            deletingRecordId={deletingRecordId}
+            onDeleteRequest={(id) => setDialog({ kind: "request", id })}
+            deletingRequestId={deletingRequestId}
             deletionBusy={deletionBusy}
             focusAfterDelete={focusAfterDelete}
             onFocusAfterDelete={() => setFocusAfterDelete(undefined)}
@@ -525,8 +526,8 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
               ref={detailBackButton}
               type="button"
               className={styles.detailBack}
-              aria-label="Back to Request Record list"
-              title="Back to Request Record list"
+              aria-label="Back to Request list"
+              title="Back to Request list"
               onClick={returnToList}
             >
               <ChevronLeft size={18} aria-hidden="true" />
@@ -539,11 +540,11 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
               icon={
                 <LoaderCircle className={`${styles.loader} spin`} size={28} aria-label="Loading" />
               }
-              description="Loading record…"
+              description="Loading request…"
               role="status"
             />
           ) : detail ? (
-            <RecordDetail
+            <RequestDetail
               key={detail.request.id}
               detail={detail}
               bodies={bodies}
@@ -560,8 +561,8 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
               className={styles.emptyDetail}
               variant="detail"
               icon={<CircleAlert size={26} aria-hidden="true" />}
-              title="Record unavailable"
-              description="Request Record details could not be loaded."
+              title="Request unavailable"
+              description="Request details could not be loaded."
             >
               {inspectionFailure?.retryable !== false && (
                 <button type="button" onClick={retryInspectionFailure}>
@@ -576,8 +577,8 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
               icon={
                 <ArrowLeftRight size={26} data-icon="request-detail-empty" aria-hidden="true" />
               }
-              title="Select a Request Record"
-              description="Choose a Request Record to inspect its summary and raw data."
+              title="Select a Request"
+              description="Choose a Request to inspect its summary and raw data."
             />
           )}
         </div>
@@ -599,9 +600,9 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
       {dialog && (
         <ConfirmDialog
           title={
-            dialog.kind === "record"
-              ? "Delete this Request Record?"
-              : `Delete ${dialog.ids.length} selected Request Record${dialog.ids.length === 1 ? "" : "s"}?`
+            dialog.kind === "request"
+              ? "Delete this Request?"
+              : `Delete ${dialog.ids.length} selected Request${dialog.ids.length === 1 ? "" : "s"}?`
           }
           message="This permanently deletes the selected raw Request and Response data."
           confirmLabel="Delete permanently"
@@ -615,52 +616,52 @@ export function RequestsPage({ api, search, onLocationChange }: RequestsPageProp
 }
 
 function focusTargetAfterDelete(
-  before: RecordSummary[],
+  before: RequestSummary[],
   deletedId: string,
-  after: RecordSummary[],
+  after: RequestSummary[],
   movedToPreviousPage: boolean,
 ): string | null {
-  const deletableAfter = after.filter((record) => record.state !== "active");
+  const deletableAfter = after.filter((request) => request.state !== "active");
   if (deletableAfter.length === 0) return null;
   if (movedToPreviousPage) return deletableAfter.at(-1)?.id ?? null;
 
-  const deletedIndex = before.findIndex((record) => record.id === deletedId);
+  const deletedIndex = before.findIndex((request) => request.id === deletedId);
   if (deletedIndex >= 0) {
     const adjacentIds = [
       ...before.slice(deletedIndex + 1),
       ...before.slice(0, deletedIndex).reverse(),
     ]
-      .filter((record) => record.state !== "active")
-      .map((record) => record.id);
-    const remainingIds = new Set(deletableAfter.map((record) => record.id));
+      .filter((request) => request.state !== "active")
+      .map((request) => request.id);
+    const remainingIds = new Set(deletableAfter.map((request) => request.id));
     const adjacentId = adjacentIds.find((id) => remainingIds.has(id));
     if (adjacentId) return adjacentId;
   }
 
   const start = Math.min(Math.max(deletedIndex, 0), after.length - 1);
   return (
-    after.slice(start).find((record) => record.state !== "active")?.id ??
+    after.slice(start).find((request) => request.state !== "active")?.id ??
     after
       .slice(0, start)
       .reverse()
-      .find((record) => record.state !== "active")?.id ??
+      .find((request) => request.state !== "active")?.id ??
     null
   );
 }
 
 function removeDeletedFromList(
-  current: RecordListData,
+  current: RequestListData,
   ids: readonly string[],
   deletedCount: number,
   currentPage: number,
-): RecordListData {
+): RequestListData {
   const deleted = new Set(ids);
   const total = Math.max(0, current.total - deletedCount);
   return {
     ...current,
-    records: current.records.filter((record) => !deleted.has(record.id)),
+    requests: current.requests.filter((request) => !deleted.has(request.id)),
     total,
     deletable_count: Math.max(0, current.deletable_count - deletedCount),
-    has_next: currentPage * RECORDS_PER_PAGE < total,
+    has_next: currentPage * REQUESTS_PER_PAGE < total,
   };
 }

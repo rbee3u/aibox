@@ -4,7 +4,7 @@ import {
   stringify as stringifyLosslessJson,
   type LosslessNumber,
 } from "lossless-json";
-import type { BodyKind, HeaderValue, RecordDetail } from "./types";
+import type { BodyKind, HeaderValue, RequestDetail } from "./types";
 import { formatTimestampWithMilliseconds, hex, tryDecodeHeader } from "./utils";
 
 export const LARGE_PRETTY_BYTES = 5 * 1024 * 1024;
@@ -133,14 +133,14 @@ export function contentCoding(headers: HeaderValue[]): ContentCoding {
   };
 }
 
-export function bodyComplete(detail: RecordDetail, kind: BodyKind): boolean {
+export function bodyComplete(detail: RequestDetail, kind: BodyKind): boolean {
   if (detail.state !== "active") return true;
   return kind === "request"
     ? detail.summary.timing.upstream_request_body_completed_at_ns !== null
     : detail.summary.timing.upstream_response_body_completed_at_ns !== null;
 }
 
-export function bodyHeaders(detail: RecordDetail, kind: BodyKind): HeaderValue[] {
+export function bodyHeaders(detail: RequestDetail, kind: BodyKind): HeaderValue[] {
   return kind === "request" ? detail.request.headers : (detail.response?.headers ?? []);
 }
 
@@ -158,7 +158,7 @@ export function isJsonMediaType(mediaType: string | null): boolean {
   return subtype === "json" || subtype.endsWith("+json");
 }
 
-export function isSseResponse(detail: RecordDetail): boolean {
+export function isSseResponse(detail: RequestDetail): boolean {
   if (!detail.response) return false;
   const mediaType = bodyMediaType(detail.response.headers);
   return (

@@ -11,18 +11,18 @@ import {
 import { useEffect, useRef } from "react";
 import { moduleIcons } from "../consoleIcons";
 import { elapsedNsMs, resolveRequestedEffective } from "../summary";
-import type { RecordSummary } from "../types";
-import { compactDuration, formatTimestamp, recordUrl } from "../utils";
-import styles from "./RecordList.module.css";
-import { RecordStatus } from "./RecordStatus";
+import type { RequestSummary } from "../types";
+import { compactDuration, formatTimestamp, requestUrl } from "../utils";
+import styles from "./RequestList.module.css";
+import { RequestStatus } from "./RequestStatus";
 import { assessmentIssueText, assessmentPresentation } from "./statusPresentation";
 import { EmptyState } from "./EmptyState";
 import { IconButton } from "./IconButton";
 
 const RequestIcon = moduleIcons.requests;
 
-interface RecordListProps {
-  records: RecordSummary[];
+interface RequestListProps {
+  requests: RequestSummary[];
   total: number;
   page: number;
   totalPages: number;
@@ -43,8 +43,8 @@ interface RecordListProps {
   deletableCount: number;
   onRefresh: () => void;
   onDeleteSelected: () => void;
-  onDeleteRecord: (id: string) => void;
-  deletingRecordId: string | null;
+  onDeleteRequest: (id: string) => void;
+  deletingRequestId: string | null;
   deletionBusy: boolean;
   focusAfterDelete: string | null | undefined;
   onFocusAfterDelete: () => void;
@@ -52,8 +52,8 @@ interface RecordListProps {
   onFocusAfterInspection: () => void;
 }
 
-export function RecordList({
-  records,
+export function RequestList({
+  requests,
   total,
   page,
   totalPages,
@@ -74,22 +74,22 @@ export function RecordList({
   deletableCount,
   onRefresh,
   onDeleteSelected,
-  onDeleteRecord,
-  deletingRecordId,
+  onDeleteRequest,
+  deletingRequestId,
   deletionBusy,
   focusAfterDelete,
   onFocusAfterDelete,
   focusAfterInspection,
   onFocusAfterInspection,
-}: RecordListProps) {
-  const deletable = records.filter((record) => record.state !== "active");
-  const selectedOnPage = deletable.filter((record) => selected.has(record.id)).length;
+}: RequestListProps) {
+  const deletable = requests.filter((request) => request.state !== "active");
+  const selectedOnPage = deletable.filter((request) => selected.has(request.id)).length;
   const pageSelected = deletable.length > 0 && selectedOnPage === deletable.length;
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
   const focusSelectAfterExit = useRef(false);
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
-  const recordButtons = useRef(new Map<string, HTMLButtonElement>());
+  const requestButtons = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
     if (focusAfterDelete === undefined) return;
@@ -101,19 +101,19 @@ export function RecordList({
     if (!target || target.disabled) return;
     target.focus();
     onFocusAfterDelete();
-  }, [deletionBusy, focusAfterDelete, onFocusAfterDelete, records]);
+  }, [deletionBusy, focusAfterDelete, onFocusAfterDelete, requests]);
 
   useEffect(() => {
     if (focusAfterInspection === undefined) return;
     const preferred =
       focusAfterInspection === null
         ? refreshButton.current
-        : recordButtons.current.get(focusAfterInspection);
+        : requestButtons.current.get(focusAfterInspection);
     const target = preferred && !preferred.disabled ? preferred : refreshButton.current;
     if (!target || target.disabled) return;
     target.focus();
     onFocusAfterInspection();
-  }, [focusAfterInspection, onFocusAfterInspection, records]);
+  }, [focusAfterInspection, onFocusAfterInspection, requests]);
 
   useEffect(() => {
     if (selectionMode || !focusSelectAfterExit.current) return;
@@ -122,7 +122,7 @@ export function RecordList({
   }, [selectionMode]);
 
   return (
-    <aside className={styles.panel} aria-label="Request Record list">
+    <aside className={styles.panel} aria-label="Request list">
       <div className={`${styles.listHeader} ${selectionMode ? styles.selectionHeader : ""}`}>
         {selectionMode && (
           <button
@@ -146,7 +146,7 @@ export function RecordList({
               className={styles.refreshButton}
               onClick={onRefresh}
               disabled={refreshing || deletionBusy}
-              label={refreshing ? "Refreshing Request Record list" : "Refresh Request Record list"}
+              label={refreshing ? "Refreshing Request list" : "Refresh Request list"}
               aria-busy={refreshing}
             >
               <RefreshCw className={refreshing ? "spin" : undefined} size={14} aria-hidden="true" />
@@ -182,7 +182,7 @@ export function RecordList({
             <button
               ref={selectButton}
               type="button"
-              className={styles.selectRecords}
+              className={styles.selectRequests}
               onClick={onEnterSelection}
               disabled={deletableCount === 0 || loading || deletionBusy}
             >
@@ -191,33 +191,33 @@ export function RecordList({
           )}
         </div>
       </div>
-      <div className={styles.records} aria-busy={loading}>
-        {loading && records.length === 0 ? (
+      <div className={styles.requests} aria-busy={loading}>
+        {loading && requests.length === 0 ? (
           <div className={styles.loadingState} role="status" aria-live="polite">
             <LoaderCircle className="spin" size={22} aria-hidden="true" />
-            <p>Loading Request Records…</p>
+            <p>Loading Requests…</p>
           </div>
-        ) : records.length === 0 ? (
+        ) : requests.length === 0 ? (
           <EmptyState
             variant="list"
             icon={<Inbox size={22} data-icon="request-empty" aria-hidden="true" />}
             title="No request recorded yet."
           />
         ) : (
-          records.map((record) => {
-            const target = recordUrl(record);
-            const active = record.state === "active";
-            const checked = selected.has(record.id);
-            const model = resolveRequestedEffective(record.protocol?.model) ?? "—";
+          requests.map((request) => {
+            const target = requestUrl(request);
+            const active = request.state === "active";
+            const checked = selected.has(request.id);
+            const model = resolveRequestedEffective(request.protocol?.model) ?? "—";
             const reasoningEffort =
-              resolveRequestedEffective(record.protocol?.reasoning_effort) ?? "—";
+              resolveRequestedEffective(request.protocol?.reasoning_effort) ?? "—";
             const compactModel = reasoningEffort === "—" ? model : `${model} ${reasoningEffort}`;
-            const firstToken = compactDuration(elapsedNsMs(record.protocol?.first_token_at_ns));
-            const totalDuration = compactDuration(record.total_ms);
-            const timestampKind = record.ended_at ? "Ended" : "Started";
-            const timestampValue = record.ended_at ?? record.started_at;
+            const firstToken = compactDuration(elapsedNsMs(request.protocol?.first_token_at_ns));
+            const totalDuration = compactDuration(request.total_ms);
+            const timestampKind = request.ended_at ? "Ended" : "Started";
+            const timestampValue = request.ended_at ?? request.started_at;
             const timestamp = formatTimestamp(timestampValue);
-            const issue = assessmentPresentation(record.assessment);
+            const issue = assessmentPresentation(request.assessment);
             const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
@@ -228,13 +228,13 @@ export function RecordList({
             ]
               .filter((value): value is string => value !== null)
               .join("; ");
-            const metadataDescriptionId = `record-metadata-${record.id}`;
+            const metadataDescriptionId = `request-metadata-${request.id}`;
             return (
               <div
-                key={record.id}
+                key={request.id}
                 className={[
-                  styles.record,
-                  currentId === record.id ? styles.current : "",
+                  styles.request,
+                  currentId === request.id ? styles.current : "",
                   selectionMode ? styles.selectionRecord : "",
                   checked ? styles.selected : "",
                   selectionMode && active ? styles.unselectable : "",
@@ -244,37 +244,37 @@ export function RecordList({
               >
                 <button
                   ref={(element) => {
-                    if (element) recordButtons.current.set(record.id, element);
-                    else recordButtons.current.delete(record.id);
+                    if (element) requestButtons.current.set(request.id, element);
+                    else requestButtons.current.delete(request.id);
                   }}
                   type="button"
                   className={styles.rowButton}
                   disabled={selectionMode && active}
                   aria-label={
                     selectionMode
-                      ? `${checked ? "Deselect" : "Select"} ${record.method} ${target.label}`
-                      : `${record.method} ${target.label}`
+                      ? `${checked ? "Deselect" : "Select"} ${request.method} ${target.label}`
+                      : `${request.method} ${target.label}`
                   }
                   aria-pressed={selectionMode ? checked : undefined}
                   aria-describedby={metadataDescriptionId}
-                  onClick={() => (selectionMode ? onToggle(record.id) : onSelect(record.id))}
+                  onClick={() => (selectionMode ? onToggle(request.id) : onSelect(request.id))}
                 >
                   <RequestIcon
                     className={styles.requestIcon}
                     size={16}
-                    data-icon="request-record"
+                    data-icon="request-row"
                     aria-hidden="true"
                   />
-                  <span className={styles.method}>{record.method}</span>
+                  <span className={styles.method}>{request.method}</span>
                   <span className={styles.target} title={target.title}>
                     <strong className={styles.targetHost}>{target.host}</strong>
                     <span className={styles.targetPath}>{target.path}</span>
                   </span>
                   <span className={styles.status}>
-                    <RecordStatus
-                      status={record.status}
-                      state={record.state}
-                      assessment={record.assessment}
+                    <RequestStatus
+                      status={request.status}
+                      state={request.state}
+                      assessment={request.assessment}
                     />
                   </span>
                   <span className={styles.metadata}>
@@ -306,28 +306,28 @@ export function RecordList({
                 {!selectionMode && (
                   <span
                     className={styles.deleteSlot}
-                    title={active ? "Active records cannot be deleted" : undefined}
+                    title={active ? "Active requests cannot be deleted" : undefined}
                   >
                     <button
                       ref={(element) => {
-                        if (element) deleteButtons.current.set(record.id, element);
-                        else deleteButtons.current.delete(record.id);
+                        if (element) deleteButtons.current.set(request.id, element);
+                        else deleteButtons.current.delete(request.id);
                       }}
                       type="button"
                       className={styles.deleteRecord}
-                      onClick={() => onDeleteRecord(record.id)}
+                      onClick={() => onDeleteRequest(request.id)}
                       disabled={active || deletionBusy}
                       aria-label={
                         active
-                          ? `Cannot delete active ${record.method} ${target.label}`
-                          : deletingRecordId === record.id
-                            ? `Deleting ${record.method} ${target.label}`
-                            : `Delete ${record.method} ${target.label}`
+                          ? `Cannot delete active ${request.method} ${target.label}`
+                          : deletingRequestId === request.id
+                            ? `Deleting ${request.method} ${target.label}`
+                            : `Delete ${request.method} ${target.label}`
                       }
-                      aria-busy={deletingRecordId === record.id}
-                      title={active ? undefined : `Delete ${record.method} ${target.label}`}
+                      aria-busy={deletingRequestId === request.id}
+                      title={active ? undefined : `Delete ${request.method} ${target.label}`}
                     >
-                      {deletingRecordId === record.id ? (
+                      {deletingRequestId === request.id ? (
                         <LoaderCircle className="spin" size={15} aria-hidden="true" />
                       ) : (
                         <Trash2 size={15} aria-hidden="true" />
@@ -340,7 +340,7 @@ export function RecordList({
           })
         )}
       </div>
-      <nav className={styles.pagination} aria-label="Record pages">
+      <nav className={styles.pagination} aria-label="Request pages">
         <button
           type="button"
           onClick={onPrevious}
@@ -349,7 +349,7 @@ export function RecordList({
           <ChevronLeft size={15} aria-hidden="true" /> Previous
         </button>
         <span>
-          Page {page} of {totalPages} · {records.length} shown · {total} total
+          Page {page} of {totalPages} · {requests.length} shown · {total} total
         </span>
         <button type="button" onClick={onNext} disabled={!hasNext || loading || deletionBusy}>
           Next <ChevronRight size={15} aria-hidden="true" />

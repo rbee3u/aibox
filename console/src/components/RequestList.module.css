@@ -95,7 +95,7 @@
   font-size: 12px;
 }
 
-.records {
+.requests {
   min-height: 0;
   overflow: auto;
   overscroll-behavior-y: contain;
@@ -124,7 +124,7 @@
   font-size: 12px;
 }
 
-.record {
+.request {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
@@ -139,7 +139,7 @@
     box-shadow var(--transition-fast);
 }
 
-.record::before {
+.request::before {
   position: absolute;
   inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
   width: 2px;
@@ -149,8 +149,8 @@
   transition: background-color var(--transition-fast);
 }
 
-.record:hover,
-.record:focus-within {
+.request:hover,
+.request:focus-within {
   background: var(--surface-hover);
 }
 
@@ -162,8 +162,8 @@
   background: var(--accent);
 }
 
-.record.current:hover,
-.record.current:focus-within {
+.request.current:hover,
+.request.current:focus-within {
   background: var(--surface-selected);
 }
 
@@ -329,8 +329,8 @@
   opacity: 0.16;
 }
 
-.record:hover .deleteRecord,
-.record:focus-within .deleteRecord,
+.request:hover .deleteRecord,
+.request:focus-within .deleteRecord,
 .current .deleteRecord,
 .deleteRecord:focus-visible {
   opacity: 1;

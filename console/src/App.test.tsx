@@ -5,7 +5,7 @@ import { App } from "./App";
 import { ControlApi } from "./controlApi";
 import type { ConfigListData, OverviewData, TenantRow, TopologyData } from "./controlApi";
 import { materializeControlApi } from "./managementTestSupport";
-import { recordList } from "./test/fixtures";
+import { requestList } from "./test/fixtures";
 
 const overview = {
   service: {
@@ -169,7 +169,7 @@ describe("Console App", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByRole("complementary", { name: "Request Record list" });
+    await screen.findByRole("complementary", { name: "Request list" });
     expect(screen.getByRole("button", { name: "Color theme: Light" })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
 
@@ -332,7 +332,7 @@ function mockRequestFetch() {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(recordList), {
+      new Response(JSON.stringify(requestList), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
