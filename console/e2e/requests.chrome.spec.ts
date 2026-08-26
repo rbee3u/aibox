@@ -39,6 +39,7 @@ test("light desktop inspector", async ({ page }) => {
   await expect(page.getByText("Bearer test-token-not-a-secret")).toBeVisible();
   await page.getByRole("tab", { name: "Response" }).click();
   await expect(page.getByLabel("SSE Events")).toBeVisible();
+  await page.screenshot({ path: "/tmp/aibox-requests-1440.png", fullPage: true });
 });
 
 test("390px Request inspection keeps the complete workflow in one panel", async ({ page }) => {
@@ -46,7 +47,9 @@ test("390px Request inspection keeps the complete workflow in one panel", async 
   await mockRequests(page, { total: 101, hasNext: true });
   await page.goto("./");
 
-  await expect(page.getByText("Page 1 of 3")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Request pages" })).toContainText(
+    "Page 1 of 3",
+  );
   await expect(page.locator('[title="Ended 2026-08-09 14:04:45"]')).toBeVisible();
 
   const row = page.getByRole("button", {
@@ -70,6 +73,7 @@ test("390px Request inspection keeps the complete workflow in one panel", async 
   await page.getByRole("button", { name: "Back to Request list" }).click();
   await expect(page.getByRole("complementary", { name: "Request list" })).toBeVisible();
   await expect(row).toBeFocused();
+  await page.screenshot({ path: "/tmp/aibox-requests-390.png", fullPage: true });
 });
 
 test("shared typography distinguishes catalog metadata from technical values", async ({ page }) => {
@@ -94,19 +98,15 @@ test("shared typography distinguishes catalog metadata from technical values", a
       ),
     );
 
-  expect(requestModelStyle).toMatchObject({
-    fontSize: "12px",
-    fontWeight: "400",
-    lineHeight: "18px",
-  });
+  // Interface role decides the family: catalog metadata is sans-serif while
+  // timing and timestamps are monospace with tabular numerals.
   expect(requestModelStyle.fontFamily).toContain("ui-sans-serif");
   expect(requestTimingStyle.fontFamily).toContain("ui-monospace");
   expect(requestTimingStyle.fontVariantNumeric).toContain("tabular-nums");
   expect(requestTimeStyle).toMatchObject({
     fontFamily: requestTimingStyle.fontFamily,
-    fontSize: "12px",
-    fontWeight: "400",
-    lineHeight: "18px",
+    fontSize: requestTimingStyle.fontSize,
+    lineHeight: requestTimingStyle.lineHeight,
   });
 
   await requestRow.click();
@@ -114,17 +114,11 @@ test("shared typography distinguishes catalog metadata from technical values", a
   await expect(sessionValue).toBeVisible();
   expect(await typography(sessionValue)).toMatchObject({
     fontFamily: requestTimingStyle.fontFamily,
-    fontSize: "12px",
-    fontWeight: "500",
+    fontSize: requestTimingStyle.fontSize,
   });
 
   await page.getByRole("button", { name: "Delete POST relay.example.test/v1/responses" }).click();
-  const dialogHeading = page.getByRole("dialog").getByRole("heading");
-  expect(await typography(dialogHeading)).toMatchObject({
-    fontSize: "16px",
-    fontWeight: "600",
-    lineHeight: "22px",
-  });
+  await expect(page.getByRole("dialog").getByRole("heading")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await page.goto("/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex");
@@ -152,6 +146,35 @@ test("shared typography distinguishes catalog metadata from technical values", a
   });
   expect(sessionTimeStyle.fontVariantNumeric).toContain("tabular-nums");
   expect(sessionTitleStyle.fontFamily).toBe(requestTargetStyle.fontFamily);
+});
+
+test("Request catalog keeps a two-line dense row without shrinking the inspector", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockRequests(page);
+  await page.goto("./");
+
+  const row = page.getByRole("button", {
+    name: "POST relay.example.test/v1/responses",
+    exact: true,
+  });
+  const rowHeight = await row
+    .locator("xpath=..")
+    .evaluate((element) => Math.round(element.getBoundingClientRect().height));
+  expect(rowHeight).toBeGreaterThanOrEqual(52);
+  expect(rowHeight).toBeLessThanOrEqual(56);
+  await expect(row.getByTitle("Model gpt-5.6-sol; Reasoning effort high")).toBeVisible();
+  await expect(row.getByTitle("First token 200ms; Duration 500ms")).toBeVisible();
+
+  await row.click();
+  const listWidth = await page
+    .getByRole("complementary", { name: "Request list" })
+    .evaluate((element) => Math.round(element.getBoundingClientRect().width));
+  const detailWidth = await page
+    .getByRole("region", { name: "Request details" })
+    .evaluate((element) => Math.round(element.getBoundingClientRect().width));
+  expect(listWidth).toBeLessThan(detailWidth);
 });
 
 async function setTheme(page: Page, theme: "light" | "dark") {

@@ -16,7 +16,7 @@ if [[ ! -x $rustup ]]; then
     bootstrap=$(mktemp)
     trap 'rm -f "$bootstrap"' EXIT
     curl -fsSL https://sh.rustup.rs -o "$bootstrap"
-    sh "$bootstrap" -y --no-modify-path --profile minimal --default-toolchain none
+    sh -x "$bootstrap" -y --no-modify-path --profile minimal --default-toolchain none
 fi
 
 installed_stable_alias=0

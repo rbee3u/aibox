@@ -1,27 +1,12 @@
-# aibox.Dockerfile
-# Shared base runtime for aibox. Mutable runtimes and Coding Agent executables
-# are installed into each Managed Tenant Home as Components.
-#
-# Build from Console Overview.
+# Mutable runtimes and Coding Agents are installed into each Managed Tenant
+# Home as Components; this image provides their shared system substrate.
 
-FROM debian:bookworm-slim
+FROM debian:bookworm
 
-# Fail RUN layers when either side of a pipeline fails.
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-# Create the runtime identity before installing tools so every Tenant Home
-# path can derive from one stable home. Build layers remain root-owned;
-# the final USER directive switches only the running container.
-RUN groupadd --gid 1000 aibox \
-    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
-ENV HOME=/home/aibox
-
-# Base system: VCS, TLS roots, fetch/extract tools, a native compiler (for cgo,
-# Rust crates, Python sdists, and node native modules), plus the common
-# development and diagnostic commands an agent needs while investigating a
-# project. Some diagnostics may pull in libpython as an ABI dependency, but no
-# application Python command is installed.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
         bind9-dnsutils \
         build-essential \
         bzip2 \
@@ -32,12 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gawk \
         gdb \
         git \
+        git-lfs \
         htop \
         iproute2 \
         iputils-ping \
         jq \
         less \
         libssl-dev \
+        libtool \
         lsof \
         netcat-openbsd \
         ninja-build \
@@ -60,11 +47,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xxd \
         xz-utils \
         zip \
-        zstd \
-    && rm -rf /var/lib/apt/lists/*
+        zstd && \
+    rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --gid 1000 aibox && \
+    useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash aibox
+
+ENV HOME=/home/aibox LANG=C.UTF-8
 WORKDIR /workspace
 USER aibox
 
-# No ENTRYPOINT: the Rust wrapper composes the Tenant Environment through login
-# Bash, then executes a Tenant-local Coding Agent or Debug Shell.
+# aibox injects the Tenant-local Coding Agent or Debug Shell at runtime.

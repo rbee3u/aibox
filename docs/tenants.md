@@ -143,6 +143,24 @@ separately. Old Python and uv releases remain until full Python Component
 removal so existing virtual environments can retain immutable interpreter
 paths.
 
+`Check for updates` explicitly refreshes the selected Tenant's native
+Component inspection and asks the Service to observe each versioned
+Component's authoritative release source. The resulting Latest Release
+snapshot is shared across Tenants for the life of the Service and is never
+written to a Tenant, metadata, or browser storage. Individual unavailable or
+unparseable sources remain visible without discarding successful results.
+There is no polling, desired version, or automatic update.
+
+The Console offers Update only when both installed and Latest Release versions
+are comparable stable `X.Y.Z` values and the Latest Release is higher. An equal
+or lower Latest Release is informational. Before the first check, installation
+can still let the native installer resolve its current stable release. Exact
+versions move through the explicit specific-version dialog; downgrading an
+installed Component requires Remove followed by an exact installation.
+Statusline Components have no release version: healthy state matches the
+current AIBox Component Definition, while `modified` state exposes a Definition
+update.
+
 An empty Python version first obtains the current stable uv and then installs
 the latest stable CPython known to that uv release. An exact `X.Y.Z` selects
 that stable CPython release. Users can explicitly run `uv python install
@@ -188,16 +206,17 @@ Debug.
 
 Explicit user values, including empty values and values for an absent
 Component, are preserved and exported. Existing Tenant-local binary
-directories absent from PATH are appended in stable order, independently of
+directories absent from PATH are added in stable order, independently of
 Component status, so preserved Cargo, GOPATH, and npm user tools remain
-available after Component removal. A nonempty path-owner variable selects its
+available after Component removal. Each missing candidate is inserted
+immediately before the last exact `/usr/local/bin` PATH segment; when that
+anchor is absent, it is appended. A nonempty path-owner variable selects its
 custom directory; when it is truly unset, the corresponding HOME-local
 candidate is considered instead; an explicit empty value suppresses that
-candidate. Every user PATH entry retains higher command-resolution priority,
-and existing entries, duplicates, relative entries, and empty segments are
-left in place. Because this composition occurs after the login profile, a
-profile that needs to invoke a Tenant Component must add that Component to PATH
-itself.
+candidate. Existing entries, duplicates, relative entries, and empty segments
+are left in place. Login-profile entries before the anchor retain higher
+command-resolution priority, while added Tenant-local directories take
+priority over the anchored system path.
 
 A Run then invokes the selected Agent by its absolute Tenant-local launcher
 path. A missing, incomplete, or unmanaged selected Agent Component stops the

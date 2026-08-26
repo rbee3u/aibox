@@ -363,11 +363,11 @@ Components](tenants.md#tenant-components). A system diagnostic such as GDB may
 retain a transitive `libpython` ABI dependency, but the image provides no
 callable `python`, `pip`, `uv`, or `uvx` command.
 
-For complete output, an installed Claude status-line Component expects Bash,
+For complete output, an installed Claude statusline Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the
 branch field. It renders the model/reasoning, current directory (abbreviating
 Home as `~`), branch, compact context-window size, and context-used percentage
-in that order. The Codex status line uses native TUI support and adds no image
+in that order. The Codex statusline uses native TUI support and adds no image
 dependency.
 
 Component installers require `HOME=/home/aibox`, no incompatible `ENTRYPOINT`,

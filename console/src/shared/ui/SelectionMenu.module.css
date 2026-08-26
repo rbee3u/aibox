@@ -1,0 +1,244 @@
+.sessionAgentFilter {
+  composes: filterControl from "@/shared/ui/layout/catalog.module.css";
+}
+
+.selection {
+  position: relative;
+  min-width: 0;
+}
+
+.selectionTrigger {
+  display: grid;
+  width: 100%;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 4px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.selectionTriggerIcon,
+.selectionOptionIcon {
+  color: var(--muted);
+}
+
+.selectionTriggerIcon,
+.selectionOptionIcon,
+.selectionOptionCheckSlot {
+  display: grid;
+  place-items: center;
+}
+
+.selectionTriggerIcon {
+  width: 14px;
+  height: 14px;
+}
+
+.selectionTriggerSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectionSummaryCompact {
+  display: none;
+}
+
+.selectionTrigger > svg:last-child {
+  flex: 0 0 auto;
+  transition: transform var(--transition-fast);
+}
+
+.selectionChevronOpen {
+  transform: rotate(180deg);
+}
+
+.selectionMenu {
+  position: absolute;
+  z-index: var(--layer-dropdown);
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  width: clamp(140px, 150%, 160px);
+  max-width: calc(100cqw - 18px);
+  max-height: min(320px, calc(100vh - 170px));
+  gap: 2px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.sessionAgentFilter .selectionMenu {
+  right: 0;
+  left: auto;
+}
+
+.selectionOptions {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.selectionOption {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 6px 7px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.selectionOptionSingle,
+.selectionOptionMultiple {
+  display: grid;
+}
+
+.selectionOptionSingle {
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+}
+
+.selectionOptionMultiple {
+  grid-template-columns: 14px 16px minmax(0, 1fr);
+}
+
+.selectionOption:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.selectionOption:has(input:checked) {
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.selectionOptionSelected {
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.selectionOption:has(input:disabled) {
+  cursor: default;
+}
+
+.selectionOption input {
+  width: 14px;
+  height: 14px;
+  min-height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.selectionOptionIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.selectionOptionLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectionOptionCheckSlot {
+  width: 14px;
+  height: 14px;
+}
+
+.selectionOptionCheck {
+  color: var(--accent);
+}
+
+.selectionMenuHeader,
+.selectionMenuFooter {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--line-soft);
+}
+
+.selectionMenuHeader {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0 2px 4px;
+}
+
+.selectionMenuFooter {
+  justify-content: space-between;
+  border-top: 1px solid var(--line-soft);
+  padding: 4px 2px 0;
+}
+
+.selectionMenuFooterMultiple {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+}
+
+.selectionMenuHeader button,
+.selectionMenuFooter button {
+  display: inline-flex;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-color: transparent;
+  padding: 4px 6px;
+  color: var(--ink-secondary);
+  background: transparent;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.selectionMenuHeader button:hover:not(:disabled),
+.selectionMenuFooter button:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.selectionModeAction {
+  color: var(--accent) !important;
+  font-weight: var(--weight-semibold);
+}
+
+.selectionCommitActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  justify-self: end;
+}
+
+.selectionCommitActions button:last-child {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+}
+
+@container (max-width: 360px) {
+  .selectionSummaryFull {
+    display: none;
+  }
+
+  .selectionSummaryCompact {
+    display: inline;
+  }
+}

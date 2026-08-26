@@ -1,0 +1,781 @@
+.configRowMain {
+  composes: rowMain from "@/shared/ui/layout/catalog.module.css";
+}
+
+.dialogActions {
+  composes: dialogActions from "@/shared/ui/layout/catalog.module.css";
+}
+
+.inlineWarning {
+  composes: alertBanner from "@/shared/ui/layout/catalog.module.css";
+}
+
+.planList {
+  composes: planList from "@/shared/ui/layout/catalog.module.css";
+}
+
+.dialogActions,
+.editorTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.configCatalog {
+  composes: catalogPanel from "@/shared/ui/layout/catalog.module.css";
+}
+
+.emptyPane {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.segmented {
+  display: inline-flex;
+  align-items: center;
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 0;
+}
+
+.segmented button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.segmented button:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.segmented button + button {
+  margin-left: -1px;
+}
+
+.segmented button[aria-pressed="true"] {
+  z-index: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.configCatalog {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.configWarnings:empty {
+  display: none;
+}
+
+.configWarnings {
+  max-height: 150px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.configWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.applicationNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px;
+  border: 1px solid var(--info-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 9px;
+  color: var(--ink-secondary);
+  background: var(--accent-subtle);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.applicationNotice svg {
+  flex: 0 0 auto;
+  color: var(--success);
+}
+
+.configRowText {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+
+.configRowTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.configRowTitle strong,
+.configRowText > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--catalog-row-primary-size);
+  font-weight: var(--weight-semibold);
+  line-height: var(--catalog-row-primary-line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.configRowPrimaryAction {
+  display: inline-flex;
+  width: auto;
+  min-width: 64px;
+  height: 30px;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  border-color: var(--line);
+  padding: 0 10px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.configRowPrimaryAction:hover:not(:disabled),
+.configRowPrimaryAction:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.configPropagateAction {
+  width: 195px;
+}
+
+.configDriftBadge {
+  flex: 0 0 auto;
+}
+
+.propagationSummary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.propagationSummaryPartial {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.propagationSummaryComplete {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.configEditorHeader {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.configEditorHeader > [data-icon-button]:first-child {
+  display: none;
+  margin-left: 8px;
+}
+
+.configEditorHeader h2 {
+  min-width: 0;
+  margin: 0;
+  padding: 0 24px;
+  overflow: hidden;
+  font: var(--weight-semibold) var(--text-xs) / 1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editorTools {
+  min-height: 44px;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.editorTools > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.editorModeBar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.editorModeBar > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.fileTitle {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.fileTitle strong {
+  font: var(--weight-semibold) var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.fileTitle span,
+.authModeBadge {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.authModeBadge {
+  min-height: var(--status-height);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+}
+
+.configFileStack {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.configFileSection {
+  display: flex;
+  min-height: 0;
+  flex: 2 1 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.configFileSection:last-child {
+  flex: 1 1 0;
+  border-bottom: 0;
+}
+
+.configFileSectionFocused {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.configFilePane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.fileWarnings {
+  display: grid;
+  gap: 4px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: var(--text-xs);
+}
+
+.fileWarnings span {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.authVisualBody {
+  display: grid;
+  gap: 12px;
+}
+
+.authVisualBody p {
+  margin: 0 14px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.authStatus {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 14px 0;
+  color: var(--success);
+  font-size: 13px;
+}
+
+.authVisualBody .dialogActions,
+.authVisualBody .inlineWarning {
+  margin-right: 14px;
+  margin-left: 14px;
+}
+
+.authVisualBody > .visualField:first-child {
+  border-top: 0;
+}
+
+.codeEditor {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 0;
+  outline: 0;
+  color: var(--code-text);
+  background: var(--code-bg);
+}
+
+.codeEditor :global(.cm-editor) {
+  height: 100%;
+  min-height: 100%;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: var(--text-xs) / 1.6 var(--font-mono);
+}
+
+.codeEditor :global(.cm-scroller) {
+  height: 100%;
+  min-height: 100%;
+  overflow: auto;
+  padding: 16px 0;
+}
+
+.codeEditor :global(.cm-content) {
+  min-height: 100%;
+  padding: 0 16px 0 12px;
+  caret-color: var(--accent);
+}
+
+.codeEditor :global(.cm-gutters) {
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--code-muted);
+  background: var(--surface-inset);
+}
+
+.codeEditor :global(.cm-lineNumbers) :global(.cm-gutterElement) {
+  min-width: 2.5em;
+  padding: 0 8px 0 4px;
+  text-align: right;
+}
+
+.codeEditor :global(.cm-activeLine),
+.codeEditor :global(.cm-activeLineGutter) {
+  background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+}
+
+.codeEditor :global(.cm-config-key) {
+  color: var(--syntax-key);
+}
+
+.codeEditor :global(.cm-config-string) {
+  color: var(--syntax-string);
+}
+
+.codeEditor :global(.cm-config-number) {
+  color: var(--syntax-number);
+}
+
+.codeEditor :global(.cm-config-boolean) {
+  color: var(--syntax-boolean);
+}
+
+.codeEditor :global(.cm-config-comment) {
+  color: var(--code-muted);
+  font-style: italic;
+}
+
+.codeEditor :global(.cm-config-invalid) {
+  color: var(--danger);
+  text-decoration: underline wavy;
+}
+
+.codeEditorFallback {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  padding: 16px;
+  border: 0;
+  outline: 0;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: var(--text-xs) / 1.6 var(--font-mono);
+  tab-size: 2;
+}
+
+.visualEditor {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 32px;
+  background: var(--surface);
+}
+
+.visualGroup {
+  margin: 0 auto 22px;
+  max-width: 980px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.visualGroup:last-child {
+  margin-bottom: 0;
+}
+
+.visualGroup > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.visualGroup h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+}
+
+.visualFieldList {
+  display: grid;
+}
+
+.visualFieldList > .visualField + .visualField {
+  border-top: 1px solid var(--line-soft);
+}
+
+.visualField {
+  display: grid;
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 9px 0;
+  background: transparent;
+}
+
+.visualFieldMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.visualOptionLabel {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.visualOptionLabel label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requiredMarker {
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.visualFieldControl {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.visualInclude {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.visualTextControl {
+  display: flex;
+  width: 100%;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.proxyToggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.visualTextControl input,
+.visualField select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: var(--text-xs);
+}
+
+.visualTextControl [data-icon-button] {
+  flex: 0 0 30px;
+}
+
+.providerEditor {
+  display: grid;
+  gap: 1px;
+}
+
+.providerEditor > .visualField + .visualField {
+  border-top: 1px solid var(--line-soft);
+}
+
+.visualFieldControl > input,
+.visualFieldControl > .visualTextControl > input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: var(--text-xs);
+}
+
+.editorDiagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: var(--text-xs);
+}
+
+.binaryConfigNotice {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.binaryConfigNotice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.configContextStack {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.contextFacts {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(90px, auto));
+  align-items: center;
+  gap: 6px 18px;
+  padding: 7px 24px 2px;
+}
+
+.contextFacts > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.contextFacts small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.contextFacts strong {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextFile {
+  font-family: var(--font-mono);
+}
+
+.contextFacts em {
+  flex: 0 0 auto;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-pill);
+  padding: 2px 6px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+.sensitiveContext {
+  padding: 0 24px 3px;
+  color: var(--warning);
+  font-size: var(--text-xs);
+}
+
+.configFilePanel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.wideDialog {
+  width: min(680px, 100%);
+}
+
+.propagationGroups {
+  display: grid;
+  max-height: 54vh;
+  gap: 14px;
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.propagationGroups section > h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: var(--text-sm);
+}
+
+.propagationGroups .planList {
+  margin-top: 6px;
+}
+
+@media (max-width: 760px) {
+  .configEditorHeader {
+    align-items: flex-start;
+  }
+
+  .contextFile {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .contextFacts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-right: 10px;
+  }
+
+  .editorTools {
+    flex-wrap: wrap;
+  }
+
+  .editorTools > span {
+    flex: 1 0 100%;
+  }
+  .configRowMain {
+    min-height: 56px;
+  }
+  .configEditorHeader > [data-icon-button]:first-child {
+    display: inline-grid;
+  }
+
+  .visualEditor {
+    padding: 10px;
+  }
+
+  .visualGroup > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .visualField {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    padding: 10px 12px;
+  }
+
+  .visualFieldMeta {
+    align-items: center;
+  }
+
+  .visualFieldControl {
+    width: 100%;
+  }
+
+  .editorModeBar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .editorModeBar > span {
+    flex: 1 0 100%;
+  }
+
+  .configFileSection {
+    min-height: 320px;
+  }
+}

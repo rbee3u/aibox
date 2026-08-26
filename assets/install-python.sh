@@ -133,7 +133,7 @@ curl -LsSf https://astral.sh/uv/install.sh -o "$uv_installer"
 env \
     UV_UNMANAGED_INSTALL="$staging/uv" \
     UV_NO_MODIFY_PATH=1 \
-    sh "$uv_installer"
+    sh -x "$uv_installer"
 test -x "$staging/uv/uv"
 test -x "$staging/uv/uvx"
 uv_version=$("$staging/uv/uv" --version | awk '{print $2}')

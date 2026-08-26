@@ -10,6 +10,7 @@
 mod agent;
 mod cli;
 mod component;
+mod component_updates;
 mod config;
 mod config_model;
 mod control_web;

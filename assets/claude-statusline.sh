@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Code status line: model/reasoning, directory, branch, and context
+# Claude Code statusline: model/reasoning, directory, branch, and context
 # size/usage.
 # `jq` provides the payload fields; the Git branch is best-effort.
 input=$(cat)
@@ -21,7 +21,7 @@ IFS=$'\t' read -r model effort workspace_dir context_size context_percent < <(
 [[ "$context_percent" == "$empty_marker" ]] && context_percent=
 
 # Use decimal units and three significant digits, matching the compact form in
-# the native Codex status line (for example, 258000 -> 258K).
+# the native Codex statusline (for example, 258000 -> 258K).
 format_tokens() {
     awk -v raw="$1" 'BEGIN {
         if (raw == "" || raw !~ /^[0-9]+([.][0-9]+)?$/) exit

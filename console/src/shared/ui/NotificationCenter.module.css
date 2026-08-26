@@ -1,0 +1,88 @@
+.center {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  z-index: var(--layer-notification);
+  display: grid;
+  width: min(520px, calc(100vw - 28px));
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.notification {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-height: 42px;
+  align-items: start;
+  gap: 9px;
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  padding: 7px 9px;
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+.error {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.success {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-raised));
+}
+
+.info {
+  border-color: var(--info-line);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.icon {
+  margin-top: 1px;
+}
+
+.copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.copy strong {
+  color: currentColor;
+  font-size: var(--text-xs);
+}
+
+.copy span {
+  overflow-wrap: anywhere;
+}
+
+.dismiss {
+  min-height: 28px;
+  border-color: transparent;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dismiss {
+  display: grid;
+  width: 28px;
+  place-items: center;
+  padding: 0;
+}
+
+.dismiss {
+  width: 28px;
+}
+
+.dismiss:hover:not(:disabled) {
+  border-color: currentColor;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}

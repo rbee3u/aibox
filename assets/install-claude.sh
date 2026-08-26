@@ -13,7 +13,7 @@ export DISABLE_AUTOUPDATER=1
 
 curl -fsSL https://claude.ai/install.sh -o "$installer"
 if [ -n "$requested" ]; then
-    bash "$installer" "$requested"
+    bash -x "$installer" "$requested"
 else
-    bash "$installer"
+    bash -x "$installer"
 fi

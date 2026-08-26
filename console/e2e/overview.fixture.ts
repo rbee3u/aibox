@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { OverviewData, TopologyAgent, TopologyData } from "../src/controlApi";
+import type { OverviewData, TopologyAgent, TopologyData } from "../src/api/overview";
 
 const overview = {
   service: {

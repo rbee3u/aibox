@@ -41,6 +41,21 @@ cargo test \
 That test binds loopback listeners and is intentionally excluded from the
 default suite.
 
+Frontend tests are layered. Query codecs, reducers, derivations, and formatting
+are unit tested beside the module they cover, so a rule such as "an equal
+version offers no Update" is stated once in a fast test rather than inferred
+from a rendered page. Each domain then keeps interaction tests that render its
+real page against a strict fake of its own API interface; those files are split
+by theme rather than collected into one suite. Test doubles live with what they
+double: `features/requests/testFixtures.ts` and `testHarness.tsx` for Requests,
+`test/controlApi` harnesses for the management pages.
+
+Because the tokens test asserts the density and stacking contracts directly,
+browser specs do not restate exact pixel values. They assert behavior and
+relative geometry instead — that names share a leading edge, that a split action
+matches the width of its plain counterpart, that a menu stays right-aligned with
+its trigger, and that nothing overflows horizontally.
+
 Optional desktop browser smoke tests use a loopback-only Vite development
 listener. They deliberately avoid committed screenshot baselines and remain
 separate from the routine socket-free checks:
@@ -77,36 +92,67 @@ references, so `assets/console.css` and `assets/console.js` are served as
 
 ## Code Boundaries
 
-`src/App.tsx` owns the persistent AIBox shell, the sole `history` and
-`popstate` integration, URL-backed module navigation, sidebar preferences,
-latest Management Operation surface, and protection for unsaved Config edits
-across in-app, history, and browser navigation. Pages receive an immutable
-`{ module, search }` route snapshot and navigation callbacks; they keep only
-pure query codecs and never subscribe to browser history themselves.
-`src/SidebarUtilities.tsx` owns the sidebar resource catalog, brand icons, and
-theme control. The Claude, OpenAI, and GitHub brand SVGs are committed under
-`src/assets/brand/`; their LobeHub source and MIT license are recorded beside
-the assets, so runtime and build output do not depend on an icon package.
+`src/` is layered `app` -> `features` -> `shared` -> `api`, and ESLint's
+`no-restricted-imports` rules in `eslint.config.js` reject an import that
+reverses an edge or lets two features depend on each other. `src/test` is
+exempt because its harnesses compose whole pages. Files are imported through
+the `@/` alias; there are no barrel files, so every import names the module it
+uses.
 
-`src/OverviewPage.tsx` orchestrates Overview data and controls,
-`src/TopologyCanvas.tsx` owns topology rendering, and
-`src/overviewTopology.ts` is the React-free tree, search, filter, and layout
-model. `src/TenantPage.tsx`, `src/ConfigPage.tsx`, and `src/SessionPage.tsx`
-own the management domains. Their CSS Modules own domain and responsive rules;
-`src/CatalogLayout.module.css` contains only shared catalog, split, and detail
-structure. Desktop layouts support 1024px and wider with a collapsible sidebar;
+`app/App.tsx` owns the persistent AIBox shell. `app/routing/useConsoleRouter.ts`
+owns the sole `history` and `popstate` integration, URL-backed module
+navigation, and protection for unsaved Config edits across in-app, history, and
+browser navigation. `app/useMobileNavigation.ts` owns the narrow-layout drawer
+and `app/useOperationFeed.ts` the latest Management Operation. Pages receive an
+immutable `search` snapshot plus one `onLocationChange(query, replace)` writer
+for their own module; they keep only pure query codecs in
+`features/<domain>/route.ts` and never subscribe to browser history themselves.
+`app/SidebarUtilities.tsx` owns the sidebar resource catalog and theme control.
+The Claude, OpenAI, GitHub, Node.js, Python, Rust, and Go brand SVGs are
+committed under `shared/icons/brand/`; their Lobe Icons or Simple Icons source
+versions and licenses are recorded beside the assets. All Console brand
+rendering goes through the typed `shared/icons/brandIcons.tsx` registry, so
+callers select a registered brand and explicit size without importing SVGs
+directly. Runtime and build output do not depend on an icon package.
+
+Each `features/<domain>/` holds its page, its query codec, its React-free
+domain modules, and its own components. `features/overview/` orchestrates
+Overview and keeps rendering in `topology/TopologyCanvas.tsx` and
+`topology/TopologyCanvasNode.tsx` over the React-free tree, search, filter, and
+layout model in `topology/topologyModel.ts`. `features/tenants/`
+holds the Component vocabulary, version comparison, Latest Release observation,
+and row derivation in `componentCatalog.ts`. `features/configs/` keeps the file
+editor, visual option editor, and CodeMirror integration under `editor/`, with
+Named Config and Request Proxy logic in `configCatalog.ts`. `features/sessions/`
+keeps the Transcript timeline reducer in `sessionDetail.ts` and the
+Tenant-and-Agent source vocabulary in `sessionSource.ts`.
+`features/requests/` keeps body decoding, Summary derivation, and list
+bookkeeping in pure modules beside `useRequestInspection.ts`.
+
+Domain CSS Modules own domain and responsive rules.
+`shared/ui/layout/catalog.module.css` owns the shared catalog page frame,
+split, toolbar, list row, status pill, and dialog structure; a domain module
+extends one of those classes through `composes` only when it adds rules of its
+own. Desktop layouts support 1024px and wider with a collapsible sidebar;
 narrow layouts use one-panel catalog/detail navigation.
 
-`connectControlApi()` in `src/controlApi.ts` owns the Console-internal Control
-transport and composes narrow Overview, Tenant, Config, Session, Requests, and
-Operation interfaces. Paths, query strings, wire bodies, binary Bodies, CSRF,
-NDJSON, and SSE remain in that client. `RequestsPage` receives its narrow
-Requests interface from the same connected client. The TypeScript
-interfaces mirror the Rust JSON responses, including raw Summary timing,
-Request Outcome, the top-level Coding Agent Session ID, the persisted Model
-Protocol Summary and Request Assessment, and normalized Diagnostics groups.
-Pages receive only their domain API interface so tests can use strict,
-deterministic fakes without sockets or HTTP knowledge.
+`connectControlApi()` in `src/api/connect.ts` composes narrow Overview, Tenant,
+Config, Session, Requests, and Operation interfaces over the single
+`api/transport.ts` client. That client owns fetch, CSRF, NDJSON reading, and
+binary Bodies; each `api/<domain>.ts` owns its paths, query strings, wire
+bodies, wire types, and domain interface, and `api/operations.ts` owns the SSE
+subscription. The TypeScript interfaces mirror the Rust JSON responses,
+including raw Summary timing, Request Outcome, the top-level Coding Agent
+Session ID, the persisted Model Protocol Summary and Request Assessment, and
+normalized Diagnostics groups. Pages receive only their domain API interface so
+tests can use strict, deterministic fakes without sockets or HTTP knowledge.
+
+Shared cross-domain behavior lives in `shared/hooks/`: `usePolling` runs an
+interval that never overlaps its own request, `useCatalogSelection` holds batch
+selection with an optional per-row context, `useNarrowDetailFocus` moves focus
+into a one-pane detail, `useFailureNotifications` collects per-source failure
+notices, and `useTenants` loads the Tenant catalog. `shared/lib/errors.ts` owns
+message extraction and cancellation detection.
 
 ## Control API
 
@@ -141,16 +187,19 @@ changing the embedded Console behavior.
 
 ## Visual System
 
-AIBox semantic CSS variables in `src/styles.css` are the single source of truth
-for Console color, surface, border, status, focus, code, and shadow roles. Both
+AIBox semantic CSS variables in `src/shared/styles/tokens.css` are the single
+source of truth for Console color, surface, border, status, focus, code, shadow,
+density, and stacking roles. Surfaces that escape their own layout use the
+`--layer-*` tokens so their order stays centralized and testable. Both
 light and dark palettes are complete and tested for parity and primary text
 contrast. The default `system` theme follows `prefers-color-scheme`; explicit
 light or dark choices are persisted, and `data-resolved-theme` selects the
 palette before React renders.
 
-Small AIBox-owned UI primitives in `src/components/` provide ordinary actions,
+Small AIBox-owned UI primitives in `src/shared/ui/` provide ordinary actions,
 text inputs, text areas, checkboxes, native selects, icon buttons, and anchored
-tooltips. They use native HTML semantics and CSS Modules rather than a general
+tooltips. Shared section headers and alert banners provide the same narrow
+presentation contract for ordinary Console surfaces. They use native HTML semantics and CSS Modules rather than a general
 visual or headless UI framework. Their props remain native except for narrow
 AIBox contracts such as action tone and a checkbox's boolean change callback.
 Use these primitives for ordinary controls; keep specialized domain interaction
@@ -175,8 +224,8 @@ baselines.
 
 The production JavaScript bundle is checked after every Console build. Its gzip
 size may grow by at most 64 KiB (65,536 bytes) from the current architecture
-baseline of 369,891 bytes; `scripts/check-bundle-budget.mjs` enforces the
-435,427-byte maximum before generated assets are published.
+baseline of 378,629 bytes; `scripts/check-bundle-budget.mjs` enforces the
+444,165-byte maximum before generated assets are published.
 
 ## Overview and Management Navigation
 
@@ -230,30 +279,78 @@ changes only on its explicit refresh. Expanding Sessions performs discovery
 only and does not parse Transcript content. Topology expansion, filters, zoom,
 and viewport position are deliberately not persisted.
 
-Management selections are shareable URL state. Tenants use `tenant` and optional
-`component`; Configs use `tenant`, `agent`, either `current=1` or `config`, and
-optional `file`; Sessions use repeated `tenant` and `agent`, plus
+Management selections are shareable URL state. Tenants use only `tenant`;
+historical `component` parameters are ignored and removed from the URL when the
+Tenant page loads. Component navigation therefore opens the Tenant-level
+diagnostics list, where an individual row can be expanded with **Details**.
+Configs use `tenant`, `agent`, either `current=1` or `config`, and optional
+`file`; Sessions use repeated `tenant` and `agent`, plus
 `session_tenant`, `session_agent`, and `session` for the selected Session. Dirty
 Config file edits require confirmation before in-app navigation, history
 navigation, or page unload can discard them.
 
-The Managed Tenant Components catalog contains Codex, Claude, their two status
-lines, Node.js, Python, Rust, and Go; the Host Tenant contains only the two
-status lines. Installed versioned Components expose a `latest`/exact-version
-Update control. Unmanaged state is diagnostic only and exposes neither Install
-nor Remove, because the Console cannot claim foreign launchers safely.
+The Managed Tenant Components catalog contains Codex, Claude, their two
+statuslines, Node.js, Python, Rust, and Go; the Host Tenant contains only the
+two statuslines. A fixed 64-pixel detail toolbar presents `Components` as its
+primary task and keeps the selected Tenant, abbreviated Home, installed ratio,
+nonzero issue count, Latest Release check time, and icon-only check action as
+compact context. Container-width breakpoints progressively hide Home, the
+installed ratio, and the visible check time while retaining the Tenant,
+nonzero issues, and check action. Managed catalogs use three presentation-only
+groups: Coding Agents, Statuslines, and Runtimes & Toolchains. They are
+unframed sections with short labels and separators rather than cards; the Host
+catalog omits the two empty groups.
 
-The Tenants, Configs, Sessions, and Requests catalogs share one visual rhythm:
-48-pixel toolbars, aligned leading icons, 14-pixel semibold primary text,
+`Check for updates` refreshes local state and the Service-wide Latest Release
+snapshot. The page header owns the not-checked or last-checked observation;
+rows do not repeat a Service-wide `Latest not checked` placeholder. Component
+rows are quiet, non-selectable 52-pixel list items with a fixed two-line
+information block. The first line contains a bare Component brand icon and
+compact name; statuslines use the shared waveform icon. The second line keeps
+the local Installed State and only the necessary observed Latest Release.
+Equal Installed and Latest versions do not repeat Latest, and missing
+observations have no placeholder. Normal confirmation labels such as
+`Definition current`, version `Current`, and `Update available` stay silent;
+an available Update is expressed by its action, while exceptional inspection
+states retain their badges. Diagnostic text is available from a visible
+**Details** control. Group and Component order remains stable across state
+changes.
+
+The horizontal action group sits independently at the row end and is centered
+against both information lines rather than aligned with either line. Install
+uses a lightly filled indigo treatment, Update uses a solid teal treatment,
+and Repair or Restore uses a light warning treatment. Remove is an icon-only
+quiet action with a tooltip and destructive confirmation. Version menus fit
+their action phrase and remain right-aligned with the split trigger. Default
+installation is the primary half of a split action whose menu accepts an exact
+`X.Y.Z` version. A checked versioned Component with a
+higher Latest Release uses the same split treatment for Update: the primary
+action selects Latest, while the menu accepts any exact version newer than
+Installed. The installer remains responsible for determining whether that
+version exists. Equal versions create no Operation; downgrades retain the
+explicit Remove-then-install workflow. Statusline
+`modified` state shows a `Modified` badge and an unversioned Update action.
+Remove remains a visible, quiet, separate destructive action with confirmation.
+Unmanaged state is diagnostic only and exposes neither Install nor Remove,
+because the Console cannot claim foreign launchers safely.
+
+The Tenants, Configs, Sessions, and Requests catalog shells share one visual rhythm:
+44-pixel ordinary toolbars, 30-36 pixel controls, aligned leading icons,
+14-pixel semibold primary text,
 12-pixel secondary text, quiet destructive actions, and the same hover,
-selection, and focus treatment. Their desktop split views use the same
-responsive catalog width, and each selected detail starts with the same pale
-shell surface and divider while retaining its module-specific structure.
-Request and Tenant rows have a 64-pixel minimum height, while the single-line
-Config rows use 56 pixels. Session rows also start at 64 pixels, but a
-Conversation Message preview may occupy two lines before it is truncated; only those rows grow to
-accommodate the second line, and the complete title remains available from the
-row title. Selecting a Session updates its shareable detail URL without
+selection, and focus treatment for their navigable rows. The Tenant Component
+list is the deliberate exception: its rows are static and use unframed
+sections, bare Component icons, a 52-pixel desktop rhythm, and row-local
+progress in the second information line for the active Component Operation.
+Its detail pane uses container-width breakpoints to move the intact horizontal
+action group below the information block before allowing it to wrap, without
+changing the Console's master/detail navigation. Each selected detail starts
+with the same pale shell surface and divider while retaining its
+module-specific structure.
+Single-line catalog rows use a 44-48 pixel rhythm. Rows containing a second
+metadata or Conversation Message preview line use a 52-56 pixel rhythm, while
+coarse-pointer targets remain at least 44 pixels. The complete Session title
+remains available from the row title. Selecting a Session updates its shareable detail URL without
 restarting the unchanged catalog lifecycle, so the catalog keeps its scroll
 position and the selected row remains in context. Session source labels place
 the Tenant and Coding Agent together with a space; detail adds the Session ID
@@ -366,7 +463,10 @@ timing degradation remain local to the affected Body view.
 The latest Management Operation remains visible across modules in the bottom
 task dock. Starting a new Operation or receiving a new failure expands it;
 polling does not reopen a dock the user collapsed. Expanded output reserves
-workspace space and scrolls independently.
+workspace space and scrolls independently. Runtime Component installer
+Operations run their shell installers with command tracing enabled, so the
+dock receives each installer command together with the live stdout and stderr
+that it produces.
 
 ## Request Assessment and Diagnostics
 

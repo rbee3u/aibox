@@ -1,0 +1,36 @@
+.button {
+  display: inline-flex;
+  min-height: var(--control-compact);
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-color: transparent;
+  padding: 5px 7px;
+  color: var(--ink-secondary);
+  background: transparent;
+  font-size: var(--text-xs);
+  font-weight: inherit;
+  white-space: nowrap;
+}
+
+.button.button:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.iconOnly {
+  width: var(--control-compact);
+  height: var(--control-compact);
+  min-width: var(--control-compact);
+  padding: 0;
+}
+
+@media (pointer: coarse) {
+  .iconOnly {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}

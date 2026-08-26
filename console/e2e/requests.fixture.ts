@@ -6,7 +6,7 @@ import type {
   RequestDetail,
   RequestList,
   RequestSummary,
-} from "../src/types";
+} from "../src/api/requests";
 
 const requestBody = '{"model":"gpt-5.6-sol"}';
 const responseBody = 'data: {"type":"response.completed"}\n\n';

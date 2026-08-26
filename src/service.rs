@@ -3,7 +3,7 @@
 use crate::cli::ConsoleArgs;
 use crate::operation::OperationManager;
 use crate::request::AppState as RequestState;
-use crate::{config, control_web, request_proxy, tenant};
+use crate::{component_updates, config, control_web, request_proxy, tenant};
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::body::Body;
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -39,6 +39,9 @@ pub(crate) struct ServiceState {
     pub(crate) operations: OperationManager,
     pub(crate) mutation: Arc<Mutex<()>>,
     pub(crate) auth_propagation: Arc<std::sync::Mutex<Option<PendingAuthPropagation>>>,
+    pub(crate) latest_snapshot: Arc<RwLock<Option<component_updates::LatestSnapshot>>>,
+    pub(crate) latest_check: Arc<Mutex<()>>,
+    pub(crate) latest_provider: Arc<dyn component_updates::LatestProvider>,
 }
 
 pub(crate) struct PendingAuthPropagation {
@@ -109,6 +112,8 @@ async fn serve(
         shutdown.clone(),
         Some(crate::request_reporter::RequestReporter::new()),
     )?;
+    let latest_provider: Arc<dyn component_updates::LatestProvider> =
+        Arc::new(component_updates::OfficialLatestProvider::new()?);
     let state = ServiceState {
         root: Arc::new(root),
         host_home: Arc::new(host_home),
@@ -120,6 +125,9 @@ async fn serve(
         operations: OperationManager::new(),
         mutation: Arc::new(Mutex::new(())),
         auth_propagation: Arc::new(std::sync::Mutex::new(None)),
+        latest_snapshot: Arc::new(RwLock::new(None)),
+        latest_check: Arc::new(Mutex::new(())),
+        latest_provider,
     };
     let listener =
         bind_listener(listen).with_context(|| format!("bind aibox Service listener {listen}"))?;
@@ -435,6 +443,11 @@ mod tests {
             operations: OperationManager::new(),
             mutation: Arc::new(Mutex::new(())),
             auth_propagation: Arc::new(std::sync::Mutex::new(None)),
+            latest_snapshot: Arc::new(RwLock::new(None)),
+            latest_check: Arc::new(Mutex::new(())),
+            latest_provider: Arc::new(crate::component_updates::FixtureLatestProvider {
+                results: std::collections::BTreeMap::new(),
+            }),
         }
     }
 
@@ -445,6 +458,19 @@ mod tests {
             .header(header::HOST, "127.0.0.1:9923")
             .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()))
             .body(Body::empty())
+            .unwrap()
+    }
+
+    fn json_request(path: &str, body: &'static str) -> Request<Body> {
+        Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::HOST, "127.0.0.1:9923")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ORIGIN, "http://127.0.0.1:9923")
+            .header("x-aibox-csrf", "test-csrf")
+            .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
+            .body(Body::from(body))
             .unwrap()
     }
 
@@ -692,6 +718,96 @@ mod tests {
         let body = bootstrap.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["listen"], "127.0.0.1:9923");
+    }
+
+    #[tokio::test]
+    async fn component_update_check_is_shared_partial_and_socket_free() {
+        use crate::component_updates::{FixtureLatestProvider, LatestResult};
+        use std::collections::BTreeMap;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut state = test_state(root.path());
+        state.latest_provider = Arc::new(FixtureLatestProvider {
+            results: BTreeMap::from([
+                (
+                    "node".to_string(),
+                    LatestResult::Available {
+                        version: "24.19.0".to_string(),
+                        source: "nodejs.org",
+                    },
+                ),
+                (
+                    "codex".to_string(),
+                    LatestResult::Unavailable {
+                        source: "chatgpt.com",
+                        error: "fixture unavailable".to_string(),
+                    },
+                ),
+            ]),
+        });
+        let app = router(state.clone());
+
+        let initial = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/components/latest",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(initial.status(), StatusCode::OK);
+        let initial = initial.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&initial).unwrap(),
+            Value::Null
+        );
+
+        let checked = app
+            .clone()
+            .oneshot(json_request("/_aibox/api/components/latest/check", "{}"))
+            .await
+            .unwrap();
+        assert_eq!(checked.status(), StatusCode::OK);
+        let checked = checked.into_body().collect().await.unwrap().to_bytes();
+        let checked: Value = serde_json::from_slice(&checked).unwrap();
+        assert!(checked["checked_at"].as_str().is_some());
+        assert_eq!(checked["entries"].as_array().unwrap().len(), 6);
+        assert!(checked["entries"].as_array().unwrap().iter().all(|entry| {
+            entry["kind"] != "claude-statusline" && entry["kind"] != "codex-statusline"
+        }));
+        assert_eq!(
+            checked["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["kind"] == "node")
+                .unwrap()["version"],
+            "24.19.0"
+        );
+        assert_eq!(
+            checked["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["kind"] == "codex")
+                .unwrap()["state"],
+            "unavailable"
+        );
+
+        let shared = app
+            .oneshot(request(
+                Method::GET,
+                "/_aibox/api/components/latest",
+                "127.0.0.1:5000",
+            ))
+            .await
+            .unwrap();
+        let shared = shared.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(serde_json::from_slice::<Value>(&shared).unwrap(), checked);
+        assert!(!root.path().join("tenants").exists());
+        assert!(state.operations.snapshot().is_none());
+        assert!(state.mutation.try_lock().is_ok());
     }
 
     #[tokio::test]

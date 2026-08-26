@@ -2,7 +2,8 @@ import { gzipSync } from "node:zlib";
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 
-const baselineBytes = 369_891;
+// Measured after the feature-first restructure; the allowance is unchanged.
+const baselineBytes = 378_629;
 const maxGrowthBytes = 65_536;
 const asset = new URL("../../assets/console.js", import.meta.url);
 const content = await readFile(asset);

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { ConfigVisualOption } from "../src/controlApi";
+import type { ConfigVisualOption } from "../src/api/configs";
 
 type VisualOptionFixture = Omit<
   ConfigVisualOption,

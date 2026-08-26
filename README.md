@@ -117,14 +117,14 @@ protected from deletion. The real host Home is the separate Host Tenant. Read
 ## Components
 
 Install or update Tenant-local Coding Agents, Node.js, Python, language
-toolchains, and optional status lines from a Tenant's Components view.
+toolchains, and optional statuslines from a Tenant's Components view.
 
 Omitting a version installs the current stable release; an exact `X.Y.Z`
 selects that release. Runtime installation uses the shared Docker image and
 requires a built Runtime Image, but upgrades do not rebuild it. Codex and
 Claude use their official standalone/native installers and do not depend on
 Node.js. The Python toolchain bundles uv/uvx, one active CPython, pip, and venv;
-it is independent from Node, Rust, and Go. Status lines directly edit native
+it is independent from Node, Rust, and Go. Statuslines directly edit native
 Current Config values; Host statusline Components are available through the
 Host Tenant, while runtime and toolchain Components remain Managed Tenant-only.
 See [Tenant Components](docs/tenants.md#tenant-components) for lifecycle and
@@ -137,7 +137,7 @@ module can create, reveal, edit, delete, and explicitly apply it, as well as
 edit Current Config and preview Credential Propagation.
 
 Application overwrites or removes every fixed Config Field and preserves
-unrelated native settings such as status-line configuration. A successful
+unrelated native settings such as statusline configuration. A successful
 application records Last Application so the Console can derive Config Drift;
 this is not activation and never triggers reapplication. No backup or rollback
 state is retained. Reveal displays every native file, including credentials

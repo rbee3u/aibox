@@ -1,0 +1,112 @@
+.jsonTree {
+  max-height: 55vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  padding: 12px 10px;
+  border: 1px solid var(--code-border);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font: var(--text-xs) / 1.65 var(--font-mono);
+}
+
+.compact {
+  max-height: none;
+  padding: 3px 2px;
+}
+
+.jsonNode {
+  min-width: max-content;
+  border-radius: 3px;
+  outline: none;
+}
+
+.jsonLine {
+  display: flex;
+  min-height: 24px;
+  align-items: baseline;
+  gap: 6px;
+  padding-right: 8px;
+}
+
+.jsonNode:focus > .jsonLine {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.jsonChildren {
+  margin-left: 18px;
+  border-left: 1px solid var(--code-guide);
+  padding-left: 6px;
+}
+
+.jsonToggle,
+.jsonCopy,
+.jsonStringToggle {
+  border: 0;
+  background: transparent;
+  color: var(--code-muted);
+}
+
+.jsonToggle {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+}
+
+.jsonToggle:disabled {
+  opacity: 1;
+}
+
+.jsonIndent {
+  width: 20px;
+}
+
+.jsonKey {
+  color: var(--syntax-key);
+}
+
+.jsonContainerLabel {
+  color: var(--code-muted);
+}
+
+.jsonString {
+  color: var(--syntax-string);
+  white-space: pre-wrap;
+}
+
+.jsonNumber {
+  color: var(--syntax-number);
+}
+
+.jsonBoolean {
+  color: var(--syntax-boolean);
+}
+
+.jsonNull {
+  color: var(--code-muted);
+  font-style: italic;
+}
+
+.jsonCopy {
+  display: inline-grid;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  opacity: 0.35;
+}
+
+.jsonLine:hover .jsonCopy,
+.jsonCopy:focus-visible {
+  opacity: 1;
+}
+
+.jsonStringToggle {
+  padding: 1px 4px;
+  color: var(--code-muted);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+}

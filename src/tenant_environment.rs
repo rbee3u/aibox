@@ -52,8 +52,8 @@ aibox_export_if_set UV_MANAGED_PYTHON UV_NO_MANAGED_PYTHON UV_PYTHON_DOWNLOADS
 aibox_export_if_set DISABLE_AUTOUPDATER
 unset -f aibox_export_if_set
 
-aibox_append_path() {
-    local wanted=$1 remaining segment more
+aibox_add_path() {
+    local wanted=$1 remaining segment more padded before_anchor
     [[ -n $wanted && $wanted != *:* && -d $wanted ]] || return
     if [[ -n ${PATH+x} ]]; then
         remaining=$PATH
@@ -69,14 +69,22 @@ aibox_append_path() {
             [[ $segment != "$wanted" ]] || return
             [[ -n $more ]] || break
         done
-        PATH="${PATH}:$wanted"
+        padded=:$PATH:
+        before_anchor=${padded%:/usr/local/bin:*}
+        if [[ $before_anchor != "$padded" ]]; then
+            padded="${before_anchor}:$wanted${padded#"$before_anchor"}"
+            PATH=${padded#:}
+            PATH=${PATH%:}
+        else
+            PATH="${PATH}:$wanted"
+        fi
     else
         PATH=$wanted
     fi
     export PATH
 }
 
-aibox_append_path_from_variable() {
+aibox_add_path_from_variable() {
     local name=$1 fallback=$2 suffix=$3 value
     if declare -p "$name" >/dev/null 2>&1; then
         value=${!name}
@@ -84,17 +92,17 @@ aibox_append_path_from_variable() {
     else
         value=$fallback
     fi
-    aibox_append_path "$value$suffix"
+    aibox_add_path "$value$suffix"
 }
 
-aibox_append_path "$HOME/.local/bin"
-aibox_append_path_from_variable UV_PYTHON_BIN_DIR "$HOME/.python/bin" ''
-aibox_append_path "$HOME/.node/current/bin"
-aibox_append_path_from_variable NPM_CONFIG_PREFIX "$HOME/.npm-global" /bin
-aibox_append_path_from_variable CARGO_HOME "$HOME/.cargo" /bin
-aibox_append_path_from_variable GOROOT "$HOME/.goroot" /bin
-aibox_append_path_from_variable GOPATH "$HOME/.gopath" /bin
-unset -f aibox_append_path aibox_append_path_from_variable
+aibox_add_path "$HOME/.local/bin"
+aibox_add_path_from_variable UV_PYTHON_BIN_DIR "$HOME/.python/bin" ''
+aibox_add_path "$HOME/.node/current/bin"
+aibox_add_path_from_variable NPM_CONFIG_PREFIX "$HOME/.npm-global" /bin
+aibox_add_path_from_variable CARGO_HOME "$HOME/.cargo" /bin
+aibox_add_path_from_variable GOROOT "$HOME/.goroot" /bin
+aibox_add_path_from_variable GOPATH "$HOME/.gopath" /bin
+unset -f aibox_add_path aibox_add_path_from_variable
 unset aibox_node_installed aibox_claude_installed aibox_python_installed
 unset aibox_rust_installed aibox_go_installed
 
@@ -345,7 +353,7 @@ printf '%s:%s|%s:%s\n' "${UV_MANAGED_PYTHON+x}" "${UV_MANAGED_PYTHON-}" "${UV_NO
 
     #[cfg(unix)]
     #[test]
-    fn path_candidates_are_appended_in_stable_component_order() {
+    fn path_candidates_are_inserted_before_the_system_anchor_in_stable_order() {
         let home = tempfile::tempdir().unwrap();
         let uv = home.path().join("uv-bin");
         let npm = home.path().join("npm-prefix");
@@ -366,7 +374,7 @@ printf '%s:%s|%s:%s\n' "${UV_MANAGED_PYTHON+x}" "${UV_MANAGED_PYTHON-}" "${UV_NO
         fs::write(
             home.path().join(".bash_profile"),
             format!(
-                "export PATH='before::before'\n\
+                "export PATH='before::before:/usr/local/bin:/usr/bin:/bin'\n\
 export UV_PYTHON_BIN_DIR='{uv}'\n\
 export NPM_CONFIG_PREFIX='{npm}'\n\
 export CARGO_HOME='{cargo}'\n\
@@ -393,6 +401,11 @@ export GOPATH='{gopath}'\n",
             .args(&command[1..])
             .env("HOME", home.path())
             .env("SHELL", "/bin/bash")
+            .env_remove("UV_PYTHON_BIN_DIR")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("CARGO_HOME")
+            .env_remove("GOROOT")
+            .env_remove("GOPATH")
             .output()
             .unwrap();
 
@@ -400,7 +413,7 @@ export GOPATH='{gopath}'\n",
         assert_eq!(
             String::from_utf8(output.stdout).unwrap().trim_end(),
             format!(
-                "before::before:{local}:{uv}:{node}:{npm}:{cargo}:{goroot}:{gopath}",
+                "before::before:{local}:{uv}:{node}:{npm}:{cargo}:{goroot}:{gopath}:/usr/local/bin:/usr/bin:/bin",
                 local = home.path().join(".local/bin").display(),
                 uv = uv.display(),
                 node = home.path().join(".node/current/bin").display(),
@@ -410,6 +423,150 @@ export GOPATH='{gopath}'\n",
                 gopath = gopath.join("bin").display(),
             ),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_candidates_use_the_last_exact_system_anchor() {
+        let home = tempfile::tempdir().unwrap();
+        let local = home.path().join(".local/bin");
+        fs::create_dir_all(&local).unwrap();
+        fs::write(
+            home.path().join(".bash_profile"),
+            b"export PATH='user:/usr/local/bin:middle:/usr/local/bin:/usr/bin'\n",
+        )
+        .unwrap();
+        let probe = home.path().join("probe");
+        fs::write(&probe, b"#!/bin/bash\nprintf '%s\\n' \"$PATH\"\n").unwrap();
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let command = build_command_for_home(
+            &[probe.into_os_string()],
+            home.path().as_os_str(),
+            TenantEnvironmentComponents::default(),
+        );
+        let output = Command::new(&command[0])
+            .args(&command[1..])
+            .env("HOME", home.path())
+            .env("SHELL", "/bin/bash")
+            .env_remove("UV_PYTHON_BIN_DIR")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("CARGO_HOME")
+            .env_remove("GOROOT")
+            .env_remove("GOPATH")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim_end(),
+            format!(
+                "user:/usr/local/bin:middle:{local}:/usr/local/bin:/usr/bin",
+                local = local.display(),
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_path_candidates_keep_their_profile_position() {
+        let home = tempfile::tempdir().unwrap();
+        let local = home.path().join(".local/bin");
+        let uv = home.path().join("uv-bin");
+        fs::create_dir_all(&local).unwrap();
+        fs::create_dir_all(&uv).unwrap();
+        fs::write(
+            home.path().join(".bash_profile"),
+            format!(
+                "export PATH='user:/usr/local/bin:/usr/bin:{local}'\n\
+export UV_PYTHON_BIN_DIR='{uv}'\n",
+                local = local.display(),
+                uv = uv.display(),
+            ),
+        )
+        .unwrap();
+        let probe = home.path().join("probe");
+        fs::write(&probe, b"#!/bin/bash\nprintf '%s\\n' \"$PATH\"\n").unwrap();
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let command = build_command_for_home(
+            &[probe.into_os_string()],
+            home.path().as_os_str(),
+            TenantEnvironmentComponents::default(),
+        );
+        let output = Command::new(&command[0])
+            .args(&command[1..])
+            .env("HOME", home.path())
+            .env("SHELL", "/bin/bash")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("CARGO_HOME")
+            .env_remove("GOROOT")
+            .env_remove("GOPATH")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim_end(),
+            format!(
+                "user:{uv}:/usr/local/bin:/usr/bin:{local}",
+                uv = uv.display(),
+                local = local.display(),
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_candidates_append_when_the_exact_anchor_is_absent() {
+        for profile in [
+            "export PATH='user:/usr/local/bin/:/opt/usr/local/bin'\n",
+            "export PATH=\n",
+            "unset PATH\n",
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let local = home.path().join(".local/bin");
+            fs::create_dir_all(&local).unwrap();
+            fs::write(home.path().join(".bash_profile"), profile).unwrap();
+            let probe = home.path().join("probe");
+            fs::write(&probe, b"#!/bin/bash\nprintf '%s\\n' \"$PATH\"\n").unwrap();
+            fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+
+            let command = build_command_for_home(
+                &[probe.into_os_string()],
+                home.path().as_os_str(),
+                TenantEnvironmentComponents::default(),
+            );
+            let output = Command::new(&command[0])
+                .args(&command[1..])
+                .env("HOME", home.path())
+                .env("SHELL", "/bin/bash")
+                .env_remove("UV_PYTHON_BIN_DIR")
+                .env_remove("NPM_CONFIG_PREFIX")
+                .env_remove("CARGO_HOME")
+                .env_remove("GOROOT")
+                .env_remove("GOPATH")
+                .output()
+                .unwrap();
+
+            assert!(output.status.success(), "{profile:?}: {output:?}");
+            let expected = match profile {
+                "export PATH='user:/usr/local/bin/:/opt/usr/local/bin'\n" => {
+                    format!(
+                        "user:/usr/local/bin/:/opt/usr/local/bin:{}",
+                        local.display()
+                    )
+                }
+                "export PATH=\n" => format!(":{}", local.display()),
+                "unset PATH\n" => local.display().to_string(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap().trim_end(),
+                expected,
+                "{profile:?}",
+            );
+        }
     }
 
     #[cfg(unix)]

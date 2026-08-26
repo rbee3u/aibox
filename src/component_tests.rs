@@ -601,6 +601,14 @@ fn node_installer_contains_architecture_and_checksum_guards() {
 }
 
 #[test]
+fn nested_component_installers_keep_command_tracing_enabled() {
+    assert!(CODEX_INSTALLER.contains("sh -x \"$installer\""));
+    assert!(CLAUDE_INSTALLER.contains("bash -x \"$installer\""));
+    assert!(PYTHON_INSTALLER.contains("sh -x \"$uv_installer\""));
+    assert!(RUST_INSTALLER.contains("sh -x \"$bootstrap\""));
+}
+
+#[test]
 fn python_installer_is_self_bootstrapping_transactional_and_managed_only() {
     assert!(PYTHON_INSTALLER.contains("UV_UNMANAGED_INSTALL"));
     assert!(PYTHON_INSTALLER.contains("UV_NO_MODIFY_PATH=1"));
@@ -783,6 +791,10 @@ mv -f "$AIBOX_TEST_HOME/.node/.current" "$AIBOX_TEST_HOME/.node/current"
 
     install_runtime_component_with(&tenant, &component, &docker).unwrap();
     let first_log = fs::read_to_string(&log).unwrap();
+    assert!(
+        first_log.contains(" bash -ceux "),
+        "Component installers must expose Bash xtrace commands: {first_log}"
+    );
     install_runtime_component_with(&tenant, &component, &docker).unwrap();
 
     assert_eq!(fs::read_to_string(&log).unwrap(), first_log);

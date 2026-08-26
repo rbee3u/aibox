@@ -24,7 +24,7 @@ references between them.
   `src/metadata.rs` owns the shared Tenant-and-Agent metadata document.
 - `src/runspec.rs`, `src/docker.rs`, and `src/docker_image.rs` own mount
   validation, cleanup-aware container execution, and image construction.
-  `src/component.rs` owns status-line, runtime, Coding Agent, and toolchain
+  `src/component.rs` owns statusline, runtime, Coding Agent, and toolchain
   Components.
 - `src/session.rs` owns shared Session discovery and dispatch;
   `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
@@ -35,13 +35,13 @@ references between them.
   `src/request_web.rs` owns the Requests portion of the Control API.
 - `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
   Root-local Service, Console Control API, and ephemeral Management Operations.
-- `console/src/App.tsx` owns Console routing and navigation guards;
-  `TenantPage.tsx`, `ConfigPage.tsx`, `SessionPage.tsx`, and
-  `RequestsPage.tsx` own their domain pages. `controlApi.ts` owns the unified
-  Control API client, including Requests. `OverviewPage.tsx` orchestrates
-  Overview, while `TopologyCanvas.tsx` and `overviewTopology.ts` own its
-  rendering and pure topology model. `assets/console.*` is generated output;
-  use `docs/console-ui.md`.
+- `console/src/` is layered `app` -> `features` -> `shared` -> `api`.
+  `app/App.tsx` owns the shell and `app/routing/` the sole history integration;
+  `api/transport.ts` plus the per-domain `api/<domain>.ts` modules own the
+  Control API; each `features/<domain>/` owns its page, query codec, React-free
+  domain modules, and components; `shared/` holds UI primitives, hooks, and
+  library code. `assets/console.*` is generated output; use
+  `docs/console-ui.md`.
 
 ## Constraints
 
@@ -117,7 +117,7 @@ later file failure does not roll back an earlier committed file.
 **Keep Agent permissions native.** Both built-in Named Config templates use
 native Current Config for non-interactive, unrestricted operation. Do not add
 permission or sandbox flags to invocation arguments, or enable the Claude
-status line in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
+statusline in its template. Claude stores `ANTHROPIC_AUTH_TOKEN` directly in
 `settings.json.env`; Codex `auth.json` must be a JSON object and replaces the
 native auth file as a whole. Every Named Config file is mode `0600`.
 
@@ -127,9 +127,9 @@ native Managed or Host Tenant files without a registry. Node.js, Codex, Claude,
 Python, Rust, and Go remain Managed Tenant-only and install through the shared
 image with only the Tenant Home mounted; a Run requires its selected Coding Agent
 Component and never falls back to the Runtime Image. A Debug Shell requires no
-Component. Status-line Components
+Component. Statusline Components
 directly manage their script when applicable and their native configuration
-values. Status-line paths are not Config Fields, so Config Application preserves
+values. Statusline paths are not Config Fields, so Config Application preserves
 them without ownership or overlap machinery. Expose repairable partial state as
 `incomplete`, and never replace or remove unmanaged state automatically.
 Component removal confirms before deleting any existing state. Preserve Agent
@@ -145,14 +145,17 @@ Component as `installed`; known non-installed states are quiet, while an
 inspection error warns and skips only that Component without blocking Run or
 Debug. Take this snapshot after Tenant initialization and before Docker starts.
 User values take precedence even without the Component, and explicit empty
-values suppress defaults. Independently append only existing missing
-Tenant-local binary directories to PATH, retaining preserved user tool paths
-after Component removal; a truly unset path-owner variable uses its HOME-local
-candidate, while an explicit empty value suppresses that candidate. Do not
-persist an aibox environment file, create or rewrite user profiles, implicitly
-load `.bashrc`, or hot-reload environment changes into an active container. Run
-invokes the selected Tenant-local Agent by absolute path. Debug then opens Bash
-without rereading profile or rc files.
+values suppress defaults. PATH is the exception: independently add only
+existing missing Tenant-local binary directories, retaining preserved user
+tool paths after Component removal. Insert each missing candidate immediately
+before the last exact `/usr/local/bin` segment, or append it when that anchor is
+absent; preserve the candidate order and every existing PATH segment in place.
+A truly unset path-owner variable uses its HOME-local candidate, while an
+explicit empty value suppresses that candidate. Do not persist an aibox
+environment file, create or rewrite user profiles, implicitly load `.bashrc`,
+or hot-reload environment changes into an active container. Run invokes the
+selected Tenant-local Agent by absolute path. Debug then opens Bash without
+rereading profile or rc files.
 
 **Use explicit destructive selection.** Tenant, Named Config, and Session
 deletion require names/ids or `--all`; an empty list never means all. `--all`

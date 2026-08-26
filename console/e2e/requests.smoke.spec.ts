@@ -34,7 +34,7 @@ test("desktop layout and keyboard interactions", async ({ page }) => {
   await expect(page.getByRole("region", { name: "Request details" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back to Request list" })).toBeHidden();
 
-  await page.getByRole("button", { name: "Select" }).click();
+  await page.getByRole("button", { name: "Select Requests" }).click();
   await page.getByRole("button", { name: "Select POST relay.example.test/v1/responses" }).click();
   await page.getByRole("button", { name: "Delete selected" }).click();
   const dialog = page.getByRole("dialog");

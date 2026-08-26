@@ -1,0 +1,181 @@
+.plainText,
+.markdown {
+  margin: 0;
+  padding: 10px 12px 12px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.plainText {
+  white-space: pre-wrap;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown table {
+  margin: 0 0 12px;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+}
+
+.markdown li + li {
+  margin-top: 4px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 18px 0 8px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: var(--weight-bold);
+  line-height: 1.35;
+}
+
+.markdown h1 {
+  font-size: 17px;
+}
+
+.markdown h2 {
+  font-size: 15px;
+}
+
+.markdown blockquote {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 12px;
+  color: var(--muted);
+}
+
+.markdown :not(pre) > code {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--code-text);
+  background: var(--surface-inset);
+  font: 12px / 1.4 var(--font-mono);
+}
+
+.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown th {
+  color: var(--ink-secondary);
+  background: var(--surface-inset);
+  font-weight: var(--weight-semibold);
+}
+
+.codeBlock {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+.codeToolbar {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: var(--weight-semibold) 11px / 1 var(--font-mono);
+  text-transform: lowercase;
+}
+
+.copyCode {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-color: transparent;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.copyCode:hover,
+.copyCode:focus-visible {
+  border-color: var(--line);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.codeBlock pre {
+  margin: 0;
+  overflow-x: auto;
+  padding: 12px 14px;
+  color: var(--code-text);
+  font: 12px / 1.6 var(--font-mono);
+  white-space: pre;
+}
+
+.codeBlock code {
+  font-family: inherit;
+}
+
+.codeBlock :global(.hljs-comment),
+.codeBlock :global(.hljs-quote) {
+  color: var(--muted);
+}
+
+.codeBlock :global(.hljs-keyword),
+.codeBlock :global(.hljs-selector-tag),
+.codeBlock :global(.hljs-literal) {
+  color: var(--accent);
+}
+
+.codeBlock :global(.hljs-string),
+.codeBlock :global(.hljs-attr) {
+  color: var(--success);
+}
+
+.codeBlock :global(.hljs-number),
+.codeBlock :global(.hljs-built_in) {
+  color: var(--warning);
+}
+
+.role {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}

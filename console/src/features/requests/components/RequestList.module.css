@@ -1,0 +1,442 @@
+.panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  container-type: inline-size;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.listHeader {
+  display: flex;
+  min-height: var(--catalog-toolbar-min-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: var(--catalog-toolbar-padding);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-shell);
+}
+
+.headerActions,
+.selectionActions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.headerActions {
+  margin-left: auto;
+}
+
+.headerActions button,
+.selectionActions button,
+.pagination button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.cancelSelection,
+.pageSelection {
+  min-height: 30px;
+  border-color: transparent;
+  padding: 5px 7px;
+  background: transparent;
+  font-size: var(--text-xs);
+}
+
+.cancelSelection,
+.pageSelection {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+}
+
+.pageSelection {
+  text-align: left;
+}
+
+.selectionActions {
+  margin-left: auto;
+}
+
+.selectionCount {
+  margin-right: 3px;
+  color: var(--muted);
+  font: var(--weight-semibold) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.deleteSelected {
+  min-height: 30px;
+  border-color: var(--danger-line);
+  padding: 5px 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: var(--text-xs);
+}
+
+.requests {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  background: var(--surface);
+}
+
+.loadingState {
+  display: grid;
+  height: 100%;
+  min-height: 180px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 30px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.loadingState svg {
+  color: var(--accent);
+}
+
+.loadingState p {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.request {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  min-height: var(--row-height-roomy);
+  align-items: stretch;
+  gap: 4px;
+  padding: var(--catalog-row-padding);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+  transition:
+    background-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.request::before {
+  position: absolute;
+  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  content: "";
+  transition: background-color var(--transition-fast);
+}
+
+.request:hover,
+.request:focus-within {
+  background: var(--surface-hover);
+}
+
+.current {
+  background: var(--surface-selected);
+}
+
+.current::before {
+  background: var(--accent);
+}
+
+.request.current:hover,
+.request.current:focus-within {
+  background: var(--surface-selected);
+}
+
+.selectionRecord.current {
+  background: var(--surface);
+}
+
+.selectionRecord:not(.unselectable):hover,
+.selectionRecord:not(.unselectable):focus-within {
+  background: var(--surface-hover);
+}
+
+.selectionRecord.unselectable {
+  opacity: 0.62;
+}
+
+.selectionRecord.selected,
+.selectionRecord.selected:hover,
+.selectionRecord.selected:focus-within {
+  background: var(--surface-selected);
+}
+
+.rowButton {
+  display: grid;
+  grid-template-columns: 20px 45px minmax(0, 1fr) max-content;
+  grid-template-rows: 22px 18px;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  column-gap: 5px;
+  row-gap: 2px;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.requestIcon {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  align-self: center;
+  justify-self: start;
+  color: var(--ink);
+}
+
+.rowButton:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--ink);
+  background: transparent;
+}
+
+.rowButton:focus-visible {
+  outline-offset: 1px;
+}
+
+.rowButton:disabled {
+  cursor: default;
+}
+
+.method {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--ink-secondary);
+  font: var(--weight-bold) var(--text-xs) / var(--line-height-sm) var(--font-mono);
+  letter-spacing: 0;
+}
+
+.target {
+  display: block;
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.targetHost {
+  font-size: var(--catalog-row-primary-size);
+  font-weight: var(--weight-semibold);
+}
+
+.targetPath {
+  color: var(--muted);
+  font-size: var(--catalog-row-primary-size);
+  font-weight: var(--weight-semibold);
+}
+
+.status {
+  grid-column: 4;
+  grid-row: 1;
+  min-width: max-content;
+  justify-self: end;
+  font-size: var(--text-xs);
+}
+
+.metadata {
+  position: relative;
+  display: grid;
+  grid-column: 2 / -1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  min-width: 0;
+  align-items: center;
+  column-gap: 9px;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--catalog-row-secondary-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--catalog-row-secondary-line-height);
+}
+
+.modelMetadata,
+.timestamp,
+.timing {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timestamp,
+.timing {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.modelMetadata {
+  min-width: 0;
+}
+
+.timingMetadata {
+  display: inline-grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  justify-self: end;
+  column-gap: 16px;
+}
+
+.timestamp,
+.timing,
+.timingMetadata {
+  text-align: right;
+}
+
+.deleteSlot {
+  display: grid;
+  place-items: center;
+}
+
+.deleteRecord {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  place-items: center;
+  border-color: transparent;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  opacity: 0.16;
+}
+
+.request:hover .deleteRecord,
+.request:focus-within .deleteRecord,
+.current .deleteRecord,
+.deleteRecord:focus-visible {
+  opacity: 1;
+}
+
+.deleteRecord:hover:not(:disabled),
+.deleteRecord:focus-visible {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (pointer: coarse) {
+  .deleteRecord {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    opacity: 1;
+  }
+}
+
+.selectionRecord .rowButton {
+  position: relative;
+  grid-column: 1 / -1;
+  padding-right: 35px;
+}
+
+.selectionIndicator {
+  position: absolute;
+  top: 50%;
+  right: 1px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: var(--surface);
+  transform: translateY(-50%);
+}
+
+.selected .selectionIndicator {
+  border-color: var(--accent);
+  color: white;
+  background: var(--accent);
+}
+
+.pagination {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 47px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--bg-shell);
+  font-size: var(--text-xs);
+}
+
+.pagination span {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pagination button {
+  min-height: 30px;
+  padding: 5px 7px;
+  font-size: var(--text-xs);
+}
+
+@container (max-width: 430px) {
+  .selectionHeader {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    row-gap: 3px;
+  }
+
+  .selectionActions {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: end;
+    row-gap: 3px;
+    margin-left: 0;
+  }
+
+  .selectionCount {
+    grid-column: 1 / -1;
+    justify-self: end;
+    margin-right: 0;
+  }
+
+  .rowButton {
+    grid-template-rows: 24px 38px;
+  }
+
+  .metadata {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 18px 18px;
+  }
+
+  .timingMetadata {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: end;
+  }
+
+  .pagination span {
+    font-size: var(--text-xs);
+  }
+}
+
+@media (max-width: 760px) {
+  .rowButton {
+    min-height: 56px;
+  }
+}

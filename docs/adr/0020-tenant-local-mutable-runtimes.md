@@ -18,8 +18,10 @@ fixed `aibox:latest` tag.
 
 The Tenant Environment is composed by the current aibox binary at Run or Debug
 Shell startup rather than persisted in each Tenant Home. User login-profile
-values retain priority, and only the structural `/home/aibox` identity is
-restored unconditionally. A Component contributes its missing environment
+values retain priority, except that missing existing Tenant-local PATH
+candidates are inserted before the last exact `/usr/local/bin` segment and
+appended when that anchor is absent. Only the structural `/home/aibox` identity
+is restored unconditionally. A Component contributes its missing environment
 defaults only when native inspection reports it as installed; inspection
 failure skips that Component without blocking execution. PATH remains based on
 existing Tenant-local binary directories rather than Component ownership, so

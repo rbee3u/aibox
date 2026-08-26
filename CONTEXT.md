@@ -126,8 +126,24 @@ _Avoid_: Tenant Home, aibox Root
 **Tenant Component**:
 An optional native capability independently installed and managed for one
 Tenant, such as a Coding Agent executable, language runtime, toolchain, or
-status line.
+statusline.
 _Avoid_: Plugin, package, add-on
+
+**Latest Release**:
+The latest comparable stable version observed from a versioned Tenant
+Component's authoritative release source. It is transient evidence, not desired
+state or an instruction to change a Tenant.
+_Avoid_: Target Version, Desired Version, available update
+
+**Component Definition**:
+The statusline content and native settings built into the current AIBox
+version. It has no independent package version.
+_Avoid_: Statusline Version, Latest Release
+
+**Component Update Check**:
+An explicit Service-wide observation of Latest Releases and the selected
+Tenant's current Component state.
+_Avoid_: Component Sync, automatic update, reconciliation
 
 ### Configuration
 

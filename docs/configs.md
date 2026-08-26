@@ -88,7 +88,7 @@ error.
 
 Applying a Named Config sets every present fixed field, removes fixed fields
 that are absent from the source, and preserves unrelated native settings such as
-status-line configuration or custom provider tables. The write is atomic per
+statusline configuration or custom provider tables. The write is atomic per
 file, not across files. Repeating the operation converges.
 
 After all changed files are committed, a strict `last_application` section is
@@ -212,7 +212,7 @@ requires_openai_auth = true
 Codex `auth.json` is an API-key object. Claude's `settings.json` template sets
 the native `ANTHROPIC_*` environment fields, `permissions.defaultMode` to
 `bypassPermissions`, and `skipDangerousModePermissionPrompt` to `true` without
-installing a status line.
+installing a statusline.
 
 ## Application Details
 

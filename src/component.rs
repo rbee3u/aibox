@@ -1,6 +1,6 @@
 //! Optional capabilities derived from native state in a Tenant.
 //!
-//! Status-line Components can edit native Current Config in a Managed Tenant
+//! Statusline Components can edit native Current Config in a Managed Tenant
 //! Home or the Host Home, while runtime Components own Managed Tenant-local
 //! executables and SDK directories. There is no Component registry, so
 //! inspection derives state directly from native files.
@@ -32,7 +32,7 @@ const CODEX_INSTALLER: &str = include_str!("../assets/install-codex.sh");
 const CLAUDE_INSTALLER: &str = include_str!("../assets/install-claude.sh");
 const PYTHON_INSTALLER: &str = include_str!("../assets/install-python.sh");
 const CONTAINER_HOME: &str = "/home/aibox";
-// Status-line inspection rewrites native Current Config in memory, so bound
+// Statusline inspection rewrites native Current Config in memory, so bound
 // container- or host-written input before parsing it.
 const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 
@@ -47,9 +47,9 @@ pub enum ComponentKind {
     Claude,
     /// Tenant-local uv and CPython toolchain.
     Python,
-    /// Claude Code status-line integration.
+    /// Claude Code statusline integration.
     ClaudeStatusline,
-    /// OpenAI Codex status-line integration.
+    /// OpenAI Codex statusline integration.
     CodexStatusline,
     /// Tenant-local stable Rust toolchain.
     Rust,
@@ -105,10 +105,10 @@ impl ComponentKind {
 pub enum ComponentStatus {
     /// The Component exactly matches the current aibox definition.
     Installed {
-        /// Stable runtime or toolchain version; absent for status-line Components.
+        /// Stable runtime or toolchain version; absent for statusline Components.
         version: Option<String>,
     },
-    /// Some status-line state exists but differs from the current definition.
+    /// Some statusline state exists but differs from the current definition.
     Modified,
     /// Recognizable aibox-owned state exists but is only partially installed
     /// or is not healthy enough to run.
@@ -244,7 +244,7 @@ impl FromStr for ComponentKind {
     }
 }
 
-fn validate_stable_version(version: &str) -> Result<String, String> {
+pub(crate) fn validate_stable_version(version: &str) -> Result<String, String> {
     let parts: Vec<_> = version.split('.').collect();
     if parts.len() != 3
         || parts.iter().any(|part| {
@@ -496,7 +496,7 @@ fn inspect_claude_statusline(home: &Path) -> Result<ComponentStatus> {
     }
     let script = capture_limited(
         &dir.join(CLAUDE_STATUSLINE_SCRIPT),
-        "Claude status-line script",
+        "Claude statusline script",
     )?;
     let settings = capture_limited(
         &dir.join(AgentKind::Claude.main_config_file()),
@@ -1347,7 +1347,7 @@ fn install_claude_statusline(tenant: &Tenant) -> Result<i32> {
 
     let script_path = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
     let settings_path = selected.state_file(AgentKind::Claude.main_config_file());
-    let script = capture_limited(&script_path, "Claude status-line script")?;
+    let script = capture_limited(&script_path, "Claude statusline script")?;
     let settings = capture_limited(&settings_path, "Claude settings")?;
     let setting_state = claude_statusline_setting_state(&settings)?;
     let mut object = parse_json_config(&settings, "Claude settings")?;
@@ -1482,11 +1482,14 @@ fn install_runtime_component_with_mode(
         ComponentKind::Python => PYTHON_INSTALLER,
         ComponentKind::Rust => RUST_INSTALLER,
         ComponentKind::Go => GO_INSTALLER,
-        _ => unreachable!("status-line Components are installed on the host"),
+        _ => unreachable!("statusline Components are installed on the host"),
     };
     let command = vec![
         OsString::from("bash"),
-        OsString::from("-ceu"),
+        // Keep the installer non-interactive and fail-fast, while Bash's
+        // xtrace sends every command to stderr. Docker forwards that stream
+        // to the Management Operation log alongside installer output.
+        OsString::from("-ceux"),
         OsString::from(script),
         OsString::from(format!("aibox-{}-installer", component.kind.name())),
         OsString::from(component.version.as_deref().unwrap_or("")),
@@ -1617,7 +1620,7 @@ fn restore_user_shell_profiles(profiles: &[UserShellProfile]) -> Result<()> {
 fn remove_claude_statusline(tenant: &Tenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Claude);
     let script = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
-    tenant::remove_real_file_if_exists(&script, "Claude status-line script")?;
+    tenant::remove_real_file_if_exists(&script, "Claude statusline script")?;
 
     let settings_path = selected.state_file(AgentKind::Claude.main_config_file());
     let settings = capture_limited(&settings_path, "Claude settings")?;

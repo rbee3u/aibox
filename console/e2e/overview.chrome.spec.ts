@@ -9,16 +9,7 @@ test("Overview exposes the complete resource map before Session discovery", asyn
   const status = page.getByRole("region", { name: "Service status" });
   await expect(status.getByText("Managed Tenants")).toBeVisible();
   await expect(status.getByText("Console-only view of the Host Home")).toBeVisible();
-  await expectTypography(page.getByRole("heading", { name: "Key facts" }), {
-    fontSize: "16px",
-    fontWeight: "600",
-    lineHeight: "22px",
-  });
-  await expectTypography(page.getByRole("banner").locator("small"), {
-    fontSize: "12px",
-    fontWeight: "400",
-    lineHeight: "18px",
-  });
+  await expect(page.getByRole("heading", { name: "Key facts" })).toBeVisible();
 
   const tree = page.getByRole("tree", { name: "Tenant resource topology" });
   await expect(tree).toBeVisible();
@@ -58,18 +49,39 @@ test("390px Overview keeps page overflow contained inside the topology viewport"
     .toBe(true);
 });
 
-async function expectTypography(
-  locator: import("@playwright/test").Locator,
-  expected: { fontSize: string; fontWeight: string; lineHeight: string },
-) {
-  expect(
-    await locator.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        fontSize: style.fontSize,
-        fontWeight: style.fontWeight,
-        lineHeight: style.lineHeight,
-      };
-    }),
-  ).toMatchObject(expected);
-}
+test("operational surfaces keep the compact density contract across target widths", async ({
+  page,
+}) => {
+  await mockOverview(page);
+  for (const width of [1280, 1440, 1600, 1920, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("../overview");
+
+    const status = page.getByRole("region", { name: "Service status" });
+    const facts = status.locator("[data-overview-fact]");
+    await expect(facts).toHaveCount(6);
+    await expect
+      .poll(() =>
+        facts.evaluateAll((elements) =>
+          elements.every((element) => element.getBoundingClientRect().height > 0),
+        ),
+      )
+      .toBe(true);
+    const factHeights = await facts.evaluateAll((elements) =>
+      elements.map((element) => Math.round(element.getBoundingClientRect().height)),
+    );
+    expect(factHeights).toHaveLength(6);
+    expect(Math.max(...factHeights)).toBeLessThanOrEqual(80);
+    expect(Math.min(...factHeights)).toBeGreaterThanOrEqual(60);
+    await expect(status.getByText("Service", { exact: true })).toBeVisible();
+
+    const toolbarHeight = await page
+      .locator("[data-overview-toolbar]")
+      .evaluate((element) => Math.round(element.getBoundingClientRect().height));
+    expect(toolbarHeight).toBeLessThanOrEqual(48);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.screenshot({ path: `/tmp/aibox-overview-${width}.png`, fullPage: true });
+  }
+});

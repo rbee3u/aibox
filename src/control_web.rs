@@ -2,6 +2,7 @@
 
 use crate::agent::AgentKind;
 use crate::component::{self, ComponentKind, ComponentSpec, ComponentStatus};
+use crate::component_updates;
 use crate::config_model::{CustomProviderInput, VisualConfigOptionInput};
 use crate::request_assessment::effective_assessment;
 use crate::request_store::AssessmentLevel;
@@ -42,6 +43,11 @@ pub(crate) fn router() -> Router<ServiceState> {
         .route("/_aibox/api/tenants", get(list_tenants).post(create_tenant))
         .route("/_aibox/api/tenants/delete", post(delete_tenants))
         .route("/_aibox/api/components", get(list_components))
+        .route("/_aibox/api/components/latest", get(latest_components))
+        .route(
+            "/_aibox/api/components/latest/check",
+            post(check_latest_components),
+        )
         .route("/_aibox/api/components/install", post(install_component))
         .route("/_aibox/api/components/remove", post(remove_component))
         .route("/_aibox/api/configs", get(list_configs))
@@ -498,6 +504,23 @@ fn component_rows(selected: &Tenant) -> Result<Vec<ComponentRow>> {
             }
         })
         .collect())
+}
+
+async fn latest_components(
+    State(state): State<ServiceState>,
+) -> Json<Option<component_updates::LatestSnapshot>> {
+    Json(state.latest_snapshot.read().await.clone())
+}
+
+async fn check_latest_components(State(state): State<ServiceState>) -> Response<Body> {
+    let guard = match state.latest_check.clone().try_lock_owned() {
+        Ok(guard) => guard,
+        Err(_) => return busy("another Component update check is running"),
+    };
+    let snapshot = component_updates::check_snapshot(state.latest_provider.clone()).await;
+    *state.latest_snapshot.write().await = Some(snapshot.clone());
+    drop(guard);
+    json_response(StatusCode::OK, &snapshot)
 }
 
 #[derive(Deserialize)]

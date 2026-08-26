@@ -50,3 +50,12 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
 - [0020: Tenant-local mutable runtimes](0020-tenant-local-mutable-runtimes.md)
   keeps application language runtimes and Coding Agent executables out of the
   Runtime Image so each Managed Tenant can upgrade them independently.
+- [0021: Explicit Component update observation](0021-explicit-component-update-observation.md)
+  keeps authoritative Latest Release checks Service-wide, transient, and
+  separate from native Component state.
+- [0022: Tenant-level Component navigation](0022-tenant-component-navigation.md)
+  removes obsolete Component deep links and uses the Tenant page as the
+  diagnostic entry point.
+- [0023: Feature-first Console architecture](0023-feature-first-console-architecture.md)
+  layers the Console `app` -> `features` -> `shared` -> `api` with lint-enforced
+  boundaries and hand-written routing and data hooks instead of libraries.
