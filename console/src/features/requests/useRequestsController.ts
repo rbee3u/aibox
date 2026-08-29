@@ -1,0 +1,463 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import type { RequestList, RequestsApi } from "@/api/requests";
+import { requestWasCancelled } from "@/features/requests/requestErrors";
+import { readRequestsRoute, requestsSearch, type RequestsRoute } from "@/features/requests/route";
+import {
+  useRequestInspection,
+  type InspectionFailure,
+} from "@/features/requests/useRequestInspection";
+import {
+  focusTargetAfterDelete,
+  removeDeletedFromList,
+  REQUESTS_PER_PAGE,
+} from "@/features/requests/requestList";
+import type { DetailTab } from "@/features/requests/viewTypes";
+import { useCatalogSelection } from "@/shared/hooks/useCatalogSelection";
+import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
+import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
+import { usePolling } from "@/shared/hooks/usePolling";
+import { LatestRequest } from "@/shared/lib/latestRequest";
+import type { ModuleLocationChange } from "@/shared/lib/navigation";
+import type { NotificationItemData } from "@/shared/ui/notificationTypes";
+
+type Dialog = { kind: "batch"; ids: string[] } | { kind: "request"; id: string } | null;
+type Deletion = { kind: "batch" } | { kind: "request"; id: string } | null;
+
+const LIST_POLL_INTERVAL_MS = 5000;
+
+const emptyList: RequestList = {
+  requests: [],
+  total: 0,
+  deletable_count: 0,
+  has_next: false,
+};
+
+interface ControllerOptions {
+  api: RequestsApi;
+  search: string;
+  onLocationChange: ModuleLocationChange;
+}
+
+export function useRequestsController({ api, search, onLocationChange }: ControllerOptions) {
+  const [initialRoute] = useState(() => readRequestsRoute(search));
+  const appliedSearch = useRef(requestsSearch(initialRoute));
+  const updateLocation = useCallback(
+    (value: RequestsRoute, replace = false) => {
+      const next = requestsSearch(value);
+      appliedSearch.current = next;
+      onLocationChange(new URLSearchParams(next), replace);
+    },
+    [onLocationChange],
+  );
+  const { dismissNotification, notifications, reportFailure, resolveFailure } =
+    useFailureNotifications();
+  const [list, setList] = useState<RequestList>(emptyList);
+  const [page, setPage] = useState(initialRoute.page);
+  const pageRef = useRef(initialRoute.page);
+  const selection = useCatalogSelection<number>();
+  const [loadingList, setLoadingList] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const [deletion, setDeletion] = useState<Deletion>(null);
+  const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
+  const [focusAfterInspection, setFocusAfterInspection] = useState<string | null | undefined>(
+    undefined,
+  );
+  const [detailOpen, setDetailOpen] = useState(initialRoute.request !== null);
+  const routeApplied = useRef(false);
+  const detailBackButton = useRef<HTMLButtonElement>(null);
+  const listRequest = useRef(new LatestRequest());
+  const apiOwner = useRef(api);
+  const deletionInProgress = useRef(false);
+  const pageNavigation = useRef(false);
+  const failedListPage = useRef<number | null>(null);
+  const deletingRequestId = deletion?.kind === "request" ? deletion.id : null;
+  const deletionBusy = deletion !== null;
+  const dialogOpen = dialog !== null;
+
+  const handleInspectionFailure = useCallback(
+    (failure: InspectionFailure) => {
+      const title =
+        failure.kind === "detail"
+          ? "Couldn’t load request"
+          : failure.kind === "body"
+            ? "Couldn’t load Body"
+            : "Couldn’t download Body";
+      reportFailure("inspection", title, failure.message, failure.retryable !== false);
+      if (failure.kind === "detail" && failure.retryable === false) {
+        setDetailOpen(false);
+        setFocusAfterInspection(null);
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
+      }
+    },
+    [reportFailure, updateLocation],
+  );
+  const handleInspectionRecovery = useCallback(
+    () => resolveFailure("inspection"),
+    [resolveFailure],
+  );
+  const inspection = useRequestInspection({
+    api,
+    initialTab: initialRoute.tab,
+    paused: dialogOpen,
+    onFailure: handleInspectionFailure,
+    onRecovery: handleInspectionRecovery,
+  });
+  const {
+    bodies,
+    bodyStatus,
+    clearCurrentRecord,
+    clearRequestIfCurrent,
+    currentId,
+    decodedBodies,
+    detail,
+    download,
+    eventTimings,
+    failure: inspectionFailure,
+    loadingBody,
+    loadingDetail,
+    retryFailure: retryInspectionFailure,
+    selectRequest,
+    setTab,
+    tab,
+  } = inspection;
+  const currentIdRef = useRef(currentId);
+  const tabRef = useRef(tab);
+  useEffect(() => {
+    currentIdRef.current = currentId;
+    tabRef.current = tab;
+  }, [currentId, tab]);
+
+  useNarrowDetailFocus(detailBackButton, detailOpen && currentId !== null, currentId);
+
+  const openRecord = useCallback(
+    (id: string) => {
+      setFocusAfterInspection(undefined);
+      setDetailOpen(true);
+      updateLocation({ page: pageRef.current, request: id, tab: "summary" });
+      void selectRequest(id);
+    },
+    [selectRequest, updateLocation],
+  );
+
+  const returnToList = useCallback(() => {
+    setFocusAfterInspection(currentId);
+    setDetailOpen(false);
+    clearCurrentRecord();
+    updateLocation({ page: pageRef.current, request: null, tab: "summary" });
+  }, [clearCurrentRecord, currentId, updateLocation]);
+
+  const selectTab = useCallback(
+    (next: DetailTab) => {
+      if (next === tab) return;
+      setTab(next);
+      if (currentId) updateLocation({ page: pageRef.current, request: currentId, tab: next });
+    },
+    [currentId, setTab, tab, updateLocation],
+  );
+
+  function beginDeletion(next: Exclude<Deletion, null>): boolean {
+    if (deletionInProgress.current) return false;
+    deletionInProgress.current = true;
+    listRequest.current.cancel();
+    setDeletion(next);
+    return true;
+  }
+
+  function finishDeletion() {
+    deletionInProgress.current = false;
+    setDeletion(null);
+  }
+
+  const loadPage = useCallback(
+    async (pageToLoad: number, background = false): Promise<RequestList | null> => {
+      if (background && (pageNavigation.current || deletionInProgress.current)) return null;
+      const targetPage = Math.max(1, pageToLoad);
+      const request = listRequest.current.begin();
+      if (!background) {
+        pageNavigation.current = true;
+        setLoadingList(true);
+      }
+      try {
+        const payload = await api.listRequests(targetPage, request.signal);
+        if (request.signal.aborted || !request.isCurrent()) return null;
+        setList(payload);
+        setPage(targetPage);
+        pageRef.current = targetPage;
+        if (
+          !background ||
+          failedListPage.current === null ||
+          failedListPage.current === targetPage
+        ) {
+          failedListPage.current = null;
+          resolveFailure("list");
+        }
+        return payload;
+      } catch (cause) {
+        if (request.isCurrent() && !requestWasCancelled(cause, request.signal)) {
+          if (!background || failedListPage.current === null) failedListPage.current = targetPage;
+          reportFailure("list", "Couldn’t load requests", cause, true);
+        }
+        return null;
+      } finally {
+        if (request.isCurrent() && !background) {
+          pageNavigation.current = false;
+          setLoadingList(false);
+        }
+        request.release();
+      }
+    },
+    [api, reportFailure, resolveFailure],
+  );
+
+  useEffect(() => {
+    if (apiOwner.current === api) return;
+    apiOwner.current = api;
+    void loadPage(pageRef.current);
+  }, [api, loadPage]);
+
+  const navigatePage = useCallback(
+    (nextPage: number) => {
+      const target = Math.max(1, nextPage);
+      updateLocation({ page: target, request: currentId, tab });
+      void loadPage(target).then((payload) => {
+        if (payload || failedListPage.current !== target) return;
+        updateLocation({ page: pageRef.current, request: currentId, tab }, true);
+      });
+    },
+    [currentId, loadPage, tab, updateLocation],
+  );
+
+  const refreshWithFallback = useCallback(
+    async (targetPage = pageRef.current, background = false) => {
+      let candidate = Math.max(1, targetPage);
+      while (true) {
+        const payload = await loadPage(candidate, background);
+        if (!payload) return null;
+        if (payload.requests.length > 0 || candidate === 1) return { page: candidate, payload };
+        const lastPage = Math.max(1, Math.ceil(payload.total / REQUESTS_PER_PAGE));
+        candidate = Math.min(candidate - 1, lastPage);
+        updateLocation(
+          { page: candidate, request: currentIdRef.current, tab: tabRef.current },
+          true,
+        );
+      }
+    },
+    [loadPage, updateLocation],
+  );
+
+  const refreshPage = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refreshWithFallback(page);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [page, refreshWithFallback]);
+
+  const retryListFailure = useCallback(async () => {
+    const targetPage = failedListPage.current ?? pageRef.current;
+    setRefreshing(true);
+    try {
+      const refreshed = await refreshWithFallback(targetPage);
+      if (!refreshed) return;
+      updateLocation(
+        { page: refreshed.page, request: currentIdRef.current, tab: tabRef.current },
+        true,
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshWithFallback, updateLocation]);
+
+  const cancelListRequest = useCallback(() => listRequest.current.cancel(), []);
+  const pollList = useCallback(
+    async (first: boolean) => {
+      await refreshWithFallback(pageRef.current, !first);
+    },
+    [refreshWithFallback],
+  );
+  usePolling({
+    enabled: !selection.active && !dialogOpen,
+    intervalMs: LIST_POLL_INTERVAL_MS,
+    run: pollList,
+    onCancel: cancelListRequest,
+  });
+
+  useEffect(() => {
+    if (routeApplied.current) return;
+    routeApplied.current = true;
+    if (initialRoute.request) void selectRequest(initialRoute.request, initialRoute.tab);
+  }, [initialRoute, selectRequest]);
+
+  useEffect(() => {
+    if (appliedSearch.current === search) return;
+    appliedSearch.current = search;
+    const route = readRequestsRoute(search);
+    const normalized = requestsSearch(route);
+    if (normalized !== search) {
+      updateLocation(route, true);
+      return;
+    }
+    if (route.page !== pageRef.current) void loadPage(route.page);
+    if (route.request && route.request !== currentId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDetailOpen(true);
+      void selectRequest(route.request, route.tab);
+    } else if (!route.request && currentId) {
+      setDetailOpen(false);
+      clearCurrentRecord();
+    } else if (route.request && route.tab !== tab) {
+      setTab(route.tab);
+    }
+  }, [clearCurrentRecord, currentId, loadPage, search, selectRequest, setTab, tab, updateLocation]);
+
+  const deletableIdsOnPage = list.requests
+    .filter((request) => request.state !== "active")
+    .map((request) => request.id);
+
+  async function confirmDelete() {
+    if (!dialog) return;
+    if (dialog.kind === "request") {
+      await deleteRecord(dialog.id);
+      return;
+    }
+    if (!beginDeletion({ kind: "batch" })) return;
+    resolveFailure("action");
+    const targetPage = dialog.ids.reduce(
+      (minimum, id) => Math.min(minimum, selection.contextOf(id) ?? pageRef.current),
+      Number.MAX_SAFE_INTEGER,
+    );
+    try {
+      const deletedCount = await api.deleteRequests(dialog.ids);
+      const deletedIds = dialog.ids;
+      setList((current) =>
+        removeDeletedFromList(current, deletedIds, deletedCount, pageRef.current),
+      );
+      selection.exit();
+      if (currentId && deletedIds.includes(currentId)) {
+        setDetailOpen(false);
+        clearCurrentRecord();
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
+      }
+      setDialog(null);
+      resolveFailure("action");
+      await refreshWithFallback(targetPage);
+      setFocusAfterDelete(null);
+    } catch (cause) {
+      const title =
+        dialog.ids.length === 1 ? "Couldn’t delete request" : "Couldn’t delete requests";
+      setDialog(null);
+      reportFailure("action", title, cause);
+    } finally {
+      finishDeletion();
+    }
+  }
+
+  async function deleteRecord(id: string) {
+    if (!beginDeletion({ kind: "request", id })) return;
+    const originPage = pageRef.current;
+    const originRequests = list.requests;
+    resolveFailure("action");
+    try {
+      await api.deleteRequests([id]);
+      if (currentId === id) {
+        setDetailOpen(false);
+        clearCurrentRecord();
+        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
+      } else {
+        clearRequestIfCurrent(id);
+      }
+      setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
+      setFocusAfterDelete(
+        focusTargetAfterDelete(
+          originRequests,
+          id,
+          originRequests.filter((request) => request.id !== id),
+          false,
+        ),
+      );
+      const refreshed = await refreshWithFallback(originPage);
+      if (refreshed) {
+        setFocusAfterDelete(
+          focusTargetAfterDelete(
+            originRequests,
+            id,
+            refreshed.payload.requests,
+            refreshed.page !== originPage,
+          ),
+        );
+      }
+    } catch (cause) {
+      reportFailure("action", "Couldn’t delete request", cause);
+    } finally {
+      setDialog(null);
+      finishDeletion();
+    }
+  }
+
+  function handleNotificationAction(notification: NotificationItemData) {
+    resolveFailure(notification.source);
+    if (notification.source === "list") {
+      void retryListFailure();
+    } else if (notification.source === "inspection") {
+      retryInspectionFailure();
+    }
+  }
+
+  return {
+    bodies,
+    bodyStatus,
+    cancelDialog: () => !deletionBusy && setDialog(null),
+    clearFocusAfterDelete: () => setFocusAfterDelete(undefined),
+    clearFocusAfterInspection: () => setFocusAfterInspection(undefined),
+    confirmDelete,
+    currentId,
+    decodedBodies,
+    deletingRequestId,
+    deletionBusy,
+    detail,
+    detailBackButton,
+    detailOpen,
+    dialog,
+    dismissNotification,
+    download,
+    enterSelection: () => {
+      setDetailOpen(false);
+      selection.enter();
+    },
+    eventTimings,
+    exitSelection: selection.exit,
+    focusAfterDelete,
+    focusAfterInspection,
+    handleNotificationAction,
+    inspectionFailure,
+    list,
+    loadingBody,
+    loadingDetail,
+    loadingList,
+    navigatePage,
+    notifications: selection.active
+      ? notifications.map((notification) =>
+          notification.source === "list"
+            ? { ...notification, actionLabel: undefined }
+            : notification,
+        )
+      : notifications,
+    openBatchDeletion: () => setDialog({ kind: "batch", ids: selection.ids }),
+    openRecord,
+    openRequestDeletion: (id: string) => setDialog({ kind: "request", id }),
+    page,
+    refreshPage,
+    refreshing,
+    retryInspectionFailure,
+    returnToList,
+    selectTab,
+    selected: selection.selected,
+    selectionMode: selection.active,
+    tab,
+    togglePageSelection: () => selection.toggleAll(deletableIdsOnPage, pageRef.current),
+    toggleRequestSelection: (id: string) => selection.toggle(id, pageRef.current),
+  };
+}

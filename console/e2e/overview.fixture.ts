@@ -78,7 +78,9 @@ export async function mockOverview(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/_aibox/api/bootstrap") {
-      return route.fulfill({ json: { version: "test", csrf_token: "test-token" } });
+      return route.fulfill({
+        json: { version: "test", csrf_token: "test-token", listen: "127.0.0.1:3000" },
+      });
     }
     if (url.pathname === "/_aibox/api/operations/current") {
       return route.fulfill({ json: { operation: null, gap: false } });

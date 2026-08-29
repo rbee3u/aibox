@@ -148,7 +148,7 @@ shell.
 Named Config main files use native syntax but project only these fixed fields.
 Unknown fields are warnings and remain in the native source; wrong primitive
 types are errors. Model names, URLs, and endpoint availability are not resolved
-by aibox. Visual enum values are the closed sets declared by `AgentKind`; Raw
+by AIBox. Visual enum values are the closed sets declared by `AgentKind`; Raw
 may preserve unknown string values. Codex `approval_policy` is currently limited
 to `untrusted`, `on-request`, or `never`; the native granular object form is not
 supported by Named Config validation.

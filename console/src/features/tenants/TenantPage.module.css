@@ -370,6 +370,10 @@
   font-weight: var(--weight-semibold);
 }
 
+.componentStateBadge {
+  padding-block: 1px;
+}
+
 .componentProgress {
   color: var(--accent);
   font-weight: var(--weight-bold);

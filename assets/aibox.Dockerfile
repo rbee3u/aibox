@@ -57,4 +57,4 @@ ENV HOME=/home/aibox LANG=C.UTF-8
 WORKDIR /workspace
 USER aibox
 
-# aibox injects the Tenant-local Coding Agent or Debug Shell at runtime.
+# AIBox injects the Tenant-local Coding Agent or Debug Shell at runtime.

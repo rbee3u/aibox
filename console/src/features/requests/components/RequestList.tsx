@@ -25,6 +25,64 @@ import { RefreshButton } from "@/shared/ui/RefreshButton";
 
 const RequestIcon = moduleIcons.requests;
 
+function PageTurnButton({
+  direction,
+  disabled,
+  onClick,
+}: {
+  direction: "previous" | "next";
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className={styles.pageTurn} onClick={onClick} disabled={disabled}>
+      {direction === "previous" ? (
+        <>
+          <ChevronLeft size={15} aria-hidden="true" /> Previous
+        </>
+      ) : (
+        <>
+          Next <ChevronRight size={15} aria-hidden="true" />
+        </>
+      )}
+    </button>
+  );
+}
+
+function RequestPagination({
+  className,
+  page,
+  totalPages,
+  shown,
+  total,
+  hasPrevious,
+  hasNext,
+  locked,
+  onPrevious,
+  onNext,
+}: {
+  className: string;
+  page: number;
+  totalPages: number;
+  shown: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  locked: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <nav className={className} aria-label="Request pages">
+      <PageTurnButton direction="previous" disabled={!hasPrevious || locked} onClick={onPrevious} />
+      <span>
+        Page {page} of {totalPages} · {shown} shown · {total} total
+      </span>
+      <PageTurnButton direction="next" disabled={!hasNext || locked} onClick={onNext} />
+    </nav>
+  );
+}
+
 interface RequestListProps {
   requests: RequestSummary[];
   total: number;
@@ -125,50 +183,49 @@ export function RequestList({
     selectButton.current?.focus();
   }, [selectionMode]);
 
+  const pageTurnLocked = loading || deletionBusy;
+  const paginationProps = {
+    page,
+    totalPages,
+    shown: requests.length,
+    total,
+    hasPrevious,
+    hasNext,
+    locked: pageTurnLocked,
+    onPrevious,
+    onNext,
+  };
+
   return (
     <aside className={styles.panel} aria-label="Request list">
-      <div className={`${styles.listHeader} ${selectionMode ? styles.selectionHeader : ""}`}>
-        {selectionMode && (
-          <button
-            type="button"
-            className={styles.cancelSelection}
-            onClick={() => {
-              focusSelectAfterExit.current = true;
-              onExitSelection();
-            }}
-          >
-            Cancel
-          </button>
-        )}
-        <div className={selectionMode ? styles.selectionActions : styles.headerActions}>
+      <div className={styles.headerStack}>
+        <div className={`${styles.listHeader} ${selectionMode ? layout.selectionBar : ""}`}>
           {selectionMode ? (
-            <span className={styles.selectionCount}>{selected.size} selected</span>
-          ) : (
-            <RefreshButton
-              ref={refreshButton}
-              data-dialog-focus-fallback="true"
-              onClick={onRefresh}
-              disabled={refreshing || deletionBusy}
-              label="Refresh Requests"
-              busyLabel="Refreshing Requests"
-              busy={refreshing}
-            >
-              Refresh
-            </RefreshButton>
-          )}
-          {selectionMode && (
             <>
               <button
                 type="button"
-                className={styles.pageSelection}
-                onClick={onTogglePage}
-                disabled={deletable.length === 0}
+                className={layout.selectionCancel}
+                onClick={() => {
+                  focusSelectAfterExit.current = true;
+                  onExitSelection();
+                }}
               >
-                {pageSelected ? "Clear page" : "Select page"}
+                Cancel
               </button>
+              <div className={layout.selectionCenter}>
+                <span className={styles.selectionCount}>{selected.size} selected</span>
+                <button
+                  type="button"
+                  className={layout.selectionAll}
+                  onClick={onTogglePage}
+                  disabled={deletable.length === 0}
+                >
+                  {pageSelected ? "Clear page" : "Select page"}
+                </button>
+              </div>
               <button
                 type="button"
-                className={styles.deleteSelected}
+                className={layout.selectionDelete}
                 onClick={(event) => {
                   event.currentTarget.focus();
                   onDeleteSelected();
@@ -178,23 +235,41 @@ export function RequestList({
                 title="Delete selected"
               >
                 <Trash2 size={14} aria-hidden="true" />
-                Delete selected
+                Delete
               </button>
             </>
-          )}
-          {!selectionMode && (
-            <button
-              ref={selectButton}
-              type="button"
-              className={layout.selectionEnter}
-              aria-label="Select Requests"
-              onClick={onEnterSelection}
-              disabled={deletableCount === 0 || loading || deletionBusy}
-            >
-              <ListChecks size={14} aria-hidden="true" /> Select
-            </button>
+          ) : (
+            <div className={styles.headerActions}>
+              <RefreshButton
+                ref={refreshButton}
+                data-dialog-focus-fallback="true"
+                onClick={onRefresh}
+                disabled={refreshing || deletionBusy}
+                label="Refresh Requests"
+                busyLabel="Refreshing Requests"
+                busy={refreshing}
+              >
+                Refresh
+              </RefreshButton>
+              <button
+                ref={selectButton}
+                type="button"
+                className={layout.selectionEnter}
+                aria-label="Select Requests"
+                onClick={onEnterSelection}
+                disabled={deletableCount === 0 || loading || deletionBusy}
+              >
+                <ListChecks size={14} aria-hidden="true" /> Select
+              </button>
+            </div>
           )}
         </div>
+        {selectionMode && (
+          <RequestPagination
+            className={`${styles.pagination} ${styles.headerPagination}`}
+            {...paginationProps}
+          />
+        )}
       </div>
       <div className={styles.requests} aria-busy={loading}>
         {loading && requests.length === 0 ? (
@@ -345,21 +420,7 @@ export function RequestList({
           })
         )}
       </div>
-      <nav className={styles.pagination} aria-label="Request pages">
-        <button
-          type="button"
-          onClick={onPrevious}
-          disabled={!hasPrevious || loading || deletionBusy}
-        >
-          <ChevronLeft size={15} aria-hidden="true" /> Previous
-        </button>
-        <span>
-          Page {page} of {totalPages} · {requests.length} shown · {total} total
-        </span>
-        <button type="button" onClick={onNext} disabled={!hasNext || loading || deletionBusy}>
-          Next <ChevronRight size={15} aria-hidden="true" />
-        </button>
-      </nav>
+      <RequestPagination className={styles.pagination} {...paginationProps} />
     </aside>
   );
 }

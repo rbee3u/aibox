@@ -1,8 +1,13 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { URL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 
-const generatedIndex = new URL("../../assets/index.html", import.meta.url);
-const embeddedHtml = new URL("../../assets/console.html", import.meta.url);
+const outputDirectory = resolve(
+  import.meta.dirname,
+  globalThis.process.env.AIBOX_CONSOLE_OUT_DIR ?? "../../assets",
+);
+const generatedIndex = pathToFileURL(resolve(outputDirectory, "index.html"));
+const embeddedHtml = pathToFileURL(resolve(outputDirectory, "console.html"));
 
 function assertExactlyOnce(content, value) {
   const first = content.indexOf(value);

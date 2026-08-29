@@ -1,5 +1,4 @@
 import { AlertTriangle, LoaderCircle } from "lucide-react";
-import type { Operation } from "@/api/operations";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/shared/ui/ManagementFeedback.module.css";
 
@@ -26,7 +25,7 @@ export function Loading() {
   );
 }
 
-export function MutationUnavailable({ operation }: { operation?: Operation | null }) {
+export function MutationUnavailable({ operation }: { operation?: { state: string } | null }) {
   if (operation?.state !== "running") return null;
   return (
     <div className={styles.mutationUnavailable} role="status">

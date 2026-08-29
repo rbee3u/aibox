@@ -4,14 +4,14 @@
 //! Known feature sections remain typed by their owning modules while this
 //! module preserves other top-level sections across atomic updates.
 
-use crate::tenant::{self, TenantAgent};
+use crate::tenant::TenantAgent;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const METADATA_FILE: &str = "metadata.json";
@@ -72,22 +72,19 @@ impl PreparedMetadataWrite {
     /// Atomically replace the metadata document and sync its catalog directory.
     pub(crate) fn commit(self) -> Result<()> {
         let parent = self.path.parent().context("metadata path has no parent")?;
-        if !tenant::real_dir_exists(parent, "Named Config catalog")? {
+        if !crate::foundation::safe_fs::real_dir_exists(parent, "Named Config catalog")? {
             bail!("Named Config catalog does not exist: {}", parent.display());
         }
         validate_existing_target(&self.path)?;
         let prefix = temporary_file_prefix(&self.path)?;
-        let mut temp = tempfile::Builder::new()
-            .prefix(&prefix)
-            .tempfile_in(parent)
-            .with_context(|| format!("create metadata temporary file in {}", parent.display()))?;
-        temp.write_all(&self.content)?;
-        set_private_mode(temp.as_file())?;
-        temp.as_file().sync_all()?;
-        temp.persist(&self.path)
-            .map_err(|error| error.error)
-            .with_context(|| format!("replace metadata file {}", self.path.display()))?;
-        tenant::sync_dir(parent)
+        let mut write = crate::foundation::safe_fs::PreparedAtomicWrite::new(
+            parent,
+            &prefix,
+            Some(0o600),
+            "metadata file",
+        )?;
+        write.write_all(&self.content)?;
+        write.commit(&self.path, "replace metadata file")
     }
 }
 
@@ -97,11 +94,11 @@ pub(crate) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
         return Ok(MetadataDocument::default());
     }
     let path = metadata_path(selected);
-    if !tenant::real_file_exists(&path, "metadata file")? {
+    if !crate::foundation::safe_fs::real_file_exists(&path, "metadata file")? {
         return Ok(MetadataDocument::default());
     }
     validate_private_file(&path)?;
-    let file = tenant::open_real_file(&path, "metadata file")?;
+    let file = crate::foundation::safe_fs::open_real_file(&path, "metadata file")?;
     validate_size(file.metadata()?.len(), &path)?;
     let mut content = Vec::new();
     file.take(MAX_METADATA_BYTES + 1)
@@ -122,7 +119,7 @@ pub(crate) fn metadata_path(selected: &TenantAgent) -> PathBuf {
 }
 
 fn validate_existing_target(path: &Path) -> Result<()> {
-    if tenant::real_file_exists(path, "metadata file")? {
+    if crate::foundation::safe_fs::real_file_exists(path, "metadata file")? {
         validate_private_file(path)?;
     }
     Ok(())
@@ -156,15 +153,4 @@ fn temporary_file_prefix(path: &Path) -> Result<String> {
         .and_then(OsStr::to_str)
         .context("metadata file name is not valid UTF-8")?;
     Ok(format!(".{name}.aibox-write-"))
-}
-
-fn set_private_mode(file: &fs::File) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = file;
-    Ok(())
 }

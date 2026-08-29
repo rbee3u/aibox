@@ -167,6 +167,30 @@
   margin-left: auto;
 }
 
+.selectionBar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 6px;
+}
+
+.selectionBar > :first-child {
+  justify-self: start;
+}
+
+.selectionBar > :last-child {
+  justify-self: end;
+}
+
+.selectionCenter {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-self: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
 .filterControl {
   max-width: 100px;
   flex: 1 1 0;
@@ -183,25 +207,19 @@
   gap: 5px;
   border-color: transparent;
   padding: 5px 7px;
+  color: var(--ink-secondary);
   background: transparent;
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
   white-space: nowrap;
 }
 
-.selectionEnter {
-  color: var(--ink-secondary);
-}
-
-.selectionEnter:hover:not(:disabled) {
+.selectionEnter:hover:not(:disabled),
+.selectionCancel:hover:not(:disabled),
+.selectionAll:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent);
   background: var(--accent-soft);
-}
-
-.selectionCancel,
-.selectionAll {
-  color: var(--accent);
-  font-weight: var(--weight-bold);
 }
 
 .selectionAll {
@@ -211,7 +229,8 @@
 .selectionCount {
   margin-right: 3px;
   color: var(--muted);
-  font: var(--weight-semibold) var(--text-xs) / 1 var(--font-mono);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -227,8 +246,33 @@
   padding: 5px 8px;
   color: var(--danger);
   background: var(--danger-soft);
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.selectionDelete:hover:not(:disabled) {
+  border-color: var(--danger-strong);
+  color: var(--surface);
+  background: var(--danger-strong);
+}
+
+@container (max-width: 430px) {
+  .selectionBar {
+    grid-template-columns: 1fr 1fr;
+    row-gap: 3px;
+  }
+
+  .selectionCenter {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+  }
+
+  .selectionBar > :last-child {
+    grid-column: 2;
+    grid-row: 1;
+  }
 }
 
 .selectionIndicator {

@@ -6,33 +6,12 @@ import {
   ListChecks,
   LoaderCircle,
   Plus,
-  Trash2,
   Save,
+  Trash2,
 } from "lucide-react";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-
-import type {
-  ConfigApi,
-  ConfigListData,
-  PropagationPreview,
-  PropagationReport,
-} from "@/api/configs";
-import type { CodingAgentKind, TenantRow } from "@/api/core";
-
+import type { ConfigApi } from "@/api/configs";
 import type { Operation } from "@/api/operations";
-import type { TenantSelection } from "@/api/tenantSelection";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
-import { ActionButton } from "@/shared/ui/ActionButton";
-import { Dialog } from "@/shared/ui/Dialog";
-import { EmptyState } from "@/shared/ui/EmptyState";
-import { TextInput } from "@/shared/ui/FormControls";
-import { IconButton } from "@/shared/ui/IconButton";
-import { Loading, MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
-import { RefreshButton } from "@/shared/ui/RefreshButton";
-import { SelectionMenu, type SelectionOption } from "@/shared/ui/SelectionMenu";
-import { IssueIndicator } from "@/shared/ui/IssueIndicator";
-import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { ConfigDriftBadge } from "@/features/configs/components/ConfigDriftBadge";
 import {
   configIssueDescriptionId,
@@ -42,534 +21,143 @@ import {
   propagationGroup,
 } from "@/features/configs/configCatalog";
 import { ConfigFilePane } from "@/features/configs/editor/ConfigFilePane";
-import type { ConfigFileController } from "@/features/configs/editor/configFileController";
-import {
-  configLocation,
-  configTenantKey,
-  readConfigRoute,
-  tenantSelectionFromConfigKey,
-  type ConfigApplyTarget,
-  type ConfigDeleteTarget,
-  type ConfigPendingAction,
-  type ConfigSelection,
-  type ConfigTenantKey,
-} from "@/features/configs/route";
+import { configLocation, configTenantKey } from "@/features/configs/route";
+import { useConfigController } from "@/features/configs/useConfigController";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
-import { messageOf } from "@/shared/lib/errors";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
-import { DNS_LABEL_PATTERN } from "@/api/tenantSelection";
-import { useTenants } from "@/shared/hooks/useTenants";
+import { ActionButton } from "@/shared/ui/ActionButton";
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
+import { Dialog } from "@/shared/ui/Dialog";
+import { EmptyState } from "@/shared/ui/EmptyState";
+import { TextInput } from "@/shared/ui/FormControls";
+import { IconButton } from "@/shared/ui/IconButton";
+import { IssueIndicator } from "@/shared/ui/IssueIndicator";
+import { Loading, MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
+import { RefreshButton } from "@/shared/ui/RefreshButton";
+import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+
 const CurrentConfigIcon = resourceIcons.currentConfig;
-const HostTenantIcon = resourceIcons.hostTenant;
 const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
+
 interface PageProps {
   api: ConfigApi;
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
-  onLocationChange?: ModuleLocationChange;
+  onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
 }
-export function ConfigPage({ api, operation, search, onDirtyChange, onLocationChange }: PageProps) {
-  const [initialRoute] = useState(() => readConfigRoute(search));
-  const observedSearch = useRef(search);
+
+export function ConfigPage(props: PageProps) {
   const {
-    tenants,
-    loading: loadingTenants,
-    error: tenantError,
-    retry: retryTenants,
-  } = useTenants(api);
-  const [tenant, setTenant] = useState<TenantSelection>(initialRoute.tenant);
-  const [agent, setAgent] = useState<CodingAgentKind>(initialRoute.agent);
-  const [catalog, setCatalog] = useState<ConfigListData | null>(null);
-  const [selection, setSelection] = useState<ConfigSelection>(initialRoute.selection);
-  const selectionRef = useRef<ConfigSelection>(initialRoute.selection);
-  const [file, setFile] = useState<string | null>(initialRoute.file);
-  const [editorMode, setEditorMode] = useState<"visual" | "raw">("raw");
-  const [visualAvailable, setVisualAvailable] = useState(false);
-  const visualModeInitialized = useRef(false);
-  const fileControllers = useRef(new Map<string, ConfigFileController>());
-  const revealRetries = useRef(new Map<string, () => void>());
-  const [fileStatuses, setFileStatuses] = useState<
-    Record<
-      string,
-      {
-        dirty: boolean;
-        canSave: boolean;
-      }
-    >
-  >({});
-  const [newName, setNewName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
-  const [deleteTarget, setDeleteTarget] = useState<ConfigDeleteTarget | null>(null);
-  const [applyTarget, setApplyTarget] = useState<ConfigApplyTarget | null>(null);
-  const [applyFeedback, setApplyFeedback] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<ConfigPendingAction | null>(null);
-  const [detailOpen, setDetailOpen] = useState(initialRoute.detailOpen);
-  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
-  const detailBackButtonRef = useRef<HTMLButtonElement>(null);
-  const configRowButtons = useRef(new Map<string, HTMLButtonElement>());
-  const [preview, setPreview] = useState<PropagationPreview | null>(null);
-  const [report, setReport] = useState<PropagationReport | null>(null);
-  const catalogController = useRef<AbortController | null>(null);
-  const unsavedTitleId = useId();
-  const createTitleId = useId();
-  const createHelpId = useId();
-  const propagationTitleId = useId();
-  const operationRunning = operation?.state === "running";
-  const mutationBusy = busy || operationRunning;
-  useEffect(() => {
-    if (observedSearch.current === search) return;
-    observedSearch.current = search;
-    const route = readConfigRoute(search);
-    setTenant((current) =>
-      configTenantKey(current) === configTenantKey(route.tenant) ? current : route.tenant,
-    );
-    setAgent((current) => (current === route.agent ? current : route.agent));
-    setSelection((current) => {
-      const currentKey = current.current ? "current" : `named:${current.config}`;
-      const routeKey = route.selection.current ? "current" : `named:${route.selection.config}`;
-      return currentKey === routeKey ? current : route.selection;
-    });
-    setFile((current) => (current === route.file ? current : route.file));
-    setDetailOpen((current) => (current === route.detailOpen ? current : route.detailOpen));
-    setSelectionMode(false);
-    setSelectedNames(new Set());
-  }, [search]);
-  useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
-  const managedTenantMissing =
-    !loadingTenants &&
-    tenant.kind === "managed" &&
-    !tenants.some((row) => row.kind === "managed" && row.name === tenant.name && row.exists);
-  useEffect(() => {
-    if (!detailOpen || !window.matchMedia?.("(max-width: 760px)").matches) return;
-    const frame = window.requestAnimationFrame(() =>
-      (detailHeadingRef.current ?? detailBackButtonRef.current)?.focus(),
-    );
-    return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, selection]);
-  useEffect(() => {
-    if (!managedTenantMissing || !detailOpen) return;
-    // The latest Tenant catalog invalidated the route-backed detail selection.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDetailOpen(false);
-    setFile(null);
-    onLocationChange?.(configLocation(tenant, agent, null), true);
-  }, [agent, detailOpen, managedTenantMissing, onLocationChange, tenant]);
-  const tenantOptions = useMemo<SelectionOption<ConfigTenantKey>[]>(() => {
-    const host = tenants.find((tenant) => tenant.kind === "host");
-    const managed = tenants
-      .filter(
-        (
-          tenant,
-        ): tenant is TenantRow & {
-          kind: "managed";
-          name: string;
-        } => Boolean(tenant.kind === "managed" && tenant.name),
-      )
-      .sort((left, right) => left.name.localeCompare(right.name));
-    return [
-      ...(host
-        ? [
-            {
-              value: "host" as const,
-              label: "Host Tenant",
-              icon: <HostTenantIcon size={14} aria-hidden="true" />,
-            },
-          ]
-        : []),
-      ...managed.map((tenant) => ({
-        value: `managed:${tenant.name}` as const,
-        label: tenant.display_name,
-        summaryLabel: tenant.display_name,
-        icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
-      })),
-    ];
-  }, [tenants]);
-  const agentOptions = useMemo<SelectionOption<CodingAgentKind>[]>(
-    () =>
-      (["codex", "claude"] as const).map((value) => ({
-        value,
-        label: value === "codex" ? "Codex" : "Claude",
-        icon: <BrandIcon brand={brandForAgent(value)} size={14} />,
-      })),
-    [],
-  );
-  const configTenantLabel =
-    tenant.kind === "host"
-      ? "Host Tenant"
-      : (tenants.find((row) => row.kind === "managed" && row.name === tenant.name)?.display_name ??
-        tenant.name);
-  const configSelectionLabel = selection.current
-    ? "Current Config"
-    : `Named Config ${selection.config}`;
-  const currentSelection = selection.current;
-  const selectedTenantKey = configTenantKey(tenant);
-  const selectedConfigKey = selection.current ? "current" : `named:${selection.config}`;
-  const configFiles = catalog?.files ?? [];
-  const paneRefs = useRef(new Map<string, HTMLDivElement>());
-  useEffect(() => {
-    visualModeInitialized.current = false;
-    // A route-backed Config selection owns a distinct editor-mode lifecycle.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setVisualAvailable(false);
-    setEditorMode("raw");
-  }, [agent, selectedConfigKey, selectedTenantKey]);
-  useEffect(() => {
-    if (!detailOpen || !file) return;
-    const frame = window.requestAnimationFrame(() =>
-      paneRefs.current.get(file)?.scrollIntoView?.({ block: "nearest" }),
-    );
-    return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, catalog]);
-  const loadCatalog = useCallback(
-    async (kind: "initial" | "refresh" | "background" = "initial") => {
-      catalogController.current?.abort();
-      const controller = new AbortController();
-      catalogController.current = controller;
-      if (kind === "initial") setLoadingCatalog(true);
-      if (kind === "refresh") setRefreshing(true);
-      try {
-        const data = await api.listConfigs(tenant, agent, controller.signal);
-        if (controller.signal.aborted || catalogController.current !== controller) return null;
-        const routedSelection = selectionRef.current;
-        if (
-          !routedSelection.current &&
-          !data.configs.some((entry) => entry.name === routedSelection.config)
-        ) {
-          const fallback: ConfigSelection = { current: true };
-          selectionRef.current = fallback;
-          setSelection(fallback);
-          setDetailOpen(false);
-          onLocationChange?.(configLocation(tenant, agent, null), true);
-        }
-        setCatalog(data);
-        setFile((current) =>
-          current && data.files.includes(current) ? current : (data.files[0] ?? null),
-        );
-        setSelectedNames(
-          (current) =>
-            new Set(
-              [...current].filter((name) => data.configs.some((entry) => entry.name === name)),
-            ),
-        );
-        setError(null);
-        return data;
-      } catch (cause) {
-        if (!(controller.signal.aborted || cause instanceof DOMException))
-          setError(messageOf(cause));
-        return null;
-      } finally {
-        if (catalogController.current === controller) {
-          catalogController.current = null;
-          if (kind === "initial") setLoadingCatalog(false);
-          if (kind === "refresh") setRefreshing(false);
-        }
-      }
-    },
-    [agent, api, onLocationChange, tenant],
-  );
-  useEffect(() => {
-    // Loading a different external Config catalog replaces the previous catalog lifecycle.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCatalog(null);
-    fileControllers.current.clear();
-    setFileStatuses({});
-    setVisualAvailable(false);
-    setEditorMode("raw");
-    setSelectionMode(false);
-    setSelectedNames(new Set());
-    void loadCatalog();
-    return () => catalogController.current?.abort();
-  }, [loadCatalog]);
-  const appliedName = catalog?.application.last_application?.applied ?? null;
-  const selectedCount = selectedNames.size;
-  const selectableNames = catalog?.configs.map((entry) => entry.name) ?? [];
-  const allSelectable =
-    selectableNames.length > 0 && selectableNames.every((name) => selectedNames.has(name));
-  const editorDirty = Object.values(fileStatuses).some((status) => status.dirty);
-  const dirtyFiles = (catalog?.files ?? []).filter((name) => fileStatuses[name]?.dirty);
-  useEffect(() => onDirtyChange?.(editorDirty), [editorDirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-  const registerFileController = useCallback(
-    (name: string, controller: ConfigFileController | null) => {
-      setFileStatuses((current) => {
-        const next = { ...current };
-        if (controller) {
-          fileControllers.current.set(name, controller);
-          next[name] = { dirty: controller.dirty, canSave: controller.canSave };
-        } else {
-          fileControllers.current.delete(name);
-          delete next[name];
-        }
-        return next;
-      });
-    },
-    [],
-  );
-  const registerRevealRetry = useCallback((name: string, retry: (() => void) | null) => {
-    if (retry) revealRetries.current.set(name, retry);
-    else revealRetries.current.delete(name);
-  }, []);
-  const handlePaneSaved = useCallback(() => {
-    void loadCatalog("background");
-  }, [loadCatalog]);
-  const prepareMainConfigSave = useCallback((customProvider: boolean) => {
-    if (!customProvider) return true;
-    const auth = fileControllers.current.get("auth.json");
-    if (!auth?.dirty) return true;
-    setError("Save auth.json before saving a Custom provider configuration.");
-    return false;
-  }, []);
-  const handleLinkedFileSaved = useCallback((name: string) => {
-    fileControllers.current.get(name)?.reload();
-  }, []);
-  const handleVisualAvailable = useCallback(
-    (available: boolean) => {
-      setVisualAvailable(available);
-      if (available && !visualModeInitialized.current && !currentSelection) {
-        visualModeInitialized.current = true;
-        setEditorMode("visual");
-      }
-    },
-    [currentSelection],
-  );
-  const requestEditorAction = useCallback(
-    (run: () => void | Promise<void>) => {
-      if (editorDirty) setPendingAction({ run });
-      else void run();
-    },
-    [editorDirty],
-  );
-  const switchEditorMode = useCallback(
-    (next: "visual" | "raw") => {
-      if (next === editorMode) return;
-      if (next === "visual" && (!visualAvailable || currentSelection)) {
-        setError("Visual Editor is available only for a valid Named Config main file.");
-        return;
-      }
-      requestEditorAction(() => {
-        setEditorMode(next);
-        setError(null);
-      });
-    },
-    [currentSelection, editorMode, requestEditorAction, visualAvailable],
-  );
-  async function saveAndRunPendingAction() {
-    if (!pendingAction) return;
-    const action = pendingAction.run;
-    const names = agent === "codex" ? ["auth.json", "config.toml"] : (catalog?.files ?? []);
-    for (const name of names) {
-      const controller = fileControllers.current.get(name);
-      if (controller?.dirty && !(await controller.save())) return;
-    }
-    setPendingAction(null);
-    await action();
-  }
-  async function discardAndRunPendingAction() {
-    if (!pendingAction) return;
-    const action = pendingAction.run;
-    for (const controller of fileControllers.current.values()) {
-      if (controller.dirty) controller.restore();
-    }
-    setPendingAction(null);
-    await action();
-  }
-  function selectTenant(values: ReadonlySet<ConfigTenantKey>) {
-    const next = [...values][0];
-    if (!next || next === configTenantKey(tenant)) return;
-    requestEditorAction(() => {
-      setTenant(tenantSelectionFromConfigKey(next));
-      setSelection({ current: true });
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      setDetailOpen(false);
-      onLocationChange?.(configLocation(tenantSelectionFromConfigKey(next), agent, null));
-    });
-  }
-  function selectAgent(values: ReadonlySet<CodingAgentKind>) {
-    const next = [...values][0];
-    if (!next || next === agent) return;
-    requestEditorAction(() => {
-      setAgent(next);
-      setSelection({ current: true });
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      setDetailOpen(false);
-      onLocationChange?.(configLocation(tenant, next, null));
-    });
-  }
-  function openConfig(name: string) {
-    requestEditorAction(() => {
-      setSelection({ current: false, config: name });
-      setDetailOpen(true);
-      const nextSelection: ConfigSelection = { current: false, config: name };
-      onLocationChange?.(configLocation(tenant, agent, nextSelection, file));
-    });
-  }
-  function openCurrent() {
-    requestEditorAction(() => {
-      setSelection({ current: true });
-      setDetailOpen(true);
-      onLocationChange?.(configLocation(tenant, agent, { current: true }, file));
-    });
-  }
-  function toggleConfig(name: string) {
-    setSelectedNames((current) => {
-      const next = new Set(current);
-      if (!next.delete(name)) next.add(name);
-      return next;
-    });
-  }
-  function toggleAllConfigs() {
-    setSelectedNames(allSelectable ? new Set() : new Set(selectableNames));
-  }
-  function cancelSelection() {
-    setSelectionMode(false);
-    setSelectedNames(new Set());
-  }
-  function requestDelete(names: string[]) {
-    if (names.length === 0) return;
-    requestEditorAction(() => setDeleteTarget({ names }));
-  }
-  async function createConfig(name: string) {
-    if (operationRunning || !name) return;
-    setBusy(true);
-    try {
-      await api.createConfig(tenant, agent, name);
-      setNewName("");
-      setCreateError(null);
-      setCreateOpen(false);
-      await loadCatalog("background");
-      setSelection({ current: false, config: name });
-      setDetailOpen(true);
-      onLocationChange?.(configLocation(tenant, agent, { current: false, config: name }, file));
-    } catch (cause) {
-      setCreateError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function applyConfig(name: string) {
-    if (operationRunning) return;
-    setBusy(true);
-    setApplyFeedback(null);
-    let applyError: string | null = null;
-    try {
-      await api.applyConfig(tenant, agent, name);
-    } catch (cause) {
-      applyError = `${messageOf(cause)} Some Current Config files may already have been updated.`;
-    } finally {
-      const refreshed = await loadCatalog("background");
-      if (refreshed && currentSelection) {
-        for (const currentFile of refreshed.files) {
-          fileControllers.current.get(currentFile)?.reload();
-        }
-      }
-      setApplyTarget(null);
-      setError(applyError);
-      if (!applyError) {
-        setApplyFeedback(
-          `Applied Named Config ${name} to Current Config. This is a one-time projection; it is not an Active Config.`,
-        );
-      }
-      setBusy(false);
-    }
-  }
-  async function deleteConfigs() {
-    if (operationRunning || !deleteTarget || deleteTarget.names.length === 0) return;
-    const requestedNames = deleteTarget.names;
-    const wasSelectionMode = selectionMode;
-    setBusy(true);
-    try {
-      await api.deleteConfigs(tenant, agent, requestedNames);
-      const deletedSelected = !selection.current && requestedNames.includes(selection.config ?? "");
-      setDeleteTarget(null);
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      if (deletedSelected) {
-        setSelection({ current: true });
-        setDetailOpen(false);
-        onLocationChange?.(configLocation(tenant, agent, null), true);
-      }
-      await loadCatalog("background");
-    } catch (cause) {
-      const deletionError = messageOf(cause);
-      setDeleteTarget(null);
-      const refreshed = await loadCatalog("background");
-      if (refreshed) {
-        const remaining = requestedNames.filter((name) =>
-          refreshed.configs.some((entry) => entry.name === name),
-        );
-        setSelectedNames(wasSelectionMode ? new Set(remaining) : new Set());
-        setSelectionMode(wasSelectionMode && remaining.length > 0);
-        if (
-          !selection.current &&
-          !refreshed.configs.some((entry) => entry.name === selection.config)
-        ) {
-          setSelection({ current: true });
-          setDetailOpen(false);
-          onLocationChange?.(configLocation(tenant, agent, null), true);
-        }
-      }
-      setError(deletionError);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function previewPropagation() {
-    setBusy(true);
-    try {
-      setPreview(await api.previewCredentialPropagation());
-      setReport(null);
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function executePropagation() {
-    if (operationRunning || !preview) return;
-    setBusy(true);
-    try {
-      setReport(await api.executeCredentialPropagation(preview.plan_id));
-      setPreview(null);
-      await loadCatalog("background");
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  const createNameValid = DNS_LABEL_PATTERN.test(newName);
-  const propagationHasFailures =
-    report?.entries.some((entry) => entry.outcome.status === "failed") ?? false;
-  const propagationNeedsAttention =
-    report?.entries.some((entry) => propagationGroup(entry.outcome.status) === "attention") ??
-    false;
+    agent,
+    agentOptions,
+    allSelectable,
+    appliedName,
+    applyConfig,
+    applyFeedback,
+    applyTarget,
+    busy,
+    cancelPending,
+    cancelSelection,
+    catalog,
+    catalogError,
+    configFiles,
+    configRowButtons,
+    configSelectionLabel,
+    configTenantLabel,
+    createConfig,
+    createError,
+    createHelpId,
+    createNameValid,
+    createOpen,
+    createTitleId,
+    deleteConfigs,
+    deleteTarget,
+    detailBackButtonRef,
+    detailHeadingRef,
+    detailOpen,
+    dirtyFiles,
+    discardAndRunPendingAction,
+    editorMode,
+    error,
+    executePropagation,
+    file,
+    fileStatuses,
+    handleLinkedFileSaved,
+    handlePaneSaved,
+    handleVisualAvailable,
+    loadCatalog,
+    loadingCatalog,
+    loadingTenants,
+    managedTenantMissing,
+    mutationBusy,
+    newName,
+    openConfig,
+    openCurrent,
+    paneRefs,
+    pendingAction,
+    prepareMainConfigSave,
+    preview,
+    previewPropagation,
+    propagationHasFailures,
+    propagationNeedsAttention,
+    propagationTitleId,
+    refreshing,
+    registerFileController,
+    registerRevealRetry,
+    report,
+    requestDelete,
+    requestEditorAction,
+    retryReveals,
+    retryTenants,
+    saveInOrder,
+    saveOrder,
+    savePending,
+    selectAgent,
+    selectableNames,
+    selectedCount,
+    selectedNames,
+    selection,
+    selectionMode,
+    selectTenant,
+    setApplyTarget,
+    setBusy,
+    setCreateError,
+    setCreateOpen,
+    setDeleteTarget,
+    setDetailOpen,
+    setEditorMode,
+    setError,
+    setNewName,
+    setPreview,
+    setReport,
+    setSelectionMode,
+    switchEditorMode,
+    tenant,
+    tenantError,
+    tenantOptions,
+    toggleAllConfigs,
+    toggleConfig,
+    unsavedTitleId,
+    visualAvailable,
+  } = useConfigController(props);
+  const { api, onLocationChange, operation } = props;
   return (
     <div className={`${layout.page} ${layout.catalogPage}`}>
       <PageError
-        error={tenantError ?? error}
+        error={tenantError ?? catalogError ?? error}
         onRetry={
           tenantError
             ? retryTenants
-            : error
+            : catalogError || error
               ? () => {
                   setError(null);
-                  for (const retry of revealRetries.current.values()) retry();
+                  retryReveals();
                   void loadCatalog("refresh");
                 }
               : undefined
@@ -578,7 +166,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
       <MutationUnavailable operation={operation} />
       <div className={`${layout.splitLayout} ${detailOpen ? layout.showsDetail : ""}`}>
         <aside className={styles.configCatalog} aria-label="Configs">
-          <div className={layout.toolbar}>
+          <div className={`${layout.toolbar} ${selectionMode ? layout.selectionBar : ""}`}>
             {selectionMode ? (
               <>
                 <button
@@ -589,7 +177,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
                 >
                   Cancel
                 </button>
-                <div className={layout.toolbarSelectionActions}>
+                <div className={layout.selectionCenter}>
                   <span className={layout.selectionCount}>{selectedCount} selected</span>
                   <button
                     type="button"
@@ -599,16 +187,16 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
                   >
                     {allSelectable ? "Clear all" : "Select all"}
                   </button>
-                  <button
-                    type="button"
-                    className={layout.selectionDelete}
-                    aria-label="Delete selected Named Configs"
-                    disabled={selectedCount === 0 || mutationBusy}
-                    onClick={() => requestDelete([...selectedNames])}
-                  >
-                    <Trash2 size={14} aria-hidden="true" /> Delete selected
-                  </button>
                 </div>
+                <button
+                  type="button"
+                  className={layout.selectionDelete}
+                  aria-label="Delete selected Named Configs"
+                  disabled={selectedCount === 0 || mutationBusy}
+                  onClick={() => requestDelete([...selectedNames])}
+                >
+                  <Trash2 size={14} aria-hidden="true" /> Delete
+                </button>
               </>
             ) : (
               <>
@@ -901,7 +489,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
                         const target = configRowButtons.current.get(focusKey);
                         target?.focus();
                       }
-                      onLocationChange?.(configLocation(tenant, agent, null));
+                      onLocationChange(configLocation(tenant, agent, null));
                     })
                   }
                 >
@@ -978,12 +566,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
                       onClick={() => {
                         void (async () => {
                           setBusy(true);
-                          const names =
-                            agent === "codex" ? ["auth.json", "config.toml"] : configFiles;
-                          for (const name of names) {
-                            const controller = fileControllers.current.get(name);
-                            if (controller?.dirty && !(await controller.save())) break;
-                          }
+                          await saveInOrder(saveOrder);
                           await loadCatalog("background");
                           setBusy(false);
                         })();
@@ -1043,7 +626,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
           className={layout.dialog}
           ariaLabelledBy={unsavedTitleId}
           busy={mutationBusy}
-          onCancel={() => setPendingAction(null)}
+          onCancel={cancelPending}
         >
           <section>
             <h2 id={unsavedTitleId}>Unsaved changes</h2>
@@ -1055,7 +638,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
               before continuing?
             </p>
             <div className={styles.dialogActions}>
-              <button type="button" onClick={() => setPendingAction(null)} disabled={busy}>
+              <button type="button" onClick={cancelPending} disabled={busy}>
                 Cancel
               </button>
               <button
@@ -1067,7 +650,7 @@ export function ConfigPage({ api, operation, search, onDirtyChange, onLocationCh
               </button>
               <ActionButton
                 tone="primary"
-                onClick={() => void saveAndRunPendingAction()}
+                onClick={() => void savePending(saveOrder)}
                 disabled={mutationBusy || dirtyFiles.some((name) => !fileStatuses[name]?.canSave)}
               >
                 Save and continue

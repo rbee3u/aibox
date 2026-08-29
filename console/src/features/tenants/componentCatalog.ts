@@ -5,7 +5,7 @@ import type {
   ComponentLatestSnapshot,
   ComponentRow,
 } from "@/api/tenants";
-import type { TenantSelection } from "@/api/tenantSelection";
+import type { TenantSelection } from "@/domain/tenant";
 import type { BrandName } from "@/shared/icons/brandIcons";
 
 export type ComponentPrimaryAction =

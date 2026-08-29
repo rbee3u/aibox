@@ -119,6 +119,38 @@ describe("Control API endpoints", () => {
     expect(complete).toBe(1);
   });
 
+  it("normalizes synchronous and asynchronous Component mutations", async () => {
+    const { api, fetchMock } = connected();
+    fetchMock
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          Response.json({
+            id: "operation-1",
+            kind: "install codex",
+            state: "running",
+            started_at: "now",
+            ended_at: null,
+            result: null,
+            first_sequence: 0,
+            next_sequence: 0,
+            logs: [],
+          }),
+        ),
+      )
+      .mockImplementationOnce(() => Promise.resolve(Response.json({ installed: "codex" })));
+
+    await expect(api.tenants.mutateComponent(tenant, "codex", true, null)).resolves.toMatchObject({
+      kind: "operation",
+      operation: { id: "operation-1" },
+    });
+    await expect(
+      api.tenants.mutateComponent(tenant, "codex-statusline", true, null),
+    ).resolves.toEqual({
+      kind: "completed",
+      value: { installed: "codex" },
+    });
+  });
+
   it("fails a Session detail stream that ends before completion", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

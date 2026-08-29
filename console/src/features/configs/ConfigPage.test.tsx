@@ -1103,14 +1103,20 @@ describe("ConfigPage", () => {
               entries: [
                 { label: "default · Current", outcome: { status: "updated" } },
                 { label: "work · team", outcome: { status: "updated" } },
-                { label: "work · newer", outcome: { status: "newer" } },
+                {
+                  label: "work · newer",
+                  outcome: {
+                    status: "newer",
+                    source_last_refresh: "2026-08-18T00:00:00Z",
+                    target_last_refresh: "2026-08-19T00:00:00Z",
+                  },
+                },
               ],
             },
           });
         }
         if (path === "/_aibox/api/configs/propagate-auth/execute") {
           return Promise.resolve({
-            counts: { updated: 1, unchanged: 1, failed: 1 },
             entries: [
               { label: "default · Current", outcome: { status: "updated" } },
               { label: "work · team", outcome: { status: "unchanged" } },
@@ -1119,8 +1125,6 @@ describe("ConfigPage", () => {
                 outcome: {
                   status: "failed",
                   reason: "target changed during propagation",
-                  source_last_refresh: "2026-08-18T00:00:00Z",
-                  target_last_refresh: "2026-08-19T00:00:00Z",
                 },
               },
             ],

@@ -1,88 +1,33 @@
-import type { CodingAgentKind, TenantRow } from "@/api/core";
+import type { TenantRow } from "@/api/core";
+import type { CodingAgentKind } from "@/domain/codingAgent";
+import type {
+  ConversationMessage,
+  SessionDetailMeta,
+  SessionDetailStats,
+  SessionDiscoverySummary,
+  SessionDetailFrame,
+  SessionListData,
+  SessionListRow,
+  ToolActivity,
+  TranscriptEvidence,
+  TranscriptEvidenceSummary,
+} from "@/api/generated/wire";
 import { listTenantsRequest } from "@/api/tenants";
 import type { ControlApi } from "@/api/transport";
-import { tenantBody, tenantQuery, type TenantSelection } from "@/api/tenantSelection";
+import { tenantBody, tenantQuery } from "@/api/tenantSelection";
+import type { TenantSelection } from "@/domain/tenant";
 
-export interface SessionRow {
-  id: string;
-  display_id: string;
-  start_ts: string;
-  title: string;
-  latest_message: string;
-  message_count: number;
-  tool_count: number;
-  warnings: string[];
-}
-
-export interface SessionListData {
-  sessions: SessionRow[];
-  warnings: string[];
-  partial: boolean;
-}
-
-export interface SessionSummaryData {
-  count: number;
-  warnings: string[];
-  partial: boolean;
-}
-
-export interface ConversationMessage {
-  entry_ids: string[];
-  role: "user" | "assistant";
-  timestamp: string;
-  text: string;
-}
-
-export interface ToolActivity {
-  entry_ids: string[];
-  call_id: string | null;
-  timestamp: string;
-  name: string;
-  status: "started" | "completed" | "failed" | "incomplete" | "unknown";
-  summary: string;
-}
-
-export interface TranscriptEvidenceSummary {
-  entry_id: string;
-  line: number;
-  timestamp: string;
-  native_type: string;
-  role: string | null;
-  content_types: string[];
-  status: string;
-  preview: string;
-}
-
-export interface SessionDetailMeta {
-  id: string;
-  title: string;
-  start_ts: string;
-  transcript_path: string;
-  cwd: string | null;
-  model_provider: string | null;
-  cli_version: string | null;
-}
-
-export interface SessionDetailStats {
-  start_ts: string;
-  last_event_ts: string;
-  message_count: number;
-  tool_count: number;
-  entry_count: number;
-  malformed_count: number;
-  unsupported_count: number;
-  hidden_internal_count: number;
-  observed_duration_ms: number | null;
-  file_size: number;
-  snapshot: string;
-}
-
-export interface TranscriptEvidence {
-  entry_id: string;
-  encoding: "utf-8" | "base64";
-  content: string;
-  snapshot: string;
-}
+export type SessionRow = SessionListRow;
+export type SessionSummaryData = SessionDiscoverySummary;
+export type {
+  ConversationMessage,
+  SessionDetailMeta,
+  SessionDetailStats,
+  SessionListData,
+  ToolActivity,
+  TranscriptEvidence,
+  TranscriptEvidenceSummary,
+};
 
 export interface SessionDetailHandlers {
   onMessage: (message: ConversationMessage) => void;
@@ -92,13 +37,7 @@ export interface SessionDetailHandlers {
   onComplete: (stats: SessionDetailStats, warnings: string[]) => void;
 }
 
-type SessionDetailFrame =
-  | { type: "message"; message: ConversationMessage }
-  | { type: "tool_activity"; tool_activity: ToolActivity }
-  | { type: "evidence"; evidence: TranscriptEvidenceSummary }
-  | { type: "meta"; meta: SessionDetailMeta }
-  | { type: "complete"; stats: SessionDetailStats; warnings: string[] }
-  | { type: "error"; error: string };
+export type { SessionDetailFrame };
 
 export interface SessionApi {
   listTenants(signal?: AbortSignal): Promise<TenantRow[]>;

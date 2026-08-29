@@ -1,0 +1,2 @@
+# Minified vendor template literals can contain significant trailing bytes.
+assets/console.js -whitespace

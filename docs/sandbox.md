@@ -1,6 +1,6 @@
 # Filesystem Sandbox and Mounts
 
-aibox treats the Docker container as the Coding Agent or Debug Shell's
+AIBox treats the Docker container as the Coding Agent or Debug Shell's
 Filesystem Sandbox. It limits which host paths enter the container while
 leaving the process free to work inside those mounts.
 
@@ -17,7 +17,7 @@ Select another existing directory with `--workspace`:
 aibox run -w ../other-project
 ```
 
-Relative paths are resolved from the directory where aibox was launched.
+Relative paths are resolved from the directory where `aibox` was launched.
 
 ## Mount Rules
 
@@ -44,7 +44,7 @@ Workspace as well as Extra Mounts:
 - Extra mounts may be nested beneath `/workspace` or `/home/aibox`, but may not
   replace either managed mount or one of its ancestors.
 - `$AIBOX_ROOT` and any host path that contains it are rejected because they
-  would expose host-only aibox state indirectly.
+  would expose host-only AIBox state indirectly.
 
 Within `$AIBOX_ROOT`, only `tenants/<tenant>` or one of its descendants may be
 a bind source. Named Config catalogs, Requests, and internal lifecycle
@@ -76,7 +76,7 @@ cleanup-aware container, but mounts only the selected Tenant Home at
 installer retains normal network access to official distribution services.
 
 On Linux, the container runs with the invoking uid and gid so Workspace files
-retain host ownership. aibox also maps `host.docker.internal` to Docker's host
+retain host ownership. AIBox also maps `host.docker.internal` to Docker's host
 gateway. Docker Desktop provides the host integration on macOS.
 
 The following remain outside the Filesystem Sandbox:
@@ -84,7 +84,7 @@ The following remain outside the Filesystem Sandbox:
 - Container networking is enabled.
 - Credentials may authorize changes to repositories, APIs, cloud accounts, or
   other remote systems.
-- aibox adds no CPU, memory, or process-count limits.
+- AIBox adds no CPU, memory, or process-count limits.
 - Writable Workspace, Tenant Home, and Extra Mounts can be modified or
   deleted by the Coding Agent.
 
@@ -98,7 +98,7 @@ services, and remain the user's responsibility.
 ## Cleanup
 
 Runs, Debug Shells, and Component installations use disposable Docker
-containers. aibox tracks the Docker child and container id, and keeps cleanup
+containers. AIBox tracks the Docker child and container id, and keeps cleanup
 armed until it has checked that the container did not outlive the Docker
 client.
 
@@ -111,17 +111,17 @@ ignored. SIGKILL, a wrapper crash, Docker failure, or a host failure cannot
 guarantee cleanup. After such an event, inspect Docker for a leftover container
 before starting sensitive work.
 
-On ordinary completion, aibox propagates the `docker run`, Debug Shell, or
+On ordinary completion, AIBox propagates the `docker run`, Debug Shell, or
 Coding Agent exit status. If the Docker client reports success but leaves a
-live or uninspectable container that aibox must kill, aibox changes that
+live or uninspectable container that AIBox must kill, AIBox changes that
 successful status to a failure; an existing failure status is preserved.
 
-One aibox process supports one active container operation at a time: a Run,
+One `aibox` process supports one active container operation at a time: a Run,
 Debug Shell, or Component installation.
 
 ## Request Proxy
 
-The Request Proxy is an always-on part of the foreground aibox Service. It does
+The Request Proxy is an always-on part of the foreground AIBox Service. It does
 not start Docker and may run alongside a separate `aibox run` process:
 
 ```sh
@@ -143,7 +143,7 @@ SIGTERM exits 143. A second signal forces exit using its conventional signal
 exit code.
 
 The default listener is `127.0.0.1:9923`. `--listen` accepts only a literal
-`IP:PORT` with a nonzero port. aibox binds exactly that socket; it does not
+`IP:PORT` with a nonzero port. AIBox binds exactly that socket; it does not
 resolve hostnames, add a loopback listener, or add another IP protocol family.
 The same socket serves the Request Proxy and Console. Console paths (`/` and
 `/_aibox/*`) require an actual loopback TCP peer and loopback Host. Other paths
@@ -151,7 +151,7 @@ remain Request Proxy input, so wildcard listeners can be reached by containers
 without exposing management. Browser mutations also require JSON, same-origin
 Origin, and the startup CSRF token.
 
-Docker Desktop provides `host.docker.internal`. aibox also maps that name to
+Docker Desktop provides `host.docker.internal`. AIBox also maps that name to
 the host gateway for Linux Runs, where the host listener commonly needs
 `0.0.0.0`. A custom provider uses the complete-upstream encoding in its provider
 table:
@@ -175,7 +175,7 @@ and recording failures 507 while downstream response headers can still be
 replaced. Upstream 3xx/4xx/5xx statuses are returned without being reclassified
 as proxy failures.
 
-Before connecting, aibox resolves the target and requires every candidate to
+Before connecting, AIBox resolves the target and requires every candidate to
 be a public address, except that `198.18.0.0/15` is accepted for host-side
 Fake-IP DNS proxies. Loopback, private, link-local, CGNAT, ULA, multicast,
 unspecified, documentation, other reserved, and metadata destinations are
@@ -346,7 +346,7 @@ and [Docker host networking](https://docs.docker.com/desktop/features/networking
 
 ## Building the Shared Image
 
-After installing aibox, start `aibox console`, open Console Overview, and choose
+After installing AIBox, start `aibox console`, open Console Overview, and choose
 **Build** to build the bundled image. **Build without cache** reruns every layer
 and pulls a fresh Debian base image.
 
@@ -377,6 +377,6 @@ installer, which downloads hash-verified Astral CPython builds; Rust resolves
 stable versions through rustup and shell tools; Go uses `jq`, `dpkg`, tar, and
 `sha256sum`. None of these installers requires an image-owned Python.
 
-On Linux, aibox overrides the image user with the invoking host uid and gid.
+On Linux, AIBox overrides the image user with the invoking host uid and gid.
 Executables and required image files must therefore be readable and executable
 by an arbitrary uid.

@@ -1,6 +1,6 @@
 # Keep mutable runtimes in Tenant Homes
 
-aibox keeps application language runtimes and Coding Agent executables as
+AIBox keeps application language runtimes and Coding Agent executables as
 native Managed Tenant Components instead of pinning them in the fixed Runtime
 Image. This includes Node.js, the Python toolchain aggregate (uv, one active
 CPython, pip, and venv), Codex, and Claude Code, alongside the existing Rust and
@@ -16,7 +16,7 @@ stable absolute paths must remain valid. Adopting this decision requires one
 image rebuild to remove former image-owned copies; it does not change ADR 0014's
 fixed `aibox:latest` tag.
 
-The Tenant Environment is composed by the current aibox binary at Run or Debug
+The Tenant Environment is composed by the current `aibox` binary at Run or Debug
 Shell startup rather than persisted in each Tenant Home. User login-profile
 values retain priority, except that missing existing Tenant-local PATH
 candidates are inserted before the last exact `/usr/local/bin` segment and

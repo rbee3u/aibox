@@ -72,6 +72,45 @@ describe("Requests page selection and deletion", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("duplicates the pagination bar under the selection toolbar with the full page status", async () => {
+    const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
+    const firstPage = requestListFor([completedSummary], {
+      total: 51,
+      deletable_count: 51,
+      has_next: true,
+    });
+    const secondPage = requestListFor([secondPageSummary], { total: 51, deletable_count: 51 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage)
+      .mockResolvedValue(firstPage);
+    const user = userEvent.setup();
+    renderApp({ listRequests });
+
+    await user.click(await screen.findByRole("button", { name: "Select Requests" }));
+    const pagers = screen.getAllByRole("navigation", { name: "Request pages" });
+    expect(pagers).toHaveLength(2);
+    const firstStatus = "Page 1 of 2 · 1 shown · 51 total";
+    expect(within(pagers[0]).getByText(firstStatus)).toBeInTheDocument();
+    expect(within(pagers[1]).getByText(firstStatus)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select page" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
+
+    await user.click(within(pagers[0]).getByRole("button", { name: "Next" }));
+    await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" });
+    const pageTwoPagers = screen.getAllByRole("navigation", { name: "Request pages" });
+    const secondStatus = "Page 2 of 2 · 1 shown · 51 total";
+    expect(within(pageTwoPagers[0]).getByText(secondStatus)).toBeInTheDocument();
+    expect(within(pageTwoPagers[1]).getByText(secondStatus)).toBeInTheDocument();
+
+    await user.click(within(pageTwoPagers[1]).getByRole("button", { name: "Previous" }));
+    await screen.findByRole("button", { name: "Select POST api.example.test/v1/responses" });
+    const pageOnePagers = screen.getAllByRole("navigation", { name: "Request pages" });
+    expect(within(pageOnePagers[0]).getByText(firstStatus)).toBeInTheDocument();
+    expect(within(pageOnePagers[1]).getByText(firstStatus)).toBeInTheDocument();
+  });
+
   it("selects and clears all completed requests on the current page", async () => {
     const secondCompleted = completedSummaryFor(
       "0198-demo-completed-second",
@@ -282,7 +321,7 @@ describe("Requests page selection and deletion", () => {
     renderApp({ listRequests });
 
     await selectCompletedRecord(user);
-    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await user.click(screen.getAllByRole("button", { name: /Next/ })[0]);
 
     await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" });
     expect(screen.getByText("1 selected")).toBeInTheDocument();
@@ -311,7 +350,7 @@ describe("Requests page selection and deletion", () => {
     renderApp({ listRequests, deleteRequests });
 
     await selectCompletedRecord(user);
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
     await user.click(
       await screen.findByRole("button", {
         name: "Select POST second.example.test/v1/responses",
@@ -346,7 +385,7 @@ describe("Requests page selection and deletion", () => {
     await user.click(
       screen.getByRole("button", { name: "Select POST three.example.test/v1/responses" }),
     );
-    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getAllByRole("button", { name: "Previous" })[0]);
     await user.click(
       screen.getByRole("button", { name: "Select POST two.example.test/v1/responses" }),
     );

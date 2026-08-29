@@ -16,24 +16,31 @@ interface PollingOptions {
  */
 export function usePolling({ enabled, intervalMs, run, onCancel }: PollingOptions) {
   const firstRun = useRef(true);
+  const runRef = useRef(run);
+  const cancelRef = useRef(onCancel);
+
+  useEffect(() => {
+    runRef.current = run;
+    cancelRef.current = onCancel;
+  }, [onCancel, run]);
 
   useEffect(() => {
     if (!enabled) {
-      onCancel?.();
+      cancelRef.current?.();
       return;
     }
     let disposed = false;
     let timer: number | undefined;
     const poll = async () => {
-      await run(firstRun.current);
+      await runRef.current(firstRun.current);
       firstRun.current = false;
       if (!disposed) timer = window.setTimeout(() => void poll(), intervalMs);
     };
     void poll();
     return () => {
       disposed = true;
-      onCancel?.();
+      cancelRef.current?.();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [enabled, intervalMs, onCancel, run]);
+  }, [enabled, intervalMs]);
 }

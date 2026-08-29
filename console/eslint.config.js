@@ -6,9 +6,9 @@ import tseslint from "typescript-eslint";
 const features = ["overview", "tenants", "configs", "sessions", "requests"];
 
 /**
- * The Console is layered `app` -> `features` -> `shared` -> `api`. Each rule
- * below forbids the imports that would reverse an edge or let two features
- * depend on each other; `src/test` is exempt because harnesses compose pages.
+ * Console dependencies point inward from app to features and from features to
+ * domain/api/shared. API and shared may depend on domain, while domain depends
+ * on none of the other layers. `src/test` is exempt because harnesses compose pages.
  */
 function layerBoundary(directory, forbidden) {
   return {
@@ -64,9 +64,15 @@ export default defineConfig(
   ]),
   layerBoundary("shared", [
     {
-      group: ["@/app/*", "@/features/*"],
+      group: ["@/app/*", "@/features/*", "@/api/*"],
       message:
-        "Shared code may not depend on the app shell or a feature. Invert the dependency by passing values in.",
+        "Shared code may depend only on shared/ or domain/. Pass adapter values and loaders in.",
+    },
+  ]),
+  layerBoundary("domain", [
+    {
+      group: ["@/app/*", "@/features/*", "@/shared/*", "@/api/*"],
+      message: "Domain invariants are framework-free and may not depend on other layers.",
     },
   ]),
   ...featureBoundaries,

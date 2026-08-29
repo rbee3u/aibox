@@ -1,4 +1,5 @@
 import type { Bootstrap } from "@/api/core";
+import type { BootstrapResponse } from "@/api/generated/wire";
 import { HttpError, readHttpError } from "@/api/httpError";
 
 export { HttpError as ApiError } from "@/api/httpError";
@@ -15,7 +16,8 @@ export class ControlApi {
   static async connect(fetchImpl: typeof fetch = fetch): Promise<ControlApi> {
     const response = await fetchImpl.call(window, "/_aibox/api/bootstrap", { cache: "no-store" });
     if (!response.ok) throw new HttpError(await readHttpError(response), response.status);
-    return new ControlApi((await response.json()) as Bootstrap, fetchImpl);
+    const bootstrap = (await response.json()) as BootstrapResponse;
+    return new ControlApi(bootstrap satisfies Bootstrap, fetchImpl);
   }
 
   async get<T>(path: string, signal?: AbortSignal): Promise<T> {

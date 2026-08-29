@@ -1,6 +1,6 @@
 # Architectural Decision Records
 
-These ADRs record the architectural decisions that currently shape aibox and
+These ADRs record the architectural decisions that currently shape AIBox and
 the reasons those choices remain deliberate. Detailed behavior belongs in the
 reference documents linked from the main [README](../../README.md#learn-more),
 while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
@@ -57,5 +57,12 @@ while [AGENTS.md](../../AGENTS.md) defines active repository constraints.
   removes obsolete Component deep links and uses the Tenant page as the
   diagnostic entry point.
 - [0023: Feature-first Console architecture](0023-feature-first-console-architecture.md)
-  layers the Console `app` -> `features` -> `shared` -> `api` with lint-enforced
-  boundaries and hand-written routing and data hooks instead of libraries.
+  gives the Console an acyclic domain/API/shared/feature/app graph with
+  lint-enforced boundaries and hand-written controllers instead of libraries.
+- [0024: Domain-first single-crate modules](0024-domain-first-single-crate-modules.md)
+  makes private dependency direction explicit without adding a workspace or
+  embedding surface.
+- [0025: Rust-owned Console contract](0025-rust-owned-console-contract.md)
+  generates TypeScript wire bindings and JSON samples from Rust while keeping
+  HTTP adapters and feature-facing ports hand-written, with contract and asset
+  drift gates in the routine Console check.

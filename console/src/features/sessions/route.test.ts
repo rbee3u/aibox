@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readSessionRoute, sessionLocation } from "@/features/sessions/route";
 
 describe("Sessions route codec", () => {
-  it("falls back to the Default Managed Tenant and Codex for an empty scope", () => {
+  it("falls back to the Default Managed Tenant and Codex for an empty selection", () => {
     const route = readSessionRoute("");
     expect([...route.tenants]).toEqual(["managed:default"]);
     expect([...route.agents]).toEqual(["codex"]);
@@ -10,7 +10,7 @@ describe("Sessions route codec", () => {
     expect(route.tab).toBe("conversation");
   });
 
-  it("reads repeated Tenant and Coding Agent scopes", () => {
+  it("reads repeated Tenant and Coding Agent selections", () => {
     const route = readSessionRoute("?tenant=host&tenant=managed%3Awork&agent=claude&agent=codex");
     expect([...route.tenants].sort()).toEqual(["host", "managed:work"]);
     expect([...route.agents].sort()).toEqual(["claude", "codex"]);
@@ -41,15 +41,17 @@ describe("Sessions route codec", () => {
   });
 
   it("omits the tab unless a Session is selected and Details is active", () => {
-    const scope = { tenants: new Set(["host" as const]), agents: new Set(["codex" as const]) };
-    expect(sessionLocation(scope.tenants, scope.agents, null, "details").has("tab")).toBe(false);
-    const selection = { tenantKey: "host" as const, agent: "codex" as const, id: "abc" };
-    expect(sessionLocation(scope.tenants, scope.agents, selection, "conversation").has("tab")).toBe(
+    const filters = { tenants: new Set(["host" as const]), agents: new Set(["codex" as const]) };
+    expect(sessionLocation(filters.tenants, filters.agents, null, "details").has("tab")).toBe(
       false,
     );
-    expect(sessionLocation(scope.tenants, scope.agents, selection, "details").get("tab")).toBe(
-      "details",
-    );
+    const selectedSession = { tenantKey: "host" as const, agent: "codex" as const, id: "abc" };
+    expect(
+      sessionLocation(filters.tenants, filters.agents, selectedSession, "conversation").has("tab"),
+    ).toBe(false);
+    expect(
+      sessionLocation(filters.tenants, filters.agents, selectedSession, "details").get("tab"),
+    ).toBe("details");
   });
 
   it("round-trips a complete selection", () => {

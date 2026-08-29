@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install one aibox-owned uv + CPython generation without relying on a system
+# Install one AIBox-owned uv + CPython generation without relying on a system
 # Python. The current generation is published only after every health check.
 set -euo pipefail
 
@@ -101,13 +101,13 @@ shopt -u nullglob
 
 if [[ -e $root/current || -L $root/current ]]; then
     if [[ ! -L $root/current ]]; then
-        echo "Python current generation is not an aibox symlink" >&2
+        echo "Python current generation is not an AIBox symlink" >&2
         exit 1
     fi
     case "$(readlink -- "$root/current")" in
         generations/* | "$HOME/.python/generations/"* | /home/aibox/.python/generations/*) ;;
         *)
-            echo "Python current generation escapes the aibox generation collection" >&2
+            echo "Python current generation escapes the AIBox generation collection" >&2
             exit 1
             ;;
     esac

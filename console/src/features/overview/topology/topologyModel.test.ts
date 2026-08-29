@@ -14,7 +14,7 @@ import type { TopologyData } from "@/api/overview";
 const tree: TopologyNode = {
   id: "service",
   parentId: null,
-  label: "aibox Service",
+  label: "AIBox Service",
   icon: "service",
   tone: "warning",
   children: [

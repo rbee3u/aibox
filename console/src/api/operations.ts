@@ -1,21 +1,13 @@
 import type { ControlApi } from "@/api/transport";
+import type {
+  OperationEnvelope,
+  OperationLog,
+  OperationSnapshot,
+  OperationState,
+} from "@/api/generated/wire";
 
-export interface OperationLog {
-  sequence: number;
-  message: string;
-}
-
-export interface Operation {
-  id: string;
-  kind: string;
-  state: "running" | "succeeded" | "failed" | "cancelled";
-  started_at: string;
-  ended_at: string | null;
-  result: string | null;
-  first_sequence: number;
-  next_sequence: number;
-  logs: OperationLog[];
-}
+export type { OperationLog, OperationState };
+export type Operation = OperationSnapshot;
 
 export interface OperationApi {
   current(): Promise<Operation | null>;
@@ -30,7 +22,7 @@ export function operationsApi(client: ControlApi): OperationApi {
   return {
     current: () =>
       client
-        .get<{ operation: Operation | null }>("/_aibox/api/operations/current")
+        .get<OperationEnvelope>("/_aibox/api/operations/current")
         .then((value) => value.operation),
     cancel: async (id) => {
       await client.post(`/_aibox/api/operations/${encodeURIComponent(id)}/cancel`);
@@ -40,10 +32,7 @@ export function operationsApi(client: ControlApi): OperationApi {
       source.addEventListener("open", () => handlers.onConnection("connected"));
       source.addEventListener("error", () => handlers.onConnection("reconnecting"));
       source.addEventListener("operation", (event) => {
-        const value = JSON.parse((event as MessageEvent<string>).data) as {
-          operation: Operation | null;
-          gap: boolean;
-        };
+        const value = JSON.parse((event as MessageEvent<string>).data) as OperationEnvelope;
         handlers.onOperation(value.operation, value.gap);
       });
       return () => source.close();

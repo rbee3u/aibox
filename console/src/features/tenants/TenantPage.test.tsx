@@ -60,7 +60,10 @@ describe("TenantPage", () => {
     expect(window.location.search).toBe("?tenant=managed%3Awork");
     expect(screen.getByLabelText("Component summary")).toHaveTextContent("1/8 installed");
     expect(screen.queryByText("No issues")).not.toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith("/_aibox/api/components?tenant=managed%3Awork", undefined);
+    expect(get).toHaveBeenCalledWith(
+      "/_aibox/api/components?tenant=managed%3Awork",
+      expect.any(AbortSignal),
+    );
   });
   it("groups a Managed Tenant catalog without treating missing optional Components as issues", async () => {
     const components = [

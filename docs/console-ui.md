@@ -26,6 +26,9 @@ make console-build      # Generate the three embedded assets
 make console-test       # Vitest module and React interaction tests
 make console-lint       # ESLint frontend source files
 make console-check      # Format check, typecheck, build, node check, test, lint
+make console-contract   # Update committed Rust-owned wire bindings and samples
+make console-contract-check # Compare committed contracts with a temporary export
+make console-assets-check   # Compare committed assets with a temporary build
 ```
 
 Routine Rust Request Proxy tests are part of `make check` and do not bind sockets.
@@ -92,12 +95,13 @@ references, so `assets/console.css` and `assets/console.js` are served as
 
 ## Code Boundaries
 
-`src/` is layered `app` -> `features` -> `shared` -> `api`, and ESLint's
-`no-restricted-imports` rules in `eslint.config.js` reject an import that
-reverses an edge or lets two features depend on each other. `src/test` is
-exempt because its harnesses compose whole pages. Files are imported through
-the `@/` alias; there are no barrel files, so every import names the module it
-uses.
+`src/` has an explicit acyclic dependency graph. `domain/` depends on no other
+Console layer. `api/` and `shared/` may depend on `domain/` but not on each
+other. A feature may depend on its own files plus `domain/`, `api/`, and
+`shared/`; `app/` composes every layer. ESLint's `no-restricted-imports` rules
+reject reversed edges and cross-feature imports. `src/test` is exempt because
+its harnesses compose whole pages. Files are imported through the `@/` alias;
+there are no barrel files, so every import names the module it uses.
 
 `app/App.tsx` owns the persistent AIBox shell. `app/routing/useConsoleRouter.ts`
 owns the sole `history` and `popstate` integration, URL-backed module
@@ -115,19 +119,32 @@ rendering goes through the typed `shared/icons/brandIcons.tsx` registry, so
 callers select a registered brand and explicit size without importing SVGs
 directly. Runtime and build output do not depend on an icon package.
 
-Each `features/<domain>/` holds its page, its query codec, its React-free
-domain modules, and its own components. `features/overview/` orchestrates
+Each `features/<domain>/` holds a page controller, a thin page view, its query
+codec, React-free domain modules, focused resource hooks, and components.
+Controllers own URL synchronization, latest-request ownership, dialogs, and
+mutation orchestration; views connect controller outputs to layout and domain
+components. Independent editor drafts and streaming inspection remain with
+their focused hooks. `features/overview/` orchestrates
 Overview and keeps rendering in `topology/TopologyCanvas.tsx` and
 `topology/TopologyCanvasNode.tsx` over the React-free tree, search, filter, and
-layout model in `topology/topologyModel.ts`. `features/tenants/`
-holds the Component vocabulary, version comparison, Latest Release observation,
-and row derivation in `componentCatalog.ts`. `features/configs/` keeps the file
-editor, visual option editor, and CodeMirror integration under `editor/`, with
-Named Config and Request Proxy logic in `configCatalog.ts`. `features/sessions/`
-keeps the Transcript timeline reducer in `sessionDetail.ts` and the
-Tenant-and-Agent source vocabulary in `sessionSource.ts`.
-`features/requests/` keeps body decoding, Summary derivation, and list
-bookkeeping in pure modules beside `useRequestInspection.ts`.
+layout model in `topology/topologyModel.ts`; `useOverviewController.ts` owns
+topology interaction while `useOverviewData.ts` owns its two read-only resource
+lifecycles. `features/tenants/` holds the Component
+vocabulary, version comparison, Latest Release observation, and row derivation
+in `componentCatalog.ts`, with `useTenantController.ts` composing separate
+Tenant and Component catalog hooks.
+`features/configs/` keeps the file editor, visual option editor, and CodeMirror
+integration under `editor/`; `useConfigEditorSession.ts` coordinates file
+controllers and ordered saves while each pane owns its draft, and
+`useConfigController.tsx` owns page routing and mutations. Named Config and
+Request Proxy rules remain in `configCatalog.ts`. `features/sessions/` keeps the
+Transcript timeline reducer in `sessionDetail.ts`, the Tenant-and-Agent source
+vocabulary in `sessionSource.ts`, and detail streaming in
+`useSessionInspection.ts`; `useSessionController.tsx` owns source selection,
+routing, and deletion. `features/requests/` keeps body decoding, Summary
+derivation, and list bookkeeping in pure modules; `useRequestsController.ts`
+owns the list and deletion lifecycle while `useRequestInspection.ts` owns
+detail and Body inspection.
 
 Domain CSS Modules own domain and responsive rules.
 `shared/ui/layout/catalog.module.css` owns the shared catalog page frame,
@@ -136,22 +153,35 @@ extends one of those classes through `composes` only when it adds rules of its
 own. Desktop layouts support 1024px and wider with a collapsible sidebar;
 narrow layouts use one-panel catalog/detail navigation.
 
+`src/domain/` contains only cross-feature identities and invariants such as
+Tenant selection, Coding Agent identity, validated names, and stable key
+codecs. It does not mirror every wire DTO or become a general application
+model. Rust-generated, read-only wire types live under `src/api/generated/`.
+
 `connectControlApi()` in `src/api/connect.ts` composes narrow Overview, Tenant,
 Config, Session, Requests, and Operation interfaces over the single
 `api/transport.ts` client. That client owns fetch, CSRF, NDJSON reading, and
 binary Bodies; each `api/<domain>.ts` owns its paths, query strings, wire
-bodies, wire types, and domain interface, and `api/operations.ts` owns the SSE
-subscription. The TypeScript interfaces mirror the Rust JSON responses,
-including raw Summary timing, Request Outcome, the top-level Coding Agent
-Session ID, the persisted Model Protocol Summary and Request Assessment, and
-normalized Diagnostics groups. Pages receive only their domain API interface so
-tests can use strict, deterministic fakes without sockets or HTTP knowledge.
+bodies, conversion, and feature-facing port, and `api/operations.ts` owns the
+SSE subscription. Generated TypeScript interfaces mirror the Rust JSON
+responses, including raw Summary timing, Request Outcome, the top-level Coding
+Agent Session ID, the persisted Model Protocol Summary and Request Assessment,
+and normalized Diagnostics groups. Pages receive only their domain API
+interface so tests can use strict, deterministic fakes without sockets, HTTP
+paths, snake_case, or wire-body knowledge. Adapter tests alone own those HTTP
+details. `make console-contract-check` exports bindings and samples to a
+temporary directory and compares them byte-for-byte. `make
+console-assets-check` builds to a temporary directory, runs the bundle budget,
+and compares embedded HTML, CSS, and JavaScript. Both gates run under `make
+console-check`.
 
 Shared cross-domain behavior lives in `shared/hooks/`: `usePolling` runs an
 interval that never overlaps its own request, `useCatalogSelection` holds batch
 selection with an optional per-row context, `useNarrowDetailFocus` moves focus
 into a one-pane detail, `useFailureNotifications` collects per-source failure
-notices, and `useTenants` loads the Tenant catalog. `shared/lib/errors.ts` owns
+notices, and `useAsyncResource` loads values through a caller-supplied adapter
+function. `shared/lib/latestRequest.ts` owns abort and stale-response
+ownership; shared code never imports API DTOs. `shared/lib/errors.ts` owns
 message extraction and cancellation detection.
 
 ## Control API
@@ -231,7 +261,7 @@ baseline of 378,629 bytes; `scripts/check-bundle-budget.mjs` enforces the
 
 Overview is an operational resource map. Key facts combine Service health,
 Managed Tenant count, Host Tenant availability, Config and Component health,
-Requests, version, listen address, and the aibox Root. The Host Tenant is
+Requests, version, listen address, and the AIBox Root. The Host Tenant is
 reported separately as a console-only view and is never included in the
 Managed Tenant count. Needs attention appears immediately below the key facts;
 the complete structural Resource topology follows it, with Runtime below the
@@ -444,7 +474,10 @@ the end before the fixed-width `First Token / total timing` and timestamp group
 on the right; a wider gap separates timing from the timestamp. At 430 pixels
 and below, the right-hand group moves intact to a second metadata line and stays
 right-aligned. Pagination shows the current and total page counts and restores
-a valid page and focus target after deletion.
+a valid page and focus target after deletion. In selection mode the toolbar
+places Cancel on the left, the selected count and Select page in the center,
+and Delete on the right, then copies the pagination bar underneath so a
+consecutive page walk can stay at the top of the list.
 
 React hooks own pagination, selection, body offsets, request cancellation, and
 the 5-second list / 3-second active-Request polling. The Summary is
@@ -471,7 +504,7 @@ that it produces.
 ## Request Assessment and Diagnostics
 
 Request Outcome, HTTP response status, Provider Error, and diagnostic warnings
-remain independent evidence. The aibox Service derives one Request Assessment for
+remain independent evidence. The AIBox Service derives one Request Assessment for
 consistent display; the browser never reclassifies a Request from `outcome`,
 status, or Body content. [Request Proxy](sandbox.md#request-proxy) is the
 canonical reference for which evidence produces Active, OK, Warning, or Error.
@@ -643,6 +676,9 @@ terminalization moves Requests between pages. An empty page falls back through
 earlier pages to the closest non-empty page or page 1. Multi-page selection
 pauses polling; after deletion the Requests module returns to the lowest page
 containing a selected Request and applies the same empty-page fallback.
+Selection mode keeps Cancel on the left, the selected count and Select page
+centered, and Delete on the right, then duplicates the footer pagination under
+that toolbar so a consecutive page walk can stay at the top of the list.
 Single-Request deletion returns to its originating page. A confirmation dialog
 pauses and cancels list, detail, and Body polling, then refreshes the applicable
 views when it closes.

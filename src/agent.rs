@@ -7,6 +7,20 @@
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::ffi::OsString;
+use std::path::Path;
+
+/// Native executable and opaque arguments for one Coding Agent launch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentInvocation {
+    command: Vec<OsString>,
+}
+
+impl AgentInvocation {
+    /// Return the native command before Tenant Environment composition.
+    pub(crate) fn command(&self) -> &[OsString] {
+        &self.command
+    }
+}
 
 /// Primitive value accepted by one fixed main-configuration Config Field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -286,6 +300,7 @@ const DEFAULT_CLAUDE_CONFIG: &str = r#"{
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
 )]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     /// Anthropic Claude Code.
@@ -295,7 +310,7 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    /// Every Coding Agent supported by aibox.
+    /// Every Coding Agent supported by AIBox.
     pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
 
     /// Lowercase name used by the CLI, paths, and executable.
@@ -398,32 +413,12 @@ impl AgentKind {
         }
     }
 
-    /// Build the Coding Agent command without adding Named Config data.
-    pub fn build_command(
-        self,
-        passthrough: &[OsString],
-        components: crate::component::TenantEnvironmentComponents,
-    ) -> Vec<OsString> {
-        self.build_command_in_home(
-            passthrough,
-            std::path::Path::new(crate::tenant_environment::CONTAINER_HOME),
-            components,
-        )
-    }
-
-    fn build_command_in_home(
-        self,
-        passthrough: &[OsString],
-        home: &std::path::Path,
-        components: crate::component::TenantEnvironmentComponents,
-    ) -> Vec<OsString> {
-        let mut agent_command = vec![home.join(".local/bin").join(self.tag()).into_os_string()];
-        agent_command.extend(passthrough.iter().cloned());
-        crate::tenant_environment::build_command_for_home(
-            &agent_command,
-            home.as_os_str(),
-            components,
-        )
+    /// Build the native Coding Agent invocation without Tenant Environment
+    /// wrapping or Named Config data.
+    pub(crate) fn invocation(self, home: &Path, passthrough: &[OsString]) -> AgentInvocation {
+        let mut command = vec![home.join(".local/bin").join(self.tag()).into_os_string()];
+        command.extend(passthrough.iter().cloned());
+        AgentInvocation { command }
     }
 }
 
@@ -546,36 +541,17 @@ mod tests {
     }
 
     #[test]
-    fn build_command_preserves_passthrough_without_injecting_named_config() {
+    fn invocation_preserves_passthrough_without_injecting_named_config() {
         let pass = vec![OsString::from("--model"), OsString::from("opus")];
-        let command = AgentKind::Claude.build_command(
-            &pass,
-            crate::component::TenantEnvironmentComponents::default(),
-        );
-        assert_eq!(&command[..3], ["/bin/bash", "--login", "-c"]);
+        let invocation = AgentKind::Claude.invocation(Path::new("/home/aibox"), &pass);
         assert_eq!(
-            &command[4..11],
-            [
-                "aibox-tenant-environment",
-                "/home/aibox",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-            ]
-        );
-        assert_eq!(
-            &command[11..],
+            invocation.command(),
             ["/home/aibox/.local/bin/claude", "--model", "opus",]
         );
 
-        let command = AgentKind::Codex.build_command(
-            &[],
-            crate::component::TenantEnvironmentComponents::default(),
-        );
+        let invocation = AgentKind::Codex.invocation(Path::new("/home/aibox"), &[]);
         assert_eq!(
-            command.last(),
+            invocation.command().last(),
             Some(&OsString::from("/home/aibox/.local/bin/codex"))
         );
     }
@@ -597,11 +573,8 @@ mod tests {
         let opaque = OsString::from_vec(vec![b'f', 0x80, b'o']);
         let pass = vec![opaque.clone()];
 
-        let command = AgentKind::Codex.build_command(
-            &pass,
-            crate::component::TenantEnvironmentComponents::default(),
-        );
+        let invocation = AgentKind::Codex.invocation(Path::new("/home/aibox"), &pass);
 
-        assert_eq!(command.last(), Some(&opaque));
+        assert_eq!(invocation.command().last(), Some(&opaque));
     }
 }

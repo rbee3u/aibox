@@ -1,6 +1,6 @@
 # Keep long-running Management Operations ephemeral and singular
 
-One aibox Service allows one active long-running Management Operation: Docker
+One AIBox Service allows one active long-running Management Operation: Docker
 image construction or a Component installation. The latest Operation is held
 only in Service memory with cancellation state, monotonic log sequence numbers,
 and a one MiB retained log window. A second Operation receives `Busy`; Service

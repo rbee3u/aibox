@@ -1,10 +1,10 @@
-# aibox
+# AIBox
 
 **Put AI in a Box.** Run OpenAI Codex or Claude Code with Docker as the
 Filesystem Sandbox while keeping sign-in, settings, Sessions, and toolchains
 persistent in named Tenants.
 
-## Why aibox
+## Why AIBox
 
 - **One runtime for Codex and Claude.** Codex is the default; select Claude
   with `--agent claude`.
@@ -20,7 +20,7 @@ persistent in named Tenants.
 
 ## Quick Start
 
-aibox supports Linux and macOS hosts with a working Docker CLI and daemon.
+AIBox supports Linux and macOS hosts with a working Docker CLI and daemon.
 Building the Rust wrapper requires Rust 1.97 or newer. The bundled image
 supports Linux `amd64` and `arm64`.
 
@@ -60,7 +60,7 @@ aibox run -- exec "fix the failing tests"
 aibox run --agent claude -- "review the current changes"
 ```
 
-aibox parses only the left side and forwards the right side unchanged to
+AIBox parses only the left side and forwards the right side unchanged to
 `run`. The public CLI is `aibox console [--listen IP:PORT]`, `aibox run`, and
 `aibox debug [--tenant TENANT]`. Runtime Image, Tenant, Component, Config, and
 Session management lives in the Console.
@@ -80,7 +80,7 @@ A Debug Shell mounts only its selected Tenant Home and starts in
 
 The Filesystem Sandbox is not a complete authority boundary. Networking is
 enabled; credentials can authorize remote actions; writable mounts can be
-changed or deleted; and aibox adds no CPU or memory limits. The built-in Named
+changed or deleted; and AIBox adds no CPU or memory limits. The built-in Named
 Config templates created in the Console disable Coding Agent approval
 prompts because Docker is the Filesystem Sandbox. Named Configs are never
 created or applied automatically. Review the template before applying it when
@@ -107,7 +107,7 @@ it explicitly from the Console's Tenants module.
 
 Tenant Homes, Named Configs, and Requests persist under `$HOME/.aibox`.
 `AIBOX_ROOT` selects another location, which must be a directory dedicated to
-aibox because Tenant deletion removes subtrees from it.
+AIBox because Tenant deletion removes subtrees from it.
 
 A Managed Tenant named `host` is ordinary and runnable. Create, inspect, and
 delete other Managed Tenants from the Console's Tenants module; `default` is

@@ -1,82 +1,54 @@
-import type { Bootstrap, CodingAgentKind, TenantRow } from "@/api/core";
+import type { Bootstrap, TenantRow } from "@/api/core";
+import type { CodingAgentKind } from "@/domain/codingAgent";
+import type {
+  ApplicationStatus,
+  AuthPropagationPreviewResponse,
+  AuthPropagationReport,
+  ConfigCatalogEntry,
+  ConfigFileResponse as GeneratedConfigFileResponse,
+  ConfigListResponse as GeneratedConfigListResponse,
+  ConfigAuthResponse as GeneratedConfigAuthResponse,
+  LinkedConfigFileResponse as GeneratedLinkedConfigFileResponse,
+  CustomProviderState as GeneratedCustomProviderState,
+  VisualConfigOptionState as GeneratedVisualConfigOptionState,
+  DiagnoseConfigResponse,
+  LastApplication,
+  PropagationOutcome,
+} from "@/api/generated/wire";
 import { listTenantsRequest } from "@/api/tenants";
 import type { ControlApi } from "@/api/transport";
-import { tenantBody, tenantQuery, type TenantSelection } from "@/api/tenantSelection";
+import { tenantBody, tenantQuery } from "@/api/tenantSelection";
+import type { TenantSelection } from "@/domain/tenant";
 
-export interface ConfigCatalogEntry {
-  name: string;
-  state: "ready" | "incomplete" | "invalid";
-  detail?: string;
-  warnings?: string[];
-}
+export type { ApplicationStatus, ConfigCatalogEntry, LastApplication, PropagationOutcome };
 
-export interface LastApplication {
-  applied: string;
-  applied_at: string;
-}
+export type ConfigListData = GeneratedConfigListResponse;
 
-export interface ApplicationStatus {
-  last_application: LastApplication | null;
-  drift: "untracked" | "clean" | "dirty" | "source-missing" | "comparison-error";
-  detail?: string;
-}
+export type ConfigLinkedFileData = GeneratedLinkedConfigFileResponse;
 
-export interface ConfigListData {
-  configs: ConfigCatalogEntry[];
-  files: string[];
-  application: ApplicationStatus;
-  credential_propagation_available: boolean;
-}
+export type ConfigCustomProvider = GeneratedCustomProviderState;
 
-export interface ConfigLinkedFileData {
-  file: string;
-  exists: boolean;
-  revision: string;
-  content_base64: string;
-}
-
-export interface ConfigCustomProvider {
-  included: boolean;
-  name: string;
-  base_url: string;
-  request_proxy_route: boolean;
-  proxy_routed: boolean;
-}
-
-export interface ConfigAuthData {
+export type ConfigAuthData = Omit<GeneratedConfigAuthResponse, "mode"> & {
   mode: "chatgpt" | "api-key";
-  api_key: string | null;
-  extra_fields: boolean;
-  warnings: string[];
-}
+};
 
-export interface ConfigVisualOption {
-  path: string;
-  label: string;
-  description: string;
-  group: string;
+export type ConfigVisualOption = Omit<GeneratedVisualConfigOptionState, "value" | "value_kind"> & {
   value_kind: "string" | "bool";
-  enum_values: string[];
-  sensitive: boolean;
-  required: boolean;
-  request_proxy_route: boolean;
-  included: boolean;
   value?: string | boolean;
   proxy_routed: boolean;
-}
+};
 
-export interface ConfigFileData {
-  file: string;
-  exists: boolean;
-  revision: string;
-  content_base64: string;
+export type ConfigFileData = Omit<
+  GeneratedConfigFileResponse,
+  "visual_options" | "custom_provider" | "visual_error" | "warnings" | "auth" | "linked_file"
+> & {
   visual_options?: ConfigVisualOption[];
   custom_provider?: ConfigCustomProvider;
   visual_error?: string;
   warnings?: string[];
   auth?: ConfigAuthData;
   linked_file?: ConfigLinkedFileData;
-}
+};
 
 export interface ConfigFileTarget {
   tenant: TenantSelection;
@@ -86,9 +58,7 @@ export interface ConfigFileTarget {
   file: string;
 }
 
-export interface ConfigFileDiagnostics {
-  diagnostics: Array<{ severity?: string; message: string; line: number; column: number }>;
-}
+export type ConfigFileDiagnostics = DiagnoseConfigResponse;
 
 export interface ConfigFileInput {
   revision: string;
@@ -98,23 +68,9 @@ export interface ConfigFileInput {
   visualAuth?: { included: boolean; value: string };
 }
 
-export type PropagationOutcome =
-  | { status: "updated" | "unchanged" }
-  | { status: "conflict"; last_refresh: string }
-  | { status: "newer"; target_last_refresh: string; source_last_refresh: string }
-  | { status: "invalid" | "failed"; reason: string };
+export type PropagationPreview = AuthPropagationPreviewResponse;
 
-export interface PropagationPreview {
-  plan_id: string;
-  preview: {
-    entries: Array<{ label: string; outcome: PropagationOutcome }>;
-    updates: number;
-  };
-}
-
-export interface PropagationReport {
-  entries: Array<{ label: string; outcome: PropagationOutcome }>;
-}
+export type PropagationReport = AuthPropagationReport;
 
 export interface ConfigApi {
   bootstrap: Bootstrap;
@@ -147,6 +103,49 @@ function configTargetBody(target: ConfigFileTarget) {
   };
 }
 
+function visualOption(value: GeneratedVisualConfigOptionState): ConfigVisualOption {
+  if (value.value_kind !== "string" && value.value_kind !== "bool") {
+    throw new Error(`Unsupported Visual Config value kind: ${value.value_kind}`);
+  }
+  if (
+    value.value !== null &&
+    value.value !== undefined &&
+    typeof value.value !== "string" &&
+    typeof value.value !== "boolean"
+  ) {
+    throw new Error(`Unsupported Visual Config value for ${value.path}`);
+  }
+  const { value: rawValue, ...rest } = value;
+  return {
+    ...rest,
+    value_kind: value.value_kind,
+    proxy_routed: false,
+    ...(rawValue === null || rawValue === undefined ? {} : { value: rawValue }),
+  };
+}
+
+function authData(value: GeneratedConfigAuthResponse): ConfigAuthData {
+  if (value.mode !== "chatgpt" && value.mode !== "api-key") {
+    throw new Error(`Unsupported Config auth mode: ${value.mode}`);
+  }
+  return { ...value, mode: value.mode };
+}
+
+function configFileData(value: GeneratedConfigFileResponse): ConfigFileData {
+  return {
+    file: value.file,
+    exists: value.exists,
+    revision: value.revision,
+    content_base64: value.content_base64,
+    visual_options: value.visual_options?.map(visualOption) ?? undefined,
+    custom_provider: value.custom_provider ?? undefined,
+    visual_error: value.visual_error ?? undefined,
+    warnings: value.warnings,
+    auth: value.auth ? authData(value.auth) : undefined,
+    linked_file: value.linked_file ?? undefined,
+  };
+}
+
 export function configsApi(client: ControlApi): ConfigApi {
   return {
     bootstrap: client.bootstrap,
@@ -154,24 +153,28 @@ export function configsApi(client: ControlApi): ConfigApi {
     listConfigs: (tenant, agent, signal) => {
       const query = tenantQuery(tenant);
       query.set("agent", agent);
-      return client.get<ConfigListData>(`/_aibox/api/configs?${query}`, signal);
+      return client.get<GeneratedConfigListResponse>(`/_aibox/api/configs?${query}`, signal);
     },
     revealConfigFile: (target) =>
-      client.post<ConfigFileData>("/_aibox/api/configs/reveal", configTargetBody(target)),
+      client
+        .post<GeneratedConfigFileResponse>("/_aibox/api/configs/reveal", configTargetBody(target))
+        .then(configFileData),
     diagnoseConfigFile: (target, contentBase64) =>
-      client.post<ConfigFileDiagnostics>("/_aibox/api/configs/diagnose", {
+      client.post<DiagnoseConfigResponse>("/_aibox/api/configs/diagnose", {
         ...configTargetBody(target),
         content_base64: contentBase64,
       }),
     saveConfigFile: (target, input) =>
-      client.post<ConfigFileData>("/_aibox/api/configs/save", {
-        ...configTargetBody(target),
-        revision: input.revision,
-        content_base64: input.contentBase64,
-        ...(input.visualOptions ? { visual_options: input.visualOptions } : {}),
-        ...(input.customProvider ? { custom_provider: input.customProvider } : {}),
-        ...(input.visualAuth ? { visual_auth: input.visualAuth } : {}),
-      }),
+      client
+        .post<GeneratedConfigFileResponse>("/_aibox/api/configs/save", {
+          ...configTargetBody(target),
+          revision: input.revision,
+          content_base64: input.contentBase64,
+          ...(input.visualOptions ? { visual_options: input.visualOptions } : {}),
+          ...(input.customProvider ? { custom_provider: input.customProvider } : {}),
+          ...(input.visualAuth ? { visual_auth: input.visualAuth } : {}),
+        })
+        .then(configFileData),
     createConfig: async (tenant, agent, config) => {
       await client.post("/_aibox/api/configs/create", { ...tenantBody(tenant), agent, config });
     },

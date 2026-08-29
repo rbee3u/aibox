@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::net::SocketAddr;
 
-/// Parsed aibox command line, excluding Coding Agent arguments after `--`.
+/// Parsed `aibox` command line, excluding Coding Agent arguments after `--`.
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
@@ -202,18 +202,18 @@ fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Err
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run a Coding Agent inside the aibox container.
+    /// Run a Coding Agent inside the AIBox container.
     ///
     /// Pass arguments verbatim after `--`, for example:
     /// `aibox run -- "fix the build"`.
     Run(RunArgs),
     /// Open a Bash shell for a Managed Tenant without starting a Coding Agent.
     Debug(DebugArgs),
-    /// Start the local aibox Console and Request Proxy.
+    /// Start the local AIBox Console and Request Proxy.
     Console(ConsoleArgs),
 }
 
-/// Options for the local aibox Console.
+/// Options for the local AIBox Console.
 #[derive(Debug, Args)]
 pub struct ConsoleArgs {
     /// IP address and port to listen on.

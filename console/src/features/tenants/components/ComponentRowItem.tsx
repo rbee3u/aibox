@@ -117,7 +117,9 @@ export function ComponentRowItem({
               <div className={styles.componentState} aria-label={`${label} installed state`}>
                 <span className={styles.componentStateValue}>
                   {presentation.stateBadge && presentation.badgeTone ? (
-                    <span className={BADGE_TONE_CLASS[presentation.badgeTone]}>
+                    <span
+                      className={`${BADGE_TONE_CLASS[presentation.badgeTone]} ${styles.componentStateBadge}`}
+                    >
                       {presentation.stateBadge}
                     </span>
                   ) : (

@@ -280,7 +280,7 @@ describe("OverviewPage", () => {
     expect(within(tree).queryByText("daily")).not.toBeInTheDocument();
 
     await user.clear(search);
-    const root = within(tree).getByRole("treeitem", { name: /aibox Service/ });
+    const root = within(tree).getByRole("treeitem", { name: /AIBox Service/ });
     root.focus();
     await user.keyboard("{ArrowDown}");
     expect(document.activeElement).toHaveAttribute("role", "treeitem");

@@ -1,6 +1,12 @@
-import type { CodingAgentKind } from "@/api/core";
-import { DNS_LABEL_PATTERN, parseTenantSelectionKey } from "@/api/tenantSelection";
-import type { TenantSelection } from "@/api/tenantSelection";
+import type { CodingAgentKind } from "@/domain/codingAgent";
+import {
+  DNS_LABEL_PATTERN,
+  parseTenantSelectionKey,
+  tenantSelectionFromKey,
+  tenantSelectionValue,
+  type TenantSelection,
+  type TenantSelectionKey,
+} from "@/domain/tenant";
 
 export type ConfigSelection =
   | {
@@ -11,7 +17,6 @@ export type ConfigSelection =
       current: false;
       config: string;
     };
-export type ConfigTenantKey = "host" | `managed:${string}`;
 export type ConfigDeleteTarget = {
   names: string[];
 };
@@ -21,11 +26,11 @@ export type ConfigApplyTarget = {
 export type ConfigPendingAction = {
   run: () => void | Promise<void>;
 };
-export function configTenantKey(tenant: TenantSelection): ConfigTenantKey {
-  return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
+export function configTenantKey(tenant: TenantSelection): TenantSelectionKey {
+  return tenantSelectionValue(tenant);
 }
-export function tenantSelectionFromConfigKey(key: ConfigTenantKey): TenantSelection {
-  return key === "host" ? { kind: "host" } : { kind: "managed", name: key.slice(8) };
+export function tenantSelectionFromConfigKey(key: TenantSelectionKey): TenantSelection {
+  return tenantSelectionFromKey(key);
 }
 export interface ConfigRouteState {
   tenant: TenantSelection;

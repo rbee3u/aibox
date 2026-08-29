@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`aibox` is a Rust CLI and foreground local Service that runs Claude Code or
+AIBox is a Rust CLI and foreground local Service that runs Claude Code or
 OpenAI Codex, or opens a Managed Tenant Debug Shell, inside a Docker container.
 The container is the Filesystem Sandbox boundary. `CONTEXT.md`
 defines the canonical domain language; keep code, clap help, and user
@@ -15,33 +15,40 @@ references between them.
 ## Implementation Map
 
 - `src/cli.rs` defines the three-command Clap surface and Run pass-through
-  boundary; `src/lib.rs` resolves command scope and orchestrates commands.
-- `src/agent.rs` centralizes Coding Agent contracts. `src/tenant.rs` owns
-  Tenant resolution, lifecycle, layout, permissions, and shared path safety.
-  `src/tenant_environment.rs` composes the Run and Debug Shell environment.
-- `src/config.rs`, `src/config_model.rs`, and `src/config_auth.rs` own Config
-  catalog operations, Config Application, and Credential Propagation.
-  `src/metadata.rs` owns the shared Tenant-and-Agent metadata document.
-- `src/runspec.rs`, `src/docker.rs`, and `src/docker_image.rs` own mount
-  validation, cleanup-aware container execution, and image construction.
-  `src/component.rs` owns statusline, runtime, Coding Agent, and toolchain
-  Components.
-- `src/session.rs` owns shared Session discovery and dispatch;
-  `src/session_claude.rs` and `src/session_codex.rs` parse native Transcripts.
-- `src/request.rs` owns shared Request state. `src/request_proxy.rs`,
-  `src/request_store.rs`, `src/request_sse.rs`,
-  `src/request_interpretation.rs`, and `src/request_assessment.rs` own
-  forwarding, persistence, SSE indexing, protocol facts, and assessment.
-  `src/request_web.rs` owns the Requests portion of the Control API.
-- `src/service.rs`, `src/control_web.rs`, and `src/operation.rs` own the
-  Root-local Service, Console Control API, and ephemeral Management Operations.
-- `console/src/` is layered `app` -> `features` -> `shared` -> `api`.
+  boundary; `src/lib.rs` performs parsed command dispatch only.
+- `src/foundation/` owns policy-free no-follow filesystem, platform, and
+  synchronization mechanics. `src/docker/` owns cleanup-aware container
+  execution and Runtime Image construction; `src/execution/` owns Run, Debug
+  Shell, and RunSpec orchestration.
+- `src/agent.rs` centralizes Coding Agent contracts and invocation.
+  `src/tenant/` owns Tenant identity, resolution, lifecycle, layout,
+  permissions, and Tenant Environment composition.
+- `src/config/` owns the Config model, catalog, Config Application, and
+  Credential Propagation. `src/metadata.rs` owns the shared Tenant-and-Agent
+  metadata document. `src/component/` owns Component inspection,
+  installation, removal, and Latest Release observation.
+- `src/session/` owns shared Session discovery and use cases, while
+  `claude.rs` and `codex.rs` parse native Transcripts.
+- `src/request/` owns Request state, the I/O-free model, assessment, protocol
+  observation, SSE indexing, persistence, reporting, and proxy forwarding.
+  The Request aggregate has no dependency on Console or HTTP presentation.
+- `src/service/` is the Root-local Service composition root. `state.rs` owns
+  private shared state, `operation.rs` owns ephemeral Management Operations,
+  `coordination/` owns concrete management coordinators, and `control/` owns
+  Axum routes, wire DTOs, Console assets, and all Control adapters including
+  Requests.
+- `console/src/` uses an acyclic graph: `domain` is independent; `api` and
+  `shared` may depend on `domain` but not each other; features depend on those
+  three layers; and `app` composes all layers.
   `app/App.tsx` owns the shell and `app/routing/` the sole history integration;
   `api/transport.ts` plus the per-domain `api/<domain>.ts` modules own the
-  Control API; each `features/<domain>/` owns its page, query codec, React-free
-  domain modules, and components; `shared/` holds UI primitives, hooks, and
-  library code. `assets/console.*` is generated output; use
-  `docs/console-ui.md`.
+  Control API, while `api/generated/` contains Rust-owned wire bindings. Each
+  `features/<domain>/` owns its page controller, thin page view,
+  resource-lifecycle hooks, query codec, React-free domain modules, and
+  components; the minimal `domain/` holds only cross-feature identities and
+  invariants. `shared/` holds API-independent UI primitives, hooks, and library
+  code. `api/generated/` is Rust-owned and `assets/console.*` is generated output;
+  use `docs/console-ui.md`.
 
 ## Constraints
 
@@ -59,7 +66,7 @@ is exposed through the Console Control API. Removed command names, including
 `build` and `serve`, must remain unknown Clap subcommands; do not add aliases,
 tombstones, or a completion protocol.
 
-**Keep Tenants distinct.** A Managed Tenant is aibox-managed and runnable;
+**Keep Tenants distinct.** A Managed Tenant is AIBox-managed and runnable;
 `host` is a valid Managed Tenant name. The Host Tenant is selected only by
 Console Tenant-scoped views. The Host Tenant cannot Run or open a Debug Shell
 and never appears in the Managed Tenant list or deletion. The Default Managed
@@ -73,7 +80,7 @@ subtrees may be mounted from inside `$AIBOX_ROOT`.
 `<agent>/<name>/`; the Host Tenant catalog uses `<agent>/__host/`. A Claude
 Named Config contains only native `settings.json`; a Codex Named Config
 contains only native `config.toml` and `auth.json`. Do not add scope/Config
-metadata inside Named Config directories. One aibox-owned `metadata.json` at
+metadata inside Named Config directories. One AIBox-owned `metadata.json` at
 the Tenant-and-Agent catalog root may contain typed observational sections;
 preserve unknown top-level sections when updating a known section. Do not add
 metadata elsewhere, layout versions, migration readers, management wrappers,
@@ -81,7 +88,7 @@ or lock directories. Ignore unknown collection entries during listing, but
 reject explicitly selected unsafe paths.
 
 **Keep names and local permissions narrow.** Managed Tenant and Named Config
-names are lowercase DNS labels of 1–63 characters. Newly created aibox root,
+names are lowercase DNS labels of 1–63 characters. Newly created AIBox Root,
 collection, Named Config catalog, Named Config, and Tenant Home boundary
 directories are `0700`. Named Config files and newly created Current Config
 files are `0600`; `metadata.json` is `0600` and limited to 16 KiB. Applying or
@@ -138,7 +145,7 @@ caches, tools, npm and pip user state, Cargo, and GOPATH outside the removed
 Component's owned release paths.
 
 **Compose the Tenant Environment at launch.** A Run or Debug Shell uses login
-Bash and its native user-profile semantics, then the current aibox binary
+Bash and its native user-profile semantics, then the current `aibox` binary
 restores `HOME=/home/aibox`. Supply a missing Component-specific default only
 when native inspection reports its owning Node.js, Claude, Python, Rust, or Go
 Component as `installed`; known non-installed states are quiet, while an
@@ -151,7 +158,7 @@ tool paths after Component removal. Insert each missing candidate immediately
 before the last exact `/usr/local/bin` segment, or append it when that anchor is
 absent; preserve the candidate order and every existing PATH segment in place.
 A truly unset path-owner variable uses its HOME-local candidate, while an
-explicit empty value suppresses that candidate. Do not persist an aibox
+explicit empty value suppresses that candidate. Do not persist an AIBox
 environment file, create or rewrite user profiles, implicitly load `.bashrc`,
 or hot-reload environment changes into an active container. Run invokes the
 selected Tenant-local Agent by absolute path. Debug then opens Bash without
@@ -181,17 +188,17 @@ Debug Shell may initialize other missing state. Host statusline install may init
 state directory inside an already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
-own interrupted filesystem work, but aibox provides no multi-process locking
+own interrupted filesystem work, but AIBox provides no multi-process locking
 guarantee. Config Application atomically replaces each changed file but is not
 atomic across files; rerunning it converges. Sequential Config edits likewise
 commit one file at a time without rollback. Credential Propagation uses its
 preflight snapshots without write-time reconciliation, replaces targets
 independently, continues after individual write failures, and never rolls back
-successful targets. One aibox process supports only one active container
+successful targets. One `aibox` process supports only one active container
 operation: a Run, Debug Shell, or Component installation.
 
 **Keep the Request Proxy host-side and raw.** The Request Proxy is an always-on part of
-the aibox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
+the AIBox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
 values and body bytes under the flat `$AIBOX_ROOT/requests/<request>/` layout.
 The current Request storage contract is format v4 with `request_id`; format v3
 is unsupported and must be cleared manually before an upgraded Service starts.

@@ -1,14 +1,16 @@
-import type { CodingAgentKind } from "@/api/core";
+import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { SessionRow } from "@/api/sessions";
-import type { TenantSelection } from "@/api/tenantSelection";
+import {
+  tenantSelectionFromKey,
+  type TenantSelection,
+  type TenantSelectionKey,
+} from "@/domain/tenant";
 
 /** A Session list combines several Tenant-and-Agent scopes, tracked per row. */
-export type SessionTenantKey = "host" | `managed:${string}`;
-
 export interface SessionSource {
   key: string;
   tenant: TenantSelection;
-  tenantKey: SessionTenantKey;
+  tenantKey: TenantSelectionKey;
   tenantLabel: string;
   agent: CodingAgentKind;
   agentLabel: string;
@@ -37,15 +39,15 @@ export function agentLabel(agent: CodingAgentKind): string {
   return SESSION_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
 }
 
-export function tenantSelectionFromSessionKey(key: SessionTenantKey): TenantSelection {
-  return key === "host" ? { kind: "host" } : { kind: "managed", name: key.slice(8) };
+export function tenantSelectionFromSessionKey(key: TenantSelectionKey): TenantSelection {
+  return tenantSelectionFromKey(key);
 }
 
-export function sessionTenantLabel(key: SessionTenantKey): string {
+export function sessionTenantLabel(key: TenantSelectionKey): string {
   return key === "host" ? "Host Tenant" : `Tenant ${key.slice(8)}`;
 }
 
-export function sessionListTenantLabel(key: SessionTenantKey): string {
+export function sessionListTenantLabel(key: TenantSelectionKey): string {
   return key === "host" ? "Host Tenant" : key.slice(8);
 }
 
@@ -61,7 +63,10 @@ export function accessibleSessionSource(source: SessionSource): string {
   return `${source.tenantLabel} · ${source.agentLabel}`;
 }
 
-export function sessionSource(tenantKey: SessionTenantKey, agent: CodingAgentKind): SessionSource {
+export function sessionSource(
+  tenantKey: TenantSelectionKey,
+  agent: CodingAgentKind,
+): SessionSource {
   return {
     key: JSON.stringify([tenantKey, agent]),
     tenant: tenantSelectionFromSessionKey(tenantKey),

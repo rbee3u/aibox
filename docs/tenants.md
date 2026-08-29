@@ -6,7 +6,7 @@ neither can select the Host Tenant.
 
 ## Tenant Identity
 
-A **Managed Tenant** is an aibox-managed, runnable identity with a Tenant Home.
+A **Managed Tenant** is an AIBox-managed, runnable identity with a Tenant Home.
 The **Default Managed Tenant** is the protected Managed Tenant named `default`.
 After taking the Service Lock, `aibox console` creates or repairs its Tenant Home
 baseline and fails before listening if the baseline cannot be established
@@ -16,7 +16,7 @@ later exits nonzero. A Managed Tenant named `host` is ordinary and runnable.
 
 The Default Managed Tenant cannot be selected for deletion. An explicit delete
 request for `default` is rejected, and deleting all Managed Tenants preserves
-`default`. If an external process removes it, aibox does not watch for that
+`default`. If an external process removes it, AIBox does not watch for that
 change; the next Service startup repairs the baseline.
 
 The **Host Tenant** is a management-only view backed by the real Host Home. It
@@ -33,7 +33,7 @@ Tenant and catalog subtrees. A Managed Tenant exists exactly when
 Names are lowercase DNS labels of 1-63 characters. New root, collection,
 catalog, Tenant Home, and boundary directories use mode `0700`. Existing Host
 Home modes are never changed. Interrupted create/delete staging is recovered by
-the next lifecycle operation; aibox does not promise cross-process locking.
+the next lifecycle operation; AIBox does not promise cross-process locking.
 
 ## Direct Layout
 
@@ -173,7 +173,7 @@ Inspection reports `installed`, `incomplete`, `modified`, `unmanaged`, or
 by installation. Unmanaged runtime state is not claimed or replaced
 automatically. Unmanaged state has no Console removal action. Explicit removal
 deletes only a Component's launcher and owned release paths and confirms before
-deleting existing state. Python removal deletes `.python` and its aibox-owned
+deleting existing state. Python removal deletes `.python` and its AIBox-owned
 launchers but preserves uv configuration/cache/tools, pip user state, and
 Workspace `.venv` directories. Other removals keep Coding Agent configuration,
 credentials, Transcripts, npm user state, Cargo, and GOPATH.
@@ -188,11 +188,11 @@ explicitly install every required Component in each Tenant after the rebuild.
 ### Tenant Environment
 
 A Run or Debug Shell starts login Bash and lets Bash read the first applicable
-user login profile using native semantics. aibox never creates or modifies
+user login profile using native semantics. AIBox never creates or modifies
 `.bash_profile` or `.bashrc`, and `.bashrc` is loaded only when the user's login
 profile chooses to source it.
 
-After the login profile, the current aibox binary restores the structural
+After the login profile, the current `aibox` binary restores the structural
 `HOME=/home/aibox`. It snapshots native Component state before Docker starts
 and supplies a missing default only when the owning Component is `installed`:
 Node owns `NPM_CONFIG_PREFIX`; Claude owns `DISABLE_AUTOUPDATER`; Python owns
@@ -228,7 +228,7 @@ but retains network access and writable access to all Tenant state.
 
 ## Concurrency
 
-Tenant lifecycle can recover its own interrupted filesystem work, but aibox does
+Tenant lifecycle can recover its own interrupted filesystem work, but AIBox does
 not coordinate separate processes editing the same Tenant or Coding Agent state.
 One process supports only one active container operation: a Run, Debug Shell,
 or Component installation. See [Configs](configs.md) for per-file application

@@ -1,7 +1,7 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ConfigCustomProvider, ConfigVisualOption } from "@/api/configs";
-import type { TenantSelection } from "@/api/tenantSelection";
+import type { TenantSelection } from "@/domain/tenant";
 import {
   proxyValueIsValid,
   requestProxyRoute,

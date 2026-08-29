@@ -1,18 +1,18 @@
-import type { CodingAgentKind } from "@/api/core";
-import { parseTenantSelectionKey } from "@/api/tenantSelection";
-import { SESSION_AGENT_OPTIONS, type SessionTenantKey } from "@/features/sessions/sessionSource";
+import type { CodingAgentKind } from "@/domain/codingAgent";
+import { parseTenantSelectionKey, type TenantSelectionKey } from "@/domain/tenant";
+import { SESSION_AGENT_OPTIONS } from "@/features/sessions/sessionSource";
 import { readEnum } from "@/shared/lib/queryParams";
 
 export type SessionTab = "conversation" | "details";
 
 export interface SessionRouteSelection {
-  tenantKey: SessionTenantKey;
+  tenantKey: TenantSelectionKey;
   agent: CodingAgentKind;
   id: string;
 }
 
 export interface SessionRouteState {
-  tenants: Set<SessionTenantKey>;
+  tenants: Set<TenantSelectionKey>;
   agents: Set<CodingAgentKind>;
   selection: SessionRouteSelection | null;
   tab: SessionTab;
@@ -26,7 +26,7 @@ function isAgent(value: string | null): value is CodingAgentKind {
 
 /**
  * Sessions is scoped by repeated `tenant` and `agent` values, with the selected
- * Session named separately. An empty scope falls back to the Default Managed
+ * Session named separately. An empty selection falls back to the Default Managed
  * Tenant and Codex so the module always has something to list.
  */
 export function readSessionRoute(search: string): SessionRouteState {
@@ -35,7 +35,7 @@ export function readSessionRoute(search: string): SessionRouteState {
     query
       .getAll("tenant")
       .map(parseTenantSelectionKey)
-      .filter((value): value is SessionTenantKey => value !== null),
+      .filter((value): value is TenantSelectionKey => value !== null),
   );
   const agents = new Set(query.getAll("agent").filter(isAgent));
   if (tenants.size === 0) tenants.add("managed:default");
@@ -56,7 +56,7 @@ export function readSessionRoute(search: string): SessionRouteState {
 }
 
 export function sessionLocation(
-  tenants: ReadonlySet<SessionTenantKey>,
+  tenants: ReadonlySet<TenantSelectionKey>,
   agents: ReadonlySet<CodingAgentKind>,
   selection?: SessionRouteSelection | null,
   tab: SessionTab = "conversation",

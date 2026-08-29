@@ -66,7 +66,10 @@ test("Component names stay left-aligned across labels and action sets", async ({
   expect(new Set(iconOffsets.map(Math.round)).size).toBe(1);
   expect(new Set(nameOffsets.map(Math.round)).size).toBe(1);
   const rowHeights = await Promise.all(rows.map(async (row) => (await box(row)).height));
-  expect(new Set(rowHeights.map(Math.round)).size).toBe(1);
+  expect(
+    new Set(rowHeights.map(Math.round)).size,
+    `Component row heights: ${rowHeights.map(Math.round).join(", ")}`,
+  ).toBe(1);
   const splitInstall = await box(
     codex.getByRole("button", { name: "Install", exact: true }).locator(".."),
   );
@@ -205,7 +208,9 @@ async function mockTenants(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/_aibox/api/bootstrap") {
-      return route.fulfill({ json: { version: "test", csrf_token: "test-token" } });
+      return route.fulfill({
+        json: { version: "test", csrf_token: "test-token", listen: "127.0.0.1:3000" },
+      });
     }
     if (url.pathname === "/_aibox/api/operations/current") {
       return route.fulfill({ json: { operation: null, gap: false } });

@@ -1,6 +1,6 @@
 # Use Docker as the Filesystem Sandbox
 
-aibox uses one shared Docker runtime as the Coding Agents' and Debug Shell's
+AIBox uses one shared Docker runtime as the Coding Agents' and Debug Shell's
 Filesystem Sandbox instead of relying on native permission modes; a Run exposes
 only its Workspace, Tenant Home, and explicit Extra Mounts, while Debug exposes
 only its Tenant Home. Network and credential authority remain outside that

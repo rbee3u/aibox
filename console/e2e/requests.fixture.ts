@@ -79,7 +79,7 @@ const detail = {
     error: null,
   },
   summary: {
-    schema_version: 1,
+    schema_version: 4,
     request_id: primaryRequest.id,
     kind: "summary",
     observed_at: primaryRequest.started_at,
@@ -138,7 +138,9 @@ export async function mockRequests(
   await page.route("**/_aibox/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/_aibox/api/bootstrap") {
-      return route.fulfill({ json: { version: "test", csrf_token: "test-token" } });
+      return route.fulfill({
+        json: { version: "test", csrf_token: "test-token", listen: "127.0.0.1:3000" },
+      });
     }
     if (path === "/_aibox/api/operations/current") {
       return route.fulfill({ json: { operation: null, gap: false } });

@@ -1,6 +1,6 @@
 # Keep the public integration surface application-only
 
-aibox exposes a CLI application entry point rather than embedding-oriented
+AIBox exposes a CLI application entry point rather than embedding-oriented
 dispatch APIs. Its narrow public commands are `console`, `run`, and `debug`;
 Debug opens only a selected Managed Tenant Home and is not a second management
 command tree. The first `--` is split before command parsing and only `run`

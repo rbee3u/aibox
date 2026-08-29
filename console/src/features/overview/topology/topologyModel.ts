@@ -1,10 +1,10 @@
-import type { CodingAgentKind } from "@/api/core";
+import type { CodingAgentKind } from "@/domain/codingAgent";
 import { formatBinaryByteSize as formatBytes } from "@/api/encoding";
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
 import type { SessionSummaryData } from "@/api/sessions";
 import type { ComponentRow } from "@/api/tenants";
-import { tenantSelectionValue, type TenantSelection } from "@/api/tenantSelection";
+import { tenantSelectionValue, type TenantSelection } from "@/domain/tenant";
 import type { ModuleId } from "@/shared/lib/navigation";
 import { formatTimestamp } from "@/shared/lib/format";
 
@@ -273,7 +273,7 @@ export function buildTopologyTree(
   return {
     id: "service",
     parentId: null,
-    label: "aibox Service",
+    label: "AIBox Service",
     detail: `${tenants.length} Tenants`,
     icon: "service",
     tone: maxTone(tenants.map((tenant) => tenant.tone)),

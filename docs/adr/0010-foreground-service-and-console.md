@@ -1,6 +1,6 @@
-# Manage aibox through one foreground Service and embedded Console
+# Manage AIBox through one foreground Service and embedded Console
 
-`aibox console` starts one foreground aibox Service for one aibox Root and
+`aibox console` starts one foreground AIBox Service for one AIBox Root and
 embeds the Console used for Tenant, Component, Config, Session, image, and
 Request management. The Service holds an advisory Root-local Service Lock;
 `aibox run` and `aibox debug` stay direct CLI paths and deliberately ignore that

@@ -1,6 +1,6 @@
 import type { ConfigCatalogEntry, ConfigCustomProvider, PropagationOutcome } from "@/api/configs";
-import type { CodingAgentKind } from "@/api/core";
-import type { TenantSelection } from "@/api/tenantSelection";
+import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { TenantSelection } from "@/domain/tenant";
 import { configTenantKey } from "@/features/configs/route";
 import type { IssueTone } from "@/shared/ui/IssueIndicator";
 

@@ -151,7 +151,7 @@ export const completedDetail = {
     error: null,
   },
   summary: {
-    schema_version: 3,
+    schema_version: 4,
     request_id: completedSummary.id,
     kind: "summary",
     observed_at: completedSummary.started_at,

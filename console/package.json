@@ -8,12 +8,14 @@
   },
   "scripts": {
     "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc",
     "build": "vite build && node scripts/check-bundle-budget.mjs && node scripts/publish-assets.mjs",
     "test": "vitest run",
     "test:chrome": "playwright test --project=desktop-chrome",
     "test:browsers": "playwright test --project=desktop-firefox --project=desktop-webkit",
     "lint": "eslint .",
-    "check": "prettier --check . && tsc && npm run build && npm run test && npm run lint"
+    "check": "npm run format:check && npm run typecheck && npm run test && npm run lint && npm run build"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",

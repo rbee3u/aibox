@@ -52,8 +52,14 @@ export function composeTestApi(testApi: TestControlApi): ConnectedControlApi {
   };
 }
 
-export type TestPageProps<T extends ElementType> = Omit<ComponentProps<T>, "api" | "search"> & {
+export type TestPageProps<T extends ElementType> = Omit<
+  ComponentProps<T>,
+  "api" | "search" | "onLocationChange"
+> & {
   api: TestControlApi;
+  onLocationChange?: ComponentProps<T> extends { onLocationChange: infer TLocation }
+    ? TLocation
+    : never;
 };
 
 export function TenantPage(
@@ -61,16 +67,35 @@ export function TenantPage(
     search?: string;
   },
 ) {
-  const { api, search = window.location.search, ...pageProps } = props;
-  return <TenantPageView {...pageProps} api={composeTestApi(api).tenants} search={search} />;
+  const {
+    api,
+    search = window.location.search,
+    onLocationChange = (query: URLSearchParams, replace = false) => {
+      window.history[replace ? "replaceState" : "pushState"](
+        null,
+        "",
+        `${window.location.pathname}${query.toString() ? `?${query}` : ""}`,
+      );
+    },
+    ...pageProps
+  } = props;
+  return (
+    <TenantPageView
+      api={composeTestApi(api).tenants}
+      search={search}
+      onLocationChange={onLocationChange}
+      {...pageProps}
+    />
+  );
 }
 export function ConfigPage(props: TestPageProps<typeof ConfigPageView>) {
-  const { api, ...pageProps } = props;
+  const { api, onLocationChange = () => undefined, ...pageProps } = props;
   return (
     <ConfigPageView
-      {...pageProps}
       api={composeTestApi(api).configs}
       search={window.location.search}
+      onLocationChange={onLocationChange}
+      {...pageProps}
     />
   );
 }
@@ -79,9 +104,21 @@ export function SessionPage(
     search?: string;
   },
 ) {
-  const { api, search = window.location.search, ...pageProps } = props;
+  const {
+    api,
+    search = window.location.search,
+    onLocationChange = () => undefined,
+    ...pageProps
+  } = props;
   const sessionApi = useMemo(() => composeTestApi(api).sessions, [api]);
-  return <SessionPageView {...pageProps} api={sessionApi} search={search} />;
+  return (
+    <SessionPageView
+      api={sessionApi}
+      search={search}
+      onLocationChange={onLocationChange}
+      {...pageProps}
+    />
+  );
 }
 export function OperationPanel(
   props: Omit<ComponentProps<typeof OperationPanelView>, "api"> & { api: TestControlApi },

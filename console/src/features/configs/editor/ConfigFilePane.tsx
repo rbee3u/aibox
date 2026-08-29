@@ -8,9 +8,9 @@ import type {
   ConfigFileData,
   ConfigVisualOption,
 } from "@/api/configs";
-import type { CodingAgentKind } from "@/api/core";
+import type { CodingAgentKind } from "@/domain/codingAgent";
 import { decodeBase64, encodeBase64 } from "@/api/encoding";
-import type { TenantSelection } from "@/api/tenantSelection";
+import type { TenantSelection } from "@/domain/tenant";
 import {
   comparableProvider,
   proxyValueIsValid,

@@ -117,17 +117,27 @@ async function renderModule(module: Module) {
       return result;
     }
     case "tenants": {
-      const result = render(<TenantPage api={api.tenants} search={window.location.search} />);
+      const result = render(
+        <TenantPage api={api.tenants} search={window.location.search} onLocationChange={vi.fn()} />,
+      );
       await screen.findByRole("button", { name: /^default, Managed Tenant/ });
       return result;
     }
     case "configs": {
-      const result = render(<ConfigPage api={api.configs} search={window.location.search} />);
+      const result = render(
+        <ConfigPage api={api.configs} search={window.location.search} onLocationChange={vi.fn()} />,
+      );
       await screen.findByRole("button", { name: "Tenant: default" });
       return result;
     }
     case "sessions": {
-      const result = render(<SessionPage api={api.sessions} search={window.location.search} />);
+      const result = render(
+        <SessionPage
+          api={api.sessions}
+          search={window.location.search}
+          onLocationChange={vi.fn()}
+        />,
+      );
       await screen.findByRole("button", { name: "Tenant: default" });
       return result;
     }

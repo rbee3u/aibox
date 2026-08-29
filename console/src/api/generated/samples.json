@@ -1,0 +1,83 @@
+{
+  "bootstrap": {
+    "version": "0.1.0",
+    "csrf_token": "contract-csrf",
+    "listen": "127.0.0.1:4422"
+  },
+  "tenants": [
+    {
+      "kind": "host",
+      "name": null,
+      "display_name": "Host Tenant",
+      "home": "/Users/example",
+      "exists": true
+    },
+    {
+      "kind": "managed",
+      "name": "default",
+      "display_name": "default",
+      "home": "/tmp/aibox/tenants/default",
+      "exists": true
+    }
+  ],
+  "component_latest": {
+    "checked_at": "2026-08-27T00:00:00Z",
+    "entries": [
+      {
+        "kind": "codex",
+        "state": "available",
+        "version": "1.2.3",
+        "source": "GitHub Releases",
+        "error": null
+      }
+    ]
+  },
+  "application": {
+    "last_application": {
+      "applied": "default",
+      "applied_at": "2026-08-27T00:00:00Z"
+    },
+    "drift": "clean"
+  },
+  "propagation_outcomes": [
+    {
+      "status": "updated"
+    },
+    {
+      "status": "unchanged"
+    },
+    {
+      "status": "conflict",
+      "last_refresh": "2026-08-27T00:00:00Z"
+    },
+    {
+      "status": "newer",
+      "target_last_refresh": "2026-08-28T00:00:00Z",
+      "source_last_refresh": "2026-08-27T00:00:00Z"
+    },
+    {
+      "status": "invalid",
+      "reason": "malformed credential"
+    },
+    {
+      "status": "failed",
+      "reason": "write failed"
+    }
+  ],
+  "operation": {
+    "id": "0198f000-0000-7000-8000-000000000000",
+    "kind": "install codex@1.2.3",
+    "state": "running",
+    "started_at": "2026-08-27T00:00:00Z",
+    "ended_at": null,
+    "result": null,
+    "first_sequence": 4,
+    "next_sequence": 5,
+    "logs": [
+      {
+        "sequence": 4,
+        "message": "Installing codex@1.2.3"
+      }
+    ]
+  }
+}

@@ -1,37 +1,55 @@
 import type { ControlApi } from "@/api/transport";
+import type {
+  AssessmentFinding,
+  AssessmentLevel,
+  AssessmentPrimary,
+  AssessmentSource,
+  DiagnosticGroups as GeneratedDiagnosticGroups,
+  EventTimingEntry,
+  EventTimingResponse,
+  EventTimingState,
+  ProtocolDiagnostic,
+  ProtocolFamily,
+  ProtocolSummary,
+  RecordedHeader,
+  RequestAssessment,
+  RequestDetail as GeneratedRequestDetail,
+  RequestList as GeneratedRequestList,
+  RequestMetadata as GeneratedRequestMetadata,
+  RequestState,
+  RequestSummary,
+  RequestedEffective,
+  RequestedObserved,
+  ResponseModeValue,
+  ResultMetadata as GeneratedResultMetadata,
+  SummaryMetadata as GeneratedSummaryMetadata,
+  TokenUsage,
+} from "@/api/generated/wire";
 
-export type RequestState = "active" | "completed" | "interrupted";
+export type {
+  AssessmentFinding,
+  AssessmentLevel,
+  AssessmentPrimary,
+  AssessmentSource,
+  EventTimingEntry,
+  EventTimingState,
+  ProtocolDiagnostic,
+  ProtocolFamily,
+  ProtocolSummary,
+  RequestAssessment,
+  RequestState,
+  RequestSummary,
+  RequestedEffective,
+  RequestedObserved,
+  ResponseModeValue,
+  TokenUsage,
+};
+export type HeaderValue = RecordedHeader;
 export type BodyKind = "request" | "response";
-type EventTimingState = "available" | "unavailable" | "partial";
-type AssessmentLevel = "active" | "ok" | "warning" | "error";
-type AssessmentSource = "request" | "http" | "provider" | "diagnostic";
 
-interface EventTimingEntry {
-  sequence: number;
-  completed_at_ns: string;
-}
+export type EventTimingIndex = EventTimingResponse;
 
-export interface EventTimingIndex {
-  state: EventTimingState;
-  events: EventTimingEntry[];
-  next_sequence: number;
-  warning: string | null;
-}
-
-export interface HeaderValue {
-  name: string;
-  value_base64: string;
-}
-
-interface RequestMetadata {
-  id: string;
-  started_at: string;
-  method: string;
-  incoming_uri: string;
-  upstream_url: string | null;
-  http_version: string;
-  headers: HeaderValue[];
-}
+export type RequestMetadata = Omit<GeneratedRequestMetadata, "format_version">;
 
 export interface ResponseMetadata {
   status: number;
@@ -42,150 +60,13 @@ export interface ResponseMetadata {
   headers: HeaderValue[];
 }
 
-interface ErrorMetadata {
-  kind: string;
-  message: string;
-}
-
-interface SummaryTiming {
-  upstream_request_started_at_ns: string | null;
-  upstream_request_body_first_byte_at_ns: string | null;
-  upstream_request_body_completed_at_ns: string | null;
-  upstream_response_headers_at_ns: string | null;
-  upstream_response_body_first_byte_at_ns: string | null;
-  upstream_response_body_completed_at_ns: string | null;
-  finished_at_ns: string | null;
-}
-
-interface SummaryDiagnostic {
-  phase: string;
-  kind: string;
-  message: string;
-  at_ns: string;
-}
-
-interface SummaryRequestMetadata {
-  method: string;
-  incoming_uri: string;
-  upstream_url: string | null;
-  http_version: string;
-}
-
-interface SummaryResponseMetadata {
-  status: number;
-  http_version: string;
-}
-
-export interface AssessmentPrimary {
-  source: AssessmentSource;
-  kind: string;
-  message: string;
-}
-
-export interface RequestAssessment {
-  level: AssessmentLevel;
-  primary: AssessmentPrimary | null;
-  issue_count: number;
-}
-
-export interface AssessmentFinding extends AssessmentPrimary {
-  level: AssessmentLevel;
-  phase: string | null;
-  at_ns: string | null;
-}
-
-type DiagnosticGroups = Record<"request" | "http" | "provider" | "warnings", AssessmentFinding[]>;
-
-interface SummaryMetadata {
-  schema_version: number;
-  request_id: string;
-  kind: string;
-  observed_at: string;
-  request: SummaryRequestMetadata;
-  response: SummaryResponseMetadata | null;
-  terminal: boolean;
-  timing: SummaryTiming;
-  coding_agent_session_id: string | null;
-  protocol: ProtocolSummary | null;
-  outcome: string | null;
-  errors: SummaryDiagnostic[];
-  warnings: SummaryDiagnostic[];
-  assessment: RequestAssessment;
-}
-
-type ProtocolFamily =
-  "openai_responses" | "openai_chat_completions" | "claude_messages" | "unknown";
-
-export type ResponseModeValue = "stream" | "normal";
-
-export interface RequestedEffective<T> {
-  requested: T | null;
-  effective: T | null;
-}
-
-interface RequestedObserved<T> {
-  requested: T | null;
-  observed: T | null;
-}
-
-export interface TokenUsage {
-  total_input_tokens: number | null;
-  base_input_tokens: number | null;
-  cached_input_tokens: number | null;
-  cache_write_tokens: number | null;
-  cache_write_5m_tokens: number | null;
-  cache_write_1h_tokens: number | null;
-  output_tokens: number | null;
-  reasoning_output_tokens: number | null;
-}
-
-interface ProtocolDiagnostic {
-  kind: string;
-  message: string;
-  at_ns: string | null;
-}
-
-export interface ProtocolSummary {
-  family: ProtocolFamily;
-  response_terminal: boolean;
-  model: RequestedEffective<string>;
-  reasoning_effort: RequestedEffective<string>;
-  response_mode: RequestedObserved<ResponseModeValue>;
-  first_token_at_ns: string | null;
-  token_usage: TokenUsage | null;
-  errors: ProtocolDiagnostic[];
-  warnings: ProtocolDiagnostic[];
-}
-
-interface ResultMetadata {
-  ended_at: string;
-  outcome: string;
-  total_ms: number | null;
-  error: ErrorMetadata | null;
-}
-
-export interface RequestSummary {
-  id: string;
-  started_at: string;
-  ended_at: string | null;
-  method: string;
-  incoming_uri: string;
-  upstream_url: string | null;
-  status: number | null;
-  http_version: string | null;
-  outcome: string;
-  state: RequestState;
-  total_ms: number | null;
-  protocol: ProtocolSummary | null;
-  assessment: RequestAssessment;
-}
-
-export interface RequestList {
-  requests: RequestSummary[];
-  total: number;
-  deletable_count: number;
-  has_next: boolean;
-}
+type DiagnosticGroups = GeneratedDiagnosticGroups;
+type SummaryMetadata = Omit<GeneratedSummaryMetadata, "outcome"> & { outcome: string | null };
+type ResultMetadata = Omit<
+  GeneratedResultMetadata,
+  "format_version" | "request_bytes" | "response_bytes" | "request_body_ms"
+>;
+export type RequestList = GeneratedRequestList;
 
 export interface RequestDetail {
   request: RequestMetadata;
@@ -199,6 +80,33 @@ export interface RequestDetail {
   response_body_bytes: number;
   live_total_ms: number | null;
   timeline_end_at_ns: string | null;
+}
+
+function featureRequestDetail(value: GeneratedRequestDetail): RequestDetail {
+  if (!value || typeof value !== "object" || !value.request) {
+    return value;
+  }
+  const request = withoutFormatVersion(value.request);
+  const response = value.response ? withoutFormatVersion(value.response) : null;
+  const result = value.result ? featureResult(value.result) : null;
+  return { ...value, request, response, result };
+}
+
+function withoutFormatVersion<T extends { format_version: number }>(
+  value: T,
+): Omit<T, "format_version"> {
+  const copy: Record<string, unknown> = { ...value };
+  delete copy["format_version"];
+  return copy as Omit<T, "format_version">;
+}
+
+function featureResult(value: GeneratedResultMetadata): ResultMetadata {
+  const copy = { ...value } as unknown as Record<string, unknown>;
+  delete copy.format_version;
+  delete copy.request_bytes;
+  delete copy.response_bytes;
+  delete copy.request_body_ms;
+  return copy as ResultMetadata;
 }
 
 export interface RequestsApi {
@@ -227,9 +135,10 @@ export function requestsApi(client: ControlApi): RequestsApi {
   return {
     listRequests: (page = 1, signal) => {
       const query = page === 1 ? "" : `?page=${page}`;
-      return client.get<RequestList>(`/_aibox/api/requests${query}`, signal);
+      return client.get<GeneratedRequestList>(`/_aibox/api/requests${query}`, signal);
     },
-    getRequest: (id, signal) => client.get<RequestDetail>(requestPath(id), signal),
+    getRequest: (id, signal) =>
+      client.get<GeneratedRequestDetail>(requestPath(id), signal).then(featureRequestDetail),
     loadBody: async (id, kind, offset, signal) => {
       const response = await client.getResponse(
         `${requestPath(id)}/${kind}-body?offset=${offset}`,
@@ -252,7 +161,7 @@ export function requestsApi(client: ControlApi): RequestsApi {
       return new Uint8Array(await response.arrayBuffer());
     },
     loadEventTimings: (id, afterSequence, signal) =>
-      client.get<EventTimingIndex>(
+      client.get<EventTimingResponse>(
         `${requestPath(id)}/response-event-timings?after_sequence=${afterSequence}`,
         signal,
       ),

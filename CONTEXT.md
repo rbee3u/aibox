@@ -1,6 +1,6 @@
-# aibox
+# AIBox
 
-aibox provides persistent identities and a Filesystem Sandbox for running
+AIBox provides persistent identities and a Filesystem Sandbox for running
 Coding Agents while keeping host access and native configuration explicit.
 
 ## Language
@@ -8,14 +8,16 @@ Coding Agents while keeping host access and native configuration explicit.
 ### Product identity
 
 **AIBox**:
-The visual product brand used by the Console. The CLI command, filesystem
-paths, repository name, and technical `aibox` identifiers remain lowercase.
+The product brand used in user-facing prose, the Console, clap help, and
+documentation. The CLI command, filesystem paths, repository name, crate
+name, container user, and other technical `aibox` identifiers remain
+lowercase.
 _Avoid_: Aibox, AI Box
 
 ### Execution boundary
 
 **Coding Agent**:
-An external coding assistant that aibox can run or manage, currently OpenAI
+An external coding assistant that AIBox can run or manage, currently OpenAI
 Codex or Claude Code.
 _Avoid_: Agent process, Agent Profile
 
@@ -53,14 +55,14 @@ _Avoid_: Shared path, implicit mount
 
 ### Local management
 
-**aibox Service**:
+**AIBox Service**:
 The foreground process started by `aibox console`. One Service exclusively
-manages one aibox Root for browser management while also running the global
+manages one AIBox Root for browser management while also running the global
 Request Proxy.
 _Avoid_: Daemon, Request server, backend
 
 **Console**:
-The exclusive management interface embedded in the aibox Service, with
+The exclusive management interface embedded in the AIBox Service, with
 Overview, Tenants, Configs, Sessions, and Requests modules. Runtime Image builds
 and persistent lifecycle actions enter through it.
 _Avoid_: Requests Viewer, admin site, dashboard
@@ -71,7 +73,7 @@ is available only to loopback TCP peers and is not a public embedding API.
 _Avoid_: Public API, SDK, remote API
 
 **Service Lock**:
-The advisory `$AIBOX_ROOT/.service.lock` held for the lifetime of one aibox
+The advisory `$AIBOX_ROOT/.service.lock` held for the lifetime of one AIBox
 Service. It prevents a second Service for the same Root but does not coordinate
 Runs, Debug Shells, or Console operations in another process.
 _Avoid_: Global lock, Run lock, filesystem transaction
@@ -84,8 +86,8 @@ _Avoid_: Job, Run, Operation History
 
 ### Tenant identity
 
-**aibox Root**:
-The dedicated host storage boundary for aibox-managed identities,
+**AIBox Root**:
+The dedicated host storage boundary for AIBox-managed identities,
 configuration, and Requests.
 _Avoid_: Install prefix, Tenant Home
 
@@ -95,8 +97,13 @@ Components, and Sessions. Every Tenant is either a Managed Tenant or the Host
 Tenant.
 _Avoid_: Scope, Namespace, Target, profile, environment
 
+**Tenant Selection**:
+An explicit reference to exactly one Managed Tenant or the Host Tenant for a
+Tenant-scoped view or action.
+_Avoid_: Scope, Target, Tenant key
+
 **Managed Tenant**:
-An aibox-managed, runnable Tenant with its own Tenant Home.
+An AIBox-managed, runnable Tenant with its own Tenant Home.
 _Avoid_: Agent Namespace, managed Target, Linux namespace
 
 **Default Managed Tenant**:
@@ -109,7 +116,7 @@ The management-only Tenant backed by the real Host Home.
 _Avoid_: Host Target, Host Namespace, host profile
 
 **Tenant Home**:
-The aibox-managed Home belonging to one Managed Tenant and containing its
+The AIBox-managed Home belonging to one Managed Tenant and containing its
 persistent native Coding Agent and Component state.
 _Avoid_: Host Home, profile home
 
@@ -121,7 +128,7 @@ _Avoid_: Runtime Image environment, Agent Profile
 
 **Host Home**:
 The real user Home that backs the Host Tenant's native Coding Agent state.
-_Avoid_: Tenant Home, aibox Root
+_Avoid_: Tenant Home, AIBox Root
 
 **Tenant Component**:
 An optional native capability independently installed and managed for one
@@ -209,6 +216,12 @@ One interaction identity created by a Coding Agent and discovered from its
 Transcript independently of Runs.
 _Avoid_: Run, Transcript
 
+**Session Source**:
+One Tenant-and-Coding Agent combination used to discover Transcripts. A
+Session Source identifies where discovery happens; it is not a Session or a
+Run.
+_Avoid_: Session scope, Session target, Run source
+
 **Transcript**:
 The Coding Agent's native persistent record of one Session.
 _Avoid_: Session, prompt history
@@ -240,9 +253,9 @@ _Avoid_: Prompt, Request, log line
 ### Request diagnostics
 
 **Request Proxy**:
-The always-on host-side HTTP intermediary inside a running aibox Service that
+The always-on host-side HTTP intermediary inside a running AIBox Service that
 forwards Incoming HTTP Requests as Upstream Requests and captures
-application-visible evidence. It is global to aibox rather than owned by a
+application-visible evidence. It is global to AIBox rather than owned by a
 Tenant or Coding Agent.
 _Avoid_: Router, packet capture
 
@@ -259,6 +272,17 @@ _Avoid_: Upstream Request
 The HTTP message the Request Proxy sends toward the selected upstream service.
 It may not exist when an Incoming HTTP Request is rejected first.
 _Avoid_: Incoming HTTP Request, Provider Request
+
+**Upstream Response**:
+The HTTP response the Request Proxy receives from the selected upstream
+service. It may not exist when forwarding fails or the Request Proxy produces
+a response locally.
+_Avoid_: Downstream Response, Provider Response
+
+**Downstream Response**:
+The HTTP response the Request Proxy returns to its client, either by relaying
+an Upstream Response or by producing one locally.
+_Avoid_: Upstream Response, Client Response
 
 **Request**:
 The diagnostic lifecycle that begins when the Request Proxy receives one

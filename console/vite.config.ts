@@ -1,5 +1,9 @@
 import { defineConfig } from "vitest/config";
 
+type NodeProcess = { env: Record<string, string | undefined> };
+const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
+const outputDirectory = nodeProcess.env.AIBOX_CONSOLE_OUT_DIR ?? "../assets";
+
 export default defineConfig({
   base: "/_aibox/ui/",
   publicDir: false,
@@ -9,7 +13,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../assets",
+    outDir: outputDirectory,
     // The shared assets directory also contains non-Vite inputs such as the Dockerfile.
     emptyOutDir: false,
     assetsInlineLimit: () => true,

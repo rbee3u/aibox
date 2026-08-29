@@ -19,22 +19,22 @@
   background: var(--bg-shell);
 }
 
-.headerActions,
-.selectionActions {
+.headerStack {
+  display: grid;
+  min-width: 0;
+}
+
+.headerActions {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 3px;
+  margin-left: auto;
   white-space: nowrap;
 }
 
-.headerActions {
-  margin-left: auto;
-}
-
 .headerActions button,
-.selectionActions button,
-.pagination button {
+.pageTurn {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -43,43 +43,12 @@
   white-space: nowrap;
 }
 
-.cancelSelection,
-.pageSelection {
-  min-height: 30px;
-  border-color: transparent;
-  padding: 5px 7px;
-  background: transparent;
-  font-size: var(--text-xs);
-}
-
-.cancelSelection,
-.pageSelection {
-  color: var(--accent);
-  font-weight: var(--weight-bold);
-}
-
-.pageSelection {
-  text-align: left;
-}
-
 .selectionActions {
   margin-left: auto;
 }
 
 .selectionCount {
-  margin-right: 3px;
-  color: var(--muted);
-  font: var(--weight-semibold) var(--text-xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.deleteSelected {
-  min-height: 30px;
-  border-color: var(--danger-line);
-  padding: 5px 8px;
-  color: var(--danger);
-  background: var(--danger-soft);
-  font-size: var(--text-xs);
+  composes: selectionCount from "@/shared/ui/layout/catalog.module.css";
 }
 
 .requests {
@@ -379,7 +348,7 @@
   font-size: var(--text-xs);
 }
 
-.pagination span {
+.pagination > span {
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -387,34 +356,19 @@
   white-space: nowrap;
 }
 
-.pagination button {
+.pageTurn {
   min-height: 30px;
   padding: 5px 7px;
+  color: var(--muted);
   font-size: var(--text-xs);
 }
 
+.headerPagination {
+  border-top: 0;
+  border-bottom: 1px solid var(--line);
+}
+
 @container (max-width: 430px) {
-  .selectionHeader {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
-    row-gap: 3px;
-  }
-
-  .selectionActions {
-    display: grid;
-    grid-template-columns: auto auto;
-    justify-content: end;
-    row-gap: 3px;
-    margin-left: 0;
-  }
-
-  .selectionCount {
-    grid-column: 1 / -1;
-    justify-self: end;
-    margin-right: 0;
-  }
-
   .rowButton {
     grid-template-rows: 24px 38px;
   }
@@ -430,7 +384,7 @@
     justify-self: end;
   }
 
-  .pagination span {
+  .pagination > span {
     font-size: var(--text-xs);
   }
 }
