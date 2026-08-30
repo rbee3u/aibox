@@ -9,16 +9,17 @@
 
 mod agent;
 mod application_error;
+#[cfg(test)]
+mod architecture_tests;
 mod cli;
 mod component;
 mod config;
-#[cfg(test)]
-mod console_contract;
 mod docker;
 mod execution;
 mod foundation;
 mod metadata;
 mod request;
+mod sandbox;
 mod service;
 mod session;
 mod tenant;
@@ -88,22 +89,31 @@ fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext
     match cli.command {
         Command::Run(args) => {
             let root = context.root()?;
-            execution::run(
-                args.agent.unwrap_or(AgentKind::Codex),
-                &args,
-                passthrough,
-                &root,
-                &context.docker(),
-            )
+            let command = execution::RunCommand {
+                agent: args.agent.unwrap_or(AgentKind::Codex),
+                tenant: args
+                    .tenant
+                    .unwrap_or_else(|| tenant::DEFAULT_TENANT_NAME.to_string()),
+                workspace: args.workspace,
+                mounts: args.mount,
+            };
+            execution::run(command, passthrough, &root, &context.docker())
         }
         Command::Debug(args) => {
             reject_passthrough("debug takes no pass-through args", passthrough)?;
             let root = context.root()?;
-            execution::debug(&args, &root, &context.docker())
+            let command = execution::DebugCommand {
+                tenant: args
+                    .tenant
+                    .unwrap_or_else(|| tenant::DEFAULT_TENANT_NAME.to_string()),
+            };
+            execution::debug(command, &root, &context.docker())
         }
         Command::Console(args) => {
             reject_passthrough("console takes no pass-through args", passthrough)?;
-            service::dispatch(&args)
+            service::dispatch(service::ConsoleCommand {
+                listen: args.listen,
+            })
         }
     }
 }

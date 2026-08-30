@@ -3,90 +3,36 @@
 use super::state::{ConsoleCspNonce, ServiceState};
 use crate::agent::AgentKind;
 use crate::application_error::{ApplicationError, ApplicationErrorKind};
-use crate::component::updates as component_updates;
-use crate::component::{self, ComponentStatus};
-use crate::config::model::{CustomProviderInput, VisualConfigOptionInput};
-use crate::request::assessment::effective_assessment;
-use crate::request::model::AssessmentLevel;
-use crate::tenant::{self, ManagedTenant, Tenant, TenantSelection};
-use crate::{config, docker, session};
-use anyhow::{Context, Result};
-use async_stream::stream;
-use axum::Json;
+use anyhow::Result;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Extension, Path, Query, State};
-use axum::http::{HeaderValue, Response, StatusCode, header};
-use axum::response::sse::{Event, KeepAlive, Sse};
-use base64::Engine as _;
-use bytes::Bytes;
-use futures_util::StreamExt as _;
+use axum::extract::Extension;
+use axum::http::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::convert::Infallible;
-use std::fs;
-use std::path::Path as FsPath;
-use std::time::Duration;
-use tokio_stream::wrappers::ReceiverStream;
 
+mod assets;
 mod components;
 mod configs;
+#[cfg(test)]
+mod contract;
 mod operations;
 mod overview;
 mod requests;
+mod response;
 mod routes;
 mod sessions;
 mod tenants;
 
 pub(crate) use components::ComponentRow;
 use components::component_rows;
-#[cfg(test)]
-pub(crate) use components::{
-    ComponentMutation, ComponentQuery, InstalledComponentResponse, RemovedComponentResponse,
-};
-#[cfg(test)]
-pub(crate) use configs::{
-    AuthPropagationPreviewResponse, ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest,
-    ConfigFileResponse, ConfigListResponse, ConfigMutationBase, CreatedConfigResponse,
-    DeleteConfigsRequest, DeletedConfigsResponse, DiagnoseConfigRequest, DiagnoseConfigResponse,
-    ExecuteAuthPropagationRequest, LinkedConfigFileResponse, SaveConfigFileRequest,
-};
-#[cfg(test)]
-pub(crate) use operations::{
-    BuildRequest, CancelledOperationResponse, OperationEnvelope, OperationQuery,
-};
-#[cfg(test)]
-pub(crate) use overview::BootstrapResponse;
-#[cfg(test)]
-pub(crate) use overview::{
-    DockerOverview, OverviewResponse, RequestOverview, RuntimeImageOverview, ServiceOverview,
-    TopologyAgent, TopologyComponents, TopologyCurrentConfig, TopologyNamedConfigs,
-    TopologyResponse, TopologyTenant,
-};
-#[cfg(test)]
-pub(crate) use requests::{
-    BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
-    EventTimingQuery, EventTimingResponse, EventTimingState, ListQuery, RequestApiError,
-    RequestDetail, RequestList, RequestState, RequestSummary, ResponseDetail,
-};
-#[cfg(test)]
-pub(crate) use sessions::{
-    DeleteSessionsRequest, DeletedSessionsResponse, SessionDetailFrame, SessionDetailQuery,
-    SessionEvidenceQuery,
-};
-#[cfg(test)]
-pub(crate) use tenants::TenantRow;
-#[cfg(test)]
-pub(crate) use tenants::{
-    CreateTenantRequest, CreatedTenantResponse, DeleteSelection, DeletedTenantsResponse,
-};
+use response::content;
 
 pub(crate) fn router() -> Router<ServiceState> {
     routes::router()
 }
 
 async fn index(Extension(csp_nonce): Extension<ConsoleCspNonce>) -> Response<Body> {
-    requests::index(csp_nonce.as_str()).await
+    assets::index(csp_nonce.as_str()).await
 }
 
 fn default_tenant_selection() -> String {
@@ -128,6 +74,28 @@ fn result_error(error: anyhow::Error) -> Response<Body> {
         ApplicationError::kind(&error).unwrap_or(ApplicationErrorKind::InvalidInput),
     );
     api_error(status, &message)
+}
+
+/// What every fallible Control API handler returns.
+pub(crate) type ControlResult = Result<Response<Body>, ControlError>;
+
+/// A domain error on its way to a Control API response.
+///
+/// Handlers return `Result<Response<Body>, ControlError>` so wire decoding,
+/// selector parsing, and coordinator calls can all use `?` instead of repeating
+/// a `match` that maps every error to [`result_error`].
+pub(crate) struct ControlError(anyhow::Error);
+
+impl<E: Into<anyhow::Error>> From<E> for ControlError {
+    fn from(error: E) -> Self {
+        Self(error.into())
+    }
+}
+
+impl axum::response::IntoResponse for ControlError {
+    fn into_response(self) -> Response<Body> {
+        result_error(self.0)
+    }
 }
 
 fn status_for_application_error(kind: ApplicationErrorKind) -> StatusCode {
@@ -179,47 +147,6 @@ pub(crate) struct ControlErrorBody<'a> {
     message: &'a str,
 }
 
-fn content(
-    status: StatusCode,
-    content_type: &'static str,
-    body: impl Into<Body>,
-) -> Response<Body> {
-    let mut response = Response::new(body.into());
-    *response.status_mut() = status;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    response
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn application_error_categories_have_stable_http_statuses() {
-        let cases = [
-            (ApplicationErrorKind::InvalidInput, StatusCode::BAD_REQUEST),
-            (ApplicationErrorKind::NotFound, StatusCode::NOT_FOUND),
-            (ApplicationErrorKind::Conflict, StatusCode::CONFLICT),
-            (
-                ApplicationErrorKind::InputTooLarge,
-                StatusCode::PAYLOAD_TOO_LARGE,
-            ),
-            (ApplicationErrorKind::Busy, StatusCode::CONFLICT),
-            (
-                ApplicationErrorKind::Internal,
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ),
-        ];
-        for (kind, expected) in cases {
-            assert_eq!(status_for_application_error(kind), expected, "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn unclassified_domain_errors_remain_bad_requests() {
-        let response = result_error(anyhow::anyhow!("invalid selector"));
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-}
+#[path = "control_tests.rs"]
+mod tests;

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 
 import type {
   ConfigApi,
@@ -8,29 +9,40 @@ import type {
 } from "@/api/configs";
 import type { TenantRow } from "@/api/core";
 import type { Operation } from "@/api/operations";
-import type { CodingAgentKind } from "@/domain/codingAgent";
-import { DNS_LABEL_PATTERN, type TenantSelection, type TenantSelectionKey } from "@/domain/tenant";
-import { propagationGroup } from "@/features/configs/configCatalog";
-import { useConfigEditorSession } from "@/features/configs/editor/useConfigEditorSession";
+import { CODING_AGENTS, type CodingAgentKind } from "@/domain/codingAgent";
+import { DNS_LABEL_PATTERN, type TenantSelectionValue } from "@/domain/tenant";
+import {
+  agentSelectionOptions,
+  tenantSelectionLabel,
+  tenantSelectionOptions,
+} from "@/features/common/tenantOptions";
+import type { ConfigFileController } from "@/features/configs/detail/configFileController";
+import {
+  useConfigEditorSession,
+  type ConfigFileStatus,
+} from "@/features/configs/detail/useConfigEditorSession";
+import { configWorkflowReducer, initialConfigWorkflow } from "@/features/configs/configWorkflow";
 import {
   configLocation,
-  configTenantKey,
+  configTenantSelectionValue,
   readConfigRoute,
-  tenantSelectionFromConfigKey,
+  tenantSelectionFromConfigValue,
   type ConfigApplyTarget,
   type ConfigDeleteTarget,
+  type ConfigPendingAction,
   type ConfigSelection,
 } from "@/features/configs/route";
-import { useConfigCatalog } from "@/features/configs/useConfigCatalog";
+import {
+  useConfigCatalog,
+  type ConfigCatalogLoadKind,
+} from "@/features/configs/catalog/useConfigCatalog";
+import { useConfigCrud } from "@/features/configs/mutation/useConfigCrud";
+import { useCredentialPropagation } from "@/features/configs/mutation/useCredentialPropagation";
+import { useElementRegistry } from "@/features/common/useElementRegistry";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
-import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
-import { resourceIcons } from "@/shared/icons/consoleIcons";
-import { messageOf } from "@/shared/lib/errors";
+import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import type { SelectionOption } from "@/shared/ui/SelectionMenu";
-
-const HostTenantIcon = resourceIcons.hostTenant;
-const ManagedTenantIcon = resourceIcons.managedTenant;
 
 interface ControllerOptions {
   api: ConfigApi;
@@ -41,15 +53,123 @@ interface ControllerOptions {
   onOperation?: (operation: Operation) => void;
 }
 
+export interface ConfigViewModel {
+  catalog: {
+    agent: CodingAgentKind;
+    agentOptions: SelectionOption<CodingAgentKind>[];
+    catalog: ConfigListData | null;
+    catalogError: string | null;
+    configFiles: string[];
+    configSelectionLabel: string;
+    configTenantLabel: string;
+    fileStatuses: Record<string, ConfigFileStatus>;
+    loadCatalog: (kind?: ConfigCatalogLoadKind) => Promise<ConfigListData | null>;
+    loadingCatalog: boolean;
+    loadingTenants: boolean;
+    managedTenantMissing: boolean;
+    refreshing: boolean;
+    retryTenants: () => void;
+    selectAgent: (values: ReadonlySet<CodingAgentKind>) => void;
+    selectTenant: (values: ReadonlySet<TenantSelectionValue>) => void;
+    tenant: ReturnType<typeof tenantSelectionFromConfigValue>;
+    tenantError: string | null;
+    tenantOptions: SelectionOption<TenantSelectionValue>[];
+  };
+  detail: {
+    closeConfigDetail: () => void;
+    detailBackButtonRef: RefObject<HTMLButtonElement | null>;
+    detailHeadingRef: RefObject<HTMLHeadingElement | null>;
+    detailOpen: boolean;
+    file: string | null;
+    openConfig: (name: string) => void;
+    openCurrent: () => void;
+    selection: ConfigSelection;
+  };
+  selection: {
+    allSelectable: boolean;
+    cancelSelection: () => void;
+    registerConfigRow: (key: string, element: HTMLButtonElement | null) => void;
+    selectableNames: string[];
+    selectedCount: number;
+    selectedKeys: Set<string>;
+    selectionMode: boolean;
+    enterSelection: () => void;
+    toggleAllConfigs: () => void;
+    toggleConfig: (name: string) => void;
+  };
+  mutations: {
+    applyConfig: (name: string) => Promise<void>;
+    busy: boolean;
+    createConfig: (name: string) => Promise<void>;
+    deleteConfigs: () => Promise<void>;
+    executePropagation: () => Promise<void>;
+    mutationBusy: boolean;
+    previewPropagation: () => Promise<void>;
+    requestDelete: (names: string[]) => void;
+    saveAll: () => Promise<void>;
+    saveInOrder: (names: readonly string[]) => Promise<boolean>;
+    saveOrder: string[];
+    savePending: (names: readonly string[]) => Promise<void>;
+  };
+  dialogs: {
+    applyTarget: ConfigApplyTarget | null;
+    cancelApply: () => void;
+    cancelDelete: () => void;
+    cancelPending: () => void;
+    changeNewName: (name: string) => void;
+    closeCreateDialog: () => void;
+    closePropagation: () => void;
+    createError: string | null;
+    createHelpId: string;
+    createNameValid: boolean;
+    createOpen: boolean;
+    createTitleId: string;
+    deleteTarget: ConfigDeleteTarget | null;
+    discardAndRunPendingAction: () => Promise<void>;
+    newName: string;
+    openCreateDialog: () => void;
+    pendingAction: ConfigPendingAction | null;
+    preview: PropagationPreview | null;
+    propagationHasFailures: boolean;
+    propagationNeedsAttention: boolean;
+    propagationTitleId: string;
+    report: PropagationReport | null;
+    requestApply: (name: string) => void;
+    unsavedTitleId: string;
+  };
+  editor: {
+    dirtyFiles: readonly string[];
+    editorMode: "visual" | "raw";
+    handleLinkedFileSaved: (name: string) => void;
+    handlePaneSaved: () => void;
+    handleVisualAvailable: (available: boolean) => void;
+    registerPane: (name: string, element: HTMLDivElement | null) => void;
+    prepareMainConfigSave: (customProvider: boolean) => boolean;
+    registerFileController: (name: string, controller: ConfigFileController | null) => void;
+    registerRevealRetry: (name: string, retry: (() => void) | null) => void;
+    requestEditorAction: (action: () => void | Promise<void>) => void;
+    retryReveals: () => void;
+    showRawEditor: () => void;
+    switchEditorMode: (next: "visual" | "raw") => void;
+    visualAvailable: boolean;
+  };
+  feedback: {
+    appliedName: string | null;
+    applyFeedback: string | null;
+    error: string | null;
+    setError: Dispatch<SetStateAction<string | null>>;
+  };
+}
+
 export function useConfigController({
   api,
   operation,
   search,
   onDirtyChange,
   onLocationChange,
-}: ControllerOptions) {
-  const [initialRoute] = useState(() => readConfigRoute(search));
-  const observedSearch = useRef(search);
+}: ControllerOptions): ConfigViewModel {
+  const route = useMemo(() => readConfigRoute(search), [search]);
+  const { agent, detailOpen, selection, tenant } = route;
   const loadTenants = useCallback((signal: AbortSignal) => api.listTenants(signal), [api]);
   const {
     data: tenants,
@@ -57,43 +177,39 @@ export function useConfigController({
     error: tenantError,
     retry: retryTenants,
   } = useAsyncResource<TenantRow[]>(loadTenants, []);
-  const [tenant, setTenant] = useState<TenantSelection>(initialRoute.tenant);
-  const [agent, setAgent] = useState<CodingAgentKind>(initialRoute.agent);
-  const [selection, setSelection] = useState<ConfigSelection>(initialRoute.selection);
-  const selectionRef = useRef<ConfigSelection>(initialRoute.selection);
-  const [file, setFile] = useState<string | null>(initialRoute.file);
   const [editorMode, setEditorMode] = useState<"visual" | "raw">("raw");
   const [visualAvailable, setVisualAvailable] = useState(false);
   const visualModeInitialized = useRef(false);
-  const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
-  const [detailOpen, setDetailOpen] = useState(initialRoute.detailOpen);
+  const [workflow, dispatchWorkflow] = useReducer(configWorkflowReducer, initialConfigWorkflow);
+  const { mutationBusy: busy, selectedKeys, selectionMode } = workflow;
+  const onBusyChange = useCallback(
+    (nextBusy: boolean) => dispatchWorkflow({ type: "mutation_changed", busy: nextBusy }),
+    [],
+  );
+  const resetSelection = useCallback(() => dispatchWorkflow({ type: "selection_cancel" }), []);
+  const recoverSelection = useCallback(
+    (remaining: Set<string>, resume: boolean) =>
+      dispatchWorkflow({ type: "selection_recovered", remaining, resume }),
+    [],
+  );
   const onCatalogLoaded = useCallback(
     (data: ConfigListData) => {
-      const routedSelection = selectionRef.current;
-      if (
-        !routedSelection.current &&
-        !data.configs.some((entry) => entry.name === routedSelection.config)
-      ) {
-        const fallback: ConfigSelection = { current: true };
-        selectionRef.current = fallback;
-        setSelection(fallback);
-        setDetailOpen(false);
+      if (!selection.current && !data.configs.some((entry) => entry.name === selection.config)) {
         onLocationChange(configLocation(tenant, agent, null), true);
+      } else if (route.file && !data.files.includes(route.file)) {
+        onLocationChange(
+          configLocation(tenant, agent, detailOpen ? selection : null, data.files[0]),
+          true,
+        );
       }
-      setFile((current) =>
-        current && data.files.includes(current) ? current : (data.files[0] ?? null),
-      );
-      setSelectedNames(
-        (current) =>
-          new Set([...current].filter((name) => data.configs.some((entry) => entry.name === name))),
-      );
+      dispatchWorkflow({
+        type: "selection_prune",
+        available: new Set(data.configs.map((entry) => entry.name)),
+      });
       setError(null);
     },
-    [agent, onLocationChange, tenant],
+    [agent, detailOpen, onLocationChange, route.file, selection, tenant],
   );
   const {
     catalog,
@@ -102,113 +218,43 @@ export function useConfigController({
     error: catalogError,
     load: loadCatalog,
   } = useConfigCatalog(api, tenant, agent, onCatalogLoaded);
-  const [deleteTarget, setDeleteTarget] = useState<ConfigDeleteTarget | null>(null);
-  const [applyTarget, setApplyTarget] = useState<ConfigApplyTarget | null>(null);
-  const [applyFeedback, setApplyFeedback] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const detailBackButtonRef = useRef<HTMLButtonElement>(null);
-  const configRowButtons = useRef(new Map<string, HTMLButtonElement>());
-  const [preview, setPreview] = useState<PropagationPreview | null>(null);
-  const [report, setReport] = useState<PropagationReport | null>(null);
+  const configRows = useElementRegistry<HTMLButtonElement>();
+  const focusAfterDetailClose = useRef<string | null>(null);
   const unsavedTitleId = useId();
   const createTitleId = useId();
   const createHelpId = useId();
   const propagationTitleId = useId();
   const operationRunning = operation?.state === "running";
   const mutationBusy = busy || operationRunning;
-  useEffect(() => {
-    if (observedSearch.current === search) return;
-    observedSearch.current = search;
-    const route = readConfigRoute(search);
-    setTenant((current) =>
-      configTenantKey(current) === configTenantKey(route.tenant) ? current : route.tenant,
-    );
-    setAgent((current) => (current === route.agent ? current : route.agent));
-    setSelection((current) => {
-      const currentKey = current.current ? "current" : `named:${current.config}`;
-      const routeKey = route.selection.current ? "current" : `named:${route.selection.config}`;
-      return currentKey === routeKey ? current : route.selection;
-    });
-    setFile((current) => (current === route.file ? current : route.file));
-    setDetailOpen((current) => (current === route.detailOpen ? current : route.detailOpen));
-    setSelectionMode(false);
-    setSelectedNames(new Set());
-  }, [search]);
-  useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
   const managedTenantMissing =
     !loadingTenants &&
     tenant.kind === "managed" &&
     !tenants.some((row) => row.kind === "managed" && row.name === tenant.name && row.exists);
-  useEffect(() => {
-    if (!detailOpen || !window.matchMedia?.("(max-width: 760px)").matches) return;
-    const frame = window.requestAnimationFrame(() =>
-      (detailHeadingRef.current ?? detailBackButtonRef.current)?.focus(),
-    );
-    return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, selection]);
+  useNarrowDetailFocus(
+    detailBackButtonRef,
+    detailOpen,
+    route.file,
+    selection.current ? "current" : selection.config,
+  );
   useEffect(() => {
     if (!managedTenantMissing || !detailOpen) return;
     // The latest Tenant catalog invalidated the route-backed detail selection.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDetailOpen(false);
-    setFile(null);
     onLocationChange(configLocation(tenant, agent, null), true);
   }, [agent, detailOpen, managedTenantMissing, onLocationChange, tenant]);
-  const tenantOptions = useMemo<SelectionOption<TenantSelectionKey>[]>(() => {
-    const host = tenants.find((tenant) => tenant.kind === "host");
-    const managed = tenants
-      .filter(
-        (
-          tenant,
-        ): tenant is TenantRow & {
-          kind: "managed";
-          name: string;
-        } => Boolean(tenant.kind === "managed" && tenant.name),
-      )
-      .sort((left, right) => left.name.localeCompare(right.name));
-    return [
-      ...(host
-        ? [
-            {
-              value: "host" as const,
-              label: "Host Tenant",
-              icon: <HostTenantIcon size={14} aria-hidden="true" />,
-            },
-          ]
-        : []),
-      ...managed.map((tenant) => ({
-        value: `managed:${tenant.name}` as const,
-        label: tenant.display_name,
-        summaryLabel: tenant.display_name,
-        icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
-      })),
-    ];
-  }, [tenants]);
-  const agentOptions = useMemo<SelectionOption<CodingAgentKind>[]>(
-    () =>
-      (["codex", "claude"] as const).map((value) => ({
-        value,
-        label: value === "codex" ? "Codex" : "Claude",
-        icon: <BrandIcon brand={brandForAgent(value)} size={14} />,
-      })),
-    [],
-  );
-  const configTenantLabel =
-    tenant.kind === "host"
-      ? "Host Tenant"
-      : (tenants.find((row) => row.kind === "managed" && row.name === tenant.name)?.display_name ??
-        tenant.name);
+  const tenantOptions = useMemo(() => tenantSelectionOptions(tenants), [tenants]);
+  const agentOptions = useMemo(() => agentSelectionOptions(CODING_AGENTS), []);
+  const configTenantLabel = tenantSelectionLabel(tenants, tenant);
   const configSelectionLabel = selection.current
     ? "Current Config"
     : `Named Config ${selection.config}`;
   const currentSelection = selection.current;
-  const selectedTenantKey = configTenantKey(tenant);
+  const selectedTenantSelectionValue = configTenantSelectionValue(tenant);
   const selectedConfigKey = selection.current ? "current" : `named:${selection.config}`;
   const configFiles = catalog?.files ?? [];
+  const file =
+    route.file && configFiles.includes(route.file) ? route.file : (configFiles[0] ?? null);
   const saveOrder = agent === "codex" ? ["auth.json", "config.toml"] : configFiles;
   const {
     cancelPending,
@@ -225,35 +271,84 @@ export function useConfigController({
     retryReveals,
     saveInOrder,
     savePending,
-  } = useConfigEditorSession(configFiles, `${selectedTenantKey}:${agent}`, onDirtyChange, setError);
-  const paneRefs = useRef(new Map<string, HTMLDivElement>());
+  } = useConfigEditorSession(
+    configFiles,
+    `${selectedTenantSelectionValue}:${agent}`,
+    onDirtyChange,
+    setError,
+  );
+  const crud = useConfigCrud({
+    agent,
+    api,
+    currentSelection,
+    file,
+    loadCatalog,
+    onLocationChange,
+    operationRunning,
+    onBusyChange,
+    onSelectionRecovery: recoverSelection,
+    onSelectionReset: resetSelection,
+    reloadFiles,
+    requestEditorAction,
+    selection,
+    selectionMode,
+    setError,
+    tenant,
+  });
+  const propagation = useCredentialPropagation({
+    api,
+    loadCatalog,
+    onBusyChange,
+    operationRunning,
+    setError,
+  });
+  const panes = useElementRegistry<HTMLDivElement>();
+  function closeConfigDetail() {
+    requestEditorAction(() => {
+      focusAfterDetailClose.current = selection.current ? "current" : selection.config;
+      onLocationChange(configLocation(tenant, agent, null));
+    });
+  }
+  useEffect(() => {
+    if (detailOpen || !focusAfterDetailClose.current) return;
+    const key = focusAfterDetailClose.current;
+    let focusFrame = 0;
+    const revealFrame = window.requestAnimationFrame(() => {
+      focusFrame = window.requestAnimationFrame(() => {
+        if (configRows.focus(key)) focusAfterDetailClose.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(revealFrame);
+      window.cancelAnimationFrame(focusFrame);
+    };
+  }, [catalog, configRows, detailOpen]);
   useEffect(() => {
     visualModeInitialized.current = false;
     // A route-backed Config selection owns a distinct editor-mode lifecycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisualAvailable(false);
     setEditorMode("raw");
-  }, [agent, selectedConfigKey, selectedTenantKey]);
+  }, [agent, selectedConfigKey, selectedTenantSelectionValue]);
   useEffect(() => {
     if (!detailOpen || !file) return;
     const frame = window.requestAnimationFrame(() =>
-      paneRefs.current.get(file)?.scrollIntoView?.({ block: "nearest" }),
+      panes.get(file)?.scrollIntoView?.({ block: "nearest" }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, catalog]);
+  }, [detailOpen, file, catalog, panes]);
   useEffect(() => {
     // Loading a different external Config catalog resets editor-local state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisualAvailable(false);
     setEditorMode("raw");
-    setSelectionMode(false);
-    setSelectedNames(new Set());
-  }, [agent, selectedTenantKey]);
+    resetSelection();
+  }, [agent, resetSelection, selectedTenantSelectionValue]);
   const appliedName = catalog?.application.last_application?.applied ?? null;
-  const selectedCount = selectedNames.size;
+  const selectedCount = selectedKeys.size;
   const selectableNames = catalog?.configs.map((entry) => entry.name) ?? [];
   const allSelectable =
-    selectableNames.length > 0 && selectableNames.every((name) => selectedNames.has(name));
+    selectableNames.length > 0 && selectableNames.every((name) => selectedKeys.has(name));
   const handlePaneSaved = useCallback(() => {
     void loadCatalog("background");
   }, [loadCatalog]);
@@ -281,267 +376,144 @@ export function useConfigController({
     },
     [currentSelection, editorMode, requestEditorAction, visualAvailable],
   );
-  function selectTenant(values: ReadonlySet<TenantSelectionKey>) {
+  const showRawEditor = useCallback(() => setEditorMode("raw"), []);
+  function selectTenant(values: ReadonlySet<TenantSelectionValue>) {
     const next = [...values][0];
-    if (!next || next === configTenantKey(tenant)) return;
+    if (!next || next === configTenantSelectionValue(tenant)) return;
     requestEditorAction(() => {
-      setTenant(tenantSelectionFromConfigKey(next));
-      setSelection({ current: true });
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      setDetailOpen(false);
-      onLocationChange(configLocation(tenantSelectionFromConfigKey(next), agent, null));
+      resetSelection();
+      onLocationChange(configLocation(tenantSelectionFromConfigValue(next), agent, null));
     });
   }
   function selectAgent(values: ReadonlySet<CodingAgentKind>) {
     const next = [...values][0];
     if (!next || next === agent) return;
     requestEditorAction(() => {
-      setAgent(next);
-      setSelection({ current: true });
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      setDetailOpen(false);
+      resetSelection();
       onLocationChange(configLocation(tenant, next, null));
     });
   }
   function openConfig(name: string) {
     requestEditorAction(() => {
-      setSelection({ current: false, config: name });
-      setDetailOpen(true);
       const nextSelection: ConfigSelection = { current: false, config: name };
       onLocationChange(configLocation(tenant, agent, nextSelection, file));
     });
   }
   function openCurrent() {
     requestEditorAction(() => {
-      setSelection({ current: true });
-      setDetailOpen(true);
       onLocationChange(configLocation(tenant, agent, { current: true }, file));
     });
   }
   function toggleConfig(name: string) {
-    setSelectedNames((current) => {
-      const next = new Set(current);
-      if (!next.delete(name)) next.add(name);
-      return next;
-    });
+    dispatchWorkflow({ type: "selection_toggle", key: name });
   }
   function toggleAllConfigs() {
-    setSelectedNames(allSelectable ? new Set() : new Set(selectableNames));
+    dispatchWorkflow({
+      type: "selection_toggle_all",
+      keys: selectableNames,
+      clear: allSelectable,
+    });
   }
   function cancelSelection() {
-    setSelectionMode(false);
-    setSelectedNames(new Set());
+    resetSelection();
   }
-  function requestDelete(names: string[]) {
-    if (names.length === 0) return;
-    requestEditorAction(() => setDeleteTarget({ names }));
-  }
-  async function createConfig(name: string) {
-    if (operationRunning || !name) return;
-    setBusy(true);
+  async function saveAll() {
+    onBusyChange(true);
     try {
-      await api.createConfig(tenant, agent, name);
-      setNewName("");
-      setCreateError(null);
-      setCreateOpen(false);
+      await saveInOrder(saveOrder);
       await loadCatalog("background");
-      setSelection({ current: false, config: name });
-      setDetailOpen(true);
-      onLocationChange(configLocation(tenant, agent, { current: false, config: name }, file));
-    } catch (cause) {
-      setCreateError(messageOf(cause));
     } finally {
-      setBusy(false);
+      onBusyChange(false);
     }
   }
-  async function applyConfig(name: string) {
-    if (operationRunning) return;
-    setBusy(true);
-    setApplyFeedback(null);
-    let applyError: string | null = null;
-    try {
-      await api.applyConfig(tenant, agent, name);
-    } catch (cause) {
-      applyError = `${messageOf(cause)} Some Current Config files may already have been updated.`;
-    } finally {
-      const refreshed = await loadCatalog("background");
-      if (refreshed && currentSelection) {
-        reloadFiles(refreshed.files);
-      }
-      setApplyTarget(null);
-      setError(applyError);
-      if (!applyError) {
-        setApplyFeedback(
-          `Applied Named Config ${name} to Current Config. This is a one-time projection; it is not an Active Config.`,
-        );
-      }
-      setBusy(false);
-    }
-  }
-  async function deleteConfigs() {
-    if (operationRunning || !deleteTarget || deleteTarget.names.length === 0) return;
-    const requestedNames = deleteTarget.names;
-    const wasSelectionMode = selectionMode;
-    setBusy(true);
-    try {
-      await api.deleteConfigs(tenant, agent, requestedNames);
-      const deletedSelected = !selection.current && requestedNames.includes(selection.config ?? "");
-      setDeleteTarget(null);
-      setSelectionMode(false);
-      setSelectedNames(new Set());
-      if (deletedSelected) {
-        setSelection({ current: true });
-        setDetailOpen(false);
-        onLocationChange(configLocation(tenant, agent, null), true);
-      }
-      await loadCatalog("background");
-    } catch (cause) {
-      const deletionError = messageOf(cause);
-      setDeleteTarget(null);
-      const refreshed = await loadCatalog("background");
-      if (refreshed) {
-        const remaining = requestedNames.filter((name) =>
-          refreshed.configs.some((entry) => entry.name === name),
-        );
-        setSelectedNames(wasSelectionMode ? new Set(remaining) : new Set());
-        setSelectionMode(wasSelectionMode && remaining.length > 0);
-        if (
-          !selection.current &&
-          !refreshed.configs.some((entry) => entry.name === selection.config)
-        ) {
-          setSelection({ current: true });
-          setDetailOpen(false);
-          onLocationChange(configLocation(tenant, agent, null), true);
-        }
-      }
-      setError(deletionError);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function previewPropagation() {
-    setBusy(true);
-    try {
-      setPreview(await api.previewCredentialPropagation());
-      setReport(null);
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function executePropagation() {
-    if (operationRunning || !preview) return;
-    setBusy(true);
-    try {
-      setReport(await api.executeCredentialPropagation(preview.plan_id));
-      setPreview(null);
-      await loadCatalog("background");
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-  const createNameValid = DNS_LABEL_PATTERN.test(newName);
-  const propagationHasFailures =
-    report?.entries.some((entry) => entry.outcome.status === "failed") ?? false;
-  const propagationNeedsAttention =
-    report?.entries.some((entry) => propagationGroup(entry.outcome.status) === "attention") ??
-    false;
+  const createNameValid = DNS_LABEL_PATTERN.test(crud.dialogs.newName);
   return {
-    agent,
-    agentOptions,
-    allSelectable,
-    appliedName,
-    applyConfig,
-    applyFeedback,
-    applyTarget,
-    busy,
-    cancelPending,
-    cancelSelection,
-    catalog,
-    catalogError,
-    configFiles,
-    configRowButtons,
-    configSelectionLabel,
-    configTenantLabel,
-    createConfig,
-    createError,
-    createHelpId,
-    createNameValid,
-    createOpen,
-    createTitleId,
-    deleteConfigs,
-    deleteTarget,
-    detailBackButtonRef,
-    detailHeadingRef,
-    detailOpen,
-    dirtyFiles,
-    discardAndRunPendingAction,
-    editorMode,
-    error,
-    executePropagation,
-    file,
-    fileStatuses,
-    handleLinkedFileSaved,
-    handlePaneSaved,
-    handleVisualAvailable,
-    loadCatalog,
-    loadingCatalog,
-    loadingTenants,
-    managedTenantMissing,
-    mutationBusy,
-    newName,
-    openConfig,
-    openCurrent,
-    paneRefs,
-    pendingAction,
-    prepareMainConfigSave,
-    preview,
-    previewPropagation,
-    propagationHasFailures,
-    propagationNeedsAttention,
-    propagationTitleId,
-    refreshing,
-    registerFileController,
-    registerRevealRetry,
-    report,
-    requestDelete,
-    requestEditorAction,
-    retryReveals,
-    retryTenants,
-    saveInOrder,
-    saveOrder,
-    savePending,
-    selectAgent,
-    selectableNames,
-    selectedCount,
-    selectedNames,
-    selection,
-    selectionMode,
-    selectTenant,
-    setApplyTarget,
-    setBusy,
-    setCreateError,
-    setCreateOpen,
-    setDeleteTarget,
-    setDetailOpen,
-    setEditorMode,
-    setError,
-    setNewName,
-    setPreview,
-    setReport,
-    setSelectionMode,
-    switchEditorMode,
-    tenant,
-    tenantError,
-    tenantOptions,
-    toggleAllConfigs,
-    toggleConfig,
-    unsavedTitleId,
-    visualAvailable,
+    catalog: {
+      agent,
+      agentOptions,
+      catalog,
+      catalogError,
+      configFiles,
+      configSelectionLabel,
+      configTenantLabel,
+      fileStatuses,
+      loadCatalog,
+      loadingCatalog,
+      loadingTenants,
+      managedTenantMissing,
+      refreshing,
+      retryTenants,
+      selectAgent,
+      selectTenant,
+      tenant,
+      tenantError,
+      tenantOptions,
+    },
+    detail: {
+      closeConfigDetail,
+      detailBackButtonRef,
+      detailHeadingRef,
+      detailOpen,
+      file,
+      openConfig,
+      openCurrent,
+      selection,
+    },
+    selection: {
+      allSelectable,
+      cancelSelection,
+      registerConfigRow: configRows.register,
+      selectableNames,
+      selectedCount,
+      selectedKeys,
+      selectionMode,
+      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      toggleAllConfigs,
+      toggleConfig,
+    },
+    mutations: {
+      ...crud.mutations,
+      ...propagation.mutations,
+      busy,
+      mutationBusy,
+      saveAll,
+      saveInOrder,
+      saveOrder,
+      savePending,
+    },
+    dialogs: {
+      ...crud.dialogs,
+      ...propagation.dialogs,
+      cancelPending,
+      createHelpId,
+      createNameValid,
+      createTitleId,
+      discardAndRunPendingAction,
+      pendingAction,
+      propagationTitleId,
+      unsavedTitleId,
+    },
+    editor: {
+      dirtyFiles,
+      editorMode,
+      handleLinkedFileSaved,
+      handlePaneSaved,
+      handleVisualAvailable,
+      prepareMainConfigSave,
+      registerFileController,
+      registerPane: panes.register,
+      registerRevealRetry,
+      requestEditorAction,
+      retryReveals,
+      showRawEditor,
+      switchEditorMode,
+      visualAvailable,
+    },
+    feedback: {
+      appliedName,
+      applyFeedback: crud.applyFeedback,
+      error,
+      setError,
+    },
   };
 }

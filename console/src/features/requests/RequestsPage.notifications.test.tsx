@@ -2,15 +2,15 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/transport";
+import { ApiError } from "@/api/requests";
 import { completedDetail, completedSummary, requestList } from "@/features/requests/testFixtures";
 import {
   advanceTimers,
   confirmDeletion,
   flushEffects,
-  openCompletedRecord,
+  openCompletedRequest,
   renderApp,
-  selectCompletedRecord,
+  selectCompletedRequest,
 } from "@/features/requests/testHarness";
 
 describe("Requests page failure notifications", () => {
@@ -60,7 +60,7 @@ describe("Requests page failure notifications", () => {
     const user = userEvent.setup();
     renderApp({ getRequest });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
 
     await screen.findByRole("heading", { name: "Select a Request" });
     expect(screen.getByRole("alert")).toHaveTextContent("Request not found");
@@ -148,7 +148,7 @@ describe("Requests page failure notifications", () => {
     const user = userEvent.setup();
     renderApp({ listRequests, deleteRequests: vi.fn().mockResolvedValue(1) });
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await confirmDeletion(user, "Delete selected");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot refresh Requests");

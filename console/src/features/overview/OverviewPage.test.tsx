@@ -3,11 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import styles from "@/features/overview/OverviewPage.module.css";
-import { composeControlApi } from "@/api/connect";
 import type { Operation } from "@/api/operations";
-import type { OverviewData, TopologyData } from "@/api/overview";
+import type { OverviewApi, OverviewData, TopologyData } from "@/api/overview";
 import type { SessionSummaryData } from "@/api/sessions";
-import { materializeControlApi } from "@/test/managementTestSupport";
 
 const overview = {
   service: {
@@ -113,17 +111,19 @@ const operation = {
   logs: [],
 } satisfies Operation;
 
-function fakeApi(topologyData: TopologyData = topology) {
+function fakeApi(topologyData: TopologyData = topology, overviewData: OverviewData = overview) {
   const sessionSummary = { count: 3, warnings: [], partial: false } satisfies SessionSummaryData;
-  const get = vi.fn((path: string) => {
-    if (path === "/_aibox/api/overview") return Promise.resolve(overview);
-    if (path === "/_aibox/api/topology") return Promise.resolve(topologyData);
-    if (path.startsWith("/_aibox/api/sessions/summary?")) return Promise.resolve(sessionSummary);
-    return Promise.reject(new Error(`Unexpected GET ${path}`));
-  });
-  const post = vi.fn(() => Promise.resolve(operation));
-  const control = materializeControlApi({ get, post });
-  return { api: composeControlApi(control).overview, control, get, post };
+  const loadOverview = vi.fn(() => Promise.resolve(overviewData));
+  const loadTopology = vi.fn(() => Promise.resolve(topologyData));
+  const loadSessionSummary = vi.fn(() => Promise.resolve(sessionSummary));
+  const buildImage = vi.fn(() => Promise.resolve(operation));
+  const api = {
+    loadOverview,
+    loadTopology,
+    loadSessionSummary,
+    buildImage,
+  } satisfies OverviewApi;
+  return { api, loadOverview, loadTopology, loadSessionSummary, buildImage };
 }
 
 async function openTopology() {
@@ -132,7 +132,7 @@ async function openTopology() {
 
 describe("OverviewPage", () => {
   it("shows health, Runtime Image metadata, and both explicit build modes", async () => {
-    const { api, post } = fakeApi();
+    const { api, buildImage } = fakeApi();
     const onOperation = vi.fn();
     const user = userEvent.setup();
     render(
@@ -150,27 +150,17 @@ describe("OverviewPage", () => {
     expect(screen.queryByText(/Rebuild/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^Build$/ }));
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith("/_aibox/api/operations/build", { force: false }),
-    );
+    await waitFor(() => expect(buildImage).toHaveBeenCalledWith(false));
     await user.click(screen.getByRole("button", { name: "Build without cache" }));
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith("/_aibox/api/operations/build", { force: true }),
-    );
+    await waitFor(() => expect(buildImage).toHaveBeenCalledWith(true));
     expect(onOperation).toHaveBeenCalledTimes(2);
   });
 
   it("shows and describes why Runtime Image builds are unavailable", async () => {
-    const get = vi.fn((path: string): Promise<unknown> => {
-      if (path === "/_aibox/api/overview")
-        return Promise.resolve({
-          ...overview,
-          docker: { status: "unavailable" as const, error: "Docker daemon is offline" },
-        });
-      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
-      return Promise.reject(new Error(`Unexpected GET ${path}`));
+    const { api } = fakeApi(topology, {
+      ...overview,
+      docker: { status: "unavailable", error: "Docker daemon is offline" },
     });
-    const api = composeControlApi(materializeControlApi({ get, post: vi.fn() })).overview;
 
     render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
@@ -205,38 +195,20 @@ describe("OverviewPage", () => {
   });
 
   it("uses singular labels for one Request error or warning", async () => {
-    const { control } = fakeApi();
     const singularOverview = {
       ...overview,
       requests: { ...overview.requests, warning: 0, error: 1 },
     } satisfies OverviewData;
-    const get = vi.fn((path: string) => {
-      if (path === "/_aibox/api/overview") return Promise.resolve(singularOverview);
-      if (path === "/_aibox/api/topology") return Promise.resolve(topology);
-      if (path.startsWith("/_aibox/api/sessions/summary?"))
-        return Promise.resolve({
-          count: 0,
-          warnings: [],
-          partial: false,
-        } satisfies SessionSummaryData);
-      return Promise.reject(new Error(`Unexpected GET ${path}`));
-    });
+    const { api } = fakeApi(topology, singularOverview);
 
-    render(
-      <OverviewPage
-        api={composeControlApi(materializeControlApi({ ...control, get })).overview}
-        operation={null}
-        onNavigate={vi.fn()}
-        onOperation={vi.fn()}
-      />,
-    );
+    render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
 
     expect(await screen.findByText("1 error · 0 warnings")).toBeInTheDocument();
     expect(screen.queryByText("1 errors · 0 warnings")).not.toBeInTheDocument();
   });
 
   it("shows the complete structural map and loads Session counts on demand", async () => {
-    const { api, get } = fakeApi();
+    const { api, loadSessionSummary } = fakeApi();
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(
@@ -251,8 +223,9 @@ describe("OverviewPage", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Expand Sessions" })[0]);
     expect((await within(tree).findAllByText("3 Sessions")).length).toBe(2);
-    expect(get).toHaveBeenCalledWith(
-      "/_aibox/api/sessions/summary?tenant=managed%3Adefault&agent=codex",
+    expect(loadSessionSummary).toHaveBeenCalledWith(
+      { kind: "managed", name: "default" },
+      "codex",
       expect.any(AbortSignal),
     );
 

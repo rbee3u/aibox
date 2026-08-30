@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/transport";
+import { ApiError } from "@/api/requests";
 import {
   completedDetail,
   completedSummary,
@@ -10,7 +10,7 @@ import {
   requestList,
   requestListFor,
 } from "@/features/requests/testFixtures";
-import { flushEffects, openCompletedRecord, renderApp } from "@/features/requests/testHarness";
+import { flushEffects, openCompletedRequest, renderApp } from "@/features/requests/testHarness";
 import { deferred } from "@/test/deferred";
 
 describe("Requests page routing", () => {
@@ -68,9 +68,11 @@ describe("Requests page routing", () => {
     const user = userEvent.setup();
     renderApp({
       listRequests: vi.fn().mockResolvedValue({ ...requestList, has_next: true }),
+      getRequest: vi.fn().mockResolvedValue(completedDetail),
+      loadBody: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 }),
     });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     expect(window.location.search).toBe(`?request=${completedSummary.id}`);
     await user.click(screen.getByRole("tab", { name: "Request" }));
     expect(window.location.search).toBe(`?request=${completedSummary.id}&tab=request`);
@@ -83,9 +85,18 @@ describe("Requests page routing", () => {
   it("does not navigate when clicking the already active Request detail Tab", async () => {
     const user = userEvent.setup();
     const pushState = vi.spyOn(window.history, "pushState");
-    renderApp();
+    renderApp({
+      getRequest: vi.fn().mockResolvedValue(completedDetail),
+      loadBody: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 }),
+      loadEventTimings: vi.fn().mockResolvedValue({
+        state: "available",
+        events: [],
+        next_sequence: 0,
+        warning: null,
+      }),
+    });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     pushState.mockClear();
 
     await user.click(screen.getByRole("tab", { name: "Summary" }));

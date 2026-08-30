@@ -1,6 +1,8 @@
 import type { TenantRow } from "@/api/core";
 import type {
+  ComponentKind as GeneratedComponentKind,
   ComponentRow as GeneratedComponentRow,
+  ComponentStatusWire as GeneratedComponentStatus,
   LatestEntry as GeneratedLatestEntry,
   LatestSnapshot as GeneratedLatestSnapshot,
   OperationSnapshot,
@@ -10,67 +12,18 @@ import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
-export type ComponentKind =
-  "node" | "codex" | "claude" | "python" | "claude-statusline" | "codex-statusline" | "rust" | "go";
-
-export type ComponentStatus =
-  "not-installed" | "installed" | "incomplete" | "modified" | "unmanaged";
-
-export type ComponentRow = Omit<GeneratedComponentRow, "kind" | "status"> & {
-  kind: ComponentKind;
-  supports_version: boolean;
-  status: ComponentStatus | null;
-};
-
-export type ComponentLatestEntry = Omit<GeneratedLatestEntry, "kind"> & {
-  kind: ComponentKind;
-};
-
-export type ComponentLatestSnapshot = Omit<GeneratedLatestSnapshot, "entries"> & {
-  entries: ComponentLatestEntry[];
-};
-
-const COMPONENT_KINDS = new Set<ComponentKind>([
-  "node",
-  "codex",
-  "claude",
-  "python",
-  "claude-statusline",
-  "codex-statusline",
-  "rust",
-  "go",
-]);
-
-const COMPONENT_STATUSES = new Set<ComponentStatus>([
-  "not-installed",
-  "installed",
-  "incomplete",
-  "modified",
-  "unmanaged",
-]);
-
-function componentKind(value: string): ComponentKind {
-  if (COMPONENT_KINDS.has(value as ComponentKind)) return value as ComponentKind;
-  throw new Error(`Unsupported Component kind: ${value}`);
-}
-
-function componentStatus(value: string | null): ComponentStatus | null {
-  if (value === null) return null;
-  if (COMPONENT_STATUSES.has(value as ComponentStatus)) return value as ComponentStatus;
-  throw new Error(`Unsupported Component status: ${value}`);
-}
+export type ComponentKind = GeneratedComponentKind;
+export type ComponentStatus = GeneratedComponentStatus;
+export type ComponentRow = GeneratedComponentRow;
+export type ComponentLatestEntry = GeneratedLatestEntry;
+export type ComponentLatestSnapshot = GeneratedLatestSnapshot;
 
 export function decodeComponentRow(value: GeneratedComponentRow): ComponentRow {
-  return { ...value, kind: componentKind(value.kind), status: componentStatus(value.status) };
+  return value;
 }
 
 function latestSnapshot(value: GeneratedLatestSnapshot | null): ComponentLatestSnapshot | null {
-  if (value === null) return null;
-  if (!Array.isArray(value.entries)) return value as unknown as ComponentLatestSnapshot;
-  return {
-    ...value,
-    entries: value.entries.map((entry) => ({ ...entry, kind: componentKind(entry.kind) })),
-  };
+  return value;
 }
 
 export interface TenantApi {
@@ -113,17 +66,11 @@ export function tenantsApi(client: ControlApi): TenantApi {
     listComponents: (tenant, signal) =>
       client
         .get<GeneratedComponentRow[]>(`/_aibox/api/components?${tenantQuery(tenant)}`, signal)
-        .then((rows) =>
-          Array.isArray(rows) ? rows.map(decodeComponentRow) : (rows as unknown as ComponentRow[]),
-        ),
+        .then((rows) => (Array.isArray(rows) ? rows.map(decodeComponentRow) : [])),
     latestComponents: (signal) =>
       client
         .get<GeneratedLatestSnapshot | null>("/_aibox/api/components/latest", signal)
-        .then((value) =>
-          value === null || (typeof value === "object" && Array.isArray(value.entries))
-            ? latestSnapshot(value)
-            : (value as unknown as ComponentLatestSnapshot),
-        ),
+        .then((value) => latestSnapshot(value)),
     checkLatestComponents: () =>
       client
         .post<GeneratedLatestSnapshot>("/_aibox/api/components/latest/check", {})

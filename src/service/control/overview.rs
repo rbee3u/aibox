@@ -1,6 +1,15 @@
 //! Overview and Topology Control API read projections.
 
-use super::*;
+use super::{ComponentRow, blocking, component_rows};
+use crate::agent::AgentKind;
+use crate::service::state::ServiceState;
+use crate::tenant::{self, ManagedTenant, Tenant};
+use crate::{config, docker};
+use axum::Json;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::Response;
+use serde::Serialize;
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -70,7 +79,7 @@ pub(super) async fn overview(State(state): State<ServiceState>) -> Response<Body
     let root = state.root();
     let host_home = state.host_home();
     let image = state.image();
-    let request = state.request().store.clone();
+    let request = state.request().inspection();
     let listen = state.listen();
     let uptime = state.uptime_seconds();
     blocking(move || {
@@ -110,20 +119,14 @@ pub(super) async fn overview(State(state): State<ServiceState>) -> Response<Body
                 },
             ),
         };
-        let captured_requests = request.scan_summaries()?;
-        let mut requests = RequestOverview {
-            total: captured_requests.len(),
-            bytes: directory_size(request.root())?,
-            ..RequestOverview::default()
+        let captured_requests = request.overview()?;
+        let requests = RequestOverview {
+            total: captured_requests.total,
+            active: captured_requests.active,
+            warning: captured_requests.warning,
+            error: captured_requests.error,
+            bytes: captured_requests.bytes,
         };
-        for captured_request in captured_requests {
-            match effective_assessment(&captured_request.summary, captured_request.active).level {
-                AssessmentLevel::Active => requests.active += 1,
-                AssessmentLevel::Warning => requests.warning += 1,
-                AssessmentLevel::Error => requests.error += 1,
-                AssessmentLevel::Ok => {}
-            }
-        }
         Ok(OverviewResponse {
             service: ServiceOverview {
                 version: env!("CARGO_PKG_VERSION"),
@@ -281,23 +284,4 @@ fn topology_agent(tenant: &Tenant, agent: AgentKind) -> TopologyAgent {
         named_configs,
         application: config::application_status(&selected),
     }
-}
-
-fn directory_size(root: &FsPath) -> Result<u64> {
-    let mut total = 0u64;
-    for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if !kind.is_dir() || kind.is_symlink() {
-            continue;
-        }
-        for child in fs::read_dir(entry.path())? {
-            let child = child?;
-            let kind = child.file_type()?;
-            if kind.is_file() && !kind.is_symlink() {
-                total = total.saturating_add(child.metadata()?.len());
-            }
-        }
-    }
-    Ok(total)
 }

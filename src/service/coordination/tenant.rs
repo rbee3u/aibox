@@ -51,7 +51,7 @@ impl TenantCoordinator {
                 let managed = ManagedTenant::resolve(&root, &name)?;
                 entries.push(TenantCatalogEntry::Managed {
                     name,
-                    home: managed.home_dir.display().to_string(),
+                    home: managed.home_dir().display().to_string(),
                 });
             }
             Ok(entries)
@@ -67,8 +67,8 @@ impl TenantCoordinator {
             let tenant = ManagedTenant::resolve(&root, &name)?;
             tenant.ensure_initialized()?;
             Ok(CreatedTenant {
-                name,
-                home: tenant.home_dir.display().to_string(),
+                name: tenant.name().to_string(),
+                home: tenant.home_dir().display().to_string(),
             })
         })
         .await
@@ -117,32 +117,5 @@ fn validate_delete_command(command: &DeleteTenantsCommand) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn delete_validation_preserves_protection_and_confirmation_order() {
-        let protected = DeleteTenantsCommand {
-            names: vec![tenant::DEFAULT_TENANT_NAME.to_string()],
-            all: false,
-            confirmation: "wrong".to_string(),
-        };
-        let error = validate_delete_command(&protected).unwrap_err();
-        assert_eq!(
-            crate::application_error::ApplicationError::kind(&error),
-            Some(ApplicationErrorKind::Conflict)
-        );
-
-        let mismatch = DeleteTenantsCommand {
-            names: vec!["work".to_string()],
-            all: false,
-            confirmation: "wrong".to_string(),
-        };
-        let error = validate_delete_command(&mismatch).unwrap_err();
-        assert_eq!(
-            crate::application_error::ApplicationError::kind(&error),
-            Some(ApplicationErrorKind::InvalidInput)
-        );
-        assert_eq!(error.to_string(), "confirmation does not match Tenant name");
-    }
-}
+#[path = "tenant_tests.rs"]
+mod tests;

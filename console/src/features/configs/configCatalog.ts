@@ -1,7 +1,7 @@
 import type { ConfigCatalogEntry, ConfigCustomProvider, PropagationOutcome } from "@/api/configs";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
-import { configTenantKey } from "@/features/configs/route";
+import { configTenantSelectionValue } from "@/features/configs/route";
 import type { IssueTone } from "@/shared/ui/IssueIndicator";
 
 export interface ConfigIssuePresentation {
@@ -45,7 +45,7 @@ export function configIssueDescriptionId(
   agent: CodingAgentKind,
   name: string,
 ): string {
-  return `config-issue-${configTenantKey(tenant).replace(":", "-")}-${agent}-${name}`;
+  return `config-issue-${configTenantSelectionValue(tenant).replace(":", "-")}-${agent}-${name}`;
 }
 export function propagationGroup(
   status: PropagationOutcome["status"],

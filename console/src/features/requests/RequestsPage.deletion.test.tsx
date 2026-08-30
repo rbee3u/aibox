@@ -17,10 +17,10 @@ import {
   confirmDeletion,
   confirmSingleDeletion,
   flushEffects,
-  openActiveRecord,
-  openCompletedRecord,
+  openActiveRequest,
+  openCompletedRequest,
   renderApp,
-  selectCompletedRecord,
+  selectCompletedRequest,
 } from "@/features/requests/testHarness";
 import { deferred } from "@/test/deferred";
 
@@ -160,9 +160,13 @@ describe("Requests page selection and deletion", () => {
       .fn<RequestsApi["deleteRequests"]>()
       .mockReturnValue(deleteRequest.promise);
     const user = userEvent.setup();
-    renderApp({ listRequests, deleteRequests });
+    renderApp({
+      listRequests,
+      getRequest: vi.fn().mockResolvedValue(completedDetail),
+      deleteRequests,
+    });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await screen.findByRole("region", { name: "Request details" });
     await user.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
@@ -320,7 +324,7 @@ describe("Requests page selection and deletion", () => {
     const user = userEvent.setup();
     renderApp({ listRequests });
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await user.click(screen.getAllByRole("button", { name: /Next/ })[0]);
 
     await screen.findByRole("button", { name: "Select POST second.example.test/v1/responses" });
@@ -349,7 +353,7 @@ describe("Requests page selection and deletion", () => {
     const user = userEvent.setup();
     renderApp({ listRequests, deleteRequests });
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
     await user.click(
       await screen.findByRole("button", {
@@ -399,7 +403,7 @@ describe("Requests page selection and deletion", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     await user.click(cancel);
@@ -422,7 +426,7 @@ describe("Requests page selection and deletion", () => {
     const user = userEvent.setup();
     renderApp();
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await user.click(screen.getByRole("button", { name: "Delete selected" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request?" });
     fireEvent.keyDown(dialog, { key: "Escape" });
@@ -436,7 +440,7 @@ describe("Requests page selection and deletion", () => {
     const user = userEvent.setup();
     renderApp({ deleteRequests: vi.fn().mockRejectedValue(new Error("delete failed")) });
 
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await confirmDeletion(user, "Delete selected");
 
     const alert = await screen.findByRole("alert");
@@ -500,7 +504,7 @@ describe("Requests page selection and deletion", () => {
       .mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 });
     renderApp({ listRequests, getRequest, loadBody });
 
-    await openActiveRecord();
+    await openActiveRequest();
     fireEvent.click(screen.getByRole("tab", { name: "Request" }));
     await flushEffects();
     await advanceTimers(3000);
@@ -555,9 +559,9 @@ describe("Requests page selection and deletion", () => {
       deleteRequests: vi.fn().mockResolvedValue(1),
     });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     expect(screen.getByText("Loading request…")).toBeInTheDocument();
-    await selectCompletedRecord(user);
+    await selectCompletedRequest(user);
     await confirmDeletion(user, "Delete selected");
 
     await screen.findByRole("heading", { name: "Select a Request" });

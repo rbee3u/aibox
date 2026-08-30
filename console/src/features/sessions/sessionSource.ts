@@ -1,16 +1,16 @@
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { SessionRow } from "@/api/sessions";
 import {
-  tenantSelectionFromKey,
+  tenantSelectionFromValue,
   type TenantSelection,
-  type TenantSelectionKey,
+  type TenantSelectionValue,
 } from "@/domain/tenant";
 
 /** A Session list combines several Tenant-and-Agent scopes, tracked per row. */
 export interface SessionSource {
   key: string;
   tenant: TenantSelection;
-  tenantKey: TenantSelectionKey;
+  tenantSelectionValue: TenantSelectionValue;
   tenantLabel: string;
   agent: CodingAgentKind;
   agentLabel: string;
@@ -39,15 +39,15 @@ export function agentLabel(agent: CodingAgentKind): string {
   return SESSION_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
 }
 
-export function tenantSelectionFromSessionKey(key: TenantSelectionKey): TenantSelection {
-  return tenantSelectionFromKey(key);
+export function tenantSelectionFromSessionValue(key: TenantSelectionValue): TenantSelection {
+  return tenantSelectionFromValue(key);
 }
 
-export function sessionTenantLabel(key: TenantSelectionKey): string {
+export function sessionTenantLabel(key: TenantSelectionValue): string {
   return key === "host" ? "Host Tenant" : `Tenant ${key.slice(8)}`;
 }
 
-export function sessionListTenantLabel(key: TenantSelectionKey): string {
+export function sessionListTenantLabel(key: TenantSelectionValue): string {
   return key === "host" ? "Host Tenant" : key.slice(8);
 }
 
@@ -56,7 +56,7 @@ export function visibleSessionSource(source: SessionSource): string {
 }
 
 export function visibleSessionListSource(source: SessionSource): string {
-  return `${sessionListTenantLabel(source.tenantKey)} ${source.agentLabel}`;
+  return `${sessionListTenantLabel(source.tenantSelectionValue)} ${source.agentLabel}`;
 }
 
 export function accessibleSessionSource(source: SessionSource): string {
@@ -64,14 +64,14 @@ export function accessibleSessionSource(source: SessionSource): string {
 }
 
 export function sessionSource(
-  tenantKey: TenantSelectionKey,
+  tenantSelectionValue: TenantSelectionValue,
   agent: CodingAgentKind,
 ): SessionSource {
   return {
-    key: JSON.stringify([tenantKey, agent]),
-    tenant: tenantSelectionFromSessionKey(tenantKey),
-    tenantKey,
-    tenantLabel: sessionTenantLabel(tenantKey),
+    key: JSON.stringify([tenantSelectionValue, agent]),
+    tenant: tenantSelectionFromSessionValue(tenantSelectionValue),
+    tenantSelectionValue,
+    tenantLabel: sessionTenantLabel(tenantSelectionValue),
     agent,
     agentLabel: agentLabel(agent),
   };
@@ -80,7 +80,7 @@ export function sessionSource(
 export function sourcedSession(source: SessionSource, row: SessionRow): SourcedSession {
   return {
     ...row,
-    key: JSON.stringify([source.tenantKey, source.agent, row.id]),
+    key: JSON.stringify([source.tenantSelectionValue, source.agent, row.id]),
     source,
   };
 }

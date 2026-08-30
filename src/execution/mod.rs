@@ -1,16 +1,21 @@
-//! Transient Run and Debug Shell orchestration plus Docker specification assembly.
+//! Transient Run and Debug Shell orchestration.
+//!
+//! [`run`] and [`debug`] own their own command shapes; this module holds only
+//! the Docker source seam and the preflight steps both share.
 
-pub(crate) mod runspec;
+mod debug;
+mod run;
 
-use crate::agent::AgentKind;
-use crate::cli::{DebugArgs, RunArgs};
 use crate::component;
 use crate::docker;
-use crate::tenant::ManagedTenant;
-use crate::tenant::environment as tenant_environment;
+use crate::sandbox;
+use crate::tenant::{ManagedTenant, TenantEnvironmentCapabilities};
 use anyhow::{Context, Result};
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub(crate) use debug::{DebugCommand, debug};
+pub(crate) use run::{RunCommand, run};
 
 pub(crate) enum DockerSource {
     System,
@@ -36,48 +41,6 @@ impl DockerSource {
     }
 }
 
-pub(crate) fn run(
-    agent: AgentKind,
-    run: &RunArgs,
-    passthrough: &[OsString],
-    root: &Path,
-    docker: &DockerSource,
-) -> Result<i32> {
-    let image = docker::IMAGE;
-    let tenant = ManagedTenant::resolve(root, run.tenant_name())?;
-
-    let workspace = runspec::resolve_workspace(run.workspace.as_deref())?;
-    let mounts = runspec::resolve_mounts(&run.mount)?;
-    runspec::validate_extra_mount_targets(&mounts)?;
-    runspec::validate_aibox_mount_sources(&workspace, &mounts, root)?;
-
-    require_runtime_image(docker, image)?;
-    tenant.ensure_initialized()?;
-    component::require_agent_component(agent, &tenant.home_dir)?;
-    let home_dir = canonical_tenant_home(&tenant)?;
-    let components = tenant_environment_components(&home_dir);
-
-    let invocation = agent.invocation(Path::new(tenant_environment::CONTAINER_HOME), passthrough);
-    let agent_command = tenant_environment::build_agent_command(&invocation, components);
-    let run_args = runspec::assemble_run_args(&workspace, &home_dir, &mounts);
-
-    docker.run(&run_args, image, &agent_command)
-}
-
-pub(crate) fn debug(debug: &DebugArgs, root: &Path, docker: &DockerSource) -> Result<i32> {
-    let image = docker::IMAGE;
-    let tenant = ManagedTenant::resolve(root, debug.tenant_name())?;
-
-    require_runtime_image(docker, image)?;
-    tenant.ensure_initialized()?;
-    let home_dir = canonical_tenant_home(&tenant)?;
-    let components = tenant_environment_components(&home_dir);
-
-    let run_args = runspec::assemble_debug_args(&home_dir);
-    let command = tenant_environment::build_debug_command(components);
-    docker.run(&run_args, image, &command)
-}
-
 fn require_runtime_image(docker: &DockerSource, image: &str) -> Result<()> {
     if !docker.image_exists(image)? {
         anyhow::bail!(
@@ -87,14 +50,16 @@ fn require_runtime_image(docker: &DockerSource, image: &str) -> Result<()> {
     Ok(())
 }
 
-fn canonical_tenant_home(tenant: &ManagedTenant) -> Result<std::path::PathBuf> {
-    let home_dir = std::fs::canonicalize(&tenant.home_dir)
-        .with_context(|| format!("resolve tenant home {}", tenant.home_dir.display()))?;
-    runspec::reject_colon_in_bind_source("tenant home", &home_dir)?;
+fn canonical_tenant_home(tenant: &ManagedTenant) -> Result<PathBuf> {
+    let home_dir = std::fs::canonicalize(tenant.home_dir())
+        .with_context(|| format!("resolve tenant home {}", tenant.home_dir().display()))?;
+    sandbox::reject_colon_in_bind_source("tenant home", &home_dir)?;
     Ok(home_dir)
 }
 
-fn tenant_environment_components(home: &Path) -> component::InstalledComponentSnapshot {
+/// Snapshot Component-owned environment defaults, reporting inspection
+/// failures as warnings so one damaged Component cannot block a launch.
+fn tenant_capabilities(home: &Path) -> TenantEnvironmentCapabilities {
     let (components, warnings) = component::inspect_tenant_environment_components(home);
     for warning in warnings {
         eprintln!("!! {warning}");

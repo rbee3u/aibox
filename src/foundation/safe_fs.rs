@@ -43,6 +43,183 @@ pub(crate) fn open_real_file(path: &Path, kind: &str) -> Result<fs::File> {
     Ok(file)
 }
 
+/// Open a regular file beneath an already-selected directory without
+/// following symlinked ancestors or the final entry.
+pub(crate) fn open_regular_beneath(base: &Path, path: &Path, kind: &str) -> Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+
+        let relative = path
+            .strip_prefix(base)
+            .with_context(|| format!("{kind} {} is outside {}", path.display(), base.display()))?;
+        let mut components = relative.components();
+        let file_name = components
+            .next_back()
+            .and_then(|component| match component {
+                std::path::Component::Normal(name) => Some(name.to_os_string()),
+                _ => None,
+            })
+            .with_context(|| {
+                format!("{kind} path is not a normalized child: {}", path.display())
+            })?;
+        let base_c = std::ffi::CString::new(base.as_os_str().as_bytes())
+            .with_context(|| format!("{kind} base contains a NUL byte"))?;
+        // SAFETY: the path pointer is NUL-terminated and live for this call;
+        // the returned descriptor is checked before ownership transfer.
+        let base_fd = unsafe {
+            libc::open(
+                base_c.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if base_fd < 0 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("open {kind} base {}", base.display()));
+        }
+        // SAFETY: base_fd is a newly returned descriptor owned exactly once.
+        let mut parent = unsafe { OwnedFd::from_raw_fd(base_fd) };
+        for component in components {
+            let std::path::Component::Normal(name) = component else {
+                bail!("{kind} path is not a normalized child: {}", path.display());
+            };
+            let name = std::ffi::CString::new(name.as_bytes())
+                .with_context(|| format!("{kind} path contains a NUL byte"))?;
+            // SAFETY: parent is a valid directory and name is live and NUL-terminated.
+            let next_fd = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                )
+            };
+            if next_fd < 0 {
+                return Err(io::Error::last_os_error())
+                    .with_context(|| format!("open {kind} path {}", path.display()));
+            }
+            // SAFETY: next_fd is newly returned and replaces the old owner.
+            parent = unsafe { OwnedFd::from_raw_fd(next_fd) };
+        }
+        let name = std::ffi::CString::new(file_name.as_bytes())
+            .with_context(|| format!("{kind} path contains a NUL byte"))?;
+        // SAFETY: parent is a valid directory and name is live and NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("open {kind} {}", path.display()));
+        }
+        // SAFETY: fd is newly returned and transferred exactly once to File.
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        if !file.metadata()?.file_type().is_file() {
+            bail!("{kind} is not a regular file: {}", path.display());
+        }
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    {
+        let relative = path
+            .strip_prefix(base)
+            .with_context(|| format!("{kind} {} is outside {}", path.display(), base.display()))?;
+        let mut current = base.to_path_buf();
+        for component in relative.components() {
+            let std::path::Component::Normal(name) = component else {
+                bail!("{kind} path is not a normalized child: {}", path.display());
+            };
+            current.push(name);
+            if current != path {
+                real_dir_exists(&current, kind)?;
+            }
+        }
+        open_real_file(path, kind)
+    }
+}
+
+/// Remove a regular file beneath an already-selected directory using the
+/// same anchored traversal as [`open_regular_beneath`].
+pub(crate) fn remove_regular_beneath(base: &Path, path: &Path, kind: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let file = open_regular_beneath(base, path, kind)?;
+        drop(file);
+        let relative = path
+            .strip_prefix(base)
+            .with_context(|| format!("{kind} {} is outside {}", path.display(), base.display()))?;
+        let name = relative
+            .file_name()
+            .context("regular file path has no final name")?;
+        let parent_path = relative
+            .parent()
+            .map_or(base.to_path_buf(), |parent| base.join(parent));
+        let parent = open_directory_beneath(base, &parent_path, kind)?;
+        let name = std::ffi::CString::new({
+            use std::os::unix::ffi::OsStrExt;
+            name.as_bytes()
+        })?;
+        // SAFETY: parent is a valid directory and name is live and NUL-terminated.
+        let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) };
+        if result != 0 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("remove {kind} {}", path.display()));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        open_regular_beneath(base, path, kind)?;
+        fs::remove_file(path).with_context(|| format!("remove {kind} {}", path.display()))
+    }
+}
+
+#[cfg(unix)]
+fn open_directory_beneath(base: &Path, path: &Path, kind: &str) -> Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let relative = path
+        .strip_prefix(base)
+        .with_context(|| format!("{kind} {} is outside {}", path.display(), base.display()))?;
+    let base_c = std::ffi::CString::new(base.as_os_str().as_bytes())?;
+    // SAFETY: base_c is NUL-terminated and live for the call.
+    let base_fd = unsafe {
+        libc::open(
+            base_c.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if base_fd < 0 {
+        return Err(io::Error::last_os_error()).context("open anchored base directory");
+    }
+    // SAFETY: base_fd is a newly returned descriptor.
+    let mut current = unsafe { OwnedFd::from_raw_fd(base_fd) };
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("{kind} path is not a normalized child: {}", path.display());
+        };
+        let name = std::ffi::CString::new(name.as_bytes())?;
+        // SAFETY: current is a valid directory and name is live.
+        let next_fd = unsafe {
+            libc::openat(
+                current.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if next_fd < 0 {
+            return Err(io::Error::last_os_error()).context("open anchored parent directory");
+        }
+        // SAFETY: next_fd is newly returned and replaces the old owner.
+        current = unsafe { OwnedFd::from_raw_fd(next_fd) };
+    }
+    Ok(current)
+}
+
 #[cfg(unix)]
 fn open_no_follow(path: &Path) -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -272,78 +449,5 @@ impl FileSnapshot {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_snapshots_enforce_the_read_limit() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("config");
-        fs::write(&path, b"12345").unwrap();
-
-        let error = FileSnapshot::capture_with_limit(&path, 4)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("exceeds 4 bytes"), "{error}");
-        assert_eq!(
-            FileSnapshot::capture_with_limit(&path, 5).unwrap().content,
-            b"12345"
-        );
-    }
-
-    #[test]
-    fn file_snapshots_distinguish_absence_and_reject_non_files() {
-        let root = tempfile::tempdir().unwrap();
-        let missing = FileSnapshot::capture_with_limit(&root.path().join("missing"), 16).unwrap();
-        assert!(!missing.present);
-        assert!(missing.content.is_empty());
-        assert_eq!(missing.mode, None);
-
-        let error = FileSnapshot::capture_with_limit(root.path(), 16)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("not a regular file"), "{error}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn no_follow_file_primitives_reject_symlinks_and_fifos() {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt as _;
-        use std::os::unix::fs::symlink;
-
-        let root = tempfile::tempdir().unwrap();
-        let target = root.path().join("target");
-        fs::write(&target, b"target").unwrap();
-        let link = root.path().join("link");
-        symlink(&target, &link).unwrap();
-        assert!(open_real_file(&link, "test file").is_err());
-        assert!(create_new_file(&link, "test file", 0o600).is_err());
-
-        let fifo = root.path().join("fifo");
-        let fifo_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
-        // SAFETY: `fifo_path` is a valid NUL-terminated path and mode has no pointers.
-        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
-        assert!(open_real_file(&fifo, "test file").is_err());
-        assert!(create_new_file(&fifo, "test file", 0o600).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn prepared_atomic_write_publishes_content_and_requested_mode() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = tempfile::tempdir().unwrap();
-        let target = root.path().join("metadata.json");
-        let mut write =
-            PreparedAtomicWrite::new(root.path(), ".metadata-", Some(0o600), "metadata").unwrap();
-        write.write_all(b"{}\n").unwrap();
-        write.commit(&target, "replace metadata file").unwrap();
-
-        assert_eq!(fs::read(&target).unwrap(), b"{}\n");
-        assert_eq!(
-            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-}
+#[path = "safe_fs_tests.rs"]
+mod tests;

@@ -153,9 +153,9 @@ Host Tenant risks, file modes, and partial-write behavior.
 Session browsing in the Console is host-side, progressively streams a
 Conversation Message/Tool Activity projection, and does not start Docker.
 
-Canonical UUIDs are listed by their final 12 characters; `get` and `delete`
-accept a full Session id or unique suffix. Session deletion requires explicit
-ids or `--all` and is irreversible.
+Canonical UUIDs are listed by their final 12 characters. The Console accepts a
+full Session id or unique suffix for detail and deletion; deletion requires
+explicit ids or an explicit select-all confirmation and is irreversible.
 Session discovery and the Transcript projection are best-effort, but
 destructive operations refuse an incomplete filesystem view. The detail view
 preserves diagnostic Transcript Evidence, hides internal reasoning, and reads

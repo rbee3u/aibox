@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/transport";
+import { ApiError } from "@/api/requests";
 import {
   activeDetail,
   activeRequestList,
@@ -14,9 +14,9 @@ import {
 } from "@/features/requests/testFixtures";
 import {
   advanceTimers,
-  openActiveRecord,
+  openActiveRequest,
   openActiveRequestBody,
-  openCompletedRecord,
+  openCompletedRequest,
   renderApp,
   zstdBytes,
 } from "@/features/requests/testHarness";
@@ -38,9 +38,13 @@ describe("Requests page body inspection", () => {
       warning: null,
     });
     const user = userEvent.setup();
-    renderApp({ loadBody, loadEventTimings });
+    renderApp({
+      getRequest: vi.fn().mockResolvedValue(completedDetail),
+      loadBody,
+      loadEventTimings,
+    });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     const detail = screen.getByRole("region", { name: "Request details" });
     expect(within(detail).getByRole("tab", { name: "Summary" })).toHaveAttribute(
       "aria-selected",
@@ -64,9 +68,9 @@ describe("Requests page body inspection", () => {
         nextOffset: 14,
       });
     const user = userEvent.setup();
-    renderApp({ loadBody });
+    renderApp({ getRequest: vi.fn().mockResolvedValue(completedDetail), loadBody });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await user.click(await screen.findByRole("tab", { name: "Request" }));
 
     const alert = await screen.findByRole("alert");
@@ -100,9 +104,9 @@ describe("Requests page body inspection", () => {
     vi.stubGlobal("URL", TestURL);
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     const user = userEvent.setup();
-    renderApp({ loadBody });
+    renderApp({ getRequest: vi.fn().mockResolvedValue(completedDetail), loadBody });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await user.click(await screen.findByRole("tab", { name: "Request" }));
     await screen.findByText("body");
     await user.click(screen.getByRole("button", { name: "Download original body" }));
@@ -134,7 +138,7 @@ describe("Requests page body inspection", () => {
     });
     const user = userEvent.setup();
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
 
     await screen.findByText('"gpt-5.6-sol"');
@@ -168,7 +172,7 @@ describe("Requests page body inspection", () => {
       loadDecodedBody,
     });
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
     await screen.findByText(/Decoded Source unavailable: decode failed/);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -262,7 +266,7 @@ describe("Requests page body inspection", () => {
     });
     const user = userEvent.setup();
 
-    await openCompletedRecord(user);
+    await openCompletedRequest(user);
     await user.click(screen.getByRole("tab", { name: "Request" }));
     await waitFor(() => expect(loadDecodedBody).toHaveBeenCalledTimes(1));
 
@@ -298,7 +302,7 @@ describe("Requests page body inspection", () => {
       getRequest,
     });
 
-    await openActiveRecord();
+    await openActiveRequest();
     const detail = screen.getByRole("region", { name: "Request details" });
     expect(within(detail).getAllByText("Waiting").length).toBeGreaterThan(0);
 
@@ -319,7 +323,7 @@ describe("Requests page body inspection", () => {
       getRequest,
     });
 
-    await openActiveRecord();
+    await openActiveRequest();
     await advanceTimers(3000);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Request not found");

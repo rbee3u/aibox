@@ -20,6 +20,72 @@
       "exists": true
     }
   ],
+  "component_rows": [
+    {
+      "kind": "codex",
+      "supports_version": true,
+      "status": "not-installed",
+      "version": null,
+      "error": null
+    },
+    {
+      "kind": "codex-statusline",
+      "supports_version": false,
+      "status": "installed",
+      "version": "1.2.3",
+      "error": null
+    },
+    {
+      "kind": "claude",
+      "supports_version": true,
+      "status": "incomplete",
+      "version": null,
+      "error": null
+    },
+    {
+      "kind": "claude-statusline",
+      "supports_version": false,
+      "status": "modified",
+      "version": null,
+      "error": null
+    },
+    {
+      "kind": "node",
+      "supports_version": true,
+      "status": "unmanaged",
+      "version": null,
+      "error": null
+    },
+    {
+      "kind": "python",
+      "supports_version": true,
+      "status": "not-installed",
+      "version": null,
+      "error": null
+    },
+    {
+      "kind": "rust",
+      "supports_version": true,
+      "status": "installed",
+      "version": "1.2.3",
+      "error": null
+    },
+    {
+      "kind": "go",
+      "supports_version": true,
+      "status": "incomplete",
+      "version": null,
+      "error": null
+    }
+  ],
+  "component_statuses": [
+    null,
+    "not-installed",
+    "installed",
+    "incomplete",
+    "modified",
+    "unmanaged"
+  ],
   "component_latest": {
     "checked_at": "2026-08-27T00:00:00Z",
     "entries": [
@@ -39,6 +105,13 @@
     },
     "drift": "clean"
   },
+  "config_drifts": [
+    "untracked",
+    "clean",
+    "dirty",
+    "source-missing",
+    "comparison-error"
+  ],
   "propagation_outcomes": [
     {
       "status": "updated"
@@ -62,6 +135,101 @@
     {
       "status": "failed",
       "reason": "write failed"
+    }
+  ],
+  "outcomes": [
+    "completed",
+    "rejected",
+    "upstream_error",
+    "client_disconnected",
+    "recording_failed",
+    "server_shutdown"
+  ],
+  "assessment_levels": [
+    "active",
+    "ok",
+    "warning",
+    "error"
+  ],
+  "operation_states": [
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled"
+  ],
+  "session_frames": [
+    {
+      "type": "message",
+      "message": {
+        "entry_ids": [
+          "entry-1"
+        ],
+        "role": "user",
+        "timestamp": "2026-08-27T00:00:00Z",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "tool_activity",
+      "tool_activity": {
+        "entry_ids": [
+          "entry-2"
+        ],
+        "call_id": "call-1",
+        "timestamp": "2026-08-27T00:00:01Z",
+        "name": "shell",
+        "status": "completed",
+        "summary": "ok"
+      }
+    },
+    {
+      "type": "evidence",
+      "evidence": {
+        "entry_id": "entry-3",
+        "line": 3,
+        "timestamp": "2026-08-27T00:00:02Z",
+        "native_type": "assistant",
+        "role": "assistant",
+        "content_types": [
+          "text"
+        ],
+        "status": "readable",
+        "preview": "answer"
+      }
+    },
+    {
+      "type": "meta",
+      "meta": {
+        "id": "session-1",
+        "title": "Sample",
+        "start_ts": "2026-08-27T00:00:00Z",
+        "transcript_path": "/tmp/session.jsonl",
+        "cwd": "/tmp",
+        "model_provider": "openai",
+        "cli_version": "1.0.0"
+      }
+    },
+    {
+      "type": "complete",
+      "stats": {
+        "start_ts": "2026-08-27T00:00:00Z",
+        "last_event_ts": "2026-08-27T00:00:02Z",
+        "observed_duration_ms": 2000,
+        "message_count": 1,
+        "tool_count": 1,
+        "entry_count": 3,
+        "malformed_count": 0,
+        "unsupported_count": 0,
+        "hidden_internal_count": 0,
+        "file_size": 128,
+        "snapshot": "snapshot-1"
+      },
+      "warnings": []
+    },
+    {
+      "type": "error",
+      "agent": "codex",
+      "error": "sample error"
     }
   ],
   "operation": {

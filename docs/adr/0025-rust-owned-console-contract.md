@@ -17,8 +17,12 @@ shapes into tests. This decision changes neither routes nor serialized JSON;
 wire values are converted to validated internal commands after decoding.
 
 The exported surface includes every Control request/response DTO plus NDJSON
-and SSE frames. `make console-contract-check` exports bindings and JSON samples
-to a temporary directory and compares committed bytes. `make
+and SSE frames. Closed Component kinds/statuses are generated as TypeScript
+unions, while their serialized strings remain unchanged. A test-only route
+manifest exports stable semantic keys, methods, and path templates for adapter
+tests without generating a production client. `make console-contract-check`
+exports bindings, route descriptions, and JSON samples to a temporary
+directory and compares committed bytes. `make
 console-assets-check` independently builds the Console to a temporary output,
 enforces the bundle budget, and compares the embedded HTML, CSS, and JavaScript.
 Both checks run under `make console-check`, so generated contracts and the Rust

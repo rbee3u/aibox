@@ -38,6 +38,7 @@ fs2 = "0.4"
 
 [dev-dependencies]
 http-body-util = "0.1"
+syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
 ts-rs = { version = "12", features = ["serde-compat", "serde-json-impl"] }
 

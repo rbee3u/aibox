@@ -1,6 +1,6 @@
 import { AlertTriangle, Hammer, Image, LoaderCircle, RefreshCw, Server } from "lucide-react";
 import type { Operation } from "@/api/operations";
-import { formatBinaryByteSize } from "@/api/encoding";
+import { formatBinaryByteSize } from "@/shared/lib/encoding";
 import type { OverviewData } from "@/api/overview";
 import { RuntimeStatus } from "@/features/overview/components/OverviewFacts";
 import { capitalize, imageTone, shortImageId } from "@/features/overview/topology/topologyModel";

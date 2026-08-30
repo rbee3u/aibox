@@ -69,14 +69,15 @@ console-check:
 
 console-contract:
 	AIBOX_CONTRACT_DIR="$(CURDIR)/console/src/api/generated" TS_RS_LARGE_INT=number \
-		cargo test console_contract::tests::export_console_contract -- --ignored --exact
+		cargo test service::control::contract::tests::export_console_contract -- --ignored --exact
 
 console-contract-check:
 	@aibox_contract_tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$aibox_contract_tmp"' EXIT; \
 		AIBOX_CONTRACT_DIR="$$aibox_contract_tmp" TS_RS_LARGE_INT=number \
-			cargo test console_contract::tests::export_console_contract -- --ignored --exact; \
+			cargo test service::control::contract::tests::export_console_contract -- --ignored --exact; \
 		diff -u console/src/api/generated/wire.ts "$$aibox_contract_tmp/wire.ts"; \
+		diff -u console/src/api/generated/routes.ts "$$aibox_contract_tmp/routes.ts"; \
 		diff -u console/src/api/generated/samples.json "$$aibox_contract_tmp/samples.json"
 
 console-assets-check:

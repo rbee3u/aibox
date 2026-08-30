@@ -1,9 +1,12 @@
 //! Tenant Control API handlers and wire types.
 
-use super::*;
-use crate::service::coordination::tenant::{
-    DeleteTenantsCommand, TenantCatalogEntry, TenantCoordinator,
-};
+use super::{ControlResult, json_response};
+use crate::service::coordination::{DeleteTenantsCommand, TenantCatalogEntry, TenantCoordinator};
+use crate::service::state::ServiceState;
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -23,30 +26,28 @@ pub(crate) enum TenantRow {
     },
 }
 
-pub(super) async fn list_tenants(State(state): State<ServiceState>) -> Response<Body> {
-    match TenantCoordinator::new(state).list().await {
-        Ok(entries) => json_response(
-            StatusCode::OK,
-            &entries
-                .into_iter()
-                .map(|entry| match entry {
-                    TenantCatalogEntry::Host { home, exists } => TenantRow::Host {
-                        name: None,
-                        display_name: "Host Tenant".to_string(),
-                        home,
-                        exists,
-                    },
-                    TenantCatalogEntry::Managed { name, home } => TenantRow::Managed {
-                        display_name: name.clone(),
-                        name,
-                        home,
-                        exists: true,
-                    },
-                })
-                .collect::<Vec<_>>(),
-        ),
-        Err(error) => result_error(error),
-    }
+pub(super) async fn list_tenants(State(state): State<ServiceState>) -> ControlResult {
+    let entries = TenantCoordinator::new(state).list().await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &entries
+            .into_iter()
+            .map(|entry| match entry {
+                TenantCatalogEntry::Host { home, exists } => TenantRow::Host {
+                    name: None,
+                    display_name: "Host Tenant".to_string(),
+                    home,
+                    exists,
+                },
+                TenantCatalogEntry::Managed { name, home } => TenantRow::Managed {
+                    display_name: name.clone(),
+                    name,
+                    home,
+                    exists: true,
+                },
+            })
+            .collect::<Vec<_>>(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -58,17 +59,15 @@ pub(crate) struct CreateTenantRequest {
 pub(super) async fn create_tenant(
     State(state): State<ServiceState>,
     Json(request): Json<CreateTenantRequest>,
-) -> Response<Body> {
-    match TenantCoordinator::new(state).create(request.name).await {
-        Ok(created) => json_response(
-            StatusCode::OK,
-            &CreatedTenantResponse {
-                created: created.name,
-                home: created.home,
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    let created = TenantCoordinator::new(state).create(request.name).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &CreatedTenantResponse {
+            created: created.name,
+            home: created.home,
+        },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -84,22 +83,20 @@ pub(crate) struct DeleteSelection {
 pub(super) async fn delete_tenants(
     State(state): State<ServiceState>,
     Json(request): Json<DeleteSelection>,
-) -> Response<Body> {
+) -> ControlResult {
     let command = DeleteTenantsCommand {
         names: request.names,
         all: request.all,
         confirmation: request.confirmation,
     };
-    match TenantCoordinator::new(state).delete(command).await {
-        Ok(deleted) => json_response(
-            StatusCode::OK,
-            &DeletedTenantsResponse {
-                deleted: deleted.names,
-                all: deleted.all,
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+    let deleted = TenantCoordinator::new(state).delete(command).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &DeletedTenantsResponse {
+            deleted: deleted.names,
+            all: deleted.all,
+        },
+    ))
 }
 
 #[derive(Serialize)]

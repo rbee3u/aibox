@@ -96,12 +96,12 @@ impl SessionCoordinator {
 impl SessionAccess {
     fn list(&self) -> Result<session::SessionListData> {
         let backend = session::backend_for(self.agent);
-        session::list_data(backend.as_ref(), &self.home)
+        session::list_session_data(backend.as_ref(), &self.home)
     }
 
     fn summary(&self) -> Result<session::SessionDiscoverySummary> {
         let backend = session::backend_for(self.agent);
-        session::discovery_summary(backend.as_ref(), &self.home)
+        session::session_discovery_summary(backend.as_ref(), &self.home)
     }
 
     pub(crate) fn stream_detail(
@@ -115,7 +115,7 @@ impl SessionAccess {
         Vec<String>,
     )> {
         let backend = session::backend_for(self.agent);
-        session::stream_detail_data(backend.as_ref(), &self.home, id, visit_meta, visit_record)
+        session::stream_session_detail(backend.as_ref(), &self.home, id, visit_meta, visit_record)
     }
 
     fn evidence(
@@ -125,11 +125,11 @@ impl SessionAccess {
         snapshot: &str,
     ) -> Result<session::TranscriptEvidence> {
         let backend = session::backend_for(self.agent);
-        session::read_evidence(backend.as_ref(), &self.home, id, entry, snapshot)
+        session::read_session_evidence(backend.as_ref(), &self.home, id, entry, snapshot)
     }
 
     fn delete(&self, ids: &[String], all: bool) -> Result<usize> {
         let backend = session::backend_for(self.agent);
-        session::delete_sessions(backend.as_ref(), &self.home, ids, all)
+        session::delete_session_catalog(backend.as_ref(), &self.home, ids, all)
     }
 }

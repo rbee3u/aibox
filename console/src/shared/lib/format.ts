@@ -52,7 +52,7 @@ export function duration(ms: number | null | undefined): string {
 
 /**
  * Decimal-prefix byte sizes (KB/MB). Binary-prefix sizes come from
- * `formatBinaryByteSize` in `api/encoding`; both spellings exist so each
+ * `formatBinaryByteSize` in `shared/lib/encoding`; both spellings exist so each
  * surface keeps its established wording.
  */
 export function formatByteSize(value: number | null | undefined): string {

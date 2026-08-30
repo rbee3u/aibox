@@ -1,8 +1,17 @@
+import type { ComponentProps } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Operation } from "@/api/operations";
-import { OperationPanel } from "@/test/managementTestSupport";
+import { OperationPanel as OperationPanelView } from "@/app/OperationPanel";
+import { composeTestApi, type TestControlApi } from "@/test/controlApi";
+
+function OperationPanel(
+  props: Omit<ComponentProps<typeof OperationPanelView>, "api"> & { api: TestControlApi },
+) {
+  const { api, ...panelProps } = props;
+  return <OperationPanelView {...panelProps} api={composeTestApi(api).operations} />;
+}
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");

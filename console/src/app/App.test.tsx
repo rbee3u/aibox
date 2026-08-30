@@ -6,7 +6,7 @@ import type { ConfigListData } from "@/api/configs";
 import type { TenantRow } from "@/api/core";
 import type { OverviewData, TopologyData } from "@/api/overview";
 import { ControlApi } from "@/api/transport";
-import { materializeControlApi } from "@/test/managementTestSupport";
+import { materializeControlApi } from "@/test/controlApi";
 import { requestList } from "@/features/requests/testFixtures";
 
 const overview = {

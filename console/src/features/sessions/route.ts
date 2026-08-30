@@ -1,18 +1,18 @@
 import type { CodingAgentKind } from "@/domain/codingAgent";
-import { parseTenantSelectionKey, type TenantSelectionKey } from "@/domain/tenant";
+import { parseTenantSelectionValue, type TenantSelectionValue } from "@/domain/tenant";
 import { SESSION_AGENT_OPTIONS } from "@/features/sessions/sessionSource";
 import { readEnum } from "@/shared/lib/queryParams";
 
 export type SessionTab = "conversation" | "details";
 
 export interface SessionRouteSelection {
-  tenantKey: TenantSelectionKey;
+  tenantSelectionValue: TenantSelectionValue;
   agent: CodingAgentKind;
   id: string;
 }
 
 export interface SessionRouteState {
-  tenants: Set<TenantSelectionKey>;
+  tenants: Set<TenantSelectionValue>;
   agents: Set<CodingAgentKind>;
   selection: SessionRouteSelection | null;
   tab: SessionTab;
@@ -34,18 +34,18 @@ export function readSessionRoute(search: string): SessionRouteState {
   const tenants = new Set(
     query
       .getAll("tenant")
-      .map(parseTenantSelectionKey)
-      .filter((value): value is TenantSelectionKey => value !== null),
+      .map(parseTenantSelectionValue)
+      .filter((value): value is TenantSelectionValue => value !== null),
   );
   const agents = new Set(query.getAll("agent").filter(isAgent));
   if (tenants.size === 0) tenants.add("managed:default");
   if (agents.size === 0) agents.add("codex");
-  const selectedTenant = parseTenantSelectionKey(query.get("session_tenant"));
+  const selectedTenant = parseTenantSelectionValue(query.get("session_tenant"));
   const selectedAgent = query.get("session_agent");
   const id = query.get("session");
   const selection: SessionRouteSelection | null =
     selectedTenant && isAgent(selectedAgent) && id
-      ? { tenantKey: selectedTenant, agent: selectedAgent, id }
+      ? { tenantSelectionValue: selectedTenant, agent: selectedAgent, id }
       : null;
   return {
     tenants,
@@ -56,7 +56,7 @@ export function readSessionRoute(search: string): SessionRouteState {
 }
 
 export function sessionLocation(
-  tenants: ReadonlySet<TenantSelectionKey>,
+  tenants: ReadonlySet<TenantSelectionValue>,
   agents: ReadonlySet<CodingAgentKind>,
   selection?: SessionRouteSelection | null,
   tab: SessionTab = "conversation",
@@ -67,7 +67,7 @@ export function sessionLocation(
     if (agents.has(agent)) query.append("agent", agent);
   }
   if (selection) {
-    query.set("session_tenant", selection.tenantKey);
+    query.set("session_tenant", selection.tenantSelectionValue);
     query.set("session_agent", selection.agent);
     query.set("session", selection.id);
     if (tab === "details") query.set("tab", tab);

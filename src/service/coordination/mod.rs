@@ -1,10 +1,16 @@
 //! Concrete Service coordinators for management use cases.
 
-pub(crate) mod component;
-pub(crate) mod config;
-pub(crate) mod operation;
-pub(crate) mod session;
-pub(crate) mod tenant;
+mod component;
+mod config;
+mod operation;
+mod session;
+mod tenant;
+
+pub(super) use component::{ComponentCoordinator, ComponentInstallation};
+pub(super) use config::{ConfigCoordinator, ConfigFileView, DeleteConfigsCommand};
+pub(super) use operation::OperationCoordinator;
+pub(super) use session::{DeleteSessionsCommand, SessionCoordinator};
+pub(super) use tenant::{DeleteTenantsCommand, TenantCatalogEntry, TenantCoordinator};
 
 use crate::application_error::{ApplicationErrorKind, application_error};
 use anyhow::Result;

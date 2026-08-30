@@ -264,18 +264,15 @@ export function withIncompleteRequestBody(detail: RequestDetail): RequestDetail 
 }
 
 export function requestsApiFake(overrides: Partial<RequestsApi> = {}): RequestsApi {
+  const unconfigured = (operation: string) =>
+    Promise.reject(new Error(`${operation} was not configured for this test`));
   return {
     listRequests: vi.fn().mockResolvedValue(requestList),
-    getRequest: vi.fn().mockResolvedValue(completedDetail),
-    loadBody: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), nextOffset: 0 }),
-    loadDecodedBody: vi.fn().mockResolvedValue(new Uint8Array()),
-    loadEventTimings: vi.fn().mockResolvedValue({
-      state: "unavailable",
-      events: [],
-      next_sequence: 0,
-      warning: null,
-    }),
-    deleteRequests: vi.fn().mockResolvedValue(0),
+    getRequest: vi.fn().mockImplementation(() => unconfigured("getRequest")),
+    loadBody: vi.fn().mockImplementation(() => unconfigured("loadBody")),
+    loadDecodedBody: vi.fn().mockImplementation(() => unconfigured("loadDecodedBody")),
+    loadEventTimings: vi.fn().mockImplementation(() => unconfigured("loadEventTimings")),
+    deleteRequests: vi.fn().mockImplementation(() => unconfigured("deleteRequests")),
     ...overrides,
   };
 }

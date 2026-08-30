@@ -1,11 +1,11 @@
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import {
   DNS_LABEL_PATTERN,
-  parseTenantSelectionKey,
-  tenantSelectionFromKey,
+  parseTenantSelectionValue,
+  tenantSelectionFromValue,
   tenantSelectionValue,
   type TenantSelection,
-  type TenantSelectionKey,
+  type TenantSelectionValue,
 } from "@/domain/tenant";
 
 export type ConfigSelection =
@@ -26,11 +26,11 @@ export type ConfigApplyTarget = {
 export type ConfigPendingAction = {
   run: () => void | Promise<void>;
 };
-export function configTenantKey(tenant: TenantSelection): TenantSelectionKey {
+export function configTenantSelectionValue(tenant: TenantSelection): TenantSelectionValue {
   return tenantSelectionValue(tenant);
 }
-export function tenantSelectionFromConfigKey(key: TenantSelectionKey): TenantSelection {
-  return tenantSelectionFromKey(key);
+export function tenantSelectionFromConfigValue(key: TenantSelectionValue): TenantSelection {
+  return tenantSelectionFromValue(key);
 }
 export interface ConfigRouteState {
   tenant: TenantSelection;
@@ -41,13 +41,13 @@ export interface ConfigRouteState {
 }
 export function readConfigRoute(search: string): ConfigRouteState {
   const query = new URLSearchParams(search);
-  const tenantKey = parseTenantSelectionKey(query.get("tenant")) ?? "managed:default";
+  const tenantSelectionValue = parseTenantSelectionValue(query.get("tenant")) ?? "managed:default";
   const agent = query.get("agent") === "claude" ? "claude" : "codex";
   const config = query.get("config");
   const current = query.get("current") === "1";
   const detailOpen = current || (config !== null && DNS_LABEL_PATTERN.test(config));
   return {
-    tenant: tenantSelectionFromConfigKey(tenantKey),
+    tenant: tenantSelectionFromConfigValue(tenantSelectionValue),
     agent,
     selection:
       !current && config && DNS_LABEL_PATTERN.test(config)
@@ -64,7 +64,7 @@ export function configLocation(
   file?: string | null,
 ): URLSearchParams {
   const query = new URLSearchParams();
-  query.set("tenant", configTenantKey(tenant));
+  query.set("tenant", configTenantSelectionValue(tenant));
   query.set("agent", agent);
   if (selection?.current) query.set("current", "1");
   else if (selection) query.set("config", selection.config);

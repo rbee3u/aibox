@@ -9,7 +9,7 @@ import { RequestsPage } from "@/features/requests/RequestsPage";
 import { composeControlApi } from "@/api/connect";
 import type { OverviewData, TopologyData } from "@/api/overview";
 import { ControlApi } from "@/api/transport";
-import { materializeControlApi } from "@/test/managementTestSupport";
+import { materializeControlApi } from "@/test/controlApi";
 import { requestsApiFake } from "@/features/requests/testFixtures";
 import { applyThemePreference } from "@/app/theme/usePersistentTheme";
 
@@ -97,7 +97,6 @@ function controlApi(): ControlApi {
       }
       return Promise.reject(new Error(`Unexpected Control API mutation: ${path}`));
     }),
-    streamSessionDetail: vi.fn(),
   });
 }
 

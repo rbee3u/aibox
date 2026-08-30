@@ -1,9 +1,8 @@
 //! Tenant Component inspection, update observation, and mutation coordination.
 
-use super::operation::OperationCoordinator;
+use super::OperationCoordinator;
 use super::run_blocking;
-use crate::component::updates::LatestSnapshot;
-use crate::component::{self, ComponentInspection, ComponentKind, ComponentSpec};
+use crate::component::{self, ComponentInspection, ComponentKind, ComponentSpec, LatestSnapshot};
 use crate::docker;
 use crate::service::operation::OperationSnapshot;
 use crate::service::state::ServiceState;
@@ -45,22 +44,16 @@ impl ComponentCoordinator {
     pub(crate) async fn install(
         &self,
         selection: TenantSelection,
-        component_name: String,
+        kind: ComponentKind,
         version: Option<String>,
     ) -> Result<ComponentInstallation> {
         let selected = selection.resolve(&self.state.root(), &self.state.host_home())?;
-        let spec_text = version.as_ref().map_or_else(
-            || component_name.clone(),
-            |version| format!("{component_name}@{version}"),
-        );
-        let spec = spec_text
-            .parse::<ComponentSpec>()
-            .map_err(anyhow::Error::msg)?;
+        let spec = ComponentSpec::new(kind, version).map_err(anyhow::Error::msg)?;
         let guard = self.state.begin_management_mutation()?;
-        if spec.kind.is_statusline() {
+        if spec.kind().is_statusline() {
             return run_blocking(move || {
                 let _guard = guard;
-                component::install_component(&selected, &spec)?;
+                component::install_component(&selected, &spec, None)?;
                 Ok(ComponentInstallation::Completed(spec.to_string()))
             })
             .await;
@@ -73,7 +66,7 @@ impl ComponentCoordinator {
                 context.log(format!("Installing {spec}"));
                 let log_context = context.clone();
                 let log: docker::LogCallback = Arc::new(move |line| log_context.log(line));
-                component::install_component_for_service(&selected, &spec, log)?;
+                component::install_component(&selected, &spec, Some(log))?;
                 Ok(format!("Installed {spec}"))
             })
             .map(ComponentInstallation::Started)
@@ -82,12 +75,9 @@ impl ComponentCoordinator {
     pub(crate) async fn remove(
         &self,
         selection: TenantSelection,
-        component_name: String,
+        kind: ComponentKind,
     ) -> Result<&'static str> {
         let selected = selection.resolve(&self.state.root(), &self.state.host_home())?;
-        let kind = component_name
-            .parse::<ComponentKind>()
-            .map_err(anyhow::Error::msg)?;
         let guard = self.state.begin_management_mutation()?;
         run_blocking(move || {
             let _guard = guard;

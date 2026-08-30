@@ -27,7 +27,7 @@ describe("Sessions route codec", () => {
     expect(readSessionRoute("?session_tenant=host&session=abc").selection).toBeNull();
     expect(
       readSessionRoute("?session_tenant=host&session_agent=claude&session=abc").selection,
-    ).toEqual({ tenantKey: "host", agent: "claude", id: "abc" });
+    ).toEqual({ tenantSelectionValue: "host", agent: "claude", id: "abc" });
   });
 
   it("defaults an unknown tab to Conversation", () => {
@@ -45,7 +45,11 @@ describe("Sessions route codec", () => {
     expect(sessionLocation(filters.tenants, filters.agents, null, "details").has("tab")).toBe(
       false,
     );
-    const selectedSession = { tenantKey: "host" as const, agent: "codex" as const, id: "abc" };
+    const selectedSession = {
+      tenantSelectionValue: "host" as const,
+      agent: "codex" as const,
+      id: "abc",
+    };
     expect(
       sessionLocation(filters.tenants, filters.agents, selectedSession, "conversation").has("tab"),
     ).toBe(false);

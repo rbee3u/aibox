@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { composeControlApi } from "@/api/connect";
-import type { RequestsApi } from "@/api/requests";
-import { ApiError, ControlApi } from "@/api/transport";
+import { ApiError, type RequestsApi } from "@/api/requests";
+import { ControlApi } from "@/test/controlApi";
+import { controlRoute } from "@/test/controlRoutes";
 
 function requestsApi(fetchImpl: typeof fetch): RequestsApi {
   return composeControlApi(
@@ -36,8 +37,8 @@ describe("Request API client", () => {
     await api.listRequests(3);
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/_aibox/api/requests",
-      "/_aibox/api/requests?page=3",
+      controlRoute("requests_list"),
+      controlRoute("requests_list", {}, "page=3"),
     ]);
   });
 
@@ -48,7 +49,7 @@ describe("Request API client", () => {
     await api.getRequest("request/id");
 
     const [path, init] = fetchMock.mock.calls[0];
-    expect(path).toBe("/_aibox/api/requests/request%2Fid");
+    expect(path).toBe(controlRoute("request_detail", { id: "request/id" }));
     expect(init).toMatchObject({ cache: "no-store" });
     expect(init?.headers).toBeUndefined();
   });
@@ -90,7 +91,7 @@ describe("Request API client", () => {
 
     await expect(api.deleteRequests(["one", "two"])).resolves.toBe(2);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/_aibox/api/requests/delete",
+      controlRoute("requests_delete"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ ids: ["one", "two"] }),
@@ -149,7 +150,7 @@ describe("Request API client", () => {
       nextOffset: 9,
     });
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/_aibox/api/requests/request%2Fid/response-body?offset=7",
+      controlRoute("response_body", { id: "request/id" }, "offset=7"),
     );
   });
 
@@ -163,7 +164,7 @@ describe("Request API client", () => {
       new Uint8Array([1, 2, 3]),
     );
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/_aibox/api/requests/request%2Fid/request-body-decoded",
+      controlRoute("request_body_decoded", { id: "request/id" }),
     );
   });
 
@@ -179,7 +180,7 @@ describe("Request API client", () => {
 
     await expect(api.loadEventTimings("request/id", 3)).resolves.toEqual(payload);
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/_aibox/api/requests/request%2Fid/response-event-timings?after_sequence=3",
+      controlRoute("response_event_timings", { id: "request/id" }, "after_sequence=3"),
     );
   });
 });

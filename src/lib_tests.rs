@@ -91,7 +91,7 @@ impl RunFixture {
 
         let tenant = ManagedTenant::resolve(self.root.path(), name).unwrap();
         tenant.ensure_initialized().unwrap();
-        let standalone = tenant.home_dir.join(".codex/packages/standalone");
+        let standalone = tenant.home_dir().join(".codex/packages/standalone");
         let release = standalone.join("releases/1.2.3-x86_64-unknown-linux-musl");
         std::fs::create_dir_all(release.join("bin")).unwrap();
         std::fs::write(release.join("bin/codex"), b"fake codex\n").unwrap();
@@ -100,7 +100,7 @@ impl RunFixture {
             std::fs::Permissions::from_mode(0o755),
         )
         .unwrap();
-        std::fs::create_dir_all(tenant.home_dir.join(".local/bin")).unwrap();
+        std::fs::create_dir_all(tenant.home_dir().join(".local/bin")).unwrap();
         symlink(
             "/home/aibox/.codex/packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl",
             standalone.join("current"),
@@ -108,7 +108,7 @@ impl RunFixture {
         .unwrap();
         symlink(
             "/home/aibox/.codex/packages/standalone/current/bin/codex",
-            tenant.home_dir.join(".local/bin/codex"),
+            tenant.home_dir().join(".local/bin/codex"),
         )
         .unwrap();
         tenant
@@ -119,9 +119,9 @@ impl RunFixture {
 
         let tenant = ManagedTenant::resolve(self.root.path(), name).unwrap();
         tenant.ensure_initialized().unwrap();
-        std::fs::create_dir_all(tenant.home_dir.join(".goroot/bin")).unwrap();
-        std::fs::write(tenant.home_dir.join(".goroot/VERSION"), b"go1.2.3\n").unwrap();
-        let go = tenant.home_dir.join(".goroot/bin/go");
+        std::fs::create_dir_all(tenant.home_dir().join(".goroot/bin")).unwrap();
+        std::fs::write(tenant.home_dir().join(".goroot/VERSION"), b"go1.2.3\n").unwrap();
+        let go = tenant.home_dir().join(".goroot/bin/go");
         std::fs::write(&go, b"fake go\n").unwrap();
         std::fs::set_permissions(&go, std::fs::Permissions::from_mode(0o755)).unwrap();
         tenant
@@ -133,7 +133,7 @@ impl RunFixture {
 fn run_uses_the_tenant_agent_component_and_forwards_opaque_args() {
     let fx = RunFixture::new();
     let tenant = fx.seed_codex_component("work");
-    std::fs::write(tenant.home_dir.join(".goroot"), b"broken Go state\n").unwrap();
+    std::fs::write(tenant.home_dir().join(".goroot"), b"broken Go state\n").unwrap();
     let cli = Cli::try_parse_from(["aibox", "run", "--tenant", "work"]).unwrap();
     let passthrough = vec!["exec".into(), "fix tests".into(), "--json".into()];
     let code = run_with_context(
@@ -170,8 +170,12 @@ fn run_uses_the_tenant_agent_component_and_forwards_opaque_args() {
 fn debug_uses_the_installed_component_snapshot_without_blocking_on_inspection_errors() {
     let fx = RunFixture::new();
     let tenant = fx.seed_go_component("work");
-    std::fs::create_dir(tenant.home_dir.join(".rustup")).unwrap();
-    std::fs::write(tenant.home_dir.join(".rustup/settings.toml"), [0xff, 0xfe]).unwrap();
+    std::fs::create_dir(tenant.home_dir().join(".rustup")).unwrap();
+    std::fs::write(
+        tenant.home_dir().join(".rustup/settings.toml"),
+        [0xff, 0xfe],
+    )
+    .unwrap();
 
     let code = fx
         .execute(&["aibox", "debug", "--tenant", "work"], &[])
@@ -195,7 +199,8 @@ fn run_keeps_current_config_and_does_not_read_named_configs() {
     let selected = tenant.for_agent(AgentKind::Codex);
     selected.ensure_agent_state_dir().unwrap();
     std::fs::write(selected.state_file("config.toml"), b"model = \"local\"\n").unwrap();
-    config::create_named_config(&selected, "saved").unwrap();
+    config::create_named_config(&selected, &config::NamedConfigName::parse("saved").unwrap())
+        .unwrap();
     let code = fx.execute(&["aibox", "run"], &[]).unwrap();
     assert_eq!(code, 0);
     assert_eq!(

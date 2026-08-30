@@ -1,4 +1,6 @@
+import { HttpError as ApiError } from "@/api/httpError";
 import type { ControlApi } from "@/api/transport";
+export { ApiError };
 import type {
   AssessmentFinding,
   AssessmentLevel,
@@ -82,6 +84,8 @@ export interface RequestDetail {
   timeline_end_at_ns: string | null;
 }
 
+export type RequestLookup = RequestDetail | { kind: "missing" };
+
 function featureRequestDetail(value: GeneratedRequestDetail): RequestDetail {
   if (!value || typeof value !== "object" || !value.request) {
     return value;
@@ -95,23 +99,29 @@ function featureRequestDetail(value: GeneratedRequestDetail): RequestDetail {
 function withoutFormatVersion<T extends { format_version: number }>(
   value: T,
 ): Omit<T, "format_version"> {
-  const copy: Record<string, unknown> = { ...value };
-  delete copy["format_version"];
-  return copy as Omit<T, "format_version">;
+  const { format_version: formatVersion, ...copy } = value;
+  void formatVersion;
+  return copy;
 }
 
 function featureResult(value: GeneratedResultMetadata): ResultMetadata {
-  const copy = { ...value } as unknown as Record<string, unknown>;
-  delete copy.format_version;
-  delete copy.request_bytes;
-  delete copy.response_bytes;
-  delete copy.request_body_ms;
-  return copy as ResultMetadata;
+  const {
+    format_version: formatVersion,
+    request_body_ms: requestBodyMs,
+    request_bytes: requestBytes,
+    response_bytes: responseBytes,
+    ...copy
+  } = value;
+  void formatVersion;
+  void requestBodyMs;
+  void requestBytes;
+  void responseBytes;
+  return copy;
 }
 
 export interface RequestsApi {
   listRequests(page?: number, signal?: AbortSignal): Promise<RequestList>;
-  getRequest(id: string, signal?: AbortSignal): Promise<RequestDetail>;
+  getRequest(id: string, signal?: AbortSignal): Promise<RequestLookup>;
   loadBody(
     id: string,
     kind: BodyKind,
@@ -138,7 +148,14 @@ export function requestsApi(client: ControlApi): RequestsApi {
       return client.get<GeneratedRequestList>(`/_aibox/api/requests${query}`, signal);
     },
     getRequest: (id, signal) =>
-      client.get<GeneratedRequestDetail>(requestPath(id), signal).then(featureRequestDetail),
+      client
+        .get<GeneratedRequestDetail>(requestPath(id), signal)
+        .then(featureRequestDetail)
+        .catch((cause: unknown) => {
+          if (cause instanceof ApiError && cause.status === 404)
+            return { kind: "missing" } as const;
+          throw cause;
+        }),
     loadBody: async (id, kind, offset, signal) => {
       const response = await client.getResponse(
         `${requestPath(id)}/${kind}-body?offset=${offset}`,

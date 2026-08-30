@@ -1,19 +1,10 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Operation } from "@/api/operations";
 import type { OverviewApi, TopologyData } from "@/api/overview";
 import {
   buildDisabledReason,
   buildTopologyTree,
-  clampZoom,
   collectBranchIds,
   collectVisibleNodes,
   defaultExpansion,
@@ -21,7 +12,6 @@ import {
   filterByAttention,
   firstComponentAttentionTarget,
   firstConfigAttentionTarget,
-  fitTopologyZoom,
   requestAttentionDetail,
   searchTopology,
   structuralIds,
@@ -29,23 +19,11 @@ import {
   type AttentionItem,
   type SessionLoad,
   type SessionRequest,
-  type TopologyMetrics,
-  type TopologyNode,
 } from "@/features/overview/topology/topologyModel";
+import { useTopologyInteraction } from "@/features/overview/topology/useTopologyInteraction";
 import { useOverviewData } from "@/features/overview/useOverviewData";
 import { messageOf } from "@/shared/lib/errors";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
-
-const ZOOM_STEP = 0.1;
-const MOBILE_CANVAS_WIDTH = 760;
-
-interface TopologyAnchorSnapshot {
-  id: string;
-  left: number;
-  top: number;
-}
-
-type TopologyZoomMode = "initial" | "fit" | "manual";
 
 interface ControllerOptions {
   api: OverviewApi;
@@ -63,19 +41,11 @@ export function useOverviewController({
   const [buildPosting, setBuildPosting] = useState(false);
   const [ownedBuild, setOwnedBuild] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [activeNode, setActiveNode] = useState("service");
   const [query, setQuery] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [sessionLoads, setSessionLoads] = useState<Record<string, SessionLoad>>({});
-  const [topologyZoom, setTopologyZoom] = useState(1);
-  const [topologyZoomMode, setTopologyZoomMode] = useState<TopologyZoomMode>("initial");
-  const [topologyMetrics, setTopologyMetrics] = useState<TopologyMetrics | null>(null);
   const sessionRequests = useRef(new Map<string, AbortController>());
   const initializedTopology = useRef(false);
-  const pendingExpansionAnchor = useRef<TopologyAnchorSnapshot | null>(null);
-  const pageRef = useRef<HTMLDivElement>(null);
-  const treeRef = useRef<HTMLElement>(null);
-  const nodeRefs = useRef(new Map<string, HTMLDivElement>());
   const onTopologyLoaded = useCallback((value: TopologyData) => {
     const structural = structuralIds(value);
     const firstLoad = !initializedTopology.current;
@@ -167,51 +137,18 @@ export function useOverviewController({
     () => (filteredTree ? collectVisibleNodes(filteredTree, expanded, forcedExpanded) : []),
     [expanded, filteredTree, forcedExpanded],
   );
-  const renderedActiveNode = visibleNodes.some((entry) => entry.node.id === activeNode)
-    ? activeNode
-    : (filteredTree?.id ?? "service");
-  const updateTopologyMetrics = useCallback((next: TopologyMetrics) => {
-    setTopologyMetrics((current) =>
-      current?.layoutWidth === next.layoutWidth && current.viewportWidth === next.viewportWidth
-        ? current
-        : next,
-    );
-  }, []);
-  useEffect(() => {
-    if (activeNode !== renderedActiveNode) setActiveNode(renderedActiveNode);
-  }, [activeNode, renderedActiveNode]);
-  useLayoutEffect(() => {
-    const pending = pendingExpansionAnchor.current;
-    if (!pending) return;
-    pendingExpansionAnchor.current = null;
-    const element = nodeRefs.current.get(pending.id);
-    const viewport = element?.closest<HTMLElement>("[data-topology-viewport]");
-    const page = pageRef.current;
-    if (!element || !viewport || !page) return;
-    const after = element.getBoundingClientRect();
-    viewport.scrollLeft += after.left - pending.left;
-    page.scrollTop += after.top - pending.top;
-  }, [visibleNodes]);
-  useEffect(() => {
-    if (!topologyMetrics || topologyZoomMode === "manual") return;
-    if (topologyZoomMode === "initial" && topologyMetrics.viewportWidth <= MOBILE_CANVAS_WIDTH) {
-      setTopologyZoom(1);
-      setTopologyZoomMode("manual");
-      return;
-    }
-    setTopologyZoom(fitTopologyZoom(topologyMetrics.layoutWidth, topologyMetrics.viewportWidth));
-    if (topologyZoomMode === "initial") setTopologyZoomMode("fit");
-  }, [topologyMetrics, topologyZoomMode]);
-  useEffect(() => {
-    if (!query.trim() || !topologySearch.firstMatch) return;
-    const frame = window.requestAnimationFrame(() => {
-      scrollTopologyElement(nodeRefs.current.get(topologySearch.firstMatch!), {
-        block: "nearest",
-        inline: "center",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [query, topologySearch.firstMatch, topologyZoom, visibleNodes]);
+  const topologyInteraction = useTopologyInteraction({
+    expanded,
+    filteredTree,
+    firstMatch: topologySearch.firstMatch,
+    forcedExpanded,
+    onLoadSessionSummary: (id, request) => void loadSessionSummary(id, request),
+    onNavigate,
+    query,
+    setExpanded,
+    topology,
+    visibleNodes,
+  });
   const operationRunning = operation?.state === "running";
   const buildDisabled = buildPosting || operationRunning || overview?.docker.status !== "available";
   const buildUnavailableReason = buildPosting
@@ -282,148 +219,51 @@ export function useOverviewController({
     }
   }
 
-  function captureExpansionAnchor(id: string) {
-    const before = nodeRefs.current.get(id)?.getBoundingClientRect();
-    pendingExpansionAnchor.current = before ? { id, left: before.left, top: before.top } : null;
-  }
-
-  function toggleNode(node: TopologyNode) {
-    if (node.children.length === 0 && !node.sessionRequest) return;
-    const opening = !expanded.has(node.id);
-    captureExpansionAnchor(node.id);
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (!next.delete(node.id)) next.add(node.id);
-      return next;
-    });
-    if (opening && node.sessionRequest) void loadSessionSummary(node.id, node.sessionRequest);
-  }
-
-  function replaceExpansion(next: Set<string>) {
-    captureExpansionAnchor("service");
-    setExpanded(next);
-  }
-
-  function focusNode(id: string) {
-    setActiveNode(id);
-    const element = nodeRefs.current.get(id);
-    element?.focus({ preventScroll: true });
-    scrollTopologyElement(element, { block: "nearest", inline: "nearest" });
-  }
-
-  function navigateTree(event: KeyboardEvent<HTMLDivElement>, node: TopologyNode) {
-    if (event.target !== event.currentTarget) return;
-    const index = visibleNodes.findIndex((value) => value.node.id === node.id);
-    const current = visibleNodes[index];
-    if (!current) return;
-    let destination: string | null = null;
-    const open = node.id === "service" || expanded.has(node.id) || forcedExpanded.has(node.id);
-    const branch = node.children.length > 0 || Boolean(node.sessionRequest);
-    switch (event.key) {
-      case "ArrowDown":
-        destination = visibleNodes[index + 1]?.node.id ?? null;
-        break;
-      case "ArrowUp":
-        destination = visibleNodes[index - 1]?.node.id ?? null;
-        break;
-      case "Home":
-        destination = visibleNodes[0]?.node.id ?? null;
-        break;
-      case "End":
-        destination = visibleNodes.at(-1)?.node.id ?? null;
-        break;
-      case "ArrowRight":
-        if (!branch) break;
-        if (!open) toggleNode(node);
-        else
-          destination =
-            visibleNodes[index + 1]?.parentId === node.id ? visibleNodes[index + 1].node.id : null;
-        break;
-      case "ArrowLeft":
-        if (node.id !== "service" && branch && open && !forcedExpanded.has(node.id))
-          toggleNode(node);
-        else destination = current.parentId;
-        break;
-      case " ":
-        if (node.id !== "service" && branch) toggleNode(node);
-        break;
-      case "Enter":
-        if (node.target) onNavigate(node.target.module, node.target.query);
-        else if (node.id !== "service" && branch) toggleNode(node);
-        break;
-      default:
-        return;
-    }
-    event.preventDefault();
-    if (destination) focusNode(destination);
-  }
-
-  function changeTopologyZoom(value: number) {
-    setTopologyZoomMode("manual");
-    setTopologyZoom(clampZoom(value));
-  }
-
   return {
     attentionItems,
     attentionOnly,
     build,
     buildDisabled,
     buildUnavailableReason,
-    collapseAll: () => replaceExpansion(new Set()),
+    collapseAll: topologyInteraction.collapseAll,
     elapsedUptime,
-    expandAll: () => topology && replaceExpansion(structuralIds(topology)),
+    expandAll: topologyInteraction.expandAll,
     expanded,
     filteredTree,
-    fitTopology: () => {
-      if (!topologyMetrics) return;
-      setTopologyZoomMode("fit");
-      setTopologyZoom(fitTopologyZoom(topologyMetrics.layoutWidth, topologyMetrics.viewportWidth));
-    },
+    fitTopology: topologyInteraction.fit,
     forcedExpanded,
     health,
     loadOverview,
     loadSessionSummary,
     loadTopology,
-    navigateTree,
+    navigateTree: topologyInteraction.navigateTree,
     overview,
     overviewError,
     overviewRefreshing,
-    pageRef,
+    pageRef: topologyInteraction.pageRef,
     query,
-    registerNode: (id: string, element: HTMLDivElement | null) => {
-      if (element) nodeRefs.current.set(id, element);
-      else nodeRefs.current.delete(id);
-    },
-    renderedActiveNode,
-    resetZoom: () => changeTopologyZoom(1),
+    registerNode: topologyInteraction.registerNode,
+    renderedActiveNode: topologyInteraction.activeNode,
+    resetZoom: topologyInteraction.resetZoom,
     revealAttention: () => {
       setAttentionOnly(true);
-      window.requestAnimationFrame(() =>
-        scrollTopologyElement(treeRef.current, { behavior: "smooth" }),
-      );
+      window.requestAnimationFrame(topologyInteraction.reveal);
     },
     sessionLoads,
-    setActiveNode,
+    setActiveNode: topologyInteraction.setActiveNode,
     setQuery,
     toggleAttention: () => setAttentionOnly((value) => !value),
-    toggleNode,
+    toggleNode: topologyInteraction.toggleNode,
     topology,
     topologyError,
-    topologyMetrics,
+    topologyMetrics: topologyInteraction.metrics,
     topologyRefreshing,
     topologySearch,
-    topologyZoom,
-    topologyZoomMode,
-    treeRef,
-    updateTopologyMetrics,
-    zoomIn: () => changeTopologyZoom(topologyZoom + ZOOM_STEP),
-    zoomOut: () => changeTopologyZoom(topologyZoom - ZOOM_STEP),
+    topologyZoom: topologyInteraction.zoom,
+    topologyZoomMode: topologyInteraction.zoomMode,
+    treeRef: topologyInteraction.treeRef,
+    updateTopologyMetrics: topologyInteraction.updateMetrics,
+    zoomIn: topologyInteraction.zoomIn,
+    zoomOut: topologyInteraction.zoomOut,
   };
-}
-
-function scrollTopologyElement(
-  element: Element | null | undefined,
-  options: ScrollIntoViewOptions,
-) {
-  if (element && typeof element.scrollIntoView === "function") element.scrollIntoView(options);
 }

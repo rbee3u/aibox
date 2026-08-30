@@ -1,9 +1,9 @@
 import { ArrowLeftRight, ChevronLeft, CircleAlert, LoaderCircle } from "lucide-react";
 
 import type { RequestsApi } from "@/api/requests";
-import { RequestDetail } from "@/features/requests/components/RequestDetail";
-import { RequestList } from "@/features/requests/components/RequestList";
-import { REQUESTS_PER_PAGE } from "@/features/requests/requestList";
+import { RequestDetail } from "@/features/requests/detail/RequestDetail";
+import { RequestList } from "@/features/requests/catalog/RequestList";
+import { REQUESTS_PER_PAGE } from "@/features/requests/catalog/listModel";
 import { useRequestsController } from "@/features/requests/useRequestsController";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
@@ -20,49 +20,49 @@ interface RequestsPageProps {
 
 export function RequestsPage(props: RequestsPageProps) {
   const {
-    bodies,
-    bodyStatus,
-    cancelDialog,
-    clearFocusAfterDelete,
-    clearFocusAfterInspection,
-    confirmDelete,
-    currentId,
-    decodedBodies,
-    deletingRequestId,
-    deletionBusy,
-    detail,
-    detailBackButton,
-    detailOpen,
-    dialog,
-    dismissNotification,
-    download,
-    enterSelection,
-    eventTimings,
-    exitSelection,
-    focusAfterDelete,
-    focusAfterInspection,
-    handleNotificationAction,
-    inspectionFailure,
-    list,
-    loadingBody,
-    loadingDetail,
-    loadingList,
-    navigatePage,
-    notifications,
-    openBatchDeletion,
-    openRecord,
-    openRequestDeletion,
-    page,
-    refreshPage,
-    refreshing,
-    retryInspectionFailure,
-    returnToList,
-    selectTab,
-    selected,
-    selectionMode,
-    tab,
-    togglePageSelection,
-    toggleRequestSelection,
+    catalog: {
+      currentId,
+      list,
+      loadingList,
+      navigatePage,
+      openRequest,
+      page,
+      refreshPage,
+      refreshing,
+    },
+    detail: {
+      bodies,
+      bodyStatus,
+      currentId: detailCurrentId,
+      decodedBodies,
+      detail: requestDetail,
+      detailBackButton,
+      detailOpen,
+      download,
+      eventTimings,
+      inspectionFailure,
+      loadingBody,
+      loadingDetail,
+      retryInspectionFailure,
+      returnToList,
+      selectTab,
+      tab,
+    },
+    dialogs: { cancelDialog, confirmDelete, dialog },
+    feedback: { dismissNotification, handleNotificationAction, notifications },
+    mutations: { deletingRequestId, deletionBusy, openBatchDeletion, openRequestDeletion },
+    selection: {
+      clearFocusAfterDelete,
+      clearFocusAfterInspection,
+      enterSelection,
+      exitSelection,
+      focusAfterDelete,
+      focusAfterInspection,
+      selected,
+      selectionMode,
+      togglePageSelection,
+      toggleRequestSelection,
+    },
   } = useRequestsController(props);
 
   return (
@@ -85,7 +85,7 @@ export function RequestsPage(props: RequestsPageProps) {
             onExitSelection={exitSelection}
             onTogglePage={togglePageSelection}
             onToggle={toggleRequestSelection}
-            onSelect={openRecord}
+            onSelect={openRequest}
             onPrevious={() => navigatePage(page - 1)}
             onNext={() => navigatePage(page + 1)}
             loading={loadingList}
@@ -103,7 +103,7 @@ export function RequestsPage(props: RequestsPageProps) {
           />
         </div>
         <div className={styles.detailColumn}>
-          {currentId && (
+          {detailCurrentId && (
             <button
               ref={detailBackButton}
               type="button"
@@ -125,10 +125,10 @@ export function RequestsPage(props: RequestsPageProps) {
               description="Loading request…"
               role="status"
             />
-          ) : detail ? (
+          ) : requestDetail ? (
             <RequestDetail
-              key={detail.request.id}
-              detail={detail}
+              key={requestDetail.request.id}
+              detail={requestDetail}
               bodies={bodies}
               bodyStatus={bodyStatus}
               decodedBodies={decodedBodies}
@@ -138,7 +138,7 @@ export function RequestsPage(props: RequestsPageProps) {
               onDownload={(kind) => void download(kind)}
               loadingBody={loadingBody}
             />
-          ) : currentId ? (
+          ) : detailCurrentId ? (
             <EmptyState
               className={styles.emptyDetail}
               variant="detail"

@@ -58,6 +58,43 @@ pub(crate) enum Outcome {
     ServerShutdown,
 }
 
+/// Lifecycle state of a Request, independent from its terminal outcome.
+///
+/// An interrupted Request has no terminal Outcome because the process stopped
+/// before finalization; the Control adapter serializes this same closed set.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestState {
+    Active,
+    Completed,
+    Interrupted,
+}
+
+impl RequestState {
+    pub(crate) fn from_snapshot(active: bool, terminal: bool) -> Self {
+        if active {
+            Self::Active
+        } else if terminal {
+            Self::Completed
+        } else {
+            Self::Interrupted
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Completed => "completed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// Domain-facing name for the terminal result enum. `Outcome` remains as the
+/// compatibility spelling used by persistence and protocol code.
+pub(crate) type RequestOutcome = Outcome;
+
 impl Outcome {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -327,7 +364,7 @@ pub(crate) struct TerminalRequestEvent {
     pub(crate) id: String,
     pub(crate) method: String,
     pub(crate) host: String,
-    pub(crate) outcome: Outcome,
+    pub(crate) outcome: RequestOutcome,
     pub(crate) assessment_level: AssessmentLevel,
     pub(crate) ended_at: String,
     pub(crate) total_ms: u64,

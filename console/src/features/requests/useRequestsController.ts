@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import type { RequestList, RequestsApi } from "@/api/requests";
 import { requestWasCancelled } from "@/features/requests/requestErrors";
@@ -6,12 +6,12 @@ import { readRequestsRoute, requestsSearch, type RequestsRoute } from "@/feature
 import {
   useRequestInspection,
   type InspectionFailure,
-} from "@/features/requests/useRequestInspection";
+} from "@/features/requests/detail/useRequestInspection";
 import {
   focusTargetAfterDelete,
   removeDeletedFromList,
   REQUESTS_PER_PAGE,
-} from "@/features/requests/requestList";
+} from "@/features/requests/catalog/listModel";
 import type { DetailTab } from "@/features/requests/viewTypes";
 import { useCatalogSelection } from "@/shared/hooks/useCatalogSelection";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
@@ -19,7 +19,9 @@ import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { LatestRequest } from "@/shared/lib/latestRequest";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
-import type { NotificationItemData } from "@/shared/ui/notificationTypes";
+import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
+
+type Inspection = ReturnType<typeof useRequestInspection>;
 
 type Dialog = { kind: "batch"; ids: string[] } | { kind: "request"; id: string } | null;
 type Deletion = { kind: "batch" } | { kind: "request"; id: string } | null;
@@ -39,7 +41,75 @@ interface ControllerOptions {
   onLocationChange: ModuleLocationChange;
 }
 
-export function useRequestsController({ api, search, onLocationChange }: ControllerOptions) {
+/**
+ * What the Requests page reads, grouped the same way the other three catalog
+ * pages group their view models: the list, the open Request, batch selection,
+ * deletion, its dialog, and page-level feedback.
+ */
+export interface RequestsViewModel {
+  catalog: {
+    currentId: string | null;
+    list: RequestList;
+    loadingList: boolean;
+    navigatePage: (nextPage: number) => void;
+    openRequest: (id: string) => void;
+    page: number;
+    refreshPage: () => Promise<void>;
+    refreshing: boolean;
+  };
+  detail: {
+    bodies: Inspection["bodies"];
+    bodyStatus: Inspection["bodyStatus"];
+    currentId: string | null;
+    decodedBodies: Inspection["decodedBodies"];
+    detail: Inspection["detail"];
+    detailBackButton: RefObject<HTMLButtonElement | null>;
+    detailOpen: boolean;
+    download: Inspection["download"];
+    eventTimings: Inspection["eventTimings"];
+    inspectionFailure: Inspection["failure"];
+    loadingBody: Inspection["loadingBody"];
+    loadingDetail: boolean;
+    retryInspectionFailure: () => void;
+    returnToList: () => void;
+    selectTab: (next: DetailTab) => void;
+    tab: DetailTab;
+  };
+  selection: {
+    clearFocusAfterDelete: () => void;
+    clearFocusAfterInspection: () => void;
+    enterSelection: () => void;
+    exitSelection: () => void;
+    focusAfterDelete: string | null | undefined;
+    focusAfterInspection: string | null | undefined;
+    selected: Set<string>;
+    selectionMode: boolean;
+    togglePageSelection: () => void;
+    toggleRequestSelection: (id: string) => void;
+  };
+  mutations: {
+    deletingRequestId: string | null;
+    deletionBusy: boolean;
+    openBatchDeletion: () => void;
+    openRequestDeletion: (id: string) => void;
+  };
+  dialogs: {
+    cancelDialog: () => void;
+    confirmDelete: () => Promise<void>;
+    dialog: Dialog;
+  };
+  feedback: {
+    dismissNotification: (source: NotificationSource) => void;
+    handleNotificationAction: (notification: NotificationItemData) => void;
+    notifications: NotificationItemData[];
+  };
+}
+
+export function useRequestsController({
+  api,
+  search,
+  onLocationChange,
+}: ControllerOptions): RequestsViewModel {
   const [initialRoute] = useState(() => readRequestsRoute(search));
   const appliedSearch = useRef(requestsSearch(initialRoute));
   const updateLocation = useCallback(
@@ -107,7 +177,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
   const {
     bodies,
     bodyStatus,
-    clearCurrentRecord,
+    clearCurrentRequest,
     clearRequestIfCurrent,
     currentId,
     decodedBodies,
@@ -131,7 +201,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
 
   useNarrowDetailFocus(detailBackButton, detailOpen && currentId !== null, currentId);
 
-  const openRecord = useCallback(
+  const openRequest = useCallback(
     (id: string) => {
       setFocusAfterInspection(undefined);
       setDetailOpen(true);
@@ -144,9 +214,9 @@ export function useRequestsController({ api, search, onLocationChange }: Control
   const returnToList = useCallback(() => {
     setFocusAfterInspection(currentId);
     setDetailOpen(false);
-    clearCurrentRecord();
+    clearCurrentRequest();
     updateLocation({ page: pageRef.current, request: null, tab: "summary" });
-  }, [clearCurrentRecord, currentId, updateLocation]);
+  }, [clearCurrentRequest, currentId, updateLocation]);
 
   const selectTab = useCallback(
     (next: DetailTab) => {
@@ -307,11 +377,20 @@ export function useRequestsController({ api, search, onLocationChange }: Control
       void selectRequest(route.request, route.tab);
     } else if (!route.request && currentId) {
       setDetailOpen(false);
-      clearCurrentRecord();
+      clearCurrentRequest();
     } else if (route.request && route.tab !== tab) {
       setTab(route.tab);
     }
-  }, [clearCurrentRecord, currentId, loadPage, search, selectRequest, setTab, tab, updateLocation]);
+  }, [
+    clearCurrentRequest,
+    currentId,
+    loadPage,
+    search,
+    selectRequest,
+    setTab,
+    tab,
+    updateLocation,
+  ]);
 
   const deletableIdsOnPage = list.requests
     .filter((request) => request.state !== "active")
@@ -320,7 +399,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
   async function confirmDelete() {
     if (!dialog) return;
     if (dialog.kind === "request") {
-      await deleteRecord(dialog.id);
+      await deleteRequest(dialog.id);
       return;
     }
     if (!beginDeletion({ kind: "batch" })) return;
@@ -338,7 +417,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
       selection.exit();
       if (currentId && deletedIds.includes(currentId)) {
         setDetailOpen(false);
-        clearCurrentRecord();
+        clearCurrentRequest();
         updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       }
       setDialog(null);
@@ -355,7 +434,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
     }
   }
 
-  async function deleteRecord(id: string) {
+  async function deleteRequest(id: string) {
     if (!beginDeletion({ kind: "request", id })) return;
     const originPage = pageRef.current;
     const originRequests = list.requests;
@@ -364,7 +443,7 @@ export function useRequestsController({ api, search, onLocationChange }: Control
       await api.deleteRequests([id]);
       if (currentId === id) {
         setDetailOpen(false);
-        clearCurrentRecord();
+        clearCurrentRequest();
         updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       } else {
         clearRequestIfCurrent(id);
@@ -407,57 +486,70 @@ export function useRequestsController({ api, search, onLocationChange }: Control
   }
 
   return {
-    bodies,
-    bodyStatus,
-    cancelDialog: () => !deletionBusy && setDialog(null),
-    clearFocusAfterDelete: () => setFocusAfterDelete(undefined),
-    clearFocusAfterInspection: () => setFocusAfterInspection(undefined),
-    confirmDelete,
-    currentId,
-    decodedBodies,
-    deletingRequestId,
-    deletionBusy,
-    detail,
-    detailBackButton,
-    detailOpen,
-    dialog,
-    dismissNotification,
-    download,
-    enterSelection: () => {
-      setDetailOpen(false);
-      selection.enter();
+    catalog: {
+      currentId,
+      list,
+      loadingList,
+      navigatePage,
+      openRequest,
+      page,
+      refreshPage,
+      refreshing,
     },
-    eventTimings,
-    exitSelection: selection.exit,
-    focusAfterDelete,
-    focusAfterInspection,
-    handleNotificationAction,
-    inspectionFailure,
-    list,
-    loadingBody,
-    loadingDetail,
-    loadingList,
-    navigatePage,
-    notifications: selection.active
-      ? notifications.map((notification) =>
-          notification.source === "list"
-            ? { ...notification, actionLabel: undefined }
-            : notification,
-        )
-      : notifications,
-    openBatchDeletion: () => setDialog({ kind: "batch", ids: selection.ids }),
-    openRecord,
-    openRequestDeletion: (id: string) => setDialog({ kind: "request", id }),
-    page,
-    refreshPage,
-    refreshing,
-    retryInspectionFailure,
-    returnToList,
-    selectTab,
-    selected: selection.selected,
-    selectionMode: selection.active,
-    tab,
-    togglePageSelection: () => selection.toggleAll(deletableIdsOnPage, pageRef.current),
-    toggleRequestSelection: (id: string) => selection.toggle(id, pageRef.current),
+    detail: {
+      bodies,
+      bodyStatus,
+      currentId,
+      decodedBodies,
+      detail,
+      detailBackButton,
+      detailOpen,
+      download,
+      eventTimings,
+      inspectionFailure,
+      loadingBody,
+      loadingDetail,
+      retryInspectionFailure,
+      returnToList,
+      selectTab,
+      tab,
+    },
+    selection: {
+      clearFocusAfterDelete: () => setFocusAfterDelete(undefined),
+      clearFocusAfterInspection: () => setFocusAfterInspection(undefined),
+      enterSelection: () => {
+        setDetailOpen(false);
+        selection.enter();
+      },
+      exitSelection: selection.exit,
+      focusAfterDelete,
+      focusAfterInspection,
+      selected: selection.selected,
+      selectionMode: selection.active,
+      togglePageSelection: () => selection.toggleAll(deletableIdsOnPage, pageRef.current),
+      toggleRequestSelection: (id: string) => selection.toggle(id, pageRef.current),
+    },
+    mutations: {
+      deletingRequestId,
+      deletionBusy,
+      openBatchDeletion: () => setDialog({ kind: "batch", ids: selection.ids }),
+      openRequestDeletion: (id: string) => setDialog({ kind: "request", id }),
+    },
+    dialogs: {
+      cancelDialog: () => !deletionBusy && setDialog(null),
+      confirmDelete,
+      dialog,
+    },
+    feedback: {
+      dismissNotification,
+      handleNotificationAction,
+      notifications: selection.active
+        ? notifications.map((notification) =>
+            notification.source === "list"
+              ? { ...notification, actionLabel: undefined }
+              : notification,
+          )
+        : notifications,
+    },
   };
 }

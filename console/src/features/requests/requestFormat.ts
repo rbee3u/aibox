@@ -1,4 +1,4 @@
-import { tryDecodeBase64 } from "@/api/encoding";
+import { tryDecodeBase64 } from "@/shared/lib/encoding";
 import type { EventTimingIndex, HeaderValue, RequestSummary } from "@/api/requests";
 import { hex } from "@/shared/lib/format";
 

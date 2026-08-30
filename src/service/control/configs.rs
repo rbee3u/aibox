@@ -1,10 +1,20 @@
 //! Config Control API handlers and wire types.
 
-use super::*;
-use crate::service::coordination::config::{
-    ConfigCoordinator, ConfigFileView, DeleteConfigsCommand,
+use super::{
+    AgentTenantQuery, ControlResult, default_agent, default_tenant_selection, json_response,
 };
+use crate::agent::AgentKind;
+use crate::application_error::{ApplicationErrorKind, application_error};
+use crate::config::{self, CustomProviderInput, VisualConfigOptionInput};
+use crate::service::coordination::{ConfigCoordinator, ConfigFileView, DeleteConfigsCommand};
+use crate::service::state::ServiceState;
 use crate::tenant::TenantSelection;
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -15,29 +25,35 @@ pub(crate) struct ConfigListResponse {
     credential_propagation_available: bool,
 }
 
+/// Decode a base64 wire field, keeping the original Control API wording.
+fn decode_base64(value: &str) -> Result<Vec<u8>, anyhow::Error> {
+    base64::engine::general_purpose::STANDARD
+        .decode(value.as_bytes())
+        .map_err(|error| {
+            application_error(
+                ApplicationErrorKind::InvalidInput,
+                format!("invalid base64: {error}"),
+            )
+        })
+}
+
 pub(super) async fn list_configs(
     State(state): State<ServiceState>,
     Query(query): Query<AgentTenantQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let catalog = ConfigCoordinator::new(state)
         .list(selection, query.agent)
-        .await
-    {
-        Ok(catalog) => json_response(
-            StatusCode::OK,
-            &ConfigListResponse {
-                configs: catalog.configs,
-                files: catalog.files,
-                application: catalog.application,
-                credential_propagation_available: catalog.credential_propagation_available,
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &ConfigListResponse {
+            configs: catalog.configs,
+            files: catalog.files,
+            application: catalog.application,
+            credential_propagation_available: catalog.credential_propagation_available,
+        },
+    ))
 }
 
 #[derive(Serialize)]
@@ -50,20 +66,17 @@ pub(crate) struct AuthPropagationPreviewResponse {
 pub(super) async fn preview_auth_propagation(
     State(state): State<ServiceState>,
     Json(_request): Json<Value>,
-) -> Response<Body> {
-    match ConfigCoordinator::new(state)
+) -> ControlResult {
+    let preview = ConfigCoordinator::new(state)
         .preview_auth_propagation()
-        .await
-    {
-        Ok(preview) => json_response(
-            StatusCode::OK,
-            &AuthPropagationPreviewResponse {
-                plan_id: preview.plan_id,
-                preview: preview.preview,
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &AuthPropagationPreviewResponse {
+            plan_id: preview.plan_id,
+            preview: preview.preview,
+        },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -75,14 +88,11 @@ pub(crate) struct ExecuteAuthPropagationRequest {
 pub(super) async fn execute_auth_propagation(
     State(state): State<ServiceState>,
     Json(request): Json<ExecuteAuthPropagationRequest>,
-) -> Response<Body> {
-    match ConfigCoordinator::new(state)
+) -> ControlResult {
+    let report = ConfigCoordinator::new(state)
         .execute_auth_propagation(request.plan_id)
-        .await
-    {
-        Ok(report) => json_response(StatusCode::OK, &report),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &report))
 }
 
 #[derive(Deserialize)]
@@ -99,18 +109,16 @@ pub(crate) struct ConfigMutationBase {
 pub(super) async fn create_config(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigMutationBase>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
-        .create(selection, request.agent, request.config)
-        .await
-    {
-        Ok(created) => json_response(StatusCode::OK, &CreatedConfigResponse { created }),
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let name = config::NamedConfigName::parse(&request.config)?;
+    let created = ConfigCoordinator::new(state)
+        .create(selection, request.agent, name)
+        .await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &CreatedConfigResponse { created },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -137,7 +145,7 @@ pub(crate) struct ConfigFileResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_options: Option<Vec<config::VisualConfigOptionState>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    custom_provider: Option<crate::config::model::CustomProviderState>,
+    custom_provider: Option<crate::config::CustomProviderState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_error: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -169,26 +177,14 @@ pub(crate) struct ConfigAuthResponse {
 pub(super) async fn reveal_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigFileRequest>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    let target = match config::ConfigTarget::from_wire(request.config.as_deref(), request.current) {
-        Ok(target) => target,
-        Err(error) => return result_error(error),
-    };
-    let file = match config::ConfigFile::parse(request.agent, &request.file) {
-        Ok(file) => file,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let file = config::ConfigFile::parse(request.agent, &request.file)?;
+    let view = ConfigCoordinator::new(state)
         .reveal(selection, request.agent, target, file)
-        .await
-    {
-        Ok(view) => json_response(StatusCode::OK, &config_file_response(view)),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &config_file_response(view)))
 }
 
 #[derive(Deserialize)]
@@ -210,42 +206,24 @@ pub(crate) struct SaveConfigFileRequest {
     #[serde(default)]
     custom_provider: Option<CustomProviderInput>,
     #[serde(default)]
-    visual_auth: Option<crate::config::model::VisualAuthInput>,
+    visual_auth: Option<crate::config::VisualAuthInput>,
 }
 
 pub(super) async fn save_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<SaveConfigFileRequest>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    let content =
-        match base64::engine::general_purpose::STANDARD.decode(request.content_base64.as_bytes()) {
-            Ok(content) => content,
-            Err(error) => {
-                return api_error(StatusCode::BAD_REQUEST, &format!("invalid base64: {error}"));
-            }
-        };
-    let target = match config::ConfigTarget::from_wire(request.config.as_deref(), request.current) {
-        Ok(target) => target,
-        Err(error) => return result_error(error),
-    };
-    let file = match config::ConfigFile::parse(request.agent, &request.file) {
-        Ok(file) => file,
-        Err(error) => return result_error(error),
-    };
-    let edit = match config::ConfigEdit::from_wire(
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let content = decode_base64(&request.content_base64)?;
+    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let file = config::ConfigFile::parse(request.agent, &request.file)?;
+    let edit = config::ConfigEdit::from_wire(
         content,
         request.custom_provider,
         request.visual_options,
         request.visual_auth,
-    ) {
-        Ok(edit) => edit,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
+    )?;
+    let view = ConfigCoordinator::new(state)
         .save(
             selection,
             request.agent,
@@ -254,11 +232,8 @@ pub(super) async fn save_config_file(
             request.revision,
             edit,
         )
-        .await
-    {
-        Ok(view) => json_response(StatusCode::OK, &config_file_response(view)),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &config_file_response(view)))
 }
 
 #[derive(Deserialize)]
@@ -294,63 +269,40 @@ pub(crate) struct DiagnoseConfigResponse {
 pub(super) async fn diagnose_config_file(
     State(state): State<ServiceState>,
     Json(request): Json<DiagnoseConfigRequest>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    let content =
-        match base64::engine::general_purpose::STANDARD.decode(request.content_base64.as_bytes()) {
-            Ok(content) => content,
-            Err(error) => {
-                return api_error(StatusCode::BAD_REQUEST, &format!("invalid base64: {error}"));
-            }
-        };
-    let target = match config::ConfigTarget::from_wire(request.config.as_deref(), request.current) {
-        Ok(target) => target,
-        Err(error) => return result_error(error),
-    };
-    let file = match config::ConfigFile::parse(request.agent, &request.file) {
-        Ok(file) => file,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let content = decode_base64(&request.content_base64)?;
+    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let file = config::ConfigFile::parse(request.agent, &request.file)?;
+    let diagnostics = ConfigCoordinator::new(state)
         .diagnose(selection, request.agent, target, file, content)
-        .await
-    {
-        Ok(diagnostics) => json_response(
-            StatusCode::OK,
-            &DiagnoseConfigResponse {
-                diagnostics: diagnostics
-                    .into_iter()
-                    .map(|diagnostic| ConfigDiagnostic {
-                        severity: "error",
-                        message: diagnostic.message,
-                        line: diagnostic.line,
-                        column: diagnostic.column,
-                    })
-                    .collect(),
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &DiagnoseConfigResponse {
+            diagnostics: diagnostics
+                .into_iter()
+                .map(|diagnostic| ConfigDiagnostic {
+                    severity: "error",
+                    message: diagnostic.message,
+                    line: diagnostic.line,
+                    column: diagnostic.column,
+                })
+                .collect(),
+        },
+    ))
 }
 
 pub(super) async fn apply_config(
     State(state): State<ServiceState>,
     Json(request): Json<ConfigMutationBase>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ConfigCoordinator::new(state)
-        .apply(selection, request.agent, request.config)
-        .await
-    {
-        Ok(application) => json_response(StatusCode::OK, &application),
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let name = config::NamedConfigName::parse(&request.config)?;
+    let application = ConfigCoordinator::new(state)
+        .apply(selection, request.agent, name)
+        .await?;
+    Ok(json_response(StatusCode::OK, &application))
 }
 
 #[derive(Deserialize)]
@@ -371,11 +323,8 @@ pub(crate) struct DeleteConfigsRequest {
 pub(super) async fn delete_configs(
     State(state): State<ServiceState>,
     Json(request): Json<DeleteConfigsRequest>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
     let command = DeleteConfigsCommand {
         selection,
         agent: request.agent,
@@ -383,16 +332,14 @@ pub(super) async fn delete_configs(
         all: request.all,
         confirmation: request.confirmation,
     };
-    match ConfigCoordinator::new(state).delete(command).await {
-        Ok(deleted) => json_response(
-            StatusCode::OK,
-            &DeletedConfigsResponse {
-                deleted: deleted.configs,
-                all: deleted.all,
-            },
-        ),
-        Err(error) => result_error(error),
-    }
+    let deleted = ConfigCoordinator::new(state).delete(command).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &DeletedConfigsResponse {
+            deleted: deleted.configs,
+            all: deleted.all,
+        },
+    ))
 }
 
 #[derive(Serialize)]

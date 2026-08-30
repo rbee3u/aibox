@@ -47,11 +47,18 @@ default suite.
 Frontend tests are layered. Query codecs, reducers, derivations, and formatting
 are unit tested beside the module they cover, so a rule such as "an equal
 version offers no Update" is stated once in a fast test rather than inferred
-from a rendered page. Each domain then keeps interaction tests that render its
-real page against a strict fake of its own API interface; those files are split
-by theme rather than collected into one suite. Test doubles live with what they
-double: `features/requests/testFixtures.ts` and `testHarness.tsx` for Requests,
-`test/controlApi` harnesses for the management pages.
+from a rendered page. A unit test follows its module into `catalog/`, `detail/`,
+or `mutation/`; a page-level interaction test stays at the feature root. Each
+domain keeps interaction tests that render its real page against a strict fake
+of its own API interface, split by theme rather than collected into one suite.
+Test
+doubles live with what they double: each feature has its own `testSupport.tsx`
+(Requests calls its pair `testFixtures.ts` and `testHarness.tsx`), and
+`features/common/testFixtures.ts` holds the Tenant rows several features assume.
+The Tenants fixture stays local because its Tenant Homes are load-bearing: one
+sits under the Host Home to exercise `~/...` abbreviation and one outside it to
+stay absolute. HTTP paths, queries, snake_case request bodies, and wire
+normalization are asserted only by the `api/` adapter tests.
 
 Because the tokens test asserts the density and stacking contracts directly,
 browser specs do not restate exact pixel values. They assert behavior and
@@ -97,11 +104,22 @@ references, so `assets/console.css` and `assets/console.js` are served as
 
 `src/` has an explicit acyclic dependency graph. `domain/` depends on no other
 Console layer. `api/` and `shared/` may depend on `domain/` but not on each
-other. A feature may depend on its own files plus `domain/`, `api/`, and
-`shared/`; `app/` composes every layer. ESLint's `no-restricted-imports` rules
-reject reversed edges and cross-feature imports. `src/test` is exempt because
-its harnesses compose whole pages. Files are imported through the `@/` alias;
-there are no barrel files, so every import names the module it uses.
+other. `features/common/` may depend on `api/`, `shared/`, and `domain/`, but on
+no feature. A feature may depend on its own files plus those four layers; `app/`
+composes every layer. ESLint's `no-restricted-imports` rules reject reversed
+edges and cross-feature imports. `src/test` is exempt because its harnesses
+compose whole pages. Files are imported through the `@/` alias; there are no
+barrel files, so every import names the module it uses.
+
+`features/common/` is for what several features share when `shared/` cannot hold
+it, because the module needs both an `api/` wire type and a `shared/ui` type.
+`tenantOptions.tsx` is the motivating case: it turns Control API Tenant rows
+into Selection Menu options. It also holds `catalogSelection.ts`, the one
+batch-selection reducer every catalog page composes; `useElementRegistry.ts`,
+the keyed focus registry pages use to move focus to a row; and
+`testFixtures.ts`, the Tenant rows several features' tests assume. It sits
+outside the features-may-not-import-each-other rule so every feature may use it,
+and its own ESLint boundary forbids importing a feature back.
 
 `app/App.tsx` owns the persistent AIBox shell. `app/routing/useConsoleRouter.ts`
 owns the sole `history` and `popstate` integration, URL-backed module
@@ -120,31 +138,63 @@ callers select a registered brand and explicit size without importing SVGs
 directly. Runtime and build output do not depend on an icon package.
 
 Each `features/<domain>/` holds a page controller, a thin page view, its query
-codec, React-free domain modules, focused resource hooks, and components.
+codec, its workflow reducer, and the React-free modules or components that more
+than one of its concerns reads. `catalog/`, `detail/`, and `mutation/`
+subdirectories hold what exactly one concern uses, so a module's location states
+who depends on it: `sessions/sessionSource.ts` stays at the root because the
+catalog, detail, mutation, and route code all read it, while
+`sessions/detail/sessionFormat.ts` moved down because only detail does.
+`features/overview/` keeps `topology/` and `components/` instead — it has
+neither a catalog nor a detail pane.
+
 Controllers own URL synchronization, latest-request ownership, dialogs, and
-mutation orchestration; views connect controller outputs to layout and domain
-components. Independent editor drafts and streaming inspection remain with
-their focused hooks. `features/overview/` orchestrates
+mutation orchestration. All four catalog controllers expose grouped view models
+such as `catalog`, `detail`, `selection`, `mutations`, `dialogs`, and
+`feedback`, with feature-specific `editor` or `components` groups, so views do
+not receive a flat collection of setters, refs, mutable maps, or inferred
+controller return types. A hook whose result spans more than one group returns
+those groups itself. `useComponentActions` returns `components` and `dialogs`;
+`useSessionDeletion` returns `mutations` and `dialogs`. So the controller
+spreads them instead of forwarding each field, and adding a field is one edit
+rather than three. Their feature-local reducers own only cross-action workflow
+state such as selection, dialogs, mutation phases, and typed outcomes, and
+delegate the selection part to `features/common/catalogSelection.ts`. Resource
+snapshots, loading, streaming reads, and AbortController ownership remain with
+focused hooks.
+
+`features/overview/` orchestrates
 Overview and keeps rendering in `topology/TopologyCanvas.tsx` and
-`topology/TopologyCanvasNode.tsx` over the React-free tree, search, filter, and
-layout model in `topology/topologyModel.ts`; `useOverviewController.ts` owns
-topology interaction while `useOverviewData.ts` owns its two read-only resource
-lifecycles. `features/tenants/` holds the Component
+`topology/TopologyCanvasNode.tsx`. `topology/topologyModel.ts` is the stable
+facade over the React-free core tree, layout/path, query/filter, and
+health/attention modules; `topology/useTopologyInteraction.ts` owns focus,
+keyboard navigation, expansion, and zoom while `useOverviewData.ts` owns its
+two read-only resource lifecycles.
+`features/tenants/` holds the Component
 vocabulary, version comparison, Latest Release observation, and row derivation
 in `componentCatalog.ts`, with `useTenantController.ts` composing separate
-Tenant and Component catalog hooks.
+Tenant and Component catalog hooks plus actions and dialogs.
+`useComponentCatalog.ts` owns the selected Tenant's Component snapshot,
+`useComponentLatest.ts` owns the Service-wide Latest Release snapshot, and
+`useComponentMenu.ts` owns anchored menu focus and positioning.
 `features/configs/` keeps the file editor, visual option editor, and CodeMirror
-integration under `editor/`; `useConfigEditorSession.ts` coordinates file
-controllers and ordered saves while each pane owns its draft, and
-`useConfigController.tsx` owns page routing and mutations. Named Config and
-Request Proxy rules remain in `configCatalog.ts`. `features/sessions/` keeps the
-Transcript timeline reducer in `sessionDetail.ts`, the Tenant-and-Agent source
-vocabulary in `sessionSource.ts`, and detail streaming in
-`useSessionInspection.ts`; `useSessionController.tsx` owns source selection,
-routing, and deletion. `features/requests/` keeps body decoding, Summary
-derivation, and list bookkeeping in pure modules; `useRequestsController.ts`
-owns the list and deletion lifecycle while `useRequestInspection.ts` owns
-detail and Body inspection.
+integration under `detail/`, since editing a Config is what its detail pane
+does; `useConfigEditorSession.ts` coordinates file controllers and ordered
+saves. Each file pane separates pure projection in
+`configFileModel.ts`, draft/reveal/save ownership in
+`useConfigFileSession.ts`, and rendering in `ConfigFilePane.tsx`;
+`useConfigController.tsx` composes route selection, catalog, mutations,
+dialogs, and the editor session. Named Config and Request Proxy rules remain in
+`configCatalog.ts`. `features/sessions/` keeps the Transcript timeline reducer
+in `sessionDetail.ts`, the Tenant-and-Agent source vocabulary in
+`sessionSource.ts`, and detail streaming in `useSessionInspection.ts`;
+`useSessionController.tsx` composes catalog, inspection, deletion, conversation
+navigation, and routing, while `SessionCatalogPane.tsx`,
+`SessionDetailPane.tsx`, and `SessionDialogs.tsx` keep the page view split by
+stable interaction responsibility. `features/requests/` remains the reference
+split: body decoding, Summary derivation, and list bookkeeping live in pure
+modules; `useRequestsController.ts` owns list/deletion, and
+`useRequestInspection.ts` composes focused detail, Body/timing, and download
+resource hooks through one explicit Request identity and generation.
 
 Domain CSS Modules own domain and responsive rules.
 `shared/ui/layout/catalog.module.css` owns the shared catalog page frame,
@@ -169,9 +219,14 @@ Agent Session ID, the persisted Model Protocol Summary and Request Assessment,
 and normalized Diagnostics groups. Pages receive only their domain API
 interface so tests can use strict, deterministic fakes without sockets, HTTP
 paths, snake_case, or wire-body knowledge. Adapter tests alone own those HTTP
-details. `make console-contract-check` exports bindings and samples to a
-temporary directory and compares them byte-for-byte. `make
-console-assets-check` builds to a temporary directory, runs the bundle budget,
+details. The Rust-owned test manifest in
+`console/src/api/generated/routes.ts` records the semantic route keys, methods,
+and path templates used by adapter tests; those tests add path parameters and
+queries through the shared manifest helper. Production clients remain
+handwritten. `make console-contract-check`
+exports bindings, routes, and samples to a temporary directory and compares
+them byte-for-byte. `make console-assets-check` builds to a temporary directory,
+runs the bundle budget,
 and compares embedded HTML, CSS, and JavaScript. Both gates run under `make
 console-check`.
 

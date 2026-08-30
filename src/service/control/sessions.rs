@@ -1,40 +1,45 @@
 //! Session Control API handlers, wire queries, and NDJSON presentation.
 
-use super::*;
-use crate::service::coordination::session::{DeleteSessionsCommand, SessionCoordinator};
+use super::{
+    AgentTenantQuery, ControlResult, default_agent, default_tenant_selection, json_response,
+    result_error,
+};
+use crate::agent::AgentKind;
+use crate::service::coordination::{DeleteSessionsCommand, SessionCoordinator};
+use crate::service::state::ServiceState;
+use crate::session;
+use crate::tenant::TenantSelection;
+use anyhow::{Context, Result};
+use axum::Json;
+use axum::body::Body;
+use axum::extract::{Query, State};
+use axum::http::{HeaderValue, Response, StatusCode, header};
+use bytes::Bytes;
+use futures_util::StreamExt as _;
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use tokio_stream::wrappers::ReceiverStream;
 
 pub(super) async fn list_sessions(
     State(state): State<ServiceState>,
     Query(query): Query<AgentTenantQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match SessionCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let data = SessionCoordinator::new(state)
         .list(selection, query.agent)
-        .await
-    {
-        Ok(data) => json_response(StatusCode::OK, &data),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &data))
 }
 
 pub(super) async fn session_summary(
     State(state): State<ServiceState>,
     Query(query): Query<AgentTenantQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match SessionCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let summary = SessionCoordinator::new(state)
         .summary(selection, query.agent)
-        .await
-    {
-        Ok(summary) => json_response(StatusCode::OK, &summary),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &summary))
 }
 
 #[derive(Deserialize)]
@@ -119,12 +124,9 @@ pub(crate) struct SessionEvidenceQuery {
 pub(super) async fn session_evidence(
     State(state): State<ServiceState>,
     Query(query): Query<SessionEvidenceQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match SessionCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let evidence = SessionCoordinator::new(state)
         .evidence(
             selection,
             query.agent,
@@ -132,11 +134,8 @@ pub(super) async fn session_evidence(
             query.entry,
             query.snapshot,
         )
-        .await
-    {
-        Ok(evidence) => json_response(StatusCode::OK, &evidence),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(StatusCode::OK, &evidence))
 }
 
 fn send_ndjson(sender: &tokio::sync::mpsc::Sender<Bytes>, value: &impl Serialize) -> Result<bool> {
@@ -189,7 +188,7 @@ pub(crate) enum SessionDetailFrame {
 pub(super) async fn delete_sessions(
     State(state): State<ServiceState>,
     Json(request): Json<DeleteSessionsRequest>,
-) -> Response<Body> {
+) -> ControlResult {
     let command = DeleteSessionsCommand {
         tenant: request.tenant,
         agent: request.agent,
@@ -197,10 +196,11 @@ pub(super) async fn delete_sessions(
         all: request.all,
         confirmation: request.confirmation,
     };
-    match SessionCoordinator::new(state).delete(command).await {
-        Ok(deleted) => json_response(StatusCode::OK, &DeletedSessionsResponse { deleted }),
-        Err(error) => result_error(error),
-    }
+    let deleted = SessionCoordinator::new(state).delete(command).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &DeletedSessionsResponse { deleted },
+    ))
 }
 
 #[derive(Serialize)]

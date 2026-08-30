@@ -1,9 +1,42 @@
 //! Component Control API handlers and wire types.
 
-use super::*;
-use crate::component::ComponentInspection;
-use crate::service::coordination::component::{ComponentCoordinator, ComponentInstallation};
-use crate::tenant::TenantSelection;
+use super::{ControlResult, default_tenant_selection, json_response};
+use crate::component::{self, ComponentInspection, ComponentKind, ComponentStatus, LatestSnapshot};
+use crate::service::coordination::{ComponentCoordinator, ComponentInstallation};
+use crate::service::state::ServiceState;
+use crate::tenant::{Tenant, TenantSelection};
+use anyhow::Result;
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use serde::{Deserialize, Serialize};
+
+/// Stable wire representation of native Component inspection state.
+///
+/// The domain status carries an optional installed version, while the
+/// Control API intentionally keeps the historical string values.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ComponentStatusWire {
+    NotInstalled,
+    Installed,
+    Incomplete,
+    Modified,
+    Unmanaged,
+}
+
+impl From<&ComponentStatus> for ComponentStatusWire {
+    fn from(status: &ComponentStatus) -> Self {
+        match status {
+            ComponentStatus::Installed { .. } => Self::Installed,
+            ComponentStatus::Modified => Self::Modified,
+            ComponentStatus::Incomplete => Self::Incomplete,
+            ComponentStatus::Unmanaged => Self::Unmanaged,
+            ComponentStatus::NotInstalled => Self::NotInstalled,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -16,9 +49,9 @@ pub(crate) struct ComponentQuery {
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ComponentRow {
-    pub(crate) kind: String,
+    pub(crate) kind: ComponentKind,
     pub(crate) supports_version: bool,
-    pub(crate) status: Option<String>,
+    pub(crate) status: Option<ComponentStatusWire>,
     pub(crate) version: Option<String>,
     pub(crate) error: Option<String>,
 }
@@ -26,15 +59,13 @@ pub(crate) struct ComponentRow {
 pub(super) async fn list_components(
     State(state): State<ServiceState>,
     Query(query): Query<ComponentQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ComponentCoordinator::new(state).list(selection).await {
-        Ok(inspections) => json_response(StatusCode::OK, &component_rows_from(inspections)),
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let inspections = ComponentCoordinator::new(state).list(selection).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &component_rows_from(inspections),
+    ))
 }
 
 pub(super) fn component_rows(selected: &Tenant) -> Result<Vec<ComponentRow>> {
@@ -50,10 +81,10 @@ fn component_rows_from(inspections: Vec<ComponentInspection>) -> Vec<ComponentRo
                     ComponentStatus::Installed { version } => version.clone(),
                     _ => None,
                 };
-                (Some(component_status_name(&status).to_string()), version)
+                (Some(ComponentStatusWire::from(&status)), version)
             });
             ComponentRow {
-                kind: inspection.kind.name().to_string(),
+                kind: inspection.kind,
                 supports_version: inspection.kind.supports_version(),
                 status,
                 version,
@@ -65,15 +96,13 @@ fn component_rows_from(inspections: Vec<ComponentInspection>) -> Vec<ComponentRo
 
 pub(super) async fn latest_components(
     State(state): State<ServiceState>,
-) -> Json<Option<component_updates::LatestSnapshot>> {
+) -> Json<Option<LatestSnapshot>> {
     Json(ComponentCoordinator::new(state).latest().await)
 }
 
-pub(super) async fn check_latest_components(State(state): State<ServiceState>) -> Response<Body> {
-    match ComponentCoordinator::new(state).check_latest().await {
-        Ok(snapshot) => json_response(StatusCode::OK, &snapshot),
-        Err(error) => result_error(error),
-    }
+pub(super) async fn check_latest_components(State(state): State<ServiceState>) -> ControlResult {
+    let snapshot = ComponentCoordinator::new(state).check_latest().await?;
+    Ok(json_response(StatusCode::OK, &snapshot))
 }
 
 #[derive(Deserialize)]
@@ -82,47 +111,42 @@ pub(super) async fn check_latest_components(State(state): State<ServiceState>) -
 pub(crate) struct ComponentMutation {
     #[serde(default = "default_tenant_selection")]
     tenant: String,
-    component: String,
+    component: ComponentKind,
     version: Option<String>,
 }
 
 pub(super) async fn install_component(
     State(state): State<ServiceState>,
     Json(request): Json<ComponentMutation>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ComponentCoordinator::new(state)
-        .install(selection, request.component, request.version)
-        .await
-    {
-        Ok(ComponentInstallation::Completed(installed)) => {
-            json_response(StatusCode::OK, &InstalledComponentResponse { installed })
-        }
-        Ok(ComponentInstallation::Started(operation)) => {
-            json_response(StatusCode::ACCEPTED, &operation)
-        }
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    Ok(
+        match ComponentCoordinator::new(state)
+            .install(selection, request.component, request.version)
+            .await?
+        {
+            ComponentInstallation::Completed(installed) => {
+                json_response(StatusCode::OK, &InstalledComponentResponse { installed })
+            }
+            ComponentInstallation::Started(operation) => {
+                json_response(StatusCode::ACCEPTED, &operation)
+            }
+        },
+    )
 }
 
 pub(super) async fn remove_component(
     State(state): State<ServiceState>,
     Json(request): Json<ComponentMutation>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&request.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    match ComponentCoordinator::new(state)
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let removed = ComponentCoordinator::new(state)
         .remove(selection, request.component)
-        .await
-    {
-        Ok(removed) => json_response(StatusCode::OK, &RemovedComponentResponse { removed }),
-        Err(error) => result_error(error),
-    }
+        .await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &RemovedComponentResponse { removed },
+    ))
 }
 
 #[derive(Serialize)]
@@ -135,14 +159,4 @@ pub(crate) struct InstalledComponentResponse {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RemovedComponentResponse {
     removed: &'static str,
-}
-
-fn component_status_name(status: &ComponentStatus) -> &'static str {
-    match status {
-        ComponentStatus::Installed { .. } => "installed",
-        ComponentStatus::Modified => "modified",
-        ComponentStatus::Incomplete => "incomplete",
-        ComponentStatus::Unmanaged => "unmanaged",
-        ComponentStatus::NotInstalled => "not-installed",
-    }
 }

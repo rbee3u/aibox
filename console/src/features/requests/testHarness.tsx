@@ -39,27 +39,27 @@ export function advanceTimers(milliseconds: number) {
   return act(async () => vi.advanceTimersByTimeAsync(milliseconds));
 }
 
-export async function selectCompletedRecord(user: User) {
+export async function selectCompletedRequest(user: User) {
   await user.click(await screen.findByRole("button", { name: "Select Requests" }));
   await user.click(
     screen.getByRole("button", { name: "Select POST api.example.test/v1/responses" }),
   );
 }
 
-export async function openCompletedRecord(user: User) {
+export async function openCompletedRequest(user: User) {
   await user.click(
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" }),
   );
 }
 
-export async function openActiveRecord() {
+export async function openActiveRequest() {
   await flushEffects();
   fireEvent.click(screen.getByRole("button", { name: "GET stream.example.test/events" }));
   await flushEffects();
 }
 
 export async function openActiveRequestBody() {
-  await openActiveRecord();
+  await openActiveRequest();
   fireEvent.click(screen.getByRole("tab", { name: "Request" }));
   await flushEffects();
 }

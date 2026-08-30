@@ -1,7 +1,18 @@
 //! Management Operation Control API handlers and wire commands.
 
-use super::*;
-use crate::service::coordination::operation::OperationCoordinator;
+use super::{busy, json_response, result_error};
+use crate::service::coordination::OperationCoordinator;
+use crate::service::state::ServiceState;
+use async_stream::stream;
+use axum::Json;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{Response, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::convert::Infallible;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -34,7 +45,7 @@ pub(super) async fn operation_events(
     State(state): State<ServiceState>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let coordinator = OperationCoordinator::new(state.clone());
-    let shutdown = state.request().shutdown.clone();
+    let shutdown = state.request().shutdown_token();
     let mut changes = coordinator.subscribe();
     let events = stream! {
         let mut cursor = coordinator.event_cursor();

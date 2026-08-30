@@ -15,48 +15,78 @@ references between them.
 ## Implementation Map
 
 - `src/cli.rs` defines the three-command Clap surface and Run pass-through
-  boundary; `src/lib.rs` performs parsed command dispatch only.
+  boundary; `src/lib.rs` converts parsed DTOs into execution-owned commands and
+  dispatches them.
 - `src/foundation/` owns policy-free no-follow filesystem, platform, and
-  synchronization mechanics. `src/docker/` owns cleanup-aware container
-  execution and Runtime Image construction; `src/execution/` owns Run, Debug
-  Shell, and RunSpec orchestration.
-- `src/agent.rs` centralizes Coding Agent contracts and invocation.
-  `src/tenant/` owns Tenant identity, resolution, lifecycle, layout,
-  permissions, and Tenant Environment composition.
-- `src/config/` owns the Config model, catalog, Config Application, and
-  Credential Propagation. `src/metadata.rs` owns the shared Tenant-and-Agent
-  metadata document. `src/component/` owns Component inspection,
-  installation, removal, and Latest Release observation.
+  synchronization mechanics plus the shared untrusted-file size bound.
+  `src/docker/` owns cleanup-aware container execution and Runtime Image
+  construction. `src/sandbox/` enforces the Filesystem Sandbox boundary:
+  `spec.rs` owns RunSpec, `mount.rs` owns private mount parsing and boundary
+  checks, and `args.rs` owns pure `docker run` builders. `src/execution/` owns
+  Run and Debug Shell orchestration in `run.rs` and `debug.rs` without
+  depending on Clap.
+- `src/agent/` centralizes Coding Agent contracts and invocation: `mod.rs`
+  holds `AgentKind` and every match over the closed Agent set, while
+  `claude.rs` and `codex.rs` hold each Agent's Config Field table and
+  templates. `src/tenant/` owns Tenant identity, resolution, lifecycle, layout,
+  permissions, the container Home constant, and Tenant Environment composition
+  from capability snapshots.
+- `src/config/` is the Config facade over model, catalog, editing, Config
+  Application, and Credential Propagation ownership. `src/metadata.rs` owns the
+  shared Tenant-and-Agent metadata document. `src/component/` keeps the closed
+  Component vocabulary and dispatch at its facade while catalog, native state,
+  statuslines, installers, and runtime families own their paths and lifecycle.
 - `src/session/` owns shared Session discovery and use cases, while
-  `claude.rs` and `codex.rs` parse native Transcripts.
-- `src/request/` owns Request state, the I/O-free model, assessment, protocol
-  observation, SSE indexing, persistence, reporting, and proxy forwarding.
-  The Request aggregate has no dependency on Console or HTTP presentation.
+  `src/session/claude.rs` and `src/session/codex.rs` parse native Transcripts.
+- `src/request/` owns Request state, inspection, the I/O-free model,
+  assessment, protocol observation, SSE indexing, persistence, reporting, and
+  proxy forwarding. Store layout/write/read lifecycles and proxy
+  target/header/stream/attempt lifecycles remain private behind facades; the
+  Request aggregate has no dependency on Console or HTTP presentation.
 - `src/service/` is the Root-local Service composition root. `state.rs` owns
   private shared state, `operation.rs` owns ephemeral Management Operations,
   `coordination/` owns concrete management coordinators, and `control/` owns
-  Axum routes, wire DTOs, Console assets, and all Control adapters including
-  Requests.
+  Axum routes, feature wire DTOs, response helpers, Console assets, the
+  Rust-owned contract exporter, and all Control adapters including Requests.
+  `control/routes.rs` declares each route once through `control_routes!`, which
+  emits both the path constants and the test-facing endpoint manifest. Handlers
+  return `ControlResult` so wire decoding, selector parsing, and coordinator
+  calls use `?` instead of repeating an error match.
+- `src/docker/run.rs` owns child spawning/output capture and
+  `src/docker/supervision.rs` owns cidfile/child/signal cleanup registration;
+  `console/src/api/generated/routes.ts` is a test-only route manifest generated
+  beside the Rust-owned wire bindings.
 - `console/src/` uses an acyclic graph: `domain` is independent; `api` and
-  `shared` may depend on `domain` but not each other; features depend on those
-  three layers; and `app` composes all layers.
+  `shared` may depend on `domain` but not each other; `features/common/` may
+  depend on all three but on no feature; features depend on those four layers;
+  and `app` composes everything. ESLint enforces every edge.
   `app/App.tsx` owns the shell and `app/routing/` the sole history integration;
   `api/transport.ts` plus the per-domain `api/<domain>.ts` modules own the
-  Control API, while `api/generated/` contains Rust-owned wire bindings. Each
-  `features/<domain>/` owns its page controller, thin page view,
-  resource-lifecycle hooks, query codec, React-free domain modules, and
-  components; the minimal `domain/` holds only cross-feature identities and
-  invariants. `shared/` holds API-independent UI primitives, hooks, and library
-  code. `api/generated/` is Rust-owned and `assets/console.*` is generated output;
-  use `docs/console-ui.md`.
+  Control API, `api/core.ts` names the wire types more than one domain module
+  shares, and `api/generated/` contains Rust-owned wire bindings. Each
+  `features/<domain>/` owns its page controller, grouped view model, thin page
+  view, workflow reducer where needed, query codec, and the modules more than
+  one of its concerns shares; `catalog/`, `detail/`, and `mutation/`
+  subdirectories own what only one concern uses. Overview keeps `topology/` and
+  `components/` because it has neither a catalog nor a detail pane.
+  `features/common/` holds what several features share but `shared/` cannot,
+  because it needs both an `api/` wire type and a `shared/ui` type: the catalog
+  selection reducer, Tenant and Agent option builders, the focus registry, and
+  cross-feature test fixtures. The minimal `domain/` holds only cross-feature
+  identities and invariants, and `shared/` holds API-independent UI primitives,
+  hooks, and library code. `api/generated/` is Rust-owned and `assets/console.*`
+  is generated output; use `docs/console-ui.md`.
 
 ## Constraints
 
-**Centralize Coding Agent contracts.** Put agent-specific paths, Config
-files/templates, empty Current Config content, and invocation behavior in
-`AgentKind` in `agent.rs`. Keep transcript parsing in `session_claude.rs` and
-`session_codex.rs`. The Docker image, container Home, and orchestration remain
-shared.
+**Centralize Coding Agent contracts.** Reach agent-specific paths, Config
+files/templates, empty Current Config content, and invocation behavior only
+through `AgentKind` in `src/agent/`. Every match over the closed Agent set stays
+in `agent/mod.rs`, so adding an Agent makes the compiler name each contract
+still missing; that Agent's Config Field table and templates go in its own
+`agent/<agent>.rs`. Keep transcript parsing in `src/session/claude.rs` and
+`src/session/codex.rs`. The Docker image, container Home, and orchestration
+remain shared.
 
 **Keep the CLI surface narrow.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. The public commands are
@@ -248,6 +278,20 @@ only the shared OS, shell, build, download, and diagnostic substrate. Python,
 uv, Node.js, Codex, Claude, Rust, and Go belong to Managed Tenant Components and
 must not be installed or pinned by the Dockerfile. Transitive ABI libraries
 needed by system diagnostics do not make their application runtime image-owned.
+
+**Keep every test suite in `<module>_tests.rs`.** A Rust module's tests live in
+a sibling file reached through `#[cfg(test)] #[path = ...] mod tests;`, and a
+`dir/mod.rs` suite uses `dir/<dir>_tests.rs`. An architecture test rejects a
+top-level inline `mod tests`; `service/control/contract.rs` is its one
+exception because that file is test-only in its entirety. Console tests stay
+beside what they cover: a unit test follows its module into `catalog/`,
+`detail/`, or `mutation/`, while a page-level interaction test stays at the
+feature root.
+
+**Do not let tests widen a module's public surface.** A function with no
+non-test caller stays private, and its tests enter through the type or facade
+that production code uses. Adding a `pub` item or a `#[cfg(test)]` wrapper so a
+test can reach past a facade defeats the invariant that facade exists to hold.
 
 ## Checks
 

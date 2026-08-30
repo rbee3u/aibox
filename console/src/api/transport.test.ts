@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ControlApi } from "@/api/transport";
+import { controlRoute } from "@/test/controlRoutes";
 
 function client(fetchImpl: typeof fetch) {
   return new ControlApi({ version: "1", csrf_token: "token", listen: "127.0.0.1:3000" }, fetchImpl);
@@ -24,11 +25,11 @@ describe("Control API transport", () => {
       .mockResolvedValueOnce(Response.json({ created: "work" }));
     const api = await ControlApi.connect(fetchMock);
 
-    await api.post("/_aibox/api/tenants", { name: "work" });
+    await api.post(controlRoute("tenants_create"), { name: "work" });
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/_aibox/api/bootstrap");
+    expect(fetchMock.mock.calls[0][0]).toBe(controlRoute("bootstrap"));
     const [path, init] = fetchMock.mock.calls[1];
-    expect(path).toBe("/_aibox/api/tenants");
+    expect(path).toBe(controlRoute("tenants_create"));
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("X-Aibox-Csrf")).toBe("token-1");
     expect(init?.body).toBe('{"name":"work"}');

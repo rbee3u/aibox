@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { composeControlApi } from "@/api/connect";
 import { ControlApi } from "@/api/transport";
+import { controlMethod, controlRoute, type ControlRouteKey } from "@/test/controlRoutes";
 
 const tenant = { kind: "managed", name: "work" } as const;
 const target = {
@@ -21,6 +22,23 @@ function connected() {
   return { api, fetchMock };
 }
 
+function expectRouteCalls(
+  fetchMock: ReturnType<typeof vi.fn<typeof fetch>>,
+  expected: Array<{ key: ControlRouteKey; path: string }>,
+) {
+  expect(
+    fetchMock.mock.calls.map(([path, init]) => ({
+      path,
+      method: init?.method ?? "GET",
+    })),
+  ).toEqual(
+    expected.map(({ key, path }) => ({
+      path,
+      method: controlMethod(key),
+    })),
+  );
+}
+
 describe("Control API endpoints", () => {
   it("owns semantic paths and Tenant encoding for scoped reads", async () => {
     const { api, fetchMock } = connected();
@@ -31,12 +49,28 @@ describe("Control API endpoints", () => {
     await api.tenants.checkLatestComponents();
     await api.sessions.loadSessionEvidence(tenant, "codex", "session/1", "entry 1", "10:2");
 
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/_aibox/api/sessions/summary?tenant=managed%3Awork&agent=codex",
-      "/_aibox/api/components?tenant=managed%3Awork",
-      "/_aibox/api/components/latest",
-      "/_aibox/api/components/latest/check",
-      "/_aibox/api/sessions/evidence?tenant=managed%3Awork&agent=codex&id=session%2F1&entry=entry+1&snapshot=10%3A2",
+    expectRouteCalls(fetchMock, [
+      {
+        key: "sessions_summary",
+        path: controlRoute("sessions_summary", {}, "tenant=managed%3Awork&agent=codex"),
+      },
+      {
+        key: "components_list",
+        path: controlRoute("components_list", {}, "tenant=managed%3Awork"),
+      },
+      { key: "components_latest", path: controlRoute("components_latest") },
+      {
+        key: "components_latest_check",
+        path: controlRoute("components_latest_check"),
+      },
+      {
+        key: "sessions_evidence",
+        path: controlRoute(
+          "sessions_evidence",
+          {},
+          "tenant=managed%3Awork&agent=codex&id=session%2F1&entry=entry+1&snapshot=10%3A2",
+        ),
+      },
     ]);
     expect(JSON.parse(fetchMock.mock.calls[3][1]?.body as string)).toEqual({});
   });
@@ -57,9 +91,9 @@ describe("Control API endpoints", () => {
       },
     });
 
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/_aibox/api/configs/reveal",
-      "/_aibox/api/configs/save",
+    expectRouteCalls(fetchMock, [
+      { key: "configs_reveal", path: controlRoute("configs_reveal") },
+      { key: "configs_save", path: controlRoute("configs_save") },
     ]);
     expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
       tenant: "managed:work",
@@ -83,6 +117,172 @@ describe("Control API endpoints", () => {
         base_url: "http://127.0.0.1:3000",
         proxy_routed: true,
       },
+    });
+  });
+
+  it("owns feature mutation paths, scoped queries, and snake-case bodies", async () => {
+    const { api, fetchMock } = connected();
+
+    await api.configs.listConfigs(tenant, "codex");
+    await api.configs.diagnoseConfigFile(target, "YQ==");
+    await api.configs.createConfig(tenant, "codex", "review");
+    await api.configs.applyConfig(tenant, "codex", "review");
+    await api.configs.deleteConfigs(tenant, "codex", ["review"]);
+    await api.configs.previewCredentialPropagation();
+    await api.configs.executeCredentialPropagation("plan-1");
+    await api.tenants.createTenant("work");
+    await api.tenants.deleteTenants(["work"]);
+    await api.tenants.mutateComponent(tenant, "python", false, null);
+    await api.sessions.listSessions(tenant, "claude");
+    await api.sessions.deleteSessions(tenant, "claude", ["session-1"]);
+    await api.overview.buildImage(true);
+
+    expectRouteCalls(fetchMock, [
+      {
+        key: "configs_list",
+        path: controlRoute("configs_list", {}, "tenant=managed%3Awork&agent=codex"),
+      },
+      { key: "configs_diagnose", path: controlRoute("configs_diagnose") },
+      { key: "configs_create", path: controlRoute("configs_create") },
+      { key: "configs_apply", path: controlRoute("configs_apply") },
+      { key: "configs_delete", path: controlRoute("configs_delete") },
+      {
+        key: "configs_propagate_preview",
+        path: controlRoute("configs_propagate_preview"),
+      },
+      {
+        key: "configs_propagate_execute",
+        path: controlRoute("configs_propagate_execute"),
+      },
+      { key: "tenants_create", path: controlRoute("tenants_create") },
+      { key: "tenants_delete", path: controlRoute("tenants_delete") },
+      { key: "components_remove", path: controlRoute("components_remove") },
+      {
+        key: "sessions_list",
+        path: controlRoute("sessions_list", {}, "tenant=managed%3Awork&agent=claude"),
+      },
+      { key: "sessions_delete", path: controlRoute("sessions_delete") },
+      { key: "operations_build", path: controlRoute("operations_build") },
+    ]);
+    const bodies = fetchMock.mock.calls.map(([, init]) =>
+      init?.body ? (JSON.parse(init.body as string) as unknown) : undefined,
+    );
+    expect(bodies[1]).toMatchObject({
+      tenant: "managed:work",
+      agent: "codex",
+      config: "review",
+      content_base64: "YQ==",
+    });
+    expect(bodies[4]).toEqual({
+      tenant: "managed:work",
+      agent: "codex",
+      configs: ["review"],
+      all: false,
+      confirmation: "review",
+    });
+    expect(bodies[6]).toEqual({ plan_id: "plan-1" });
+    expect(bodies[8]).toEqual({ names: ["work"], all: false, confirmation: "work" });
+    expect(bodies[9]).toEqual({
+      tenant: "managed:work",
+      component: "python",
+      version: null,
+    });
+    expect(bodies[11]).toEqual({
+      tenant: "managed:work",
+      agent: "claude",
+      ids: ["session-1"],
+      all: false,
+      confirmation: "",
+    });
+    expect(bodies[12]).toEqual({ force: true });
+  });
+
+  it("normalizes Rust-owned Config, Component, and Topology wire values", async () => {
+    const { api, fetchMock } = connected();
+    fetchMock
+      .mockResolvedValueOnce(
+        Response.json({
+          file: "config.toml",
+          exists: true,
+          revision: "rev-1",
+          content_base64: "",
+          visual_options: [
+            {
+              path: "model",
+              label: "Model",
+              description: "Model",
+              group: "Model",
+              value_kind: "string",
+              enum_values: [],
+              sensitive: false,
+              required: true,
+              included: true,
+              value: "gpt-5",
+            },
+          ],
+          custom_provider: null,
+          visual_error: null,
+          warnings: [],
+          auth: null,
+          linked_file: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            kind: "python",
+            supports_version: true,
+            status: "installed",
+            version: "3.14.7",
+            error: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          tenants: [
+            {
+              kind: "managed",
+              name: "work",
+              display_name: "work",
+              home: "/aibox/tenants/work",
+              exists: true,
+              agents: [
+                {
+                  agent: "codex",
+                  current_config: { present_files: 0, expected_files: 2, error: null },
+                  named_configs: { entries: [], error: null },
+                  application: { last_application: null, drift: "untracked", detail: null },
+                },
+              ],
+              components: { entries: [], error: null },
+            },
+          ],
+        }),
+      );
+
+    await expect(api.configs.revealConfigFile(target)).resolves.toMatchObject({
+      visual_options: [{ value_kind: "string", value: "gpt-5", proxy_routed: false }],
+      custom_provider: undefined,
+      visual_error: undefined,
+    });
+    await expect(api.tenants.listComponents(tenant)).resolves.toEqual([
+      expect.objectContaining({ kind: "python", status: "installed" }),
+    ]);
+    await expect(api.overview.loadTopology()).resolves.toEqual({
+      tenants: [
+        expect.objectContaining({
+          kind: "managed",
+          name: "work",
+          agents: [
+            expect.objectContaining({
+              current_config: { present_files: 0, expected_files: 2 },
+              named_configs: { entries: [] },
+            }),
+          ],
+          components: { entries: [] },
+        }),
+      ],
     });
   });
 
@@ -117,6 +317,10 @@ describe("Control API endpoints", () => {
     expect(meta).toBe("session-1");
     expect(messages).toEqual(["hello"]);
     expect(complete).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      controlRoute("sessions_detail", {}, "tenant=managed%3Awork&agent=codex&id=session-1"),
+      expect.objectContaining({ signal: undefined }),
+    );
   });
 
   it("normalizes synchronous and asynchronous Component mutations", async () => {

@@ -68,7 +68,7 @@ export interface SessionApi {
   ): Promise<{ deleted: number }>;
 }
 
-function sessionScopeQuery(tenant: TenantSelection, agent: CodingAgentKind, id?: string) {
+function sessionSourceQuery(tenant: TenantSelection, agent: CodingAgentKind, id?: string) {
   const query = tenantQuery(tenant);
   query.set("agent", agent);
   if (id !== undefined) query.set("id", id);
@@ -80,7 +80,7 @@ export function sessionDetailPath(
   agent: CodingAgentKind,
   id: string,
 ): string {
-  return `/_aibox/api/sessions/detail?${sessionScopeQuery(tenant, agent, id)}`;
+  return `/_aibox/api/sessions/detail?${sessionSourceQuery(tenant, agent, id)}`;
 }
 
 async function streamSessionDetail(
@@ -113,13 +113,13 @@ export function sessionsApi(client: ControlApi): SessionApi {
     listTenants: listTenantsRequest(client),
     listSessions: (tenant, agent, signal) =>
       client.get<SessionListData>(
-        `/_aibox/api/sessions?${sessionScopeQuery(tenant, agent)}`,
+        `/_aibox/api/sessions?${sessionSourceQuery(tenant, agent)}`,
         signal,
       ),
     streamSessionDetail: (tenant, agent, id, handlers, signal) =>
       streamSessionDetail(client, sessionDetailPath(tenant, agent, id), handlers, signal),
     loadSessionEvidence: (tenant, agent, id, entry, snapshot, signal) => {
-      const query = sessionScopeQuery(tenant, agent, id);
+      const query = sessionSourceQuery(tenant, agent, id);
       query.set("entry", entry);
       query.set("snapshot", snapshot);
       return client.get<TranscriptEvidence>(`/_aibox/api/sessions/evidence?${query}`, signal);
@@ -138,7 +138,7 @@ export function sessionsApi(client: ControlApi): SessionApi {
 export function sessionSummaryRequest(client: ControlApi) {
   return (tenant: TenantSelection, agent: CodingAgentKind, signal?: AbortSignal) =>
     client.get<SessionSummaryData>(
-      `/_aibox/api/sessions/summary?${sessionScopeQuery(tenant, agent)}`,
+      `/_aibox/api/sessions/summary?${sessionSourceQuery(tenant, agent)}`,
       signal,
     );
 }

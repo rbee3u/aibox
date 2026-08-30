@@ -8,7 +8,8 @@ neither can select the Host Tenant.
 
 A **Managed Tenant** is an AIBox-managed, runnable identity with a Tenant Home.
 The **Default Managed Tenant** is the protected Managed Tenant named `default`.
-After taking the Service Lock, `aibox console` creates or repairs its Tenant Home
+The Service Lock is stored at `$AIBOX_ROOT/.service.lock`. After taking it,
+`aibox console` creates or repairs the Default Managed Tenant's Tenant Home
 baseline and fails before listening if the baseline cannot be established
 safely. A validated Run or Debug Shell can still initialize a missing Managed
 Tenant when no Service has done so, even when Docker or the invoked process

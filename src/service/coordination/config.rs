@@ -7,7 +7,6 @@ use crate::config;
 use crate::service::state::ServiceState;
 use crate::tenant::{Tenant, TenantAgent, TenantSelection};
 use anyhow::{Context, Result};
-use serde_json::Value;
 
 #[derive(Clone)]
 pub(crate) struct ConfigCoordinator {
@@ -40,12 +39,6 @@ pub(crate) struct ConfigVisualView {
     pub(crate) error: Option<String>,
 }
 
-pub(crate) struct ConfigDiagnostic {
-    pub(crate) message: String,
-    pub(crate) line: usize,
-    pub(crate) column: usize,
-}
-
 pub(crate) struct DeleteConfigsCommand {
     pub(crate) selection: TenantSelection,
     pub(crate) agent: AgentKind,
@@ -75,14 +68,14 @@ impl ConfigCoordinator {
         let root = self.state.root();
         let host_home = self.state.host_home();
         run_blocking(move || {
-            let missing_managed_tenant = match &selected.tenant {
+            let missing_managed_tenant = match &selected.tenant() {
                 Tenant::Managed(tenant) => !tenant.exists()?,
                 Tenant::Host { .. } => false,
             };
             if missing_managed_tenant {
                 return Ok(ConfigCatalog {
                     configs: Vec::new(),
-                    files: selected.agent.config_files(),
+                    files: selected.agent().config_files(),
                     application: config::ApplicationStatus {
                         last_application: None,
                         drift: config::ConfigDrift::Untracked,
@@ -96,7 +89,7 @@ impl ConfigCoordinator {
                 && config::credential_propagation_source_available(&root, &host_home)?;
             Ok(ConfigCatalog {
                 configs,
-                files: selected.agent.config_files(),
+                files: selected.agent().config_files(),
                 application: config::application_status(&selected),
                 credential_propagation_available,
             })
@@ -136,14 +129,14 @@ impl ConfigCoordinator {
         &self,
         selection: TenantSelection,
         agent: AgentKind,
-        name: String,
+        name: config::NamedConfigName,
     ) -> Result<String> {
         let selected = self.resolve_agent(&selection, agent)?;
         let guard = self.state.begin_management_mutation()?;
         run_blocking(move || {
             let _guard = guard;
             config::create_named_config(&selected, &name)?;
-            Ok(name)
+            Ok(name.to_string())
         })
         .await
     }
@@ -196,53 +189,16 @@ impl ConfigCoordinator {
         target: config::ConfigTarget,
         file: config::ConfigFile,
         content: Vec<u8>,
-    ) -> Result<Vec<ConfigDiagnostic>> {
+    ) -> Result<Vec<config::ConfigDiagnostic>> {
         let selected = self.resolve_agent(&selection, agent)?;
-        run_blocking(move || {
-            let _ = config::read_config_file_target(&selected, &target, file)?;
-            let mut diagnostics = Vec::new();
-            match std::str::from_utf8(&content) {
-                Ok(text) => {
-                    let result = if target.is_current() {
-                        if file == config::ConfigFile::Main {
-                            selected.agent.parse_main_config(text).map(|_| ())
-                        } else {
-                            serde_json::from_str::<Value>(text)
-                                .context("parse Current Config auth.json")
-                                .map(|_| ())
-                        }
-                    } else {
-                        crate::config::model::NamedConfigDefinition::validate_file(
-                            selected.agent,
-                            file.as_str(selected.agent),
-                            text,
-                        )
-                    };
-                    if let Err(error) = result {
-                        let (line, column) = diagnostic_position(&error, text);
-                        diagnostics.push(ConfigDiagnostic {
-                            message: format!("{error:#}"),
-                            line,
-                            column,
-                        });
-                    }
-                }
-                Err(error) => diagnostics.push(ConfigDiagnostic {
-                    message: format!("configuration is not valid UTF-8: {error}"),
-                    line: 1,
-                    column: 1,
-                }),
-            }
-            Ok(diagnostics)
-        })
-        .await
+        run_blocking(move || config::diagnose_config_file(&selected, &target, file, &content)).await
     }
 
     pub(crate) async fn apply(
         &self,
         selection: TenantSelection,
         agent: AgentKind,
-        name: String,
+        name: config::NamedConfigName,
     ) -> Result<config::ApplicationStatus> {
         let selected = self.resolve_agent(&selection, agent)?;
         let guard = self.state.begin_management_mutation()?;
@@ -262,10 +218,15 @@ impl ConfigCoordinator {
             ));
         }
         let selected = self.resolve_agent(&command.selection, command.agent)?;
+        let configs = command
+            .configs
+            .iter()
+            .map(|name| config::NamedConfigName::parse(name))
+            .collect::<Result<Vec<_>>>()?;
         let guard = self.state.begin_management_mutation()?;
         run_blocking(move || {
             let _guard = guard;
-            config::delete_named_configs(&selected, &command.configs, command.all)?;
+            config::delete_named_configs(&selected, &configs, command.all)?;
             Ok(DeletedConfigs {
                 configs: command.configs,
                 all: command.all,
@@ -295,8 +256,8 @@ fn file_view(
     } else {
         config::config_file_warnings(
             selected,
-            target.named().expect("Named Config target").as_str(),
-            file.as_str(selected.agent),
+            target.named().expect("Named Config target"),
+            file.as_str(selected.agent()),
             &snapshot.content,
         )
         .unwrap_or_default()
@@ -326,7 +287,7 @@ fn visual_view(
         .and_then(|text| {
             config::visual_config_state(
                 selected,
-                target.named().expect("Named Config target").as_str(),
+                target.named().expect("Named Config target"),
                 text,
             )
         });
@@ -349,7 +310,7 @@ fn named_codex_auth(
     file: config::ConfigFile,
     snapshot: &config::ConfigFileSnapshot,
 ) -> Result<Option<config::CodexAuthInspection>> {
-    if target.is_current() || selected.agent != AgentKind::Codex {
+    if target.is_current() || selected.agent() != AgentKind::Codex {
         return Ok(None);
     }
     let auth_snapshot = if file == config::ConfigFile::Auth {
@@ -364,31 +325,8 @@ fn named_codex_auth(
         .context("Named Config auth.json is not valid UTF-8")?;
     Ok(config::inspect_named_codex_auth(
         selected,
-        target.named().expect("Named Config target").as_str(),
+        target.named().expect("Named Config target"),
         text,
     )
     .ok())
-}
-
-fn diagnostic_position(error: &anyhow::Error, source: &str) -> (usize, usize) {
-    if let Some(json) = error.downcast_ref::<serde_json::Error>() {
-        return (json.line(), json.column());
-    }
-    if let Some(toml) = error.downcast_ref::<toml_edit::TomlError>()
-        && let Some(span) = toml.span()
-    {
-        let offset = span.start.min(source.len());
-        let line = source[..offset]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count()
-            + 1;
-        let column = source[..offset]
-            .rsplit('\n')
-            .next()
-            .map(|line| line.chars().count() + 1)
-            .unwrap_or(1);
-        return (line, column);
-    }
-    (1, 1)
 }
