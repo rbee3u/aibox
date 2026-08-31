@@ -9,7 +9,7 @@ use crate::request::model::{
     ErrorKind, ErrorMetadata, Outcome, ProtocolFamily, ProtocolSummary, RecordedHeader,
     ResponseMetadata, ResponseModeValue, ResponseSource, utc_now,
 };
-use crate::request::response_observation::replay_zstd_sse_prefix;
+use crate::request::response_observation::replay_encoded_sse_prefix;
 use crate::request::sse::{PrefixSniff, SseIndexer, SsePrefixSniffer};
 use crate::request::store::FORMAT_VERSION;
 use axum::body::Body;
@@ -186,7 +186,7 @@ pub(super) async fn send_downstream(
 
 pub(super) enum ResponseBodyTracker {
     Normal,
-    OpaqueEventStream,
+    OpaqueEventStream(BodyContentCoding),
     EventStream(Box<SseIndexer>),
     Detect {
         sniffer: SsePrefixSniffer,
@@ -195,11 +195,17 @@ pub(super) enum ResponseBodyTracker {
 }
 
 impl ResponseBodyTracker {
-    pub(super) fn new(mode: ResponseStreamMode, guard: &RequestAttempt) -> Self {
+    pub(super) fn new(
+        mode: ResponseStreamMode,
+        guard: &RequestAttempt,
+        headers: &[RecordedHeader],
+    ) -> Self {
         match mode {
             ResponseStreamMode::Normal => Self::Normal,
             ResponseStreamMode::EventStream => Self::EventStream(Box::new(new_sse_indexer(guard))),
-            ResponseStreamMode::OpaqueEventStream => Self::OpaqueEventStream,
+            ResponseStreamMode::OpaqueEventStream => Self::OpaqueEventStream(
+                body_content_coding(headers).unwrap_or(BodyContentCoding::Identity),
+            ),
             ResponseStreamMode::Detect => Self::Detect {
                 sniffer: SsePrefixSniffer::default(),
                 pending: Vec::new(),
@@ -214,7 +220,7 @@ impl ResponseBodyTracker {
         guard: &RequestAttempt,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Normal | Self::OpaqueEventStream => Ok(()),
+            Self::Normal | Self::OpaqueEventStream(_) => Ok(()),
             Self::EventStream(indexer) => feed_sse_chunk(indexer, chunk, &at_ns, guard),
             Self::Detect { sniffer, pending } => {
                 pending.push((chunk.clone(), at_ns));
@@ -243,7 +249,7 @@ impl ResponseBodyTracker {
     pub(super) fn finish(&mut self, guard: &RequestAttempt) -> anyhow::Result<()> {
         match self {
             Self::Normal => Ok(()),
-            Self::OpaqueEventStream => guard.observe_encoded_sse_response(),
+            Self::OpaqueEventStream(coding) => guard.observe_encoded_sse_response(*coding),
             Self::Detect { .. } => {
                 guard.observe_response_mode(false)?;
                 *self = Self::Normal;
@@ -269,13 +275,20 @@ impl ResponseBodyTracker {
     }
 
     pub(super) fn is_event_stream(&self) -> bool {
-        matches!(self, Self::EventStream(_) | Self::OpaqueEventStream)
+        matches!(self, Self::EventStream(_) | Self::OpaqueEventStream(_))
+    }
+
+    fn opaque_coding(&self) -> Option<BodyContentCoding> {
+        match self {
+            Self::OpaqueEventStream(coding) => Some(*coding),
+            _ => None,
+        }
     }
 
     pub(super) fn terminal_at_ns(&self, family: ProtocolFamily) -> Option<&str> {
         match self {
             Self::EventStream(indexer) => indexer.terminal_at_ns(family),
-            _ => None,
+            Self::Normal | Self::OpaqueEventStream(_) | Self::Detect { .. } => None,
         }
     }
 }
@@ -519,7 +532,7 @@ pub(super) async fn record_response_stream_with_index(
         status: response_status,
         headers: response_headers,
     } = config;
-    let mut tracker = ResponseBodyTracker::new(mode, guard);
+    let mut tracker = ResponseBodyTracker::new(mode, guard, &response_headers);
     let mut stream_end =
         stream_response_body(&shutdown, stream, &mut file, &sender, &mut tracker, guard).await;
     if let Err(error) = file.sync_all().await {
@@ -611,16 +624,16 @@ pub(super) fn encoded_terminal_seen_on_close(
     tracker: &ResponseBodyTracker,
     guard: &RequestAttempt,
 ) -> bool {
-    if !matches!(tracker, ResponseBodyTracker::OpaqueEventStream) {
+    let Some(coding) = tracker.opaque_coding().filter(|coding| coding.is_encoded()) else {
         return false;
-    }
+    };
     let family = guard.protocol_summary().family;
     let observation = guard.with_request_path(|directory| {
         let file = crate::foundation::safe_fs::open_real_file(
             &directory.join("response.body"),
             "Upstream Response body",
         )?;
-        replay_zstd_sse_prefix(file, guard.request_id().to_string(), family)
+        replay_encoded_sse_prefix(file, coding, guard.request_id().to_string(), family)
     });
     let Ok(Ok(observation)) = observation else {
         return false;

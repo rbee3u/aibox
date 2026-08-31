@@ -1,6 +1,5 @@
 import type { ComponentProps, ReactNode, RefObject } from "react";
-import { ActionButton } from "@/shared/ui/ActionButton";
-import { AnchoredTooltip } from "@/shared/ui/AnchoredTooltip";
+import { ActionButton, type ActionButtonTone } from "@/shared/ui/ActionButton";
 import styles from "@/shared/ui/IconButton.module.css";
 
 export function IconButton({
@@ -8,78 +7,25 @@ export function IconButton({
   children,
   className,
   buttonRef,
+  tone = "default",
   ...props
-}: Omit<ComponentProps<typeof ActionButton>, "children" | "tone"> & {
+}: Omit<ComponentProps<typeof ActionButton>, "children"> & {
   label: string;
   children: ReactNode;
   buttonRef?: RefObject<HTMLButtonElement | null>;
+  tone?: Exclude<ActionButtonTone, "quiet" | "primary">;
 }) {
   return (
-    <AnchoredTooltip<HTMLButtonElement>
-      openDelayMs={450}
-      disabled={Boolean(props.disabled)}
-      content={label}
-      className={styles.tooltip}
-      positionKey={label}
+    <ActionButton
+      {...props}
+      ref={buttonRef}
+      className={`${styles.button} ${className ?? ""}`}
+      data-icon-button="true"
+      type="button"
+      tone={tone}
+      aria-label={label}
     >
-      {(tooltip) => {
-        const {
-          onPointerEnter,
-          onPointerLeave,
-          onPointerDown,
-          onFocus,
-          onBlur,
-          onKeyDown,
-          onClick,
-          ...buttonProps
-        } = props;
-        return (
-          <ActionButton
-            {...buttonProps}
-            ref={(element) => {
-              tooltip.triggerRef.current = element;
-              if (buttonRef) buttonRef.current = element;
-            }}
-            className={`${styles.button} ${className ?? ""}`}
-            data-icon-button="true"
-            type="button"
-            tone="quiet"
-            title={label}
-            aria-label={label}
-            aria-describedby={tooltip.describedBy}
-            onPointerEnter={(event) => {
-              onPointerEnter?.(event);
-              tooltip.onPointerEnter(event);
-            }}
-            onPointerLeave={(event) => {
-              onPointerLeave?.(event);
-              tooltip.onPointerLeave(event);
-            }}
-            onPointerDown={(event) => {
-              onPointerDown?.(event);
-              tooltip.onPointerDown(event);
-            }}
-            onFocus={(event) => {
-              onFocus?.(event);
-              tooltip.onFocus(event);
-            }}
-            onBlur={(event) => {
-              onBlur?.(event);
-              tooltip.onBlur(event);
-            }}
-            onKeyDown={(event) => {
-              onKeyDown?.(event);
-              if (!event.defaultPrevented) tooltip.onKeyDown(event);
-            }}
-            onClick={(event) => {
-              onClick?.(event);
-              tooltip.close();
-            }}
-          >
-            {children}
-          </ActionButton>
-        );
-      }}
-    </AnchoredTooltip>
+      {children}
+    </ActionButton>
   );
 }

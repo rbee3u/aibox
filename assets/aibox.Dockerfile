@@ -1,5 +1,11 @@
 # Mutable runtimes and Coding Agents are installed into each Managed Tenant
 # Home as Components; this image provides their shared system substrate.
+#
+# That substrate includes the shared fonts and the ABI libraries a headless
+# Chromium links against; it still links X11 without needing a display server.
+# The browser binary itself stays versioned and Tenant-local, so it is never
+# installed or pinned here. Firefox and WebKit need further libraries that stay
+# host-owned.
 
 FROM debian:bookworm
 
@@ -14,6 +20,10 @@ RUN apt-get update && \
         cmake \
         curl \
         file \
+        fontconfig \
+        fonts-liberation \
+        fonts-noto-color-emoji \
+        fonts-wqy-zenhei \
         gawk \
         gdb \
         git \
@@ -23,8 +33,29 @@ RUN apt-get update && \
         iputils-ping \
         jq \
         less \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libatspi2.0-0 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
         libssl-dev \
         libtool \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
         lsof \
         netcat-openbsd \
         ninja-build \

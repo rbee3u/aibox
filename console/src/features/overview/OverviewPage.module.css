@@ -477,7 +477,7 @@ button.fact:hover {
 
 .zoomControls [data-icon-button][aria-pressed="true"] {
   color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--surface-selected);
 }
 
 .zoomValue {

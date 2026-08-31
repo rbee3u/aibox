@@ -309,8 +309,8 @@ Error remain separately recorded; for example HTTP 200 can have a Provider
 Error or an upstream stream failure, while HTTP 401 can coexist with structured
 Provider Error details.
 
-Content-encoded SSE remains raw and unindexed. A supported zstd stream is
-semantically interpreted only after complete EOF, without synthesizing First
+Content-encoded SSE remains raw and unindexed. A supported zstd or gzip stream
+is semantically interpreted only after complete EOF, without synthesizing First
 Token or Event timings from decoded offsets.
 
 The raw request, response, and SSE index remain the diagnostic evidence. The
@@ -362,6 +362,12 @@ installed explicitly into a persistent Managed Tenant; see [Tenant
 Components](tenants.md#tenant-components). A system diagnostic such as GDB may
 retain a transitive `libpython` ABI dependency, but the image provides no
 callable `python`, `pip`, `uv`, or `uvx` command.
+
+The image also carries shared fonts and the ABI libraries a headless Chromium
+links against, so a Tenant that downloads a browser can render and screenshot
+pages. Those libraries are substrate only: the image installs and pins no
+browser, and Firefox and WebKit need further system libraries that stay
+host-owned.
 
 For complete output, an installed Claude statusline Component expects Bash,
 `jq`, `awk`, and `cat` in the runtime image; Git is optional and supplies the

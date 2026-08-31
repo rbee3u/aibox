@@ -37,7 +37,14 @@ export type JsonValue = null | boolean | string | LosslessNumber | JsonValue[] |
 type JsonParseResult = { ok: true; value: JsonValue } | { ok: false; message: string };
 
 export type ContentCoding =
-  { kind: "identity" } | { kind: "zstd" } | { kind: "unsupported"; message: string };
+  | { kind: "identity" }
+  | { kind: "zstd" }
+  | { kind: "gzip" }
+  | { kind: "unsupported"; message: string };
+
+export function isEncodedContentCoding(kind: ContentCoding["kind"]): kind is "zstd" | "gzip" {
+  return kind === "zstd" || kind === "gzip";
+}
 
 export interface ParsedSseEvent {
   sequence: number;
@@ -128,6 +135,7 @@ export function contentCoding(headers: HeaderValue[]): ContentCoding {
     return { kind: "identity" };
   }
   if (codings.length === 1 && codings[0] === "zstd") return { kind: "zstd" };
+  if (codings.length === 1 && codings[0] === "gzip") return { kind: "gzip" };
   return {
     kind: "unsupported",
     message: `Unsupported Content-Encoding: ${codings.join(", ") || "invalid value"}`,

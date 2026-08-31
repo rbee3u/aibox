@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mockRequests } from "./requests.fixture";
 
-test("desktop layout and keyboard interactions", async ({ page }) => {
+test("Request inspection preserves responsive and keyboard workflows", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await mockRequests(page);
   await page.goto("./");
@@ -9,29 +9,24 @@ test("desktop layout and keyboard interactions", async ({ page }) => {
   await page.getByRole("button", { name: "Color theme: System" }).click();
   await page.getByRole("menuitemradio", { name: "Dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.getByRole("separator")).toHaveCount(0);
-  const requestList = page.getByRole("complementary", { name: "Request list" });
-  const listBounds = await requestList.boundingBox();
-  expect(listBounds?.width).toBeGreaterThan(390);
-  expect(listBounds?.width).toBeLessThan(405);
 
-  await page
-    .getByRole("button", { name: "POST relay.example.test/v1/responses", exact: true })
-    .click();
+  const requestList = page.getByRole("complementary", { name: "Request list" });
+  const request = page.getByRole("button", {
+    name: "POST relay.example.test/v1/responses",
+    exact: true,
+  });
+  await request.click();
   await expect(page.getByRole("region", { name: "Request details" })).toBeVisible();
 
   await page.setViewportSize({ width: 760, height: 720 });
   await expect(requestList).toBeHidden();
-  await expect(page.getByRole("button", { name: "Back to Request list" })).toBeVisible();
   await page.getByRole("button", { name: "Back to Request list" }).click();
   await expect(requestList).toBeVisible();
+  await expect(request).toBeFocused();
 
   await page.setViewportSize({ width: 761, height: 720 });
-  await page
-    .getByRole("button", { name: "POST relay.example.test/v1/responses", exact: true })
-    .click();
+  await request.click();
   await expect(requestList).toBeVisible();
-  await expect(page.getByRole("region", { name: "Request details" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back to Request list" })).toBeHidden();
 
   await page.getByRole("button", { name: "Select Requests" }).click();

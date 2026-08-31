@@ -603,7 +603,7 @@ describe("RequestDetail", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Pretty unavailable:");
   });
 
-  it("shows unsupported encoding instead of waiting for an incomplete JSON Body", () => {
+  it("derives the gzip wait state from Body completeness", () => {
     const source = new Uint8Array([0x1f, 0x8b]);
     renderRequestBody(
       {
@@ -611,10 +611,32 @@ describe("RequestDetail", () => {
         request_body_bytes: source.length,
       },
       source,
+      {
+        decodedBodies: {
+          request: { bytes: null, error: null },
+          response: { bytes: null, error: null },
+        },
+      },
+    );
+
+    expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Waiting for the complete gzip Body before decoding",
+    );
+  });
+
+  it("shows unsupported encoding instead of waiting for an incomplete JSON Body", () => {
+    const source = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
+    renderRequestBody(
+      {
+        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "br")),
+        request_body_bytes: source.length,
+      },
+      source,
     );
 
     expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("status")).toHaveTextContent("Unsupported Content-Encoding: gzip");
+    expect(screen.getByRole("status")).toHaveTextContent("Unsupported Content-Encoding: br");
     expect(screen.queryByText(/Waiting for the complete JSON Body/)).not.toBeInTheDocument();
   });
 

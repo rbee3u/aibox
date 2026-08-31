@@ -71,6 +71,7 @@ describe("Body presentation", () => {
       kind: "identity",
     });
     expect(contentCoding([header("CONTENT-ENCODING", " ZsTd ")])).toEqual({ kind: "zstd" });
+    expect(contentCoding([header("content-encoding", " GzIp ")])).toEqual({ kind: "gzip" });
     expect(contentCoding([header("content-encoding", "gzip, zstd")])).toEqual({
       kind: "unsupported",
       message: "Unsupported Content-Encoding: gzip, zstd",

@@ -11,6 +11,7 @@ import type { ConfigViewModel } from "@/features/configs/useConfigController";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { ActionButton } from "@/shared/ui/ActionButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { IssueIndicator } from "@/shared/ui/IssueIndicator";
 import { Loading } from "@/shared/ui/ManagementFeedback";
@@ -214,7 +215,6 @@ export function ConfigCatalogPane({
                   <button
                     type="button"
                     className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
-                    title="Propagate credentials"
                     aria-label="Propagate credentials"
                     disabled={mutationBusy}
                     onClick={() => void previewPropagation()}
@@ -226,14 +226,15 @@ export function ConfigCatalogPane({
           )}
           <div className={layout.divider}>
             <span>Named Configs</span>
-            <IconButton
+            <ActionButton
               className={layout.addAction}
-              label="Create Named Config"
+              aria-label="Create Named Config"
               disabled={mutationBusy || loadingCatalog || selectionMode}
               onClick={openCreateDialog}
             >
-              <Plus size={15} />
-            </IconButton>
+              <Plus size={15} aria-hidden="true" />
+              Create
+            </ActionButton>
           </div>
           {data?.configs.map((entry) => {
             const applied = entry.name === appliedName;
@@ -296,11 +297,6 @@ export function ConfigCatalogPane({
                       <button
                         type="button"
                         className={styles.configRowPrimaryAction}
-                        title={
-                          applied && data.application.drift === "clean"
-                            ? "Already clean"
-                            : `Apply Named Config ${entry.name} to Current Config`
-                        }
                         aria-label={`Apply Named Config ${entry.name} to Current Config`}
                         disabled={mutationBusy || (applied && data.application.drift === "clean")}
                         onClick={() => requestApply(entry.name)}
@@ -312,7 +308,6 @@ export function ConfigCatalogPane({
                       <button
                         type="button"
                         className={styles.configRowPrimaryAction}
-                        title={`Repair Named Config ${entry.name}`}
                         aria-label={`Repair Named Config ${entry.name}`}
                         disabled={mutationBusy}
                         onClick={() => requestEditorAction(() => createConfig(entry.name))}
@@ -322,6 +317,7 @@ export function ConfigCatalogPane({
                     )}
                     <IconButton
                       className={`${layout.rowAction} ${layout.rowDeleteAction}`}
+                      tone="danger"
                       label={`Delete Named Config ${entry.name}`}
                       disabled={mutationBusy}
                       onClick={() => requestDelete([entry.name])}

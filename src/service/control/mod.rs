@@ -24,7 +24,7 @@ mod sessions;
 mod tenants;
 
 pub(crate) use components::ComponentRow;
-use components::component_rows;
+use components::component_rows_from;
 use response::content;
 
 pub(crate) fn router() -> Router<ServiceState> {
@@ -51,21 +51,6 @@ pub(crate) struct AgentTenantQuery {
 
 fn default_agent() -> AgentKind {
     AgentKind::Codex
-}
-
-async fn blocking<T, F>(operation: F) -> Response<Body>
-where
-    T: Serialize + Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    match tokio::task::spawn_blocking(operation).await {
-        Ok(Ok(value)) => json_response(StatusCode::OK, &value),
-        Ok(Err(error)) => result_error(error),
-        Err(error) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("management worker failed: {error}"),
-        ),
-    }
 }
 
 fn result_error(error: anyhow::Error) -> Response<Body> {
@@ -123,28 +108,22 @@ fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Response<Body> 
     }
 }
 
+/// Render one Control API failure.
+///
+/// Every Control route shares this envelope. The HTTP status already carries
+/// the code, so the body holds only the message: a second nested `code` field
+/// duplicated the status without a reader, and the two shapes that existed
+/// before meant the Console could only decode one of them.
 fn api_error(status: StatusCode, message: &str) -> Response<Body> {
-    let body = serde_json::to_vec(&ControlErrorResponse {
-        error: ControlErrorBody {
-            code: status.as_u16(),
-            message,
-        },
-    })
-    .unwrap_or_else(|_| b"{\"error\":{\"message\":\"Control API error\"}}".to_vec());
+    let body = serde_json::to_vec(&ControlErrorResponse { error: message })
+        .unwrap_or_else(|_| b"{\"error\":\"Control API error\"}".to_vec());
     content(status, "application/json; charset=utf-8", body)
 }
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ControlErrorResponse<'a> {
-    error: ControlErrorBody<'a>,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct ControlErrorBody<'a> {
-    code: u16,
-    message: &'a str,
+    error: &'a str,
 }
 
 #[cfg(test)]

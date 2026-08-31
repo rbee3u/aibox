@@ -93,4 +93,37 @@ describe("ConfirmDialog", () => {
     fireEvent.change(input, { target: { value: "work" } });
     expect(confirm).toBeEnabled();
   });
+
+  it("copies the confirmation phrase without filling the input", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    render(
+      <ConfirmDialog
+        title="Delete Tenant work?"
+        confirmation="work"
+        confirmLabel="Delete permanently"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    const phrase = screen.getByRole("button", { name: "Copy work" });
+    const input = screen.getByRole("textbox");
+    const confirm = screen.getByRole("button", { name: "Delete permanently" });
+
+    await act(async () => {
+      fireEvent.click(phrase);
+      await Promise.resolve();
+    });
+
+    expect(writeText).toHaveBeenCalledWith("work");
+    expect(input).toHaveValue("");
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copied work" })).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1400));
+    expect(screen.getByRole("button", { name: "Copy work" })).toBeInTheDocument();
+  });
 });

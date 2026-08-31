@@ -10,6 +10,7 @@ import {
   bodyComplete,
   bodyHeaders,
   contentCoding,
+  isEncodedContentCoding,
   isSseResponse,
 } from "@/features/requests/detail/bodyPresentation";
 import type {
@@ -137,7 +138,7 @@ export function useRequestBodyResource({
         offsets.current[kind] = chunk.nextOffset;
         setBodyStatus((current) => ({ ...current, [kind]: "loaded" }));
         if (
-          visibleBodyCodingKind === "zstd" &&
+          isEncodedContentCoding(visibleBodyCodingKind) &&
           visibleBodyComplete &&
           !decodedLoaded.current[kind]
         ) {

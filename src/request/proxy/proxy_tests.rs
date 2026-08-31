@@ -1,5 +1,3 @@
-use super::attempt::*;
-use super::headers::*;
 use super::request_stream::*;
 use super::response_stream::*;
 use super::target::*;
@@ -835,7 +833,10 @@ async fn client_close_after_zstd_terminal_event_is_completed() {
             ResponseStreamConfig {
                 mode: ResponseStreamMode::OpaqueEventStream,
                 status: 200,
-                headers: Vec::new(),
+                headers: vec![RecordedHeader {
+                    name: "content-encoding".to_string(),
+                    value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
+                }],
             },
             &mut guard,
         )

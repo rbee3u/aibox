@@ -21,16 +21,26 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-pub(crate) use inspection::RequestInspection;
-pub(crate) use interpretation::BodyContentCoding;
-#[allow(unused_imports)]
+pub(crate) use inspection::{RequestInspection, RequestOverview};
+pub(crate) use interpretation::{BodyContentCoding, body_reader};
 pub(crate) use model::{
-    AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, DiagnosticMetadata,
-    ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic, ProtocolFamily, ProtocolSummary,
-    RecordedHeader, RequestAssessment, RequestMetadata, RequestOutcome, RequestState,
-    RequestedEffective, RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource,
-    ResultMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
-    TimingMetadata, TokenUsage, anchored_at,
+    AssessmentFinding, AssessmentLevel, AssessmentSource, ProtocolSummary, RecordedHeader,
+    RequestAssessment, RequestMetadata, RequestState, ResponseMetadata, ResponseSource,
+    ResultMetadata, SummaryMetadata, anchored_at,
+};
+/// Wire types the Rust-owned Console contract exporter names directly.
+///
+/// `ts_rs` does not export a nested type on its own, so
+/// `service/control/contract.rs` must name every type that appears inside a
+/// Control API response — including ones no production caller mentions, such as
+/// `TokenUsage` inside [`ProtocolSummary`]. That exporter is test-only in its
+/// entirety, so these are `cfg(test)` rather than a permanently wider facade.
+/// See `docs/adr/0024-domain-first-single-crate-modules.md`.
+#[cfg(test)]
+pub(crate) use model::{
+    AssessmentPrimary, DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic,
+    ProtocolFamily, RequestedEffective, RequestedObserved, ResponseModeValue,
+    SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata, TokenUsage,
 };
 pub(crate) use proxy::handle as handle_proxy;
 pub(crate) use reporter::RequestReporter;

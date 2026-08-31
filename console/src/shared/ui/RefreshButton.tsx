@@ -35,7 +35,7 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
         ref={ref}
         className={`${styles.button} ${iconOnly ? styles.iconOnly : ""} ${className ?? ""}`}
         data-refresh-button="true"
-        tone="quiet"
+        tone="default"
         aria-label={busy && busyLabel ? busyLabel : label}
         aria-busy={busy || undefined}
       >

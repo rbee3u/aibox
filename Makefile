@@ -1,18 +1,25 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help install format build test lint check \
+	rust-format rust-build rust-test rust-lint rust-check \
 	console-ci console-format console-build console-test console-lint console-check \
 	console-contract console-contract-check console-assets-check
 
 help:
 	@printf '%s\n' \
+		"Project:" \
+		"  make format             Format Rust and Console sources" \
+		"  make build              Build Console assets and the CLI" \
+		"  make test               Run Rust and Console tests" \
+		"  make lint               Lint Rust and Console sources" \
+		"  make check              Run all socket-free project checks" \
 		"Rust:" \
 		"  make install            Install the CLI with Cargo" \
-		"  make format             Format Rust sources" \
-		"  make build              Build the CLI" \
-		"  make test               Run Rust tests" \
-		"  make lint               Lint Rust sources" \
-		"  make check              Run all Rust checks" \
+		"  make rust-format        Format Rust sources" \
+		"  make rust-build         Build the CLI" \
+		"  make rust-test          Run Rust tests" \
+		"  make rust-lint          Lint Rust sources" \
+		"  make rust-check         Run all Rust checks" \
 		"Console UI:" \
 		"  make console-ci         Install frontend dependencies with npm ci" \
 		"  make console-format     Format frontend sources" \
@@ -28,21 +35,41 @@ install:
 	cargo install --locked --path .
 
 format:
-	cargo fmt
+	$(MAKE) rust-format
+	$(MAKE) console-format
 
 build:
-	cargo build
+	$(MAKE) console-build
+	$(MAKE) rust-build
 
 test:
-	cargo test
+	$(MAKE) rust-test
+	$(MAKE) console-test
 
 lint:
-	cargo clippy --all-targets -- -D warnings
+	$(MAKE) rust-lint
+	$(MAKE) console-lint
 
 check:
+	$(MAKE) rust-check
+	$(MAKE) console-check
+
+rust-format:
+	cargo fmt
+
+rust-build:
+	cargo build --locked
+
+rust-test:
+	cargo test --locked
+
+rust-lint:
+	cargo clippy --locked --all-targets -- -D warnings
+
+rust-check:
 	cargo fmt --check
-	cargo test
-	cargo clippy --all-targets -- -D warnings
+	cargo test --locked
+	cargo clippy --locked --all-targets -- -D warnings
 
 console-ci:
 	npm --prefix console ci
@@ -69,13 +96,13 @@ console-check:
 
 console-contract:
 	AIBOX_CONTRACT_DIR="$(CURDIR)/console/src/api/generated" TS_RS_LARGE_INT=number \
-		cargo test service::control::contract::tests::export_console_contract -- --ignored --exact
+		cargo test --locked service::control::contract::tests::export_console_contract -- --ignored --exact
 
 console-contract-check:
 	@aibox_contract_tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$aibox_contract_tmp"' EXIT; \
 		AIBOX_CONTRACT_DIR="$$aibox_contract_tmp" TS_RS_LARGE_INT=number \
-			cargo test service::control::contract::tests::export_console_contract -- --ignored --exact; \
+			cargo test --locked service::control::contract::tests::export_console_contract -- --ignored --exact; \
 		diff -u console/src/api/generated/wire.ts "$$aibox_contract_tmp/wire.ts"; \
 		diff -u console/src/api/generated/routes.ts "$$aibox_contract_tmp/routes.ts"; \
 		diff -u console/src/api/generated/samples.json "$$aibox_contract_tmp/samples.json"

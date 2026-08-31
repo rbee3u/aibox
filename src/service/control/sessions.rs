@@ -2,7 +2,6 @@
 
 use super::{
     AgentTenantQuery, ControlResult, default_agent, default_tenant_selection, json_response,
-    result_error,
 };
 use crate::agent::AgentKind;
 use crate::service::coordination::{DeleteSessionsCommand, SessionCoordinator};
@@ -56,15 +55,9 @@ pub(crate) struct SessionDetailQuery {
 pub(super) async fn session_detail(
     State(state): State<ServiceState>,
     Query(query): Query<SessionDetailQuery>,
-) -> Response<Body> {
-    let selection = match TenantSelection::parse(&query.tenant) {
-        Ok(selection) => selection,
-        Err(error) => return result_error(error),
-    };
-    let access = match SessionCoordinator::new(state).access(selection, query.agent) {
-        Ok(access) => access,
-        Err(error) => return result_error(error),
-    };
+) -> ControlResult {
+    let selection = TenantSelection::parse(&query.tenant)?;
+    let access = SessionCoordinator::new(state).access(selection, query.agent)?;
     let agent = query.agent;
     let id = query.id;
     let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(8);
@@ -105,7 +98,7 @@ pub(super) async fn session_detail(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
     );
-    response
+    Ok(response)
 }
 
 #[derive(Deserialize)]

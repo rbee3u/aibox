@@ -1,4 +1,4 @@
-use super::{json_error, json_response};
+use super::super::{api_error, json_response};
 use crate::request::RequestProxyState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -70,8 +70,8 @@ pub(crate) async fn response_event_timings(
                 warning: timings.warning,
             },
         ),
-        Ok(Err(error)) => json_error(StatusCode::NOT_FOUND, &error.to_string()),
-        Err(error) => json_error(
+        Ok(Err(error)) => api_error(StatusCode::NOT_FOUND, &error.to_string()),
+        Err(error) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("read Request SSE event timings: {error}"),
         ),

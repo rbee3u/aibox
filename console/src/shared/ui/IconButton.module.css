@@ -6,31 +6,7 @@
   flex: 0 0 var(--control-compact);
   place-items: center;
   padding: 0;
-  border-color: transparent;
-  color: var(--muted);
-  background: transparent;
   box-shadow: none;
-}
-
-.button:hover:not(:disabled) {
-  border-color: var(--line);
-  color: var(--accent);
-  background: var(--surface-hover);
-}
-
-.button:focus-visible {
-  border-color: var(--focus);
-}
-
-.tooltip {
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
-  color: var(--bg-canvas);
-  background: var(--ink);
-  box-shadow: var(--shadow-md);
-  font-size: var(--text-xs);
-  line-height: var(--line-height-xs);
-  overflow-wrap: anywhere;
 }
 
 @media (pointer: coarse) {

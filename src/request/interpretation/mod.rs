@@ -27,7 +27,9 @@ pub(crate) use crate::request::model::{
 };
 use crate::request::model::{RecordedHeader, TokenUsage};
 use anyhow::Context as _;
-pub(crate) use http::{BodyContentCoding, body_content_coding, coding_agent_session_id};
+pub(crate) use http::{
+    BodyContentCoding, body_content_coding, body_reader, coding_agent_session_id,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -319,18 +321,13 @@ impl ProtocolObserver {
                 );
             }
         };
-        let parsed = match body_content_coding(headers) {
-            Ok(BodyContentCoding::Identity) => {
-                serde_json::from_reader::<_, JsonResponseEnvelope>(file)
-                    .context("parse response JSON")
-            }
-            Ok(BodyContentCoding::Zstd) => zstd::stream::read::Decoder::new(file)
-                .context("create zstd response decoder")
-                .and_then(|decoder| {
-                    serde_json::from_reader::<_, JsonResponseEnvelope>(decoder)
-                        .context("parse response JSON")
-                }),
-            Err(error) => Err(error).context("read response Content-Encoding"),
+        let parsed = match body_content_coding(headers)
+            .context("read response Content-Encoding")
+            .and_then(|coding| body_reader(file, coding))
+        {
+            Ok(mut reader) => serde_json::from_reader::<_, JsonResponseEnvelope>(&mut reader)
+                .context("parse response JSON"),
+            Err(error) => Err(error),
         };
         let mut changed = false;
         match parsed {

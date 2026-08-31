@@ -78,9 +78,9 @@ export function TenantDialogs({
             )}
             {createError && <div className={layout.alertBanner}>{createError}</div>}
             <div className={styles.dialogActions}>
-              <button type="button" onClick={closeCreateDialog} disabled={busy}>
+              <ActionButton type="button" onClick={closeCreateDialog} disabled={busy}>
                 Cancel
-              </button>
+              </ActionButton>
               <ActionButton
                 type="submit"
                 tone="primary"
@@ -184,9 +184,9 @@ export function TenantDialogs({
               </div>
             )}
             <div className={styles.dialogActions}>
-              <button type="button" onClick={closeSpecificVersion} disabled={mutationBusy}>
+              <ActionButton type="button" onClick={closeSpecificVersion} disabled={mutationBusy}>
                 Cancel
-              </button>
+              </ActionButton>
               <ActionButton
                 type="submit"
                 tone="primary"

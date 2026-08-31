@@ -1,19 +1,10 @@
-import {
-  ArrowUp,
-  ChevronDown,
-  ChevronUp,
-  Download,
-  LoaderCircle,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { ArrowUp, ChevronDown, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { RefObject } from "react";
 import type { ComponentKind, ComponentRow } from "@/api/tenants";
 import { ComponentGlyph } from "@/features/tenants/detail/ComponentGlyph";
 import {
   type ComponentBadgeTone,
-  type ComponentPrimaryAction,
   type ComponentRowModel,
 } from "@/features/tenants/componentCatalog";
 import { ActionButton } from "@/shared/ui/ActionButton";
@@ -25,20 +16,6 @@ const BADGE_TONE_CLASS: Record<ComponentBadgeTone, string> = {
   warn: layout.statusWarn,
   error: layout.statusError,
 };
-
-function actionClass(action: ComponentPrimaryAction): string {
-  switch (action) {
-    case "Install":
-      return styles.componentInstallAction;
-    case "Update":
-      return styles.componentUpdateAction;
-    case "Repair":
-    case "Restore":
-      return styles.componentRepairAction;
-    case "Retry inspection":
-      return styles.componentRetryAction;
-  }
-}
 
 interface ComponentRowItemProps {
   row: ComponentRow;
@@ -150,23 +127,16 @@ export function ComponentRowItem({
       <div className={styles.componentActions}>
         {diagnostic && (
           <ActionButton
-            tone="quiet"
             className={styles.componentDetailsButton}
             aria-expanded={expanded}
             aria-controls={`component-diagnostic-${row.kind}`}
             onClick={onToggleExpanded}
           >
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             Details
           </ActionButton>
         )}
         {presentation.primaryAction === "Retry inspection" ? (
-          <ActionButton
-            tone="default"
-            className={styles.componentRetryAction}
-            disabled={busy}
-            onClick={onRetryInspection}
-          >
+          <ActionButton tone="default" disabled={busy} onClick={onRetryInspection}>
             <RefreshCw size={14} aria-hidden="true" />
             Retry inspection
           </ActionButton>
@@ -174,7 +144,7 @@ export function ComponentRowItem({
           <div className={styles.componentSplitAction}>
             <ActionButton
               tone="default"
-              className={`${styles.componentSplitPrimary} ${actionClass(primaryAction)}`}
+              className={styles.componentSplitPrimary}
               disabled={mutationBusy}
               onClick={onInstall}
             >
@@ -188,7 +158,7 @@ export function ComponentRowItem({
             <ActionButton
               ref={registerMenuButton}
               tone="default"
-              className={`${styles.componentSplitTrigger} ${actionClass(primaryAction)}`}
+              className={styles.componentSplitTrigger}
               aria-label={`${primaryAction} options for ${label}`}
               aria-controls={menuOpen ? `component-install-menu-${row.kind}` : undefined}
               aria-haspopup="menu"
@@ -247,7 +217,7 @@ export function ComponentRowItem({
         ) : primaryAction ? (
           <ActionButton
             tone="default"
-            className={`${styles.componentPrimaryAction} ${actionClass(primaryAction)}`}
+            className={styles.componentPrimaryAction}
             disabled={mutationBusy}
             onClick={onInstall}
           >
@@ -261,7 +231,7 @@ export function ComponentRowItem({
         ) : null}
         {presentation.canRemove && (
           <IconButton
-            className={styles.componentRemoveAction}
+            tone="danger"
             label={`Remove ${label}`}
             disabled={mutationBusy}
             onClick={onRemove}

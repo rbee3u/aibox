@@ -5,19 +5,10 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  border-color: transparent;
   padding: 5px 7px;
-  color: var(--ink-secondary);
-  background: transparent;
   font-size: var(--text-xs);
   font-weight: inherit;
   white-space: nowrap;
-}
-
-.button.button:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 .iconOnly {

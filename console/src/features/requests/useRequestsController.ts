@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type RefObject } from "react";
 
 import type { RequestList, RequestsApi } from "@/api/requests";
+import { allSelected } from "@/features/common/catalogSelection";
 import { requestWasCancelled } from "@/features/requests/requestErrors";
+import {
+  earliestSelectedPage,
+  initialRequestsWorkflow,
+  requestsWorkflowReducer,
+  type RequestsDeletion,
+  type RequestsDialog,
+} from "@/features/requests/requestsWorkflow";
 import { readRequestsRoute, requestsSearch, type RequestsRoute } from "@/features/requests/route";
 import {
   useRequestInspection,
@@ -13,7 +21,6 @@ import {
   REQUESTS_PER_PAGE,
 } from "@/features/requests/catalog/listModel";
 import type { DetailTab } from "@/features/requests/viewTypes";
-import { useCatalogSelection } from "@/shared/hooks/useCatalogSelection";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
@@ -22,9 +29,6 @@ import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 
 type Inspection = ReturnType<typeof useRequestInspection>;
-
-type Dialog = { kind: "batch"; ids: string[] } | { kind: "request"; id: string } | null;
-type Deletion = { kind: "batch" } | { kind: "request"; id: string } | null;
 
 const LIST_POLL_INTERVAL_MS = 5000;
 
@@ -96,7 +100,7 @@ export interface RequestsViewModel {
   dialogs: {
     cancelDialog: () => void;
     confirmDelete: () => Promise<void>;
-    dialog: Dialog;
+    dialog: RequestsDialog;
   };
   feedback: {
     dismissNotification: (source: NotificationSource) => void;
@@ -125,11 +129,10 @@ export function useRequestsController({
   const [list, setList] = useState<RequestList>(emptyList);
   const [page, setPage] = useState(initialRoute.page);
   const pageRef = useRef(initialRoute.page);
-  const selection = useCatalogSelection<number>();
+  const [workflow, dispatchWorkflow] = useReducer(requestsWorkflowReducer, initialRequestsWorkflow);
+  const { deletion, dialog, selectedKeys, selectionMode } = workflow;
   const [loadingList, setLoadingList] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [dialog, setDialog] = useState<Dialog>(null);
-  const [deletion, setDeletion] = useState<Deletion>(null);
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
   const [focusAfterInspection, setFocusAfterInspection] = useState<string | null | undefined>(
     undefined,
@@ -227,17 +230,17 @@ export function useRequestsController({
     [currentId, setTab, tab, updateLocation],
   );
 
-  function beginDeletion(next: Exclude<Deletion, null>): boolean {
+  function beginDeletion(next: Exclude<RequestsDeletion, null>): boolean {
     if (deletionInProgress.current) return false;
     deletionInProgress.current = true;
     listRequest.current.cancel();
-    setDeletion(next);
+    dispatchWorkflow({ type: "delete_started", deletion: next });
     return true;
   }
 
   function finishDeletion() {
     deletionInProgress.current = false;
-    setDeletion(null);
+    dispatchWorkflow({ type: "delete_finished" });
   }
 
   const loadPage = useCallback(
@@ -349,7 +352,7 @@ export function useRequestsController({
     [refreshWithFallback],
   );
   usePolling({
-    enabled: !selection.active && !dialogOpen,
+    enabled: !selectionMode && !dialogOpen,
     intervalMs: LIST_POLL_INTERVAL_MS,
     run: pollList,
     onCancel: cancelListRequest,
@@ -404,30 +407,30 @@ export function useRequestsController({
     }
     if (!beginDeletion({ kind: "batch" })) return;
     resolveFailure("action");
-    const targetPage = dialog.ids.reduce(
-      (minimum, id) => Math.min(minimum, selection.contextOf(id) ?? pageRef.current),
-      Number.MAX_SAFE_INTEGER,
-    );
+    const targetPage = earliestSelectedPage(workflow, dialog.ids, pageRef.current);
     try {
       const deletedCount = await api.deleteRequests(dialog.ids);
       const deletedIds = dialog.ids;
       setList((current) =>
         removeDeletedFromList(current, deletedIds, deletedCount, pageRef.current),
       );
-      selection.exit();
+      // Leaves selection mode whether or not every id was removed. Sessions
+      // resumes a partial selection instead; keeping the two different is
+      // deliberate rather than an oversight.
+      dispatchWorkflow({ type: "selection_cancel" });
       if (currentId && deletedIds.includes(currentId)) {
         setDetailOpen(false);
         clearCurrentRequest();
         updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
       }
-      setDialog(null);
+      dispatchWorkflow({ type: "dialog_dismissed" });
       resolveFailure("action");
       await refreshWithFallback(targetPage);
       setFocusAfterDelete(null);
     } catch (cause) {
       const title =
         dialog.ids.length === 1 ? "Couldn’t delete request" : "Couldn’t delete requests";
-      setDialog(null);
+      dispatchWorkflow({ type: "dialog_dismissed" });
       reportFailure("action", title, cause);
     } finally {
       finishDeletion();
@@ -471,7 +474,7 @@ export function useRequestsController({
     } catch (cause) {
       reportFailure("action", "Couldn’t delete request", cause);
     } finally {
-      setDialog(null);
+      dispatchWorkflow({ type: "dialog_dismissed" });
       finishDeletion();
     }
   }
@@ -519,31 +522,43 @@ export function useRequestsController({
       clearFocusAfterInspection: () => setFocusAfterInspection(undefined),
       enterSelection: () => {
         setDetailOpen(false);
-        selection.enter();
+        dispatchWorkflow({ type: "selection_enter" });
       },
-      exitSelection: selection.exit,
+      exitSelection: () => dispatchWorkflow({ type: "selection_cancel" }),
       focusAfterDelete,
       focusAfterInspection,
-      selected: selection.selected,
-      selectionMode: selection.active,
-      togglePageSelection: () => selection.toggleAll(deletableIdsOnPage, pageRef.current),
-      toggleRequestSelection: (id: string) => selection.toggle(id, pageRef.current),
+      selected: selectedKeys,
+      selectionMode,
+      togglePageSelection: () =>
+        dispatchWorkflow({
+          type: "selection_toggle_all",
+          keys: deletableIdsOnPage,
+          clear: allSelected(deletableIdsOnPage, selectedKeys),
+          context: pageRef.current,
+        }),
+      toggleRequestSelection: (id: string) =>
+        dispatchWorkflow({ type: "selection_toggle", key: id, context: pageRef.current }),
     },
     mutations: {
       deletingRequestId,
       deletionBusy,
-      openBatchDeletion: () => setDialog({ kind: "batch", ids: selection.ids }),
-      openRequestDeletion: (id: string) => setDialog({ kind: "request", id }),
+      openBatchDeletion: () =>
+        dispatchWorkflow({
+          type: "dialog_opened",
+          dialog: { kind: "batch", ids: [...selectedKeys] },
+        }),
+      openRequestDeletion: (id: string) =>
+        dispatchWorkflow({ type: "dialog_opened", dialog: { kind: "request", id } }),
     },
     dialogs: {
-      cancelDialog: () => !deletionBusy && setDialog(null),
+      cancelDialog: () => !deletionBusy && dispatchWorkflow({ type: "dialog_dismissed" }),
       confirmDelete,
       dialog,
     },
     feedback: {
       dismissNotification,
       handleNotificationAction,
-      notifications: selection.active
+      notifications: selectionMode
         ? notifications.map((notification) =>
             notification.source === "list"
               ? { ...notification, actionLabel: undefined }

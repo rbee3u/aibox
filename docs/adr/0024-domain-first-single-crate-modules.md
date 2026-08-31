@@ -37,12 +37,34 @@ them, and resolving in the wrong order is therefore unrepresentable rather than
 a rule a caller must remember. Tests enter through the same facade production
 code uses.
 
+The Rust-owned Console contract exporter is the one named exception. `ts_rs`
+does not export a nested type on its own, so `service/control/contract.rs` must
+name every type reachable inside a Control API response, including ones no
+production caller mentions — `TokenUsage` inside `ProtocolSummary` is the
+motivating case. Those re-exports are `cfg(test)`, matching an exporter that is
+test-only in its entirety, so the facade is not permanently wider and a
+genuinely dead re-export still fails the build. Blanket
+`allow(unused_imports)` on the facade was rejected: it hid both the exporter's
+real need and any re-export that had actually died.
+
 Config and Component roots are narrow facades over concrete ownership modules,
 not generic repository or service traits. Named Config names are validated once
 at the Control/coordinator boundary and path construction stays inside Config.
 Component families keep inspection, owned paths, installation, and removal
 adjacent. Axum handlers, narrow response helpers, embedded Console assets, and
 the test-only Rust-owned contract exporter live under `service/control`.
+
+Every Control adapter reaches its domain through a coordinator, and each
+adapter's remaining domain imports are the wire types it converts. Requests and
+Overview were the last two to reach past coordination into `tenant`, `docker`,
+`config`, and `foundation` from an HTTP handler; both now have a coordinator, so
+`OverviewCoordinator` gathers the Overview and Topology snapshots and the
+adapter only projects them onto wire types. Request deletion consequently takes
+the same management gate as Config Application, Tenant lifecycle, Component
+installation, and Session deletion — it was the one mutation that did not, which
+a gate reachable only through coordination makes hard to repeat. Request reads
+stay on the inspection facade with no gate, because a diagnostic read is not a
+mutation.
 
 Request exposes a concrete inspection facade to Control while persistence,
 assessment, interpretation, and the v4 layout remain private. Store modules
@@ -66,6 +88,14 @@ decoding, selector parsing, and coordinator calls use `?`. Each Control route is
 declared once and expands to both its path constant and the test-facing manifest
 that generates the Console route bindings, because a route written twice can
 desynchronize the manifest meant to detect contract drift.
+
+One error envelope serves every route: `{"error": "<message>"}`. Two shapes had
+coexisted — a nested `{"error":{"code","message"}}` on most routes and the flat
+one on the Requests routes — and because the Console decodes only a string
+`error`, every message from the nested shape was silently replaced by the bare
+HTTP status line. The flat shape won because the status already carries the code,
+leaving the nested `code` field a duplicate no reader used. Both sides now assert
+the shape, which nothing did while the two coexisted.
 
 Test suites live in `<module>_tests.rs` beside the module they cover, enforced
 by an architecture test. Mixed inline and external placement was rejected after

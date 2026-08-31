@@ -1,7 +1,7 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FocusEvent } from "react";
-import { ActionButton } from "@/shared/ui/ActionButton";
+import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 import styles from "@/shared/ui/NotificationCenter.module.css";
@@ -119,14 +119,9 @@ function NotificationItem({ notification, paused, onAction, onDismiss }: Notific
           {notification.actionLabel}
         </RefreshButton>
       )}
-      <ActionButton
-        className={styles.dismiss}
-        tone="quiet"
-        aria-label="Dismiss message"
-        onClick={dismiss}
-      >
+      <IconButton className={styles.dismiss} label="Dismiss message" onClick={dismiss}>
         <X size={15} aria-hidden="true" />
-      </ActionButton>
+      </IconButton>
     </article>
   );
 }

@@ -44,8 +44,8 @@ mod tests {
     };
     use crate::service::control::requests::{
         BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
-        EventTimingQuery, EventTimingResponse, EventTimingState, ListQuery, RequestApiError,
-        RequestDetail, RequestList, RequestState, RequestSummary, ResponseDetail,
+        EventTimingQuery, EventTimingResponse, EventTimingState, ListQuery, RequestDetail,
+        RequestList, RequestState, RequestSummary, ResponseDetail,
     };
     use crate::service::control::routes::ENDPOINTS;
     use crate::service::control::sessions::{
@@ -56,7 +56,7 @@ mod tests {
         CreateTenantRequest, CreatedTenantResponse, DeleteSelection, DeletedTenantsResponse,
         TenantRow,
     };
-    use crate::service::control::{AgentTenantQuery, ControlErrorBody, ControlErrorResponse};
+    use crate::service::control::{AgentTenantQuery, ControlErrorResponse};
     use crate::service::operation::{OperationLog, OperationSnapshot, OperationState};
     use crate::session::{
         ConversationMessage, ConversationRole, EvidenceEncoding, SessionDetailMeta,
@@ -87,7 +87,6 @@ mod tests {
         export_types!(
             AgentKind,
             AgentTenantQuery,
-            ControlErrorBody<'static>,
             ControlErrorResponse<'static>,
             ComponentQuery,
             ComponentMutation,
@@ -151,7 +150,6 @@ mod tests {
             EventTimingState,
             DeleteRequest,
             DeletedRequestsResponse,
-            RequestApiError<'static>,
             RecordedHeader,
             RequestMetadata,
             ResponseSource,

@@ -123,17 +123,17 @@
 
 .moduleNav a:hover {
   border-color: transparent;
-  background: var(--surface-hover);
+  background: var(--surface-row-hover);
 }
 .moduleNav a[aria-current="page"] {
   color: var(--ink);
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 .moduleNav a[aria-current="page"]::before {
   background: var(--accent);
 }
 .moduleNav a[aria-current="page"]:hover {
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 .moduleNav a > span {
   display: grid;
@@ -191,8 +191,8 @@
 
 .sidebar .utilityItem:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ink);
+  background: var(--surface-hover);
 }
 
 .utilityItem:focus-visible {
@@ -217,6 +217,32 @@
 
 .themeButton {
   cursor: pointer;
+  border-color: transparent;
+  color: var(--ink-secondary);
+  background: transparent;
+}
+
+.sidebar .themeButton:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.sidebar .themeButton[aria-expanded="true"] {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.sidebar .themeButton[aria-expanded="true"]:hover:not(:disabled) {
+  background: var(--surface-selected);
+}
+
+.sidebar .themeButton:hover:not(:disabled) .themeValue,
+.sidebar .themeButton:hover:not(:disabled) .themeChevron,
+.sidebar .themeButton[aria-expanded="true"] .themeValue,
+.sidebar .themeButton[aria-expanded="true"] .themeChevron {
+  color: var(--accent);
 }
 
 .themeValue {
@@ -256,14 +282,14 @@
   flex: 0 0 30px;
   margin-left: auto;
   border-color: transparent;
-  color: var(--muted);
+  color: var(--ink-secondary);
   background: transparent;
 }
 
-.sidebar .collapseButton:hover:not(:disabled) {
+.collapseButton:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--surface-selected);
 }
 
 .themeMenu {
@@ -279,7 +305,7 @@
   box-shadow: var(--shadow-md);
 }
 
-.themeOption {
+.themeMenu .themeOption {
   display: flex;
   width: 100%;
   min-height: 34px;
@@ -293,11 +319,11 @@
   text-align: left;
 }
 
-.themeOption:hover,
-.themeOption[aria-checked="true"] {
+.themeMenu .themeOption:hover,
+.themeMenu .themeOption[aria-checked="true"] {
   border-color: transparent;
   color: var(--accent);
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .themeCheck {

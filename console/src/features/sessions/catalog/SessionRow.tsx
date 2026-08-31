@@ -2,7 +2,6 @@ import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
 import {
   accessibleSessionSource,
   visibleSessionListSource,
-  visibleSessionSource,
   type SourcedSession,
 } from "@/features/sessions/sessionSource";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
@@ -30,7 +29,7 @@ interface SessionRowProps {
   registerDelete: (element: HTMLButtonElement | null) => void;
 }
 
-/** One Session catalog row: title, source, preview, and its quiet delete action. */
+/** One Session catalog row: title, source, preview, and its danger delete action. */
 export function SessionRow({
   row,
   current,
@@ -48,7 +47,6 @@ export function SessionRow({
   registerDelete,
 }: SessionRowProps) {
   const title = row.title || "Untitled Session";
-  const visibleSource = visibleSessionSource(row.source);
   const accessibleSource = accessibleSessionSource(row.source);
   return (
     <div
@@ -106,7 +104,6 @@ export function SessionRow({
           ref={registerDelete}
           type="button"
           className={styles.sessionDelete}
-          title={`Delete Session ${row.display_id} from ${visibleSource}`}
           aria-label={
             deleting
               ? `Deleting Session ${row.display_id} from ${accessibleSource}`

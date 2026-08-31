@@ -58,6 +58,48 @@
   margin-top: 18px;
   color: var(--muted);
   font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.confirmationPrompt {
+  min-width: 0;
+}
+
+.confirmationPhrase {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--code-text);
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+  background: var(--code-bg);
+  cursor: pointer;
+}
+
+.confirmationPhrase code {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirmationPhrase:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-inset);
+}
+
+.confirmationPhrase:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .actions {

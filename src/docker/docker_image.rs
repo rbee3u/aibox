@@ -131,9 +131,7 @@ pub fn image_exists(image: &str) -> Result<bool> {
 
 pub(crate) fn image_exists_with(docker: &DockerCli, image: &str) -> Result<bool> {
     let inspect = docker
-        .command()
-        .args(["image", "inspect", "--format", "{{.Id}}", image])
-        .output()
+        .output(["image", "inspect", "--format", "{{.Id}}", image])
         .context("inspect docker image (is docker installed?)")?;
     if inspect.status.success() {
         return Ok(true);
@@ -141,9 +139,7 @@ pub(crate) fn image_exists_with(docker: &DockerCli, image: &str) -> Result<bool>
 
     let list_ref = image_ref_for_exact_ls(image);
     let list = docker
-        .command()
-        .args(["image", "ls", "--quiet", "--no-trunc", &list_ref])
-        .output()
+        .output(["image", "ls", "--quiet", "--no-trunc", &list_ref])
         .context("list docker image (is docker installed?)")?;
     if list.status.success() {
         return Ok(!String::from_utf8_lossy(&list.stdout).trim().is_empty());
@@ -189,9 +185,7 @@ pub(crate) fn inspect_runtime_image_with(
     const FORMAT: &str =
         r#"{"id":{{json .Id}},"created_at":{{json .Created}},"size_bytes":{{.Size}}}"#;
     let inspect = docker
-        .command()
-        .args(["image", "inspect", "--format", FORMAT, image])
-        .output()
+        .output(["image", "inspect", "--format", FORMAT, image])
         .context("inspect docker image metadata (is docker installed?)")?;
     if inspect.status.success() {
         return match serde_json::from_slice::<DockerImageMetadata>(&inspect.stdout) {
@@ -214,9 +208,7 @@ pub(crate) fn inspect_runtime_image_with(
 
     let list_ref = image_ref_for_exact_ls(image);
     let list = docker
-        .command()
-        .args(["image", "ls", "--quiet", "--no-trunc", &list_ref])
-        .output()
+        .output(["image", "ls", "--quiet", "--no-trunc", &list_ref])
         .context("list docker image (is docker installed?)")?;
     if list.status.success() {
         let present = !String::from_utf8_lossy(&list.stdout).trim().is_empty();

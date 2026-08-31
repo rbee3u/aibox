@@ -203,7 +203,22 @@ pub(crate) fn stop_container_left_by_child() -> bool {
     let Some(docker) = current_docker() else {
         return true;
     };
-    match container_state(&docker, &cid) {
+    let state = container_state(&docker, &cid);
+    stop_lingering_container_with(&cid, state, |cid| {
+        let _ = docker_quiet(&docker, &["kill", cid], DOCKER_KILL_TIMEOUT);
+    })
+}
+
+/// Apply the immediate post-client-exit cleanup policy to an observed
+/// container state. Keeping state inspection and the kill operation outside
+/// this coordinator lets the ordering policy be tested without subprocess
+/// scheduling, while production still uses the Docker CLI adapters above.
+fn stop_lingering_container_with(
+    cid: &str,
+    state: ContainerState,
+    mut kill_container: impl FnMut(&str),
+) -> bool {
+    match state {
         ContainerState::Stopped => return false,
         ContainerState::Running => {
             eprintln!(
@@ -217,7 +232,7 @@ pub(crate) fn stop_container_left_by_child() -> bool {
         }
     }
 
-    let _ = docker_quiet(&docker, &["kill", &cid], DOCKER_KILL_TIMEOUT);
+    kill_container(cid);
     true
 }
 
@@ -448,15 +463,33 @@ pub(crate) fn stop_active_run(sig: i32) {
         signal_child(sig);
         return;
     };
-    if let Some(cid) = wait_current_cid(CIDFILE_WAIT) {
-        stop_container_id(&docker, sig, &cid);
-        signal_child(sig);
+    stop_active_run_with(
+        sig,
+        wait_current_cid,
+        |sig, cid| stop_container_id(&docker, sig, cid),
+        signal_child,
+    );
+}
+
+/// Coordinate the two cidfile discovery phases around Docker child signaling.
+/// The production facade supplies the real polling, signal, and daemon-side
+/// cleanup adapters; tests script their results so the create-window policy
+/// does not depend on neighboring wall-clock deadlines.
+fn stop_active_run_with(
+    sig: i32,
+    mut wait_for_cid: impl FnMut(Duration) -> Option<String>,
+    mut stop_container: impl FnMut(i32, &str),
+    mut stop_child: impl FnMut(i32),
+) {
+    if let Some(cid) = wait_for_cid(CIDFILE_WAIT) {
+        stop_container(sig, &cid);
+        stop_child(sig);
         return;
     }
 
-    signal_child(sig);
-    if let Some(cid) = wait_current_cid(LATE_CIDFILE_WAIT) {
-        stop_container_id(&docker, sig, &cid);
+    stop_child(sig);
+    if let Some(cid) = wait_for_cid(LATE_CIDFILE_WAIT) {
+        stop_container(sig, &cid);
     }
 }
 
@@ -472,17 +505,52 @@ pub(crate) fn stop_active_run(sig: i32) {
 /// the CLI child is signalled. The post-wait orphan check takes a separate
 /// immediate-kill path because no attached client remains.
 pub(crate) fn stop_container_id(docker: &DockerCli, sig: i32, cid: &str) {
+    let mut grace_started = None;
+    stop_container_id_with(
+        sig,
+        cid,
+        |name, cid| {
+            let _ = docker_quiet(
+                docker,
+                &["kill", "--signal", name, cid],
+                DOCKER_KILL_TIMEOUT,
+            );
+        },
+        |cid| container_state(docker, cid),
+        || {
+            let started = grace_started.get_or_insert_with(Instant::now);
+            continue_container_grace(SIGNAL_COUNT.load(Ordering::SeqCst), started.elapsed())
+        },
+        std::thread::sleep,
+        |cid| {
+            let _ = docker_quiet(docker, &["kill", cid], DOCKER_KILL_TIMEOUT);
+        },
+    );
+}
+
+fn continue_container_grace(signal_count: usize, elapsed: Duration) -> bool {
+    signal_count <= 1 && elapsed < CONTAINER_GRACE
+}
+
+/// Apply graceful container-stop policy using caller-provided process and time
+/// adapters. Production supplies Docker commands, the signal counter, and
+/// bounded sleeping; tests script each observation and verify exact ordering.
+fn stop_container_id_with(
+    sig: i32,
+    cid: &str,
+    mut signal_container: impl FnMut(&str, &str),
+    mut container_state: impl FnMut(&str) -> ContainerState,
+    mut continue_grace: impl FnMut() -> bool,
+    mut wait: impl FnMut(Duration),
+    mut kill_container: impl FnMut(&str),
+) {
     let name = match sig {
         s if s == signal_hook::consts::SIGINT => "INT",
         s if s == signal_hook::consts::SIGHUP => "HUP",
         _ => "TERM",
     };
-    let _ = docker_quiet(
-        docker,
-        &["kill", "--signal", name, cid],
-        DOCKER_KILL_TIMEOUT,
-    );
-    if container_state(docker, cid) == ContainerState::Stopped {
+    signal_container(name, cid);
+    if container_state(cid) == ContainerState::Stopped {
         return;
     }
     // Say what the silence is (the grace wait), and how to cut it short: a
@@ -491,17 +559,13 @@ pub(crate) fn stop_container_id(docker: &DockerCli, sig: i32, cid: &str) {
     // under a supervisor that would escalate to an uncatchable SIGKILL and
     // leave the container running unsupervised.
     eprintln!(">> stopping the container (up to 10s; signal again to kill it now)");
-    let started = Instant::now();
-    while started.elapsed() < CONTAINER_GRACE {
-        if SIGNAL_COUNT.load(Ordering::SeqCst) > 1 {
-            break;
-        }
-        std::thread::sleep(CONTAINER_POLL_INTERVAL);
-        if container_state(docker, cid) == ContainerState::Stopped {
+    while continue_grace() {
+        wait(CONTAINER_POLL_INTERVAL);
+        if container_state(cid) == ContainerState::Stopped {
             return;
         }
     }
-    let _ = docker_quiet(docker, &["kill", cid], DOCKER_KILL_TIMEOUT);
+    kill_container(cid);
 }
 
 /// True if `sig` is currently ignored (SIG_IGN). Watching an ignored signal
@@ -657,3 +721,7 @@ impl Drop for RunRegistration {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "supervision_tests.rs"]
+mod tests;

@@ -33,8 +33,8 @@
   background: var(--warning-soft);
 }
 .indicator.help:hover {
-  color: var(--ink-secondary);
-  background: var(--surface-hover);
+  color: var(--accent);
+  background: var(--surface-selected);
 }
 .indicator:focus-visible {
   outline-offset: 1px;

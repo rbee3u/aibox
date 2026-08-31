@@ -1,12 +1,18 @@
 :root {
   color-scheme: light;
-  --bg-canvas: #eef1f5;
-  --bg-shell: #f7f8fa;
+  --bg-canvas: #f3f5f8;
+  --bg-shell: #fcfcfd;
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-inset: #f4f6f9;
-  --surface-hover: #f4f3ff;
+  /* Chrome hover (resources, Overview); intermediate between row wash and control float. */
+  --surface-hover: #f1f0ff;
+  /* Control float (action hover/open, segmented pressed); deeper than list selection. */
   --surface-selected: #eceaff;
+  /* Catalog/sidebar/menu list wash: row hover and selected share this; mark selection with bar/check. */
+  --surface-row-hover: var(--accent-subtle);
+  /* Quiet action resting fill: readable on near-white shell, quieter than accent-soft alone. */
+  --control-rest: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
   --line: #dce1e8;
   --line-soft: #e9edf2;
   --line-strong: #c5ccd6;
@@ -23,6 +29,8 @@
   --danger-strong: #96232b;
   --danger-soft: #fff0f1;
   --danger-line: #efc7ca;
+  /* Destructive action resting fill: softer than danger-soft alone. */
+  --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #0d7a55;
   --success-soft: #e8f7f1;
   --component-update-action: #0f766e;
@@ -93,6 +101,10 @@
   --catalog-row-primary-line-height: var(--line-height-sm);
   --catalog-row-secondary-size: 12px;
   --catalog-row-secondary-line-height: var(--line-height-xs);
+  /* Tenant/Agent filters: independent controls with catalog toolbar rhythm. */
+  --catalog-filter-control-max-width: 112px;
+  --catalog-toolbar-filters-gap: 8px;
+  --catalog-toolbar-cluster-gap: 14px;
   /*
    * Stacking order for surfaces that escape their own layout. Values inside a
    * single component's stacking context stay local literals.
@@ -120,8 +132,14 @@
   --surface: #191e28;
   --surface-raised: #1d2330;
   --surface-inset: #151a23;
-  --surface-hover: #23243a;
+  /* Chrome hover (resources, Overview); intermediate between row wash and control float. */
+  --surface-hover: #25253e;
+  /* Control float (action hover/open, segmented pressed); deeper than list selection. */
   --surface-selected: #292845;
+  /* Catalog/sidebar/menu list wash: row hover and selected share this; mark selection with bar/check. */
+  --surface-row-hover: #1f1e32;
+  /* Quiet action resting fill: deeper than row wash so chips float on hovered/selected rows. */
+  --control-rest: #242338;
   --line: #303744;
   --line-soft: #272e3a;
   --line-strong: #465061;
@@ -138,6 +156,7 @@
   --danger-strong: #ffabb0;
   --danger-soft: #3a2027;
   --danger-line: #6a343e;
+  --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #5bd4a4;
   --success-soft: #19372f;
   --component-update-action: #5bd4a4;

@@ -9,6 +9,7 @@ import {
   decodeUtf8,
   eventAbsoluteTime,
   eventRelativeTime,
+  isEncodedContentCoding,
   isJsonMediaType,
   isSseResponse,
   parseJson,
@@ -58,7 +59,11 @@ export function BodyViewer({
   const original = useMemo(() => concatChunks(bodyChunks), [bodyChunks]);
   const complete = bodyComplete(detail, kind);
   const sourceBytes =
-    coding.kind === "identity" ? original : coding.kind === "zstd" ? decoded.bytes : null;
+    coding.kind === "identity"
+      ? original
+      : isEncodedContentCoding(coding.kind)
+        ? decoded.bytes
+        : null;
   const decodedText = useMemo(
     () => (sourceBytes ? decodeUtf8(sourceBytes, complete) : null),
     [complete, sourceBytes],
@@ -77,7 +82,8 @@ export function BodyViewer({
     [canParse, decodedText, sse],
   );
   const jsonPretty = parsedJson?.ok === true;
-  const pendingDecode = coding.kind === "zstd" && decoded.bytes === null && decoded.error === null;
+  const pendingDecode =
+    isEncodedContentCoding(coding.kind) && decoded.bytes === null && decoded.error === null;
   const pendingPretty =
     coding.kind !== "unsupported" && ((declaredJson && !complete) || pendingDecode);
   const prettyAvailable = sse ? parsedEvents !== null : jsonPretty;
@@ -85,7 +91,7 @@ export function BodyViewer({
     memory.mode === "pretty" && (prettyAvailable || pendingPretty) ? "pretty" : "source";
   const canRenderLarge = large && !memory.renderLarge && decodedText?.ok === true;
   const originalSize = kind === "request" ? detail.request_body_bytes : detail.response_body_bytes;
-  const decodedSize = coding.kind === "zstd" ? sourceBytes?.length : undefined;
+  const decodedSize = isEncodedContentCoding(coding.kind) ? sourceBytes?.length : undefined;
 
   function copyBody() {
     if (decodedText?.ok) void copyBodyText(decodedText.text, true);
@@ -102,12 +108,11 @@ export function BodyViewer({
   } else if (bodyStatus === "idle") {
     bodyContent = <BodyState loading>Loading Body…</BodyState>;
   } else if (resolvedMode === "pretty" && pendingPretty) {
-    const message =
-      coding.kind === "zstd"
-        ? complete
-          ? "Decoding zstd Body…"
-          : "Waiting for the complete zstd Body before decoding…"
-        : "Waiting for the complete JSON Body…";
+    const message = isEncodedContentCoding(coding.kind)
+      ? complete
+        ? `Decoding ${coding.kind} Body…`
+        : `Waiting for the complete ${coding.kind} Body before decoding…`
+      : "Waiting for the complete JSON Body…";
     bodyContent = <BodyState loading>{message}</BodyState>;
   } else if (resolvedMode === "pretty" && parsedEvents) {
     bodyContent = (
@@ -451,8 +456,10 @@ function sourceMessage({
   if (prettyAvailable) return null;
   if (coding.kind === "unsupported") return coding.message;
   if (decoded.error) return decoded.error;
-  if (coding.kind === "zstd" && decoded.bytes === null) {
-    return complete ? "Decoding zstd Body." : "Waiting for the complete zstd Body before decoding.";
+  if (isEncodedContentCoding(coding.kind) && decoded.bytes === null) {
+    return complete
+      ? `Decoding ${coding.kind} Body.`
+      : `Waiting for the complete ${coding.kind} Body before decoding.`;
   }
   if (invalidUtf8) return "Decoded Body is not valid UTF-8; showing decoded bytes as hex.";
   if (large)

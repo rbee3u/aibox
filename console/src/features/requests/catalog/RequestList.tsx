@@ -231,7 +231,6 @@ export function RequestList({
                 }}
                 disabled={selected.size === 0 || deletionBusy}
                 aria-label="Delete selected"
-                title="Delete selected"
               >
                 <Trash2 size={14} aria-hidden="true" />
                 Delete
@@ -402,7 +401,6 @@ export function RequestList({
                             : `Delete ${request.method} ${target.label}`
                       }
                       aria-busy={deletingRequestId === request.id}
-                      title={active ? undefined : `Delete ${request.method} ${target.label}`}
                     >
                       {deletingRequestId === request.id ? (
                         <LoaderCircle className="spin" size={15} aria-hidden="true" />

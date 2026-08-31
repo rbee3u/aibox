@@ -24,10 +24,10 @@ use anyhow::{Context, Result};
 use std::ffi::OsString;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 #[cfg(test)]
-use std::sync::{Mutex, atomic::Ordering};
+use std::sync::Mutex;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
@@ -38,7 +38,9 @@ pub(crate) use image_ops::image_exists_with;
 #[cfg(test)]
 use image_ops::image_ref_for_exact_ls;
 pub use image_ops::{BuildCache, image_exists};
-pub(crate) use image_ops::{build_image_for_service, inspect_runtime_image};
+pub(crate) use image_ops::{
+    RuntimeImageInspection, build_image_for_service, inspect_runtime_image,
+};
 #[cfg(test)]
 pub(crate) use image_ops::{build_image_with, inspect_runtime_image_with};
 
@@ -93,6 +95,48 @@ impl DockerCli {
             command.env_clear().envs(env.iter().cloned());
         }
         command
+    }
+
+    /// Run `docker <args>` to completion and collect its output, with the same
+    /// `ETXTBSY` tolerance as [`Self::spawn`].
+    fn output<I, S>(&self, args: I) -> std::io::Result<std::process::Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        let mut command = self.command();
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        self.spawn(&mut command)?.wait_with_output()
+    }
+
+    /// Spawn `command`, absorbing a transient `ETXTBSY` from a stub program.
+    ///
+    /// Only an isolated CLI retries. A test writes its stub script and execs it
+    /// immediately, while `fork` on any other test thread briefly duplicates
+    /// that file's writable descriptor into the child; exec fails with
+    /// `ETXTBSY` until the descriptor closes. Stub writes and forks happen in
+    /// different modules, so no test-local lock can order them. A real
+    /// `docker` binary is never mid-write, so `ETXTBSY` there is a genuine
+    /// failure and is reported unchanged.
+    fn spawn(&self, command: &mut Command) -> std::io::Result<Child> {
+        let mut result = command.spawn();
+        if self.isolated_env.is_none() {
+            return result;
+        }
+        for attempt in 0..50u64 {
+            match result {
+                Err(ref error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(attempt.min(4) + 1));
+                    result = command.spawn();
+                }
+                _ => break,
+            }
+        }
+        result
     }
 }
 
@@ -197,7 +241,7 @@ fn run_with_mode(
     if log.is_some() {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
     }
-    let spawned = command.spawn();
+    let spawned = docker.spawn(&mut command);
     let child = match spawned {
         Ok(child) => child,
         Err(error) => {

@@ -45,13 +45,17 @@ references between them.
   Request aggregate has no dependency on Console or HTTP presentation.
 - `src/service/` is the Root-local Service composition root. `state.rs` owns
   private shared state, `operation.rs` owns ephemeral Management Operations,
-  `coordination/` owns concrete management coordinators, and `control/` owns
-  Axum routes, feature wire DTOs, response helpers, Console assets, the
-  Rust-owned contract exporter, and all Control adapters including Requests.
+  `coordination/` owns one concrete coordinator per management domain (Tenant,
+  Config, Component, Session, Request, Overview, and Management Operation), and
+  `control/` owns Axum routes, feature wire DTOs, response helpers, Console
+  assets, the Rust-owned contract exporter, and all Control adapters including
+  Requests. Every adapter reaches its domain through a coordinator and otherwise
+  imports only the domain types it converts to wire types.
   `control/routes.rs` declares each route once through `control_routes!`, which
   emits both the path constants and the test-facing endpoint manifest. Handlers
   return `ControlResult` so wire decoding, selector parsing, and coordinator
-  calls use `?` instead of repeating an error match.
+  calls use `?` instead of repeating an error match, and every failure uses the
+  one `{"error": "<message>"}` envelope `api_error` builds.
 - `src/docker/run.rs` owns child spawning/output capture and
   `src/docker/supervision.rs` owns cidfile/child/signal cleanup registration;
   `console/src/api/generated/routes.ts` is a test-only route manifest generated
@@ -70,9 +74,12 @@ references between them.
   subdirectories own what only one concern uses. Overview keeps `topology/` and
   `components/` because it has neither a catalog nor a detail pane.
   `features/common/` holds what several features share but `shared/` cannot,
-  because it needs both an `api/` wire type and a `shared/ui` type: the catalog
-  selection reducer, Tenant and Agent option builders, the focus registry, and
-  cross-feature test fixtures. The minimal `domain/` holds only cross-feature
+  because it needs both an `api/` wire type and a `shared/ui` type: the one
+  catalog selection reducer all four catalog features compose, including its
+  optional per-row context for a selection that spans pages, plus Tenant and
+  Agent option builders, the focus registry, and cross-feature test fixtures.
+  Each catalog feature owns a workflow reducer for state spanning several
+  actions and delegates the `selection_*` actions to that shared machine. The minimal `domain/` holds only cross-feature
   identities and invariants, and `shared/` holds API-independent UI primitives,
   hooks, and library code. `api/generated/` is Rust-owned and `assets/console.*`
   is generated output; use `docs/console-ui.md`.
@@ -246,10 +253,14 @@ checks explicit and ignored, and run them only in a network-permitted host or
 CI environment. Test the embedded UI in layers: Rust route/API tests,
 then Vitest module and component tests for the React and TypeScript source in
 `console/`, then optional headless Chromium/Playwright interaction and
-screenshots in a development image or CI. Edit that source rather than the
-generated `assets/console.*` bundle, as `docs/console-ui.md` describes. Desktop
-Browser access is never required for routine changes. A headless browser uses
-the same container's loopback listener.
+screenshots, which run the same way on a host and inside the Runtime Image.
+Keep the optional Chromium project on the bundled browser rather than an
+installed Chrome channel, and do not add host-only Firefox or WebKit projects.
+Edit that source rather than the generated `assets/console.*` bundle, as
+`docs/console-ui.md` describes. Desktop Browser access is never required for
+routine changes. A headless browser uses the same container's loopback listener.
+Rolldown and Lightning CSS bind natively per platform, so never share one
+`node_modules` between a host and a container.
 
 **Keep execution transient and the crate application-only.** Do not add Run History or a
 Run-to-Session mapping. The Control API is Console-internal, not a public Rust
@@ -274,10 +285,13 @@ checks for a container that outlived the Docker client.
 during the build.
 
 **Keep mutable runtimes out of the Runtime Image.** The fixed image provides
-only the shared OS, shell, build, download, and diagnostic substrate. Python,
-uv, Node.js, Codex, Claude, Rust, and Go belong to Managed Tenant Components and
-must not be installed or pinned by the Dockerfile. Transitive ABI libraries
-needed by system diagnostics do not make their application runtime image-owned.
+only the shared OS, shell, build, download, diagnostic, font, and browser-ABI
+substrate. Python, uv, Node.js, Codex, Claude, Rust, and Go belong to Managed
+Tenant Components and must not be installed or pinned by the Dockerfile.
+Transitive ABI libraries needed by system diagnostics, and the shared fonts and
+libraries a headless Chromium links against, do not make their application
+runtime image-owned: the image installs no browser, and Firefox and WebKit
+system libraries stay host-owned.
 
 **Keep every test suite in `<module>_tests.rs`.** A Rust module's tests live in
 a sibling file reached through `#[cfg(test)] #[path = ...] mod tests;`, and a
@@ -292,19 +306,18 @@ feature root.
 non-test caller stays private, and its tests enter through the type or facade
 that production code uses. Adding a `pub` item or a `#[cfg(test)]` wrapper so a
 test can reach past a facade defeats the invariant that facade exists to hold.
+The Rust-owned contract exporter is the one named exception: `ts_rs` will not
+export a nested wire type unless `service/control/contract.rs` names it, so a
+facade may re-export such a type under `#[cfg(test)]`. Keep those re-exports
+`cfg(test)` and never mask them with a blanket `allow(unused_imports)`, which
+would also hide a re-export that has genuinely died.
 
 ## Checks
 
-For Rust changes, run all of these:
-
-- `cargo fmt --check`
-- `cargo test`
-- `cargo clippy --all-targets -- -D warnings`
-
-For embedded Requests UI changes, also run the complete socket-free frontend
-check:
-
-- `make console-check`
+Run the complete socket-free project check with `make check`. During focused
+iteration, `make rust-check` runs Rust formatting plus locked Cargo test and
+Clippy checks, while `make console-check` runs Console formatting, types,
+Vitest, ESLint, contract, and embedded-asset checks.
 
 Keep the real-browser Playwright checks explicit and optional because they bind
 a loopback listener.

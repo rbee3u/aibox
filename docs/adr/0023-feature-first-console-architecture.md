@@ -30,10 +30,24 @@ dependency cycle. The batch-selection state machine lives here as one reducer:
 four features had implemented it separately and had already diverged on action
 names, field names, and whether a recovered selection resumes.
 
+Consolidating it initially reached only three of the four. Requests kept a
+separate hook because it alone records per-row context: it paginates, so a batch
+can span pages the list no longer shows and a delete must return to the earliest
+page it touched. That context is now an optional second type parameter on the
+shared reducer, so all four compose one machine and `selection_toggle_all` adds
+and removes the listed keys instead of replacing the whole selection — identical
+for a catalog that lists every selectable key at once, and correct for one that
+does not. Requests still leaves selection mode after any batch delete while
+Sessions resumes what survived a partial failure; that difference is a
+deliberate per-feature choice, not divergence in the machine.
+
 Feature controllers return grouped view models instead of flat bags of state,
 setters, refs, and commands. All four catalog features group catalog, detail,
 selection, mutation, dialog, and feedback ownership while leaving independent
-editor or streaming lifecycles in focused hooks. A hook whose result spans more
+editor or streaming lifecycles in focused hooks. All four also own a workflow
+reducer for the state that spans multiple actions; Requests grouped its view
+model before it had one, so its selection, dialog, and in-flight delete stayed
+in loose `useState` calls that read like a flat bag from inside. A hook whose result spans more
 than one group returns those groups itself, so a controller spreads them rather
 than forwarding each field and a new field needs one edit instead of three.
 Large pure models remain behind stable feature facades: Overview separates tree,

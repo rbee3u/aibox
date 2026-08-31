@@ -1,4 +1,4 @@
-use super::{json_error, json_response};
+use super::super::{api_error, json_response};
 use crate::request::{
     AssessmentFinding, AssessmentLevel, AssessmentSource, ProtocolSummary, RecordedHeader,
     RequestAssessment, RequestDetailReadError, RequestInspection, RequestMetadata,
@@ -53,8 +53,8 @@ pub(crate) async fn list_requests(
     let inspection = state.inspection();
     match tokio::task::spawn_blocking(move || list_requests_inner(&inspection, query.page)).await {
         Ok(Ok(value)) => json_response(StatusCode::OK, &value),
-        Ok(Err(error)) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
-        Err(error) => json_error(
+        Ok(Err(error)) => api_error(StatusCode::BAD_REQUEST, &error.to_string()),
+        Err(error) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("scan Requests: {error}"),
         ),
@@ -272,12 +272,12 @@ pub(crate) async fn request_detail(
             )
         }
         Ok(Err(RequestDetailReadError::Lookup(error))) => {
-            json_error(StatusCode::NOT_FOUND, &error.to_string())
+            api_error(StatusCode::NOT_FOUND, &error.to_string())
         }
         Ok(Err(RequestDetailReadError::EventIndex(error))) => {
-            json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
         }
-        Err(error) => json_error(
+        Err(error) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("read Request detail: {error}"),
         ),

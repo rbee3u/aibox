@@ -78,7 +78,7 @@
 
 .sessionRow:hover,
 .sessionRow:focus-within {
-  background: var(--surface-hover);
+  background: var(--surface-row-hover);
 }
 
 .currentSessionRow,
@@ -87,7 +87,7 @@
 .sessionRowSelected,
 .sessionRowSelected:hover,
 .sessionRowSelected:focus-within {
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .currentSessionRow::before {
@@ -208,23 +208,15 @@
   place-items: center;
   border-color: transparent;
   padding: 0;
-  color: var(--muted);
-  background: transparent;
-  opacity: 0.2;
-}
-
-.sessionRow:hover .sessionDelete,
-.sessionRow:focus-within .sessionDelete,
-.currentSessionRow .sessionDelete,
-.sessionDelete:focus-visible,
-.sessionDelete[aria-busy="true"] {
+  color: var(--danger);
+  background: var(--control-danger-rest);
   opacity: 1;
 }
 
 .sessionDelete:hover:not(:disabled),
 .sessionDelete:focus-visible {
-  border-color: var(--danger-line);
-  color: var(--danger);
+  border-color: transparent;
+  color: var(--danger-strong);
   background: var(--danger-soft);
 }
 

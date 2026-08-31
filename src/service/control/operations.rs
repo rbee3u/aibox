@@ -1,6 +1,6 @@
 //! Management Operation Control API handlers and wire commands.
 
-use super::{busy, json_response, result_error};
+use super::{ControlResult, busy, json_response};
 use crate::service::coordination::OperationCoordinator;
 use crate::service::state::ServiceState;
 use async_stream::stream;
@@ -90,14 +90,12 @@ pub(super) async fn cancel_operation(
     State(state): State<ServiceState>,
     Path(id): Path<String>,
     Json(_request): Json<Value>,
-) -> Response<Body> {
-    match OperationCoordinator::new(state).cancel(&id) {
-        Ok(()) => json_response(
-            StatusCode::ACCEPTED,
-            &CancelledOperationResponse { cancelled: id },
-        ),
-        Err(error) => result_error(error),
-    }
+) -> ControlResult {
+    OperationCoordinator::new(state).cancel(&id)?;
+    Ok(json_response(
+        StatusCode::ACCEPTED,
+        &CancelledOperationResponse { cancelled: id },
+    ))
 }
 
 #[derive(Serialize)]

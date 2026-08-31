@@ -217,12 +217,10 @@ function ThemeMenu({
     <>
       <ActionButton
         className={`${styles.utilityItem} ${styles.themeButton}`}
-        tone="quiet"
         ref={triggerRef}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Color theme: ${activeOption.label}`}
-        title={collapsed ? `Color theme: ${activeOption.label}` : undefined}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={handleTriggerKeyDown}
       >
@@ -251,7 +249,6 @@ function ThemeMenu({
                 <ActionButton
                   className={styles.themeOption}
                   key={option.value}
-                  tone="quiet"
                   role="menuitemradio"
                   aria-checked={selected}
                   ref={(element) => {

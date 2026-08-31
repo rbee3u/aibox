@@ -6,6 +6,7 @@ import type { TenantViewModel } from "@/features/tenants/useTenantController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { ActionButton } from "@/shared/ui/ActionButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
@@ -141,14 +142,15 @@ export function TenantCatalogPane({
             )}
             <div className={layout.divider}>
               <span>Managed Tenants</span>
-              <IconButton
+              <ActionButton
                 className={layout.addAction}
-                label="Create Managed Tenant"
+                aria-label="Create Managed Tenant"
                 disabled={mutationBusy || refreshing || selectionMode}
                 onClick={openCreateDialog}
               >
-                <Plus size={15} />
-              </IconButton>
+                <Plus size={15} aria-hidden="true" />
+                Create
+              </ActionButton>
             </div>
             {managedTenants.map((row) => {
               const key = tenantSelectionValueOf(row);
@@ -197,6 +199,7 @@ export function TenantCatalogPane({
                     <div className={layout.rowActions}>
                       <IconButton
                         className={`${layout.rowAction} ${layout.rowDeleteAction}`}
+                        tone="danger"
                         label={`Delete Tenant ${row.display_name}`}
                         disabled={mutationBusy}
                         onClick={() => requestTenantDelete([row.name])}

@@ -2,10 +2,11 @@
 
 The Console is a React and TypeScript application under `console/`. It
 contains Overview, Tenants/Components, Configs, Sessions, and the complete
-Requests module. A host Node and npm installation is used only to build this
-frontend; the Tenant-local Node Component is unrelated. The Rust binary
-continues to embed the generated files in `assets/console.html`,
-`assets/console.css`, and `assets/console.js`.
+Requests module. Build it with the Node and npm installation in the current
+development environment: host Node on macOS, or the selected Managed Tenant's
+Node Component when developing inside AIBox. The Rust binary continues to
+embed the generated files in `assets/console.html`, `assets/console.css`, and
+`assets/console.js`.
 
 ## Requirements
 
@@ -18,14 +19,27 @@ tree with:
 make console-ci
 ```
 
+Rolldown and Lightning CSS resolve a platform-specific native binding, so a
+`node_modules` installed on one platform cannot serve another. Separate macOS
+and AIBox development clones naturally isolate both `node_modules` and Cargo's
+`target/`; run `make console-ci` once in each clone. When sharing one Workspace
+instead, give the container its own dependency tree with
+`-m <host-dir>:/workspace/console/node_modules`.
+
 ## Common Commands
 
 ```sh
+make format             # Format Rust and Console sources
+make build              # Build embedded Console assets, then the Rust CLI
+make test               # Run Rust and Console tests
+make lint               # Lint Rust and Console sources
+make check              # Run every socket-free project check
+make rust-check         # Run only Rust format, test, and lint checks
 make console-format     # Format frontend source files
 make console-build      # Generate the three embedded assets
 make console-test       # Vitest module and React interaction tests
 make console-lint       # ESLint frontend source files
-make console-check      # Format check, typecheck, build, node check, test, lint
+make console-check      # Format, type, Vitest, lint, contract, and asset checks
 make console-contract   # Update committed Rust-owned wire bindings and samples
 make console-contract-check # Compare committed contracts with a temporary export
 make console-assets-check   # Compare committed assets with a temporary build
@@ -66,20 +80,26 @@ relative geometry instead — that names share a leading edge, that a split acti
 matches the width of its plain counterpart, that a menu stays right-aligned with
 its trigger, and that nothing overflows horizontally.
 
-Optional desktop browser smoke tests use a loopback-only Vite development
-listener. They deliberately avoid committed screenshot baselines and remain
-separate from the routine socket-free checks:
+Two optional Chromium smoke tests use a loopback-only Vite development
+listener. They cover the responsive Requests workflow and Config editor modes,
+avoid visual baselines and pixel-level geometry assertions, and remain separate
+from the routine socket-free checks:
 
 ```sh
-npm --prefix console run test:chrome        # Installed stable Chrome
-npm --prefix console run test:browsers      # Firefox and WebKit behavior smoke
+npm --prefix console run test:chromium
 ```
 
-The browser smoke projects require the matching optional Playwright browsers:
+Download Playwright's browser once in each development environment:
 
 ```sh
-npm --prefix console exec playwright install firefox webkit
+npm --prefix console exec playwright install chromium
 ```
+
+The project deliberately uses bundled Chromium rather than an installed Chrome
+channel, so it runs the same way on macOS and Linux and inside the Runtime
+Image; Google publishes no Linux arm64 Chrome. The Runtime Image carries the
+shared fonts and ABI libraries that Chromium links against, so a Debug Shell
+needs only the browser download.
 
 There is intentionally no required Vite development server. Generate the
 assets, then rebuild and launch the Rust binary so its `include_str!` inputs
@@ -115,7 +135,8 @@ barrel files, so every import names the module it uses.
 it, because the module needs both an `api/` wire type and a `shared/ui` type.
 `tenantOptions.tsx` is the motivating case: it turns Control API Tenant rows
 into Selection Menu options. It also holds `catalogSelection.ts`, the one
-batch-selection reducer every catalog page composes; `useElementRegistry.ts`,
+batch-selection reducer all four catalog pages compose, including its optional
+per-row context for a catalog whose selection spans pages; `useElementRegistry.ts`,
 the keyed focus registry pages use to move focus to a row; and
 `testFixtures.ts`, the Tenant rows several features' tests assume. It sits
 outside the features-may-not-import-each-other rule so every feature may use it,
@@ -231,11 +252,11 @@ and compares embedded HTML, CSS, and JavaScript. Both gates run under `make
 console-check`.
 
 Shared cross-domain behavior lives in `shared/hooks/`: `usePolling` runs an
-interval that never overlaps its own request, `useCatalogSelection` holds batch
-selection with an optional per-row context, `useNarrowDetailFocus` moves focus
+interval that never overlaps its own request, `useNarrowDetailFocus` moves focus
 into a one-pane detail, `useFailureNotifications` collects per-source failure
 notices, and `useAsyncResource` loads values through a caller-supplied adapter
-function. `shared/lib/latestRequest.ts` owns abort and stale-response
+function. Batch selection is not here: it needs an `api/` wire key type, so it
+lives in `features/common/catalogSelection.ts` as one reducer. `shared/lib/latestRequest.ts` owns abort and stale-response
 ownership; shared code never imports API DTOs. `shared/lib/errors.ts` owns
 message extraction and cancellation detection.
 
@@ -282,13 +303,40 @@ light or dark choices are persisted, and `data-resolved-theme` selects the
 palette before React renders.
 
 Small AIBox-owned UI primitives in `src/shared/ui/` provide ordinary actions,
-text inputs, text areas, checkboxes, native selects, icon buttons, and anchored
-tooltips. Shared section headers and alert banners provide the same narrow
-presentation contract for ordinary Console surfaces. They use native HTML semantics and CSS Modules rather than a general
-visual or headless UI framework. Their props remain native except for narrow
-AIBox contracts such as action tone and a checkbox's boolean change callback.
-Use these primitives for ordinary controls; keep specialized domain interaction
-with the structure that owns it.
+text inputs, text areas, checkboxes, native selects, and icon buttons. Shared
+section headers and alert banners provide the same narrow presentation contract
+for ordinary Console surfaces. They use native HTML semantics and CSS Modules
+rather than a general visual or headless UI framework. Their props remain native
+except for narrow AIBox contracts such as action tone and a checkbox's boolean
+change callback. Use these primitives for ordinary controls; keep specialized
+domain interaction with the structure that owns it.
+
+Ordinary Console chrome shares a soft-surface ladder with catalog rows and
+sidebar module navigation. Resting fills stay role-specific (toolbar actions and
+filter triggers use a quiet `--control-rest` chip; sidebar Theme and collapse
+controls rest transparent on the shell). Catalog rows, sidebar module links,
+SelectionMenu options, and Theme menu options share the lightest wash,
+`--surface-row-hover`, for both hover and selected/current states—shallow
+enough that an in-row Apply chip on `--control-rest` still reads as a separate
+control. Selection itself is marked by the left accent bar, a trailing check,
+or a checkbox rather than a deeper fill. Soft action hover or open states use
+the deeper `--surface-selected` wash with accent ink so a hovered control floats
+above a selected row. Sidebar resource links and other chrome such as Overview
+tiles keep the intermediate `--surface-hover` tier so a hovered GitHub link
+never matches a list wash or a hovered action. Pressed (`:active`) soft actions
+keep the hover colors and only sink slightly. Segmented view toggles
+(Visual/Raw, Pretty/Source) rest transparent with muted ink and use the same
+`--surface-selected` + accent pair when hovered or pressed. The danger tone
+rests on a diluted danger chip (`--control-danger-rest`) with danger ink, and
+hover uses `--danger-soft` with deeper `--danger-strong` ink—never a solid
+danger fill with light ink. Only `focus-visible` draws a focus ring. Prefer an
+icon followed by a short label. Keep icon-only controls for navigation chrome,
+compact tools, and destructive Remove/Delete trash actions; keep text-only
+controls for Cancel, Select all / Clear variants, Details, pagination, and
+SelectionMenu footer actions. Those text-only controls still use the same
+default soft-surface pair.
+Self-explanatory actions do not show a visual tooltip; icon-only controls rely
+on `aria-label`.
 
 CSS Modules continue to own domain layout and presentation. Do not replace the
 Overview topology, resource catalogs, Session conversation, CodeMirror,
@@ -378,55 +426,61 @@ The Managed Tenant Components catalog contains Codex, Claude, their two
 statuslines, Node.js, Python, Rust, and Go; the Host Tenant contains only the
 two statuslines. A fixed 64-pixel detail toolbar presents `Components` as its
 primary task and keeps the selected Tenant, abbreviated Home, installed ratio,
-nonzero issue count, Latest Release check time, and icon-only check action as
-compact context. Container-width breakpoints progressively hide Home, the
-installed ratio, and the visible check time while retaining the Tenant,
+nonzero issue count, Latest Release check time, and the Check for updates
+action as compact context. Container-width breakpoints progressively hide Home,
+the installed ratio, and the visible check time while retaining the Tenant,
 nonzero issues, and check action. Managed catalogs use three presentation-only
 groups: Coding Agents, Statuslines, and Runtimes & Toolchains. They are
 unframed sections with short labels and separators rather than cards; the Host
 catalog omits the two empty groups.
 
 `Check for updates` refreshes local state and the Service-wide Latest Release
-snapshot. The page header owns the not-checked or last-checked observation;
-rows do not repeat a Service-wide `Latest not checked` placeholder. Component
-rows are quiet, non-selectable 52-pixel list items with a fixed two-line
-information block. The first line contains a bare Component brand icon and
-compact name; statuslines use the shared waveform icon. The second line keeps
-the local Installed State and only the necessary observed Latest Release.
-Equal Installed and Latest versions do not repeat Latest, and missing
-observations have no placeholder. Normal confirmation labels such as
-`Definition current`, version `Current`, and `Update available` stay silent;
-an available Update is expressed by its action, while exceptional inspection
-states retain their badges. Diagnostic text is available from a visible
-**Details** control. Group and Component order remains stable across state
-changes.
+snapshot and appears as an ordinary icon-plus-label default action. The page
+header owns the not-checked or last-checked observation; rows do not repeat a
+Service-wide `Latest not checked` placeholder. Component rows are quiet,
+non-selectable 52-pixel list items with a fixed two-line information block. The
+first line contains a bare Component brand icon and compact name; statuslines
+use the shared waveform icon. The second line keeps the local Installed State
+and only the necessary observed Latest Release. Equal Installed and Latest
+versions do not repeat Latest, and missing observations have no placeholder.
+Normal confirmation labels such as `Definition current`, version `Current`, and
+`Update available` stay silent; an available Update is expressed by its action,
+while exceptional inspection states retain their badges. Diagnostic text is
+available from a visible text-only **Details** control. Group and Component
+order remains stable across state changes.
 
 The horizontal action group sits independently at the row end and is centered
-against both information lines rather than aligned with either line. Install
-uses a lightly filled indigo treatment, Update uses a solid teal treatment,
-and Repair or Restore uses a light warning treatment. Remove is an icon-only
-quiet action with a tooltip and destructive confirmation. Version menus fit
-their action phrase and remain right-aligned with the split trigger. Default
-installation is the primary half of a split action whose menu accepts an exact
-`X.Y.Z` version. A checked versioned Component with a
-higher Latest Release uses the same split treatment for Update: the primary
-action selects Latest, while the menu accepts any exact version newer than
-Installed. The installer remains responsible for determining whether that
-version exists. Equal versions create no Operation; downgrades retain the
-explicit Remove-then-install workflow. Statusline
-`modified` state shows a `Modified` badge and an unversioned Update action.
-Remove remains a visible, quiet, separate destructive action with confirmation.
-Unmanaged state is diagnostic only and exposes neither Install nor Remove,
-because the Console cannot claim foreign launchers safely.
+against both information lines rather than aligned with either line. Install,
+Update, Repair, Restore, and Retry inspection all use the shared default action
+pair. Remove is an icon-only danger action with destructive confirmation.
+Version menus fit their action phrase and remain right-aligned with the split
+trigger. A split Install or Update action shares one default pair across both
+halves so hover fills the whole control. Default installation is the primary
+half of a split action whose menu accepts an exact `X.Y.Z` version. A checked
+versioned Component with a higher Latest Release uses the same split treatment
+for Update: the primary action selects Latest, while the menu accepts any exact
+version newer than Installed. The installer remains responsible for determining
+whether that version exists. Equal versions create no Operation; downgrades
+retain the explicit Remove-then-install workflow. Statusline `modified` state
+shows a `Modified` badge and an unversioned Update action. Remove remains a
+visible, separate destructive action with confirmation. Unmanaged state is
+diagnostic only and exposes neither Install nor Remove, because the Console
+cannot claim foreign launchers safely.
 
 The Tenants, Configs, Sessions, and Requests catalog shells share one visual rhythm:
 44-pixel ordinary toolbars, 30-36 pixel controls, aligned leading icons,
 14-pixel semibold primary text,
-12-pixel secondary text, quiet destructive actions, and the same hover,
-selection, and focus treatment for their navigable rows. The Tenant Component
-list is the deliberate exception: its rows are static and use unframed
-sections, bare Component icons, a 52-pixel desktop rhythm, and row-local
-progress in the second information line for the active Component Operation.
+12-pixel secondary text, the shared soft-surface default and danger action
+pairs, and the same hover, selection, and focus treatment for their navigable
+rows. On Configs and Sessions, the Tenant and Coding Agent filters are two
+independent selectors with an 8-pixel gap between them and a 14-pixel gap before
+the toolbar actions; each is capped near 112 pixels wide and shares the quiet
+resting fill plus soft-surface hover and open states of other toolbar controls.
+The Tenant
+Component list is the deliberate exception: its rows are static and use
+unframed sections, bare Component icons, a 52-pixel desktop rhythm, and
+row-local progress in the second information line for the active Component
+Operation.
 Its detail pane uses container-width breakpoints to move the intact horizontal
 action group below the information block before allowing it to wrap, without
 changing the Console's master/detail navigation. Each selected detail starts
@@ -534,8 +588,11 @@ places Cancel on the left, the selected count and Select page in the center,
 and Delete on the right, then copies the pagination bar underneath so a
 consecutive page walk can stay at the top of the list.
 
-React hooks own pagination, selection, body offsets, request cancellation, and
-the 5-second list / 3-second active-Request polling. The Summary is
+`requestsWorkflow.ts` owns batch selection, the confirmation dialog, and the
+delete in flight, recording the page each Request was selected on so a batch
+spanning pages returns to the earliest one. React hooks own pagination, body
+offsets, request cancellation, and the 5-second list / 3-second active-Request
+polling. The Summary is
 the default detail tab, and request/response bodies load only for the visible
 body tab. Formatting and binary decoding stay in pure functions covered by
 Vitest.
@@ -597,11 +654,11 @@ The Body routes named below are suffixes of `/_aibox/api/requests/{id}/`:
 
 The read-only `request-body-decoded` and `response-body-decoded` Requests module
 routes accept no coding, an empty coding, `identity`, or one case-insensitive
-`zstd` coding. Rust streams zstd decoding from a blocking worker; unsupported
-or combined codings do not alter the raw Body. An active encoded Body must be
-complete before it can be decoded. Source can show a partially received
-identity Body, while an incomplete zstd Body is explicitly shown as encoded
-hex until decoding is possible.
+`zstd` or `gzip` coding. Rust streams encoded decoding from a blocking worker;
+unsupported or combined codings do not alter the raw Body. An active encoded
+Body must be complete before it can be decoded. Source can show a partially
+received identity Body, while an incomplete encoded Body is explicitly shown as
+encoded hex until decoding is possible.
 
 JSON uses a lossless parser so Pretty and per-value Copy retain the source
 spelling of numbers outside JavaScript's safe range. Duplicate object keys,
@@ -634,8 +691,8 @@ timestamp in a tooltip using the Requests module's existing timezone convention.
 Content-encoded event streams retain their exact encoded bytes but do not get
 an event index, because decoded Event boundaries cannot be mapped to exact raw
 byte offsets; the decoded Pretty view remains available after a supported zstd
-Body is complete. A zstd event stream is interpreted only after complete EOF
-and does not synthesize First Token or per-Event timing.
+or gzip Body is complete. A content-coded event stream is interpreted only
+after complete EOF and does not synthesize First Token or per-Event timing.
 
 ## Protocol Summary
 

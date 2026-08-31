@@ -3,12 +3,18 @@
 mod component;
 mod config;
 mod operation;
+mod overview;
+mod request;
 mod session;
 mod tenant;
 
 pub(super) use component::{ComponentCoordinator, ComponentInstallation};
 pub(super) use config::{ConfigCoordinator, ConfigFileView, DeleteConfigsCommand};
 pub(super) use operation::OperationCoordinator;
+pub(super) use overview::{
+    OverviewCoordinator, OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot,
+};
+pub(super) use request::RequestCoordinator;
 pub(super) use session::{DeleteSessionsCommand, SessionCoordinator};
 pub(super) use tenant::{DeleteTenantsCommand, TenantCatalogEntry, TenantCoordinator};
 

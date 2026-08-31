@@ -144,54 +144,60 @@ pub(super) async fn prepare_upstream<S>(
     body: Body,
     url: &Url,
     sender: &S,
-) -> Result<(S::Connection, Body), Response<Body>>
+) -> Result<(S::Connection, Body), Box<Response<Body>>>
 where
     S: UpstreamSender,
 {
     let connection = tokio::select! {
         () = state.shutdown.cancelled() => {
-            return Err(finish_proxy_response(
+            return Err(Box::new(finish_proxy_response(
                 guard,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "AIBox Request Proxy is shutting down",
                 Outcome::ServerShutdown,
                 ErrorKind::ServerShutdown,
-            ));
+            )));
         }
         result = sender.connect(url, state.allow_private_upstream) => result,
     };
     match connection {
         Ok(connection) => Ok((connection, body)),
-        Err(UpstreamConnectError::NonPublic(message)) => Err(reject_with_body(
-            guard,
-            body,
-            state.shutdown.clone(),
-            StatusCode::FORBIDDEN,
-            &message,
-            Outcome::Rejected,
-            ErrorKind::NonPublicTarget,
-        )
-        .await),
-        Err(UpstreamConnectError::Dns(message)) => Err(reject_with_body(
-            guard,
-            body,
-            state.shutdown.clone(),
-            StatusCode::BAD_GATEWAY,
-            &message,
-            Outcome::UpstreamError,
-            ErrorKind::DnsError,
-        )
-        .await),
-        Err(UpstreamConnectError::ClientConfiguration(message)) => Err(reject_with_body(
-            guard,
-            body,
-            state.shutdown.clone(),
-            StatusCode::BAD_GATEWAY,
-            &message,
-            Outcome::UpstreamError,
-            ErrorKind::ClientConfiguration,
-        )
-        .await),
+        Err(UpstreamConnectError::NonPublic(message)) => Err(Box::new(
+            reject_with_body(
+                guard,
+                body,
+                state.shutdown.clone(),
+                StatusCode::FORBIDDEN,
+                &message,
+                Outcome::Rejected,
+                ErrorKind::NonPublicTarget,
+            )
+            .await,
+        )),
+        Err(UpstreamConnectError::Dns(message)) => Err(Box::new(
+            reject_with_body(
+                guard,
+                body,
+                state.shutdown.clone(),
+                StatusCode::BAD_GATEWAY,
+                &message,
+                Outcome::UpstreamError,
+                ErrorKind::DnsError,
+            )
+            .await,
+        )),
+        Err(UpstreamConnectError::ClientConfiguration(message)) => Err(Box::new(
+            reject_with_body(
+                guard,
+                body,
+                state.shutdown.clone(),
+                StatusCode::BAD_GATEWAY,
+                &message,
+                Outcome::UpstreamError,
+                ErrorKind::ClientConfiguration,
+            )
+            .await,
+        )),
     }
 }
 

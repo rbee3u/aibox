@@ -1,6 +1,7 @@
-import { AlertTriangle, LoaderCircle, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
@@ -31,6 +32,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId();
   const [typed, setTyped] = useState("");
+  const [copied, copy] = useClipboardFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const enabled = !confirmation || typed === confirmation;
@@ -52,7 +54,20 @@ export function ConfirmDialog({
         {description}
         {confirmation && (
           <label className={styles.confirmation}>
-            Type <code>{confirmation}</code> to confirm
+            <span className={styles.confirmationPrompt}>
+              Type{" "}
+              <button
+                type="button"
+                className={styles.confirmationPhrase}
+                onClick={() => void copy(confirmation, true)}
+                aria-label={copied ? `Copied ${confirmation}` : `Copy ${confirmation}`}
+                title={copied ? "Copied" : "Click to copy"}
+              >
+                <code>{confirmation}</code>
+                {copied ? <Check size={12} aria-hidden="true" /> : null}
+              </button>{" "}
+              to confirm
+            </span>
             <TextInput
               ref={inputRef}
               value={typed}

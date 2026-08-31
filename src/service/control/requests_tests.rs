@@ -1,7 +1,12 @@
 use super::*;
 use crate::request::{
-    ObservedRequest, Outcome, ProtocolDiagnostic, RequestStore, RuntimeMeasurements,
+    ObservedRequest, Outcome, ProtocolDiagnostic, RequestProxyState, RequestStore,
+    RuntimeMeasurements,
 };
+use crate::service::tests::test_state;
+use axum::body::Body;
+use axum::http::Response;
+use axum::response::IntoResponse as _;
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use std::io::Write as _;
@@ -524,7 +529,7 @@ async fn body_api_streams_exact_offsets_and_reports_invalid_ranges() {
 }
 
 #[tokio::test]
-async fn decoded_body_api_handles_identity_and_zstd_without_changing_raw_bytes() {
+async fn decoded_body_api_handles_identity_zstd_and_gzip_without_changing_raw_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
     let identity_id = finished_request(&store, "/identity", b"plain request", b"");
@@ -596,6 +601,49 @@ async fn decoded_body_api_handles_identity_and_zstd_without_changing_raw_bytes()
             expected_raw.as_slice()
         );
     }
+
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    let gzip_source = br#"{"result":"gzip-response"}"#;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(gzip_source).unwrap();
+    let gzip_compressed = encoder.finish().unwrap();
+    let (mut gzip_request, _) = store.begin(ObservedRequest::test("POST", "/gzip")).unwrap();
+    gzip_request.request_body.write_all(b"{}").unwrap();
+    gzip_request
+        .response_body
+        .write_all(&gzip_compressed)
+        .unwrap();
+    store
+        .write_response(
+            &gzip_request.locator,
+            &gzip_request.summary,
+            &ResponseMetadata {
+                format_version: crate::request::format_version(),
+                source: ResponseSource::Upstream,
+                headers_at: "2026-08-09T00:00:00Z".to_string(),
+                status: 200,
+                http_version: "HTTP/2".to_string(),
+                headers: vec![recorded_header("content-encoding", "gzip")],
+            },
+        )
+        .unwrap();
+    let gzip_id = gzip_request.id.clone();
+    store
+        .finish(
+            &gzip_request,
+            std::time::Instant::now(),
+            &RuntimeMeasurements::default(),
+            Outcome::Completed,
+            None,
+        )
+        .unwrap();
+    let gzip_decoded = decoded_body_response(inspection(&store), &gzip_id, true).await;
+    assert_eq!(gzip_decoded.status(), StatusCode::OK);
+    assert_eq!(
+        gzip_decoded.into_body().collect().await.unwrap().to_bytes(),
+        gzip_source.as_slice()
+    );
 }
 
 #[tokio::test]
@@ -752,13 +800,14 @@ async fn event_timing_api_reports_a_missing_index_as_unavailable() {
     assert!(body["warning"].as_str().unwrap().contains("unavailable"));
 }
 
+/// Deletion goes through `RequestCoordinator`, so it takes `ServiceState` and
+/// the shared management gate rather than `RequestProxyState` directly.
 #[tokio::test]
 async fn deletion_api_maps_selection_conflicts_and_successes() {
     let temp = tempfile::tempdir().unwrap();
-    let state = RequestProxyState::for_test(temp.path()).unwrap();
-    let (active, _) = state
-        .inspection()
-        .store()
+    let state = test_state(temp.path());
+    let store = state.request().inspection().store();
+    let (active, _) = store
         .begin(ObservedRequest::test("GET", "/active"))
         .unwrap();
 
@@ -768,12 +817,11 @@ async fn deletion_api_maps_selection_conflicts_and_successes() {
             ids: vec![active.id.clone()],
         }),
     )
-    .await;
+    .await
+    .into_response();
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
 
-    state
-        .inspection()
-        .store()
+    store
         .finish(
             &active,
             std::time::Instant::now(),
@@ -782,14 +830,15 @@ async fn deletion_api_maps_selection_conflicts_and_successes() {
             None,
         )
         .unwrap();
-    let second = finished_request(&state.inspection().store(), "/delete-selected", b"", b"");
+    let second = finished_request(&store, "/delete-selected", b"", b"");
     let deleted = delete_requests(
         State(state),
         Json(DeleteRequest {
             ids: vec![active.id, second],
         }),
     )
-    .await;
+    .await
+    .into_response();
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(response_json(deleted).await, json!({"deleted": 2}));
 }

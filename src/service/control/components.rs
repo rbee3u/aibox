@@ -1,11 +1,10 @@
 //! Component Control API handlers and wire types.
 
 use super::{ControlResult, default_tenant_selection, json_response};
-use crate::component::{self, ComponentInspection, ComponentKind, ComponentStatus, LatestSnapshot};
+use crate::component::{ComponentInspection, ComponentKind, ComponentStatus, LatestSnapshot};
 use crate::service::coordination::{ComponentCoordinator, ComponentInstallation};
 use crate::service::state::ServiceState;
-use crate::tenant::{Tenant, TenantSelection};
-use anyhow::Result;
+use crate::tenant::TenantSelection;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -68,11 +67,10 @@ pub(super) async fn list_components(
     ))
 }
 
-pub(super) fn component_rows(selected: &Tenant) -> Result<Vec<ComponentRow>> {
-    Ok(component_rows_from(component::inspect_catalog(selected)?))
-}
-
-fn component_rows_from(inspections: Vec<ComponentInspection>) -> Vec<ComponentRow> {
+/// Project native Component inspections onto the stable wire rows.
+///
+/// Shared with the Topology view, which embeds the same rows per Tenant.
+pub(super) fn component_rows_from(inspections: Vec<ComponentInspection>) -> Vec<ComponentRow> {
     inspections
         .into_iter()
         .map(|inspection| {

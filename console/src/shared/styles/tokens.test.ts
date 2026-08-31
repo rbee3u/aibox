@@ -19,6 +19,9 @@ const themeTokens = [
   "surface-inset",
   "surface-hover",
   "surface-selected",
+  "surface-row-hover",
+  "control-rest",
+  "control-danger-rest",
   "line",
   "line-soft",
   "line-strong",
@@ -110,6 +113,9 @@ describe("Console CSS theme tokens", () => {
         contrastRatio(tokens.get("accent")!, tokens.get("surface-selected")!),
       ).toBeGreaterThanOrEqual(4.5);
       expect(
+        contrastRatio(tokens.get("danger-strong")!, tokens.get("danger-soft")!),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
         contrastRatio(tokens.get("warning")!, tokens.get("warning-soft")!),
       ).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(tokens.get("focus")!, tokens.get("surface")!)).toBeGreaterThanOrEqual(3);
@@ -125,6 +131,35 @@ describe("Console CSS theme tokens", () => {
     expect(light.get("row-height-roomy")).toBe("54px");
     expect(light.get("radius-sm")).toBe("5px");
     expect(light.get("radius-md")).toBe("6px");
+  });
+
+  it("keeps the catalog Tenant/Agent filter toolbar rhythm centralized", () => {
+    expect(light.get("catalog-filter-control-max-width")).toBe("112px");
+    expect(light.get("catalog-toolbar-filters-gap")).toBe("8px");
+    expect(light.get("catalog-toolbar-cluster-gap")).toBe("14px");
+  });
+
+  it("keeps chrome hover between list wash and control float in both themes", () => {
+    expect(light.get("surface-hover")).toBe("#f1f0ff");
+    expect(light.get("surface-selected")).toBe("#eceaff");
+    expect(dark.get("surface-hover")).toBe("#25253e");
+    expect(dark.get("surface-selected")).toBe("#292845");
+    expect(light.get("surface-hover")).not.toBe(light.get("surface-selected"));
+    expect(dark.get("surface-hover")).not.toBe(dark.get("surface-selected"));
+  });
+
+  it("keeps list wash distinct from control rest and control float", () => {
+    expect(light.get("surface-row-hover")).toBe("var(--accent-subtle)");
+    expect(light.get("accent-subtle")).toBe("#f8f7ff");
+    expect(dark.get("surface-row-hover")).toBe("#1f1e32");
+    expect(dark.get("control-rest")).toBe("#242338");
+    expect(dark.get("surface-selected")).toBe("#292845");
+    for (const tokens of [light, dark]) {
+      // List hover and selected share --surface-row-hover; float uses --surface-selected.
+      expect(tokens.get("surface-row-hover")).not.toBe(tokens.get("control-rest"));
+      expect(tokens.get("surface-row-hover")).not.toBe(tokens.get("surface-selected"));
+      expect(tokens.get("control-rest")).not.toBe(tokens.get("surface-selected"));
+    }
   });
 
   it("keeps the escaping-surface stacking order centralized and ordered", () => {

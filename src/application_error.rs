@@ -3,7 +3,6 @@
 use std::fmt;
 
 /// Stable application failure categories independent of wording or transport.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApplicationErrorKind {
     /// The decoded command or selected structural view is invalid.

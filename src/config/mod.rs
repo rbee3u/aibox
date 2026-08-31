@@ -27,8 +27,8 @@ pub(crate) use auth::{PropagationEntry, PropagationOutcome, PropagationPreviewEn
 #[cfg(test)]
 pub(crate) use catalog::ConfigCatalogState;
 pub(crate) use catalog::{
-    ConfigCatalogEntry, create_named_config, delete_named_configs, inspect_current_config,
-    inspect_named_configs,
+    ConfigCatalogEntry, CurrentConfigInspection, create_named_config, delete_named_configs,
+    inspect_current_config, inspect_named_configs,
 };
 pub(crate) use definition::{application_status, apply_named_config};
 #[cfg(test)]

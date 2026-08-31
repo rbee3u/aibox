@@ -9,19 +9,12 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "desktop-chrome",
-      testMatch: "**/*.chrome.spec.ts",
-      use: { ...devices["Desktop Chrome"], channel: "chrome" },
-    },
-    {
-      name: "desktop-firefox",
-      testMatch: "**/*.smoke.spec.ts",
-      use: { ...devices["Desktop Firefox"] },
-    },
-    {
-      name: "desktop-webkit",
-      testMatch: "**/*.smoke.spec.ts",
-      use: { ...devices["Desktop Safari"] },
+      // Bundled Chromium rather than an installed Chrome channel, because
+      // Google ships no Linux arm64 Chrome and this project must run the same
+      // way on a host and inside the Linux image.
+      name: "chromium",
+      testMatch: "**/*.chromium.spec.ts",
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
   webServer: {

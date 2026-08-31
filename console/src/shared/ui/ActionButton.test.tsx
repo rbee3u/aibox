@@ -21,6 +21,9 @@ describe("ActionButton", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toHaveClass(styles.danger);
     expect(screen.getByRole("button", { name: "More" })).toHaveClass(styles.quiet);
     expect(screen.getByRole("button", { name: "Apply" })).toHaveAttribute("type", "button");
+    // primary/quiet share the default soft-accent resting pair; danger keeps soft red.
+    expect(styles.default).not.toEqual(styles.danger);
+    expect(styles.primary).not.toEqual(styles.danger);
   });
 
   it("supports native form submission semantics", async () => {

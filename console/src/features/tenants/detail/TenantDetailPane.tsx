@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Clipboard, RefreshCw } from "lucide-react";
+import { Check, ChevronLeft, Clipboard } from "lucide-react";
 
 import { ComponentCatalogSkeleton } from "@/features/tenants/detail/ComponentCatalogSkeleton";
 import { ComponentRowItem } from "@/features/tenants/detail/ComponentRowItem";
@@ -8,6 +8,7 @@ import { resourceIcons } from "@/shared/icons/consoleIcons";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
+import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/tenants/TenantPage.module.css";
 
 const ManagedTenantIcon = resourceIcons.managedTenant;
@@ -134,19 +135,14 @@ export function TenantDetailPane({
                     <span>Not checked</span>
                   )}
                 </div>
-                <IconButton
+                <RefreshButton
                   className={styles.componentCheckButton}
-                  label={checkingLatest ? "Checking for updates" : "Check for updates"}
-                  aria-busy={checkingLatest || undefined}
+                  label="Check for updates"
+                  busy={checkingLatest}
+                  busyLabel="Checking for updates"
                   disabled={checkingLatest}
                   onClick={() => void checkForUpdates()}
-                >
-                  <RefreshCw
-                    className={checkingLatest ? "spin" : undefined}
-                    size={15}
-                    aria-hidden="true"
-                  />
-                </IconButton>
+                />
               </div>
             </div>
           </div>

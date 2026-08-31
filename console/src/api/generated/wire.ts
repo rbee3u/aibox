@@ -3,8 +3,7 @@
 export type JsonValue = number | boolean | string | JsonValue[] | { [key: string]: JsonValue };
 export type AgentKind = "claude" | "codex";
 export type AgentTenantQuery = { tenant: string, agent: AgentKind, };
-export type ControlErrorBody = { code: number, message: string, };
-export type ControlErrorResponse = { error: ControlErrorBody, };
+export type ControlErrorResponse = { error: string, };
 export type ComponentQuery = { tenant: string, };
 export type ComponentMutation = { tenant: string, component: ComponentKind, version: string | null, };
 export type ComponentKind = "node" | "codex" | "claude" | "python" | "claude-statusline" | "codex-statusline" | "rust" | "go";
@@ -67,7 +66,6 @@ export type EventTimingResponse = { state: EventTimingState, events: Array<Event
 export type EventTimingState = "available" | "unavailable" | "partial";
 export type DeleteRequest = { ids: Array<string>, };
 export type DeletedRequestsResponse = { deleted: number, };
-export type RequestApiError = { error: string, };
 export type RecordedHeader = { name: string, value_base64: string, };
 export type RequestMetadata = { format_version: number, id: string, started_at: string, method: string, incoming_uri: string, upstream_url: string | null, http_version: string, headers: Array<RecordedHeader>, };
 export type ResponseSource = "upstream" | "proxy";

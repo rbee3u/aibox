@@ -10,7 +10,7 @@ fn header(name: &str, value: &[u8]) -> RecordedHeader {
 }
 
 #[test]
-fn body_content_coding_accepts_identity_and_one_case_insensitive_zstd_only() {
+fn body_content_coding_accepts_identity_and_one_case_insensitive_coding() {
     assert_eq!(
         body_content_coding(&[]).unwrap(),
         BodyContentCoding::Identity
@@ -23,18 +23,14 @@ fn body_content_coding_accepts_identity_and_one_case_insensitive_zstd_only() {
         body_content_coding(&[header("CONTENT-ENCODING", b" ZsTd ")]).unwrap(),
         BodyContentCoding::Zstd
     );
-    for (value, expected) in [
-        (
-            b"identity, zstd".as_slice(),
-            "unsupported Content-Encoding \"identity, zstd\"",
-        ),
-        (b"gzip".as_slice(), "unsupported Content-Encoding \"gzip\""),
-    ] {
-        let error = body_content_coding(&[header("content-encoding", value)])
-            .unwrap_err()
-            .to_string();
-        assert_eq!(error, expected, "{value:?}");
-    }
+    assert_eq!(
+        body_content_coding(&[header("content-encoding", b" GzIp ")]).unwrap(),
+        BodyContentCoding::Gzip
+    );
+    let error = body_content_coding(&[header("content-encoding", b"identity, zstd")])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, "unsupported Content-Encoding \"identity, zstd\"");
 
     let invalid_utf8 = header("content-encoding", &[0xff]);
     assert_eq!(
@@ -253,6 +249,38 @@ fn zstd_response_metadata_is_interpreted_after_the_recorded_body_is_complete() {
     let summary = observer.snapshot();
     assert_eq!(summary.model.effective.as_deref(), Some("gpt-compressed"));
     assert_eq!(summary.token_usage.unwrap().output_tokens, Some(4));
+    assert!(summary.response_terminal);
+}
+
+#[test]
+fn gzip_response_metadata_is_interpreted_after_the_recorded_body_is_complete() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let response_path = temp.path().join("response.gzip");
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(
+            br#"{"type":"message","model":"claude-compressed","usage":{"input_tokens":12,"output_tokens":4}}"#,
+        )
+        .unwrap();
+    fs::write(&response_path, encoder.finish().unwrap()).unwrap();
+    let headers = [RecordedHeader {
+        name: "content-encoding".to_string(),
+        value_base64: base64::engine::general_purpose::STANDARD.encode("gzip"),
+    }];
+    let mut observer = ProtocolObserver::new(Some("https://example.test/v1/messages"));
+
+    assert!(observer.observe_json_response(&response_path, 200, &headers, "20".to_string()));
+    let summary = observer.snapshot();
+    assert_eq!(
+        summary.model.effective.as_deref(),
+        Some("claude-compressed")
+    );
+    assert_eq!(summary.token_usage.unwrap().output_tokens, Some(4));
+    assert!(summary.warnings.is_empty());
     assert!(summary.response_terminal);
 }
 

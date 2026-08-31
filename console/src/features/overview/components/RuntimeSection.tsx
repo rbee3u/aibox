@@ -85,24 +85,18 @@ export function RuntimeSection({
             </span>
           )}
           <ActionButton
-            tone="primary"
             disabled={buildDisabled}
             aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
-            title={buildUnavailableReason ?? "Build Runtime Image using Docker cache"}
             onClick={() => onBuild(false)}
           >
-            <Hammer size={15} /> Build
+            <Hammer size={15} aria-hidden="true" /> Build
           </ActionButton>
           <ActionButton
             disabled={buildDisabled}
             aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
-            title={
-              buildUnavailableReason ??
-              "Re-run every layer without cache and pull a fresh base image"
-            }
             onClick={() => onBuild(true)}
           >
-            <RefreshCw size={15} /> Build without cache
+            <RefreshCw size={15} aria-hidden="true" /> Build without cache
           </ActionButton>
         </div>
       </div>

@@ -159,12 +159,6 @@
   height: 24px;
   min-height: 24px;
   flex: 0 0 24px;
-  opacity: 0.62;
-}
-
-.componentHome:hover .componentHomeCopy,
-.componentHomeCopy:focus-visible {
-  opacity: 1;
 }
 
 .componentHeaderMeta {
@@ -205,10 +199,6 @@
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.componentCheckButton {
-  color: var(--ink-secondary);
 }
 
 .componentCheckButton:disabled,
@@ -396,19 +386,11 @@
   gap: 4px;
 }
 
-.componentDetailsButton {
-  color: var(--ink-secondary);
-}
-
-.componentDetailsButton:hover:not(:disabled),
-.componentDetailsButton:focus-visible {
-  color: var(--accent);
-}
-
 .componentSplitAction {
   display: flex;
-  width: 92px;
+  width: 93px;
   align-items: stretch;
+  gap: 1px;
 }
 
 .componentSplitPrimary {
@@ -433,54 +415,18 @@
   width: 28px;
   min-width: 28px;
   flex: 0 0 28px;
-  margin-left: -1px;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding-right: 5px;
   padding-left: 5px;
-  box-shadow: inset 1px 0 rgb(24 32 44 / 0.12);
 }
 
-.componentInstallAction {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.componentInstallAction:hover:not(:disabled),
-.componentInstallAction:focus-visible {
-  border-color: var(--accent-strong);
+.componentSplitAction:hover .componentSplitPrimary:not(:disabled),
+.componentSplitAction:hover .componentSplitTrigger:not(:disabled),
+.componentSplitAction:focus-within .componentSplitPrimary:not(:disabled),
+.componentSplitAction:focus-within .componentSplitTrigger:not(:disabled) {
+  border-color: transparent;
   color: var(--accent);
   background: var(--surface-selected);
-}
-
-.componentUpdateAction {
-  border-color: var(--component-update-action);
-  color: var(--component-update-action-ink);
-  background: var(--component-update-action);
-}
-
-.componentUpdateAction:hover:not(:disabled),
-.componentUpdateAction:focus-visible {
-  border-color: var(--component-update-action-hover);
-  color: var(--component-update-action-ink);
-  background: var(--component-update-action-hover);
-}
-
-.componentRepairAction {
-  border-color: var(--warning-line);
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-
-.componentRepairAction:hover:not(:disabled),
-.componentRepairAction:focus-visible {
-  border-color: var(--warning);
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-
-.componentRetryAction {
-  color: var(--ink-secondary);
 }
 
 .componentMoreMenu {
@@ -510,7 +456,8 @@
 .componentMoreMenu button:hover,
 .componentMoreMenu button:focus-visible {
   border-color: transparent;
-  background: var(--surface-hover);
+  color: var(--accent);
+  background: var(--surface-selected);
 }
 
 .componentDiagnostic {
@@ -524,18 +471,6 @@
   font-size: var(--text-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
-}
-
-.componentRemoveAction {
-  width: var(--control-compact);
-  color: var(--muted);
-}
-
-.componentRemoveAction:hover:not(:disabled),
-.componentRemoveAction:focus-visible {
-  border-color: var(--danger-line);
-  color: var(--danger);
-  background: var(--danger-soft);
 }
 
 .componentSkeletonRow {

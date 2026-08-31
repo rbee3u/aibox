@@ -354,11 +354,3 @@ fn run_rejects_invalid_mount_before_initialization() {
     assert!(error.contains("mount host path does not exist"), "{error}");
     assert!(!fx.root.path().join("tenants/default").exists());
 }
-
-#[test]
-fn removed_commands_are_rejected_by_clap() {
-    for command in ["completion", "tenant", "component", "config", "session"] {
-        let error = Cli::try_parse_from(["aibox", command]).unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
-    }
-}

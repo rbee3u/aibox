@@ -2,13 +2,13 @@
 
 use super::request_stream::{RequestStreamContext, RequestStreamFailure, RequestTarget};
 use crate::foundation::sync::lock_unpoisoned;
-use crate::request::interpretation::ProtocolObserver;
+use crate::request::interpretation::{BodyContentCoding, ProtocolObserver};
 use crate::request::model::{
     DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolSummary, RecordedHeader,
     TimingMetadata,
 };
 use crate::request::reporter::RequestReporter;
-use crate::request::response_observation::replay_complete_zstd_sse;
+use crate::request::response_observation::replay_complete_encoded_sse;
 use crate::request::sse::ObservedSseEvent;
 use crate::request::store::{NewRequest, RequestStore, RuntimeMeasurements, offset_ns};
 use std::fs::File;
@@ -248,7 +248,10 @@ impl RequestAttempt {
         self.publish_protocol(observer.snapshot())
     }
 
-    pub(super) fn observe_encoded_sse_response(&self) -> anyhow::Result<()> {
+    pub(super) fn observe_encoded_sse_response(
+        &self,
+        coding: BodyContentCoding,
+    ) -> anyhow::Result<()> {
         let at_ns = offset_ns(self.request.origin);
         let opened = self
             .store
@@ -265,13 +268,14 @@ impl RequestAttempt {
                 return Ok(());
             }
         };
-        let observation = match replay_complete_zstd_sse(file, self.request.id.clone(), &at_ns) {
-            Ok(observation) => observation,
-            Err(error) => {
-                self.add_warning("response_interpretation_failed", error.to_string());
-                return Ok(());
-            }
-        };
+        let observation =
+            match replay_complete_encoded_sse(file, coding, self.request.id.clone(), &at_ns) {
+                Ok(observation) => observation,
+                Err(error) => {
+                    self.add_warning("response_interpretation_failed", error.to_string());
+                    return Ok(());
+                }
+            };
         if let Some(warning) = observation.warning {
             self.add_warning("response_interpretation_failed", warning);
         }

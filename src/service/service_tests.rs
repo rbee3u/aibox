@@ -6,7 +6,7 @@ use http_body_util::BodyExt as _;
 use serde_json::Value;
 use tower::ServiceExt as _;
 
-pub(super) fn test_state(root: &Path) -> ServiceState {
+pub(crate) fn test_state(root: &Path) -> ServiceState {
     let host_home = root.join("host-home");
     fs::create_dir(&host_home).unwrap();
     let shutdown = CancellationToken::new();
@@ -725,6 +725,11 @@ async fn every_management_mutation_returns_conflict_without_filesystem_changes_w
                 "confirmation": "111111111111"
             }),
         ),
+        (
+            "delete Request",
+            "/_aibox/api/requests/delete",
+            serde_json::json!({"ids": ["11111111-1111-1111-1111-111111111111"]}),
+        ),
     ];
 
     for (label, path, body) in cases {
@@ -736,7 +741,7 @@ async fn every_management_mutation_returns_conflict_without_filesystem_changes_w
         assert_eq!(response.status(), StatusCode::CONFLICT, "{label}");
         let body = response_json(response).await;
         assert_eq!(
-            body["error"]["message"], "another management mutation is running",
+            body["error"], "another management mutation is running",
             "{label}"
         );
         assert_eq!(filesystem_snapshot(root.path()), before, "{label}");

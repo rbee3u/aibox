@@ -62,7 +62,7 @@ describe("SessionPage", () => {
       screen.getByRole("button", {
         name: "Delete Session 111111111111 from Tenant default · Codex",
       }),
-    ).toHaveAttribute("title", "Delete Session 111111111111 from Tenant default Codex");
+    ).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Select Sessions" })).toHaveTextContent("Select");
     await user.click(agentTrigger);

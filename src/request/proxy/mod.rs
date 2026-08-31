@@ -75,7 +75,7 @@ where
 
     let (connection, body) = match prepare_upstream(&state, &mut guard, body, &url, sender).await {
         Ok(prepared) => prepared,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let expected_body_bytes = declared_content_length(&parts.headers);
@@ -87,7 +87,7 @@ where
     let request_stream =
         match prepare_recorded_request_stream(&mut guard, body, request_context).await {
             Ok(stream) => stream,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     let headers = forwarded_headers(&parts.headers);
     let upstream_request = UpstreamRequest {

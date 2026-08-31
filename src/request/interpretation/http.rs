@@ -4,25 +4,40 @@ use super::wire::RequestEnvelope;
 use crate::request::model::{ProtocolFamily, RecordedHeader};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BodyContentCoding {
     Identity,
     Zstd,
+    Gzip,
+}
+
+impl BodyContentCoding {
+    pub(crate) fn is_encoded(self) -> bool {
+        !matches!(self, Self::Identity)
+    }
 }
 
 pub(super) fn parse_request(path: &Path, headers: &[RecordedHeader]) -> Result<RequestEnvelope> {
     let file = crate::foundation::safe_fs::open_real_file(path, "Incoming HTTP Request body")?;
-    match body_content_coding(headers)? {
-        BodyContentCoding::Identity => serde_json::from_reader(file),
+    let coding = body_content_coding(headers)?;
+    let mut reader = body_reader(file, coding)?;
+    serde_json::from_reader(&mut reader).context("parse request JSON")
+}
+
+pub(crate) fn body_reader(file: File, coding: BodyContentCoding) -> Result<Box<dyn Read + Send>> {
+    match coding {
+        BodyContentCoding::Identity => Ok(Box::new(file)),
         BodyContentCoding::Zstd => {
             let decoder =
-                zstd::stream::read::Decoder::new(file).context("create zstd request decoder")?;
-            serde_json::from_reader(decoder)
+                zstd::stream::read::Decoder::new(file).context("create zstd body decoder")?;
+            Ok(Box::new(decoder))
         }
+        BodyContentCoding::Gzip => Ok(Box::new(flate2::read::GzDecoder::new(file))),
     }
-    .context("parse request JSON")
 }
 
 pub(crate) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyContentCoding> {
@@ -49,6 +64,7 @@ pub(crate) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyCont
     match codings.as_slice() {
         [coding] if coding == "identity" => Ok(BodyContentCoding::Identity),
         [coding] if coding == "zstd" => Ok(BodyContentCoding::Zstd),
+        [coding] if coding == "gzip" => Ok(BodyContentCoding::Gzip),
         _ => bail!("unsupported Content-Encoding {:?}", codings.join(", ")),
     }
 }

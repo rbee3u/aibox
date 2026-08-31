@@ -2,6 +2,14 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
+// CodeMirror probes canvas text metrics, while jsdom deliberately does not
+// implement a rendering context. Returning null exercises CodeMirror's native
+// fallback without adding a platform-specific canvas package or noisy errors.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: () => null,
+});
+
 if (!globalThis.ResizeObserver) {
   class TestResizeObserver implements ResizeObserver {
     readonly #callback: ResizeObserverCallback;

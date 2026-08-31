@@ -107,11 +107,11 @@
 
 .request:hover,
 .request:focus-within {
-  background: var(--surface-hover);
+  background: var(--surface-row-hover);
 }
 
 .current {
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .current::before {
@@ -120,7 +120,7 @@
 
 .request.current:hover,
 .request.current:focus-within {
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .selectionRecord.current {
@@ -129,7 +129,7 @@
 
 .selectionRecord:not(.unselectable):hover,
 .selectionRecord:not(.unselectable):focus-within {
-  background: var(--surface-hover);
+  background: var(--surface-row-hover);
 }
 
 .selectionRecord.unselectable {
@@ -139,7 +139,7 @@
 .selectionRecord.selected,
 .selectionRecord.selected:hover,
 .selectionRecord.selected:focus-within {
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .rowButton {
@@ -280,22 +280,15 @@
   place-items: center;
   border-color: transparent;
   padding: 0;
-  color: var(--muted);
-  background: transparent;
-  opacity: 0.16;
-}
-
-.request:hover .deleteRecord,
-.request:focus-within .deleteRecord,
-.current .deleteRecord,
-.deleteRecord:focus-visible {
+  color: var(--danger);
+  background: var(--control-danger-rest);
   opacity: 1;
 }
 
 .deleteRecord:hover:not(:disabled),
 .deleteRecord:focus-visible {
-  border-color: var(--danger-line);
-  color: var(--danger);
+  border-color: transparent;
+  color: var(--danger-strong);
   background: var(--danger-soft);
 }
 
@@ -304,7 +297,6 @@
     width: 44px;
     height: 44px;
     min-height: 44px;
-    opacity: 1;
   }
 }
 
@@ -358,9 +350,18 @@
 
 .pageTurn {
   min-height: 30px;
+  border-color: transparent;
   padding: 5px 7px;
-  color: var(--muted);
+  color: var(--ink-secondary);
+  background: var(--control-rest);
   font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.pageTurn:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--surface-selected);
 }
 
 .headerPagination {

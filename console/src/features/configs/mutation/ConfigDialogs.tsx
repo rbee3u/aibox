@@ -70,16 +70,16 @@ export function ConfigDialogs({
               before continuing?
             </p>
             <div className={styles.dialogActions}>
-              <button type="button" onClick={cancelPending} disabled={busy}>
+              <ActionButton type="button" onClick={cancelPending} disabled={busy}>
                 Cancel
-              </button>
-              <button
+              </ActionButton>
+              <ActionButton
                 type="button"
                 onClick={() => void discardAndRunPendingAction()}
                 disabled={busy}
               >
                 Discard and continue
-              </button>
+              </ActionButton>
               <ActionButton
                 tone="primary"
                 onClick={() => void savePending(saveOrder)}
@@ -127,9 +127,9 @@ export function ConfigDialogs({
             )}
             {createError && <div className={styles.inlineWarning}>{createError}</div>}
             <div className={styles.dialogActions}>
-              <button type="button" onClick={closeCreateDialog} disabled={busy}>
+              <ActionButton type="button" onClick={closeCreateDialog} disabled={busy}>
                 Cancel
-              </button>
+              </ActionButton>
               <ActionButton
                 type="submit"
                 tone="primary"
@@ -280,9 +280,9 @@ export function ConfigDialogs({
               )}
             </div>
             <div className={styles.dialogActions}>
-              <button type="button" onClick={closePropagation}>
+              <ActionButton type="button" onClick={closePropagation}>
                 Close
-              </button>
+              </ActionButton>
               {preview && (
                 <ActionButton
                   tone="primary"

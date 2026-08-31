@@ -71,31 +71,31 @@ pub(super) async fn prepare_recorded_request_stream(
     context: RequestStreamContext,
 ) -> Result<
     impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
-    Response<Body>,
+    Box<Response<Body>>,
 > {
     let request_file = match guard.clone_request_body() {
         Ok(file) => tokio::fs::File::from_std(file),
         Err(error) => {
-            return Err(recording_failure(
+            return Err(Box::new(recording_failure(
                 guard,
                 format!("clone request body file: {error}"),
-            ));
+            )));
         }
     };
     if let Err(error) = guard.mark_timing(|timing| {
         timing.upstream_request_started_at_ns = Some(guard.at_ns());
     }) {
-        return Err(recording_failure(
+        return Err(Box::new(recording_failure(
             guard,
             format!("checkpoint request timing: {error:#}"),
-        ));
+        )));
     }
     if context.expected_body_bytes == Some(0) {
         if let Err(error) = request_file.sync_all().await {
-            return Err(recording_failure(
+            return Err(Box::new(recording_failure(
                 guard,
                 format!("sync request body: {error}"),
-            ));
+            )));
         }
         guard.mark_request_body_finished();
         if let Err(error) = checkpoint_request_complete(
@@ -105,10 +105,10 @@ pub(super) async fn prepare_recorded_request_stream(
             &context.request_headers,
             offset_ns(context.origin),
         ) {
-            return Err(recording_failure(
+            return Err(Box::new(recording_failure(
                 guard,
                 format!("checkpoint request completion: {error:#}"),
-            ));
+            )));
         }
     }
     Ok(recorded_request_stream_with_summary(

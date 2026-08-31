@@ -314,7 +314,6 @@ export function OverviewPage(props: OverviewPageProps) {
                 type="button"
                 className={styles.zoomValue}
                 disabled={!topologyMetrics}
-                title="Reset topology zoom to 100%"
                 aria-label={`Reset topology zoom to 100% (currently ${Math.round(topologyZoom * 100)}%)`}
                 onClick={resetZoom}
               >

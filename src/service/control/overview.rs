@@ -1,14 +1,15 @@
 //! Overview and Topology Control API read projections.
 
-use super::{ComponentRow, blocking, component_rows};
+use super::{ComponentRow, ControlResult, component_rows_from, json_response};
 use crate::agent::AgentKind;
+use crate::config;
+use crate::service::coordination::{
+    OverviewCoordinator, OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot,
+};
 use crate::service::state::ServiceState;
-use crate::tenant::{self, ManagedTenant, Tenant};
-use crate::{config, docker};
 use axum::Json;
-use axum::body::Body;
 use axum::extract::State;
-use axum::http::Response;
+use axum::http::StatusCode;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -75,73 +76,65 @@ pub(crate) struct RequestOverview {
     bytes: u64,
 }
 
-pub(super) async fn overview(State(state): State<ServiceState>) -> Response<Body> {
-    let root = state.root();
-    let host_home = state.host_home();
-    let image = state.image();
-    let request = state.request().inspection();
-    let listen = state.listen();
-    let uptime = state.uptime_seconds();
-    blocking(move || {
-        let tenants = tenant::list_tenants(&root)?;
-        let host_available = crate::foundation::safe_fs::real_dir_exists(&host_home, "Host Home")?;
-        let (docker, runtime_image) = match docker::inspect_runtime_image(image.as_str()) {
-            Ok(inspection) => (
-                DockerOverview {
-                    status: "available",
-                    error: None,
-                },
-                RuntimeImageOverview {
-                    reference: image.to_string(),
-                    status: if inspection.present {
-                        "built"
-                    } else {
-                        "missing"
-                    },
-                    id: inspection.id,
-                    created_at: inspection.created_at,
-                    size_bytes: inspection.size_bytes,
-                    detail: inspection.detail,
-                },
-            ),
-            Err(error) => (
-                DockerOverview {
-                    status: "unavailable",
-                    error: Some(format!("{error:#}")),
-                },
-                RuntimeImageOverview {
-                    reference: image.to_string(),
-                    status: "unknown",
-                    id: None,
-                    created_at: None,
-                    size_bytes: None,
-                    detail: None,
-                },
-            ),
-        };
-        let captured_requests = request.overview()?;
-        let requests = RequestOverview {
-            total: captured_requests.total,
-            active: captured_requests.active,
-            warning: captured_requests.warning,
-            error: captured_requests.error,
-            bytes: captured_requests.bytes,
-        };
-        Ok(OverviewResponse {
-            service: ServiceOverview {
-                version: env!("CARGO_PKG_VERSION"),
-                listen: listen.to_string(),
-                uptime_seconds: uptime,
-                aibox_root: root.display().to_string(),
+pub(super) async fn overview(State(state): State<ServiceState>) -> ControlResult {
+    let snapshot = OverviewCoordinator::new(state).overview().await?;
+    Ok(json_response(StatusCode::OK, &overview_response(snapshot)))
+}
+
+fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
+    let (docker, runtime_image) = match snapshot.runtime_image {
+        Ok(inspection) => (
+            DockerOverview {
+                status: "available",
+                error: None,
             },
-            docker,
-            runtime_image,
-            managed_tenants: tenants.len(),
-            host_available,
-            requests,
-        })
-    })
-    .await
+            RuntimeImageOverview {
+                reference: snapshot.image_reference,
+                status: if inspection.present {
+                    "built"
+                } else {
+                    "missing"
+                },
+                id: inspection.id,
+                created_at: inspection.created_at,
+                size_bytes: inspection.size_bytes,
+                detail: inspection.detail,
+            },
+        ),
+        Err(error) => (
+            DockerOverview {
+                status: "unavailable",
+                error: Some(error),
+            },
+            RuntimeImageOverview {
+                reference: snapshot.image_reference,
+                status: "unknown",
+                id: None,
+                created_at: None,
+                size_bytes: None,
+                detail: None,
+            },
+        ),
+    };
+    OverviewResponse {
+        service: ServiceOverview {
+            version: env!("CARGO_PKG_VERSION"),
+            listen: snapshot.listen,
+            uptime_seconds: snapshot.uptime_seconds,
+            aibox_root: snapshot.aibox_root,
+        },
+        docker,
+        runtime_image,
+        managed_tenants: snapshot.managed_tenants,
+        host_available: snapshot.host_available,
+        requests: RequestOverview {
+            total: snapshot.requests.total,
+            active: snapshot.requests.active,
+            warning: snapshot.requests.warning,
+            error: snapshot.requests.error,
+            bytes: snapshot.requests.bytes,
+        },
+    }
 }
 
 #[derive(Serialize)]
@@ -196,92 +189,63 @@ pub(crate) struct TopologyComponents {
     error: Option<String>,
 }
 
-pub(super) async fn topology(State(state): State<ServiceState>) -> Response<Body> {
-    let root = state.root();
-    let host_home = state.host_home();
-    blocking(move || {
-        let host_exists = crate::foundation::safe_fs::real_dir_exists(&host_home, "Host Home")?;
-        let mut selected = vec![(
-            Tenant::Host {
-                home_dir: host_home.as_ref().clone(),
-                root_dir: root.as_ref().clone(),
-            },
-            "host",
-            None,
-            "Host Tenant".to_string(),
-            host_exists,
-        )];
-        for name in tenant::list_tenants(&root)? {
-            let managed = ManagedTenant::resolve(&root, &name)?;
-            selected.push((
-                Tenant::Managed(managed),
-                "managed",
-                Some(name.clone()),
-                name,
-                true,
-            ));
-        }
-        let tenants = selected
-            .into_iter()
-            .map(|(tenant, kind, name, display_name, exists)| {
-                let agents = [AgentKind::Codex, AgentKind::Claude]
-                    .into_iter()
-                    .map(|agent| topology_agent(&tenant, agent))
-                    .collect();
-                let components = match component_rows(&tenant) {
-                    Ok(entries) => TopologyComponents {
-                        entries,
-                        error: None,
-                    },
-                    Err(error) => TopologyComponents {
-                        entries: Vec::new(),
-                        error: Some(format!("{error:#}")),
-                    },
-                };
-                TopologyTenant {
-                    kind,
-                    name,
-                    display_name,
-                    home: tenant.home_dir().display().to_string(),
-                    exists,
-                    agents,
-                    components,
-                }
-            })
-            .collect();
-        Ok(TopologyResponse { tenants })
-    })
-    .await
+pub(super) async fn topology(State(state): State<ServiceState>) -> ControlResult {
+    let tenants = OverviewCoordinator::new(state).topology().await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &TopologyResponse {
+            tenants: tenants.into_iter().map(topology_tenant).collect(),
+        },
+    ))
 }
 
-fn topology_agent(tenant: &Tenant, agent: AgentKind) -> TopologyAgent {
-    let selected = tenant.for_agent(agent);
-    let current_config = match config::inspect_current_config(&selected) {
-        Ok(inspection) => TopologyCurrentConfig {
-            present_files: inspection.present_files,
-            expected_files: inspection.expected_files,
-            error: None,
+fn topology_tenant(snapshot: TopologyTenantSnapshot) -> TopologyTenant {
+    TopologyTenant {
+        kind: if snapshot.managed { "managed" } else { "host" },
+        name: snapshot.name,
+        display_name: snapshot.display_name,
+        home: snapshot.home,
+        exists: snapshot.exists,
+        agents: snapshot.agents.into_iter().map(topology_agent).collect(),
+        components: match snapshot.components {
+            Ok(inspections) => TopologyComponents {
+                entries: component_rows_from(inspections),
+                error: None,
+            },
+            Err(error) => TopologyComponents {
+                entries: Vec::new(),
+                error: Some(error),
+            },
         },
-        Err(error) => TopologyCurrentConfig {
-            present_files: 0,
-            expected_files: agent.config_files().len(),
-            error: Some(format!("{error:#}")),
-        },
-    };
-    let named_configs = match config::inspect_named_configs(&selected) {
-        Ok(entries) => TopologyNamedConfigs {
-            entries,
-            error: None,
-        },
-        Err(error) => TopologyNamedConfigs {
-            entries: Vec::new(),
-            error: Some(format!("{error:#}")),
-        },
-    };
+    }
+}
+
+fn topology_agent(snapshot: TopologyAgentSnapshot) -> TopologyAgent {
+    let agent = snapshot.agent;
     TopologyAgent {
         agent,
-        current_config,
-        named_configs,
-        application: config::application_status(&selected),
+        current_config: match snapshot.current_config {
+            Ok(inspection) => TopologyCurrentConfig {
+                present_files: inspection.present_files,
+                expected_files: inspection.expected_files,
+                error: None,
+            },
+            Err(error) => TopologyCurrentConfig {
+                present_files: 0,
+                expected_files: agent.config_files().len(),
+                error: Some(error),
+            },
+        },
+        named_configs: match snapshot.named_configs {
+            Ok(entries) => TopologyNamedConfigs {
+                entries,
+                error: None,
+            },
+            Err(error) => TopologyNamedConfigs {
+                entries: Vec::new(),
+                error: Some(error),
+            },
+        },
+        application: snapshot.application,
     }
 }

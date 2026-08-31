@@ -254,16 +254,19 @@ lifecycle management remain in the Console.
 Before changing behavior, read the repository constraints in
 [AGENTS.md](AGENTS.md), the relevant domain definitions in
 [CONTEXT.md](CONTEXT.md), and the [ADR index](docs/adr/README.md). AGENTS.md also
-maps behavior to its owning modules. Run the complete Rust checks with:
+maps behavior to its owning modules. Install the locked Console dependencies
+once in each development clone, then run the complete socket-free project
+checks with:
 
 ```sh
+make console-ci
 make check
 ```
 
-Changes under `console/` also require `make console-check`; install its
-locked dependencies first with `make console-ci`. See
-[Console UI Development](docs/console-ui.md) for the generated-asset and
-optional browser-test workflow.
+Use `make rust-check` or `make console-check` for a narrower iteration loop.
+The generic `format`, `build`, `test`, and `lint` targets cover both Rust and
+the Console. See [Console UI Development](docs/console-ui.md) for dependency
+isolation, generated assets, and the optional Chromium workflow.
 
 ## License
 
