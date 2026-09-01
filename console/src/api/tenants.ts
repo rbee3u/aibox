@@ -5,7 +5,6 @@ import type {
   ComponentStatusWire as GeneratedComponentStatus,
   LatestEntry as GeneratedLatestEntry,
   LatestSnapshot as GeneratedLatestSnapshot,
-  OperationSnapshot,
 } from "@/api/generated/wire";
 import type { Operation } from "@/api/operations";
 import type { ControlApi } from "@/api/transport";
@@ -18,11 +17,13 @@ export type ComponentRow = GeneratedComponentRow;
 export type ComponentLatestEntry = GeneratedLatestEntry;
 export type ComponentLatestSnapshot = GeneratedLatestSnapshot;
 
+/**
+ * Contract boundary for Component row normalization.
+ *
+ * The current mapping preserves the Rust-owned wire value. Contract tests pass
+ * exported Service samples through this function.
+ */
 export function decodeComponentRow(value: GeneratedComponentRow): ComponentRow {
-  return value;
-}
-
-function latestSnapshot(value: GeneratedLatestSnapshot | null): ComponentLatestSnapshot | null {
   return value;
 }
 
@@ -45,7 +46,7 @@ export type ComponentMutationResult =
   | { kind: "operation"; operation: Operation }
   | { kind: "completed"; value: Record<string, unknown> };
 
-function isOperation(value: OperationSnapshot | Record<string, unknown>): value is Operation {
+function isOperation(value: Operation | Record<string, unknown>): value is Operation {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -68,13 +69,9 @@ export function tenantsApi(client: ControlApi): TenantApi {
         .get<GeneratedComponentRow[]>(`/_aibox/api/components?${tenantQuery(tenant)}`, signal)
         .then((rows) => (Array.isArray(rows) ? rows.map(decodeComponentRow) : [])),
     latestComponents: (signal) =>
-      client
-        .get<GeneratedLatestSnapshot | null>("/_aibox/api/components/latest", signal)
-        .then((value) => latestSnapshot(value)),
+      client.get<ComponentLatestSnapshot | null>("/_aibox/api/components/latest", signal),
     checkLatestComponents: () =>
-      client
-        .post<GeneratedLatestSnapshot>("/_aibox/api/components/latest/check", {})
-        .then((snapshot) => latestSnapshot(snapshot)!),
+      client.post<ComponentLatestSnapshot>("/_aibox/api/components/latest/check", {}),
     createTenant: async (name) => {
       await client.post("/_aibox/api/tenants", { name });
     },
@@ -86,7 +83,7 @@ export function tenantsApi(client: ControlApi): TenantApi {
       });
     },
     mutateComponent: async (tenant, component, install, version) => {
-      const value = await client.post<OperationSnapshot | Record<string, unknown>>(
+      const value = await client.post<Operation | Record<string, unknown>>(
         `/_aibox/api/components/${install ? "install" : "remove"}`,
         { ...tenantBody(tenant), component, version },
       );

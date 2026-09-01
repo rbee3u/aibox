@@ -148,26 +148,14 @@ export function ConfigDialogs({
       )}
       {applyTarget && (
         <ConfirmDialog
-          title={`Apply Named Config ${applyTarget.name} to Current Config?`}
-          description={
-            <div className={layout.dialogDescription}>
-              <p>
-                Tenant: <strong>{configTenantLabel}</strong>
-                <br />
-                Coding Agent: <strong>{agent === "codex" ? "Codex" : "Claude"}</strong>
-                <br />
-                Source: <strong>Named Config {applyTarget.name}</strong>
-                <br />
-                Target: <strong>Current Config</strong>
-              </p>
-              <p>
-                Included fixed Config Fields may be added or replaced; omitted fixed fields are
-                removed. Unrelated native configuration is preserved. This is a one-time projection
-                to Current Config and does not create an Active Config. Files commit one at a time;
-                a later file failure does not roll back earlier updates.
-              </p>
-            </div>
-          }
+          title={`Apply ${applyTarget.name} to Current Config?`}
+          facts={[
+            { label: "Tenant", value: configTenantLabel },
+            { label: "Coding Agent", value: agent === "codex" ? "Codex" : "Claude" },
+            { label: "Source", value: `Named Config ${applyTarget.name}` },
+            { label: "Target", value: "Current Config" },
+          ]}
+          message="Present fields replace; omitted fixed fields are removed. Unrelated native config is kept. One-shot; no rollback."
           confirmation={tenant.kind === "host" ? "Host Tenant" : undefined}
           confirmLabel="Apply to Current Config"
           variant="primary"
@@ -179,12 +167,7 @@ export function ConfigDialogs({
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
           title={`Delete Named Config ${deleteTarget.names[0]}?`}
-          description={
-            <p className={layout.dialogDescription}>
-              This deletes only the Named Config. Current Config stays unchanged; if this was the
-              last applied source, Config Drift will report it as missing.
-            </p>
-          }
+          message="Deletes this Named Config only. Current Config is unchanged; Drift may become Source missing."
           confirmLabel="Delete Config"
           busy={mutationBusy}
           onCancel={cancelDelete}
@@ -194,18 +177,13 @@ export function ConfigDialogs({
       {deleteTarget && deleteTarget.names.length > 1 && (
         <ConfirmDialog
           title="Delete selected Named Configs?"
+          message="Deletes the selected Named Configs only. Current Config is unchanged; Drift may become Source missing."
           description={
-            <>
-              <p className={layout.dialogDescription}>
-                This deletes only the selected Named Configs. Current Config files are not changed.
-                If a last applied source is deleted, Config Drift becomes Source missing.
-              </p>
-              <div className={styles.planList}>
-                {deleteTarget.names.map((name) => (
-                  <code key={name}>{name}</code>
-                ))}
-              </div>
-            </>
+            <div className={styles.planList}>
+              {deleteTarget.names.map((name) => (
+                <code key={name}>{name}</code>
+              ))}
+            </div>
           }
           confirmLabel="Delete selected"
           busy={mutationBusy}

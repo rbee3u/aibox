@@ -12,7 +12,7 @@ Tenant or Host Tenant and the Agent in the Console before opening Configs.
 - A **Named Config** is a reusable set of the fixed Config Fields defined by
   `AgentKind`.
 - **Current Config** is the native file set that the Coding Agent reads during
-  a Run or a host-side Session operation.
+  a Run.
 - **Config Application** is an explicit, one-shot projection of a Named Config
   into Current Config.
 - **Config Drift** compares Current Config with the Named Config recorded as

@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 /// Stable wire representation of native Component inspection state.
 ///
-/// The domain status carries an optional installed version, while the
-/// Control API intentionally keeps the historical string values.
+/// The domain's installed state carries an optional version; the wire row
+/// exposes status and version as separate fields.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]

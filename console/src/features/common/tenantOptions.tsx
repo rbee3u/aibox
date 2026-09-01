@@ -8,10 +8,8 @@ import type { SelectionOption } from "@/shared/ui/SelectionMenu";
 /**
  * Projects Control API Tenant rows into Selection Menu options.
  *
- * This lives in `features/common` rather than `shared/` because it needs both a
- * wire type from `api/` and a UI type from `shared/ui`, and `shared/` may not
- * import `api/`. Configs, Sessions, and Tenants each built this list
- * separately, including three copies of the same locale sort.
+ * This belongs to `features/common` because it combines an `api/` wire type
+ * with a `shared/ui` type; `shared/` may not import `api/`.
  */
 
 const HostTenantIcon = resourceIcons.hostTenant;

@@ -26,11 +26,11 @@ references between them.
   Run and Debug Shell orchestration in `run.rs` and `debug.rs` without
   depending on Clap.
 - `src/agent/` centralizes Coding Agent contracts and invocation: `mod.rs`
-  holds `AgentKind` and every match over the closed Agent set, while
-  `claude.rs` and `codex.rs` hold each Agent's Config Field table and
-  templates. `src/tenant/` owns Tenant identity, resolution, lifecycle, layout,
-  permissions, the container Home constant, and Tenant Environment composition
-  from capability snapshots.
+  holds `AgentKind` and shared contract dispatch, while `claude.rs` and
+  `codex.rs` hold each Agent's Config Field table and templates. Domain-owned
+  behavior may match `AgentKind` in its owning module. `src/tenant/` owns Tenant
+  identity, resolution, lifecycle, layout, permissions, the container Home
+  constant, and Tenant Environment composition from capability snapshots.
 - `src/config/` is the Config facade over model, catalog, editing, Config
   Application, and Credential Propagation ownership. `src/metadata.rs` owns the
   shared Tenant-and-Agent metadata document. `src/component/` keeps the closed
@@ -49,8 +49,9 @@ references between them.
   Config, Component, Session, Request, Overview, and Management Operation), and
   `control/` owns Axum routes, feature wire DTOs, response helpers, Console
   assets, the Rust-owned contract exporter, and all Control adapters including
-  Requests. Every adapter reaches its domain through a coordinator and otherwise
-  imports only the domain types it converts to wire types.
+  Requests. Management mutations reach their domains through coordinators;
+  read-only Request inspection may use the Request facade directly. Adapters
+  otherwise import only the domain types they convert to wire types.
   `control/routes.rs` declares each route once through `control_routes!`, which
   emits both the path constants and the test-facing endpoint manifest. Handlers
   return `ControlResult` so wire decoding, selector parsing, and coordinator
@@ -63,7 +64,8 @@ references between them.
 - `console/src/` uses an acyclic graph: `domain` is independent; `api` and
   `shared` may depend on `domain` but not each other; `features/common/` may
   depend on all three but on no feature; features depend on those four layers;
-  and `app` composes everything. ESLint enforces every edge.
+  and `app` composes everything. ESLint enforces every edge, at the layer level
+  and between one feature's concern subdirectories.
   `app/App.tsx` owns the shell and `app/routing/` the sole history integration;
   `api/transport.ts` plus the per-domain `api/<domain>.ts` modules own the
   Control API, `api/core.ts` names the wire types more than one domain module
@@ -88,12 +90,13 @@ references between them.
 
 **Centralize Coding Agent contracts.** Reach agent-specific paths, Config
 files/templates, empty Current Config content, and invocation behavior only
-through `AgentKind` in `src/agent/`. Every match over the closed Agent set stays
-in `agent/mod.rs`, so adding an Agent makes the compiler name each contract
-still missing; that Agent's Config Field table and templates go in its own
-`agent/<agent>.rs`. Keep transcript parsing in `src/session/claude.rs` and
-`src/session/codex.rs`. The Docker image, container Home, and orchestration
-remain shared.
+through `AgentKind` in `src/agent/`. Every match that defines one of those
+shared contracts stays in `agent/mod.rs`; a match that selects domain-owned
+behavior stays with that domain. Adding an Agent therefore makes the compiler
+name each missing contract and domain behavior; that Agent's Config Field table
+and templates go in its own `agent/<agent>.rs`. Keep transcript parsing in
+`src/session/claude.rs` and `src/session/codex.rs`. The Docker image, container
+Home, and orchestration remain shared.
 
 **Keep the CLI surface narrow.** Split argv at the first `--` before clap parses
 it, and pass the right side verbatim only to `run`. The public commands are
@@ -220,9 +223,9 @@ a missing Managed Tenant, and the Components view reports its catalog as not
 installed. Host Component listing reports the two supported statuslines as not
 installed when the Host Home or Agent state is missing. Read-only views create
 nothing. Service startup initializes the Default Managed Tenant; Run, Config
-creation, Current Config editing, Managed Tenant Component installation, and a
-Debug Shell may initialize other missing state. Host statusline install may initialize an Agent
-state directory inside an already existing Host Home.
+creation, Current Config editing, Component installation for a Managed Tenant,
+and a Debug Shell may initialize other missing state. Host statusline install
+may initialize an Agent state directory inside an already existing Host Home.
 
 **Do not imply cross-process coordination.** Tenant lifecycle can recover its
 own interrupted filesystem work, but AIBox provides no multi-process locking
@@ -287,37 +290,65 @@ during the build.
 **Keep mutable runtimes out of the Runtime Image.** The fixed image provides
 only the shared OS, shell, build, download, diagnostic, font, and browser-ABI
 substrate. Python, uv, Node.js, Codex, Claude, Rust, and Go belong to Managed
-Tenant Components and must not be installed or pinned by the Dockerfile.
+Tenants as Components and must not be installed or pinned by the Dockerfile.
 Transitive ABI libraries needed by system diagnostics, and the shared fonts and
 libraries a headless Chromium links against, do not make their application
 runtime image-owned: the image installs no browser, and Firefox and WebKit
 system libraries stay host-owned.
 
+**Keep the Rust module graph acyclic and its top two levels declared.** Every
+non-structural edge between depth-one and depth-two modules is named once in
+`allowed_dependencies` in `src/architecture_tests.rs`, exact in both directions
+so an undeclared edge and a stale entry both fail. Below that horizon the graph
+is unlisted but still checked: no module may take part in a cycle at any depth.
+A parent and its own child are structural in both directions and never count.
+When two siblings reach into each other, give the shared thing its own module
+rather than declaring the edge or re-exporting through a facade:
+`request/proxy/capture.rs`, `request/proxy/error_response.rs`, and
+`request/store/summary.rs` each exist because two modules were reaching sideways
+for something neither owned. Register a Control route in `control/routes.rs` and
+keep the adapter's handlers `pub(super)`; an adapter that owns its own router
+has to import the path constants back, which is the same cycle in another shape.
+
 **Keep every test suite in `<module>_tests.rs`.** A Rust module's tests live in
 a sibling file reached through `#[cfg(test)] #[path = ...] mod tests;`, and a
-`dir/mod.rs` suite uses `dir/<dir>_tests.rs`. An architecture test rejects a
+`dir/mod.rs` suite uses `dir/<dir>_tests.rs`. One architecture test rejects a
 top-level inline `mod tests`; `service/control/contract.rs` is its one
-exception because that file is test-only in its entirety. Console tests stay
-beside what they cover: a unit test follows its module into `catalog/`,
+exception because that file is test-only in its entirety. A second requires
+every `<module>_tests.rs` to name a module that exists, so a compound name
+cannot hide a suite covering two modules at once; `architecture_tests.rs` is its
+one exception because it checks the crate rather than a module. Console tests
+stay beside what they cover: a unit test follows its module into `catalog/`,
 `detail/`, or `mutation/`, while a page-level interaction test stays at the
-feature root.
+feature root, and each feature's test doubles use `testFixtures.ts` plus
+`testHarness.tsx` when it needs both.
 
 **Do not let tests widen a module's public surface.** A function with no
 non-test caller stays private, and its tests enter through the type or facade
 that production code uses. Adding a `pub` item or a `#[cfg(test)]` wrapper so a
 test can reach past a facade defeats the invariant that facade exists to hold.
-The Rust-owned contract exporter is the one named exception: `ts_rs` will not
-export a nested wire type unless `service/control/contract.rs` names it, so a
-facade may re-export such a type under `#[cfg(test)]`. Keep those re-exports
-`cfg(test)` and never mask them with a blanket `allow(unused_imports)`, which
-would also hide a re-export that has genuinely died.
+A test double used by one suite lives in that suite's file; one shared by
+several lives in `testutil.rs`, never in production code beside the trait it
+implements.
+
+Every remaining `#[cfg(test)]` item that does widen a surface is named in
+`TEST_ONLY_SURFACE` in `src/architecture_tests.rs`, grouped by the seam it
+serves: nested wire types the `ts_rs` exporter must name, the test-facing route
+manifest, Docker CLI injection, the process-wide run registry, recorded-Request
+seeding, Config and Transcript fixtures, environment-derived paths, and the
+Latest Release provider. The list is exact in both directions, so a new item
+and a stale entry both fail; adding one is a reviewed edit rather than a local
+convenience. Keep those re-exports `cfg(test)` and never mask them with a
+blanket `allow(unused_imports)`, which would also hide a re-export that has
+genuinely died.
 
 ## Checks
 
 Run the complete socket-free project check with `make check`. During focused
-iteration, `make rust-check` runs Rust formatting plus locked Cargo test and
-Clippy checks, while `make console-check` runs Console formatting, types,
-Vitest, ESLint, contract, and embedded-asset checks.
+iteration, `make rust-check` runs Rust formatting, locked Cargo test and Clippy
+checks, and strict private-item rustdoc; `make rust-doc-check` runs that rustdoc
+gate alone. `make console-check` runs Console formatting, types, Vitest, ESLint,
+contract, and embedded-asset checks.
 
 Keep the real-browser Playwright checks explicit and optional because they bind
 a loopback listener.

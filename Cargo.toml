@@ -46,3 +46,6 @@ ts-rs = { version = "12", features = ["serde-compat", "serde-json-impl"] }
 [profile.release]
 strip = true
 lto = "thin"
+
+[lints.rust]
+unreachable_pub = "deny"

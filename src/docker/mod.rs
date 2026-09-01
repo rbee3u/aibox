@@ -1,10 +1,10 @@
 //! Building and running cleanup-aware containers.
 //!
-//! Image inspection, Console-triggered image construction, and [`run`] (which
-//! spawns `docker run` for a Coding Agent or Component installer) all shell out
-//! to the Docker CLI. Image build and inspection live in the `docker_image.rs`
-//! submodule, which documents the context-free build; this module owns the run
-//! path and its cleanup.
+//! Image inspection, Console-triggered image construction, and [`run()`]
+//! (which spawns `docker run` for a Run, Debug Shell, or container-based
+//! Component installation) all shell out to the Docker CLI. Image build and
+//! inspection live in the `docker_image.rs` submodule, which documents the
+//! context-free build; this module owns the run path and its cleanup.
 //!
 //! ## Signal-aware cleanup
 //!
@@ -16,9 +16,9 @@
 //! watched only when it was not already ignored, preserving `nohup` behavior.
 //!
 //! The child pid, cidfile, and run state intentionally support one active
-//! container operation per `aibox` process, whether a Run or a
-//! Component installation. Cleanup is best-effort for uncatchable termination
-//! such as SIGKILL.
+//! container operation per `aibox` process, whether a Run, Debug Shell, or
+//! container-based Component installation. Cleanup is best-effort for
+//! uncatchable termination such as SIGKILL.
 
 use anyhow::{Context, Result};
 use std::ffi::OsString;
@@ -37,18 +37,19 @@ mod image_ops;
 pub(crate) use image_ops::image_exists_with;
 #[cfg(test)]
 use image_ops::image_ref_for_exact_ls;
-pub use image_ops::{BuildCache, image_exists};
+pub(crate) use image_ops::{BuildCache, image_exists};
 pub(crate) use image_ops::{
     RuntimeImageInspection, build_image_for_service, inspect_runtime_image,
 };
 #[cfg(test)]
 pub(crate) use image_ops::{build_image_with, inspect_runtime_image_with};
 
-/// Fixed local Runtime Image tag used by every Run and runtime Component installer.
-pub const IMAGE: &str = "aibox:latest";
+/// Fixed local Runtime Image tag used by Runs, Debug Shells, and container-based
+/// Component installations.
+pub(crate) const IMAGE: &str = "aibox:latest";
 
 /// Shared base Runtime Image Dockerfile without Tenant-local runtimes.
-pub const DOCKERFILE: &str = include_str!("../../assets/aibox.Dockerfile");
+pub(crate) const DOCKERFILE: &str = include_str!("../../assets/aibox.Dockerfile");
 
 pub(crate) type LogCallback = Arc<dyn Fn(String) + Send + Sync>;
 
@@ -61,8 +62,10 @@ use run::{
 use supervision::RunRegistration;
 pub(crate) use supervision::cancel_active_container_operation;
 
+/// The process-wide run-registry lock, for suites outside `docker/` that start
+/// a container. `docker/`'s own suite reaches `supervision` directly.
 #[cfg(test)]
-pub(crate) use supervision::*;
+pub(crate) use supervision::run_registry_test_lock;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DockerCli {
@@ -158,7 +161,7 @@ impl DockerCli {
 ///
 /// This function uses a process-wide child/cidfile registry and must not be
 /// called concurrently.
-pub fn run(
+pub(crate) fn run(
     run_args: &[String],
     image: &str,
     cmd: &[OsString],

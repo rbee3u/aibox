@@ -1,6 +1,6 @@
 //! Management Operation Control API handlers and wire commands.
 
-use super::{ControlResult, busy, json_response};
+use super::{ControlResult, json_response};
 use crate::service::coordination::OperationCoordinator;
 use crate::service::state::ServiceState;
 use async_stream::stream;
@@ -79,11 +79,9 @@ pub(crate) struct BuildRequest {
 pub(super) async fn start_build(
     State(state): State<ServiceState>,
     Json(request): Json<BuildRequest>,
-) -> Response<Body> {
-    match OperationCoordinator::new(state).start_build(request.force) {
-        Ok(operation) => json_response(StatusCode::ACCEPTED, &operation),
-        Err(error) => busy(&error.to_string()),
-    }
+) -> ControlResult {
+    let operation = OperationCoordinator::new(state).start_build(request.force)?;
+    Ok(json_response(StatusCode::ACCEPTED, &operation))
 }
 
 pub(super) async fn cancel_operation(

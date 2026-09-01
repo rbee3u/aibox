@@ -1,6 +1,6 @@
 //! Transient Run and Debug Shell orchestration.
 //!
-//! [`run`] and [`debug`] own their own command shapes; this module holds only
+//! [`run()`] and [`debug()`] own their command shapes; this module holds only
 //! the Docker source seam and the preflight steps both share.
 
 mod debug;

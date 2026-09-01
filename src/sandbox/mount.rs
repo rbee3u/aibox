@@ -1,7 +1,8 @@
 //! Resolve and validate user-controlled bind mounts.
 //!
-//! Nothing here is reachable from outside `sandbox`: [`super::RunSpec`] is the
-//! only entry point, so the resolve-then-validate order cannot be bypassed.
+//! [`super::RunSpec`] owns resolution and validation for Run Workspace and
+//! Extra Mount paths. Debug Shell and container-based Component callers use
+//! the shared Tenant Home source check after canonicalizing the path.
 
 use crate::tenant::CONTAINER_HOME;
 use anyhow::{Context, Result, bail};

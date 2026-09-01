@@ -1,15 +1,15 @@
 //! Classifying one Request into its display Request Assessment.
 //!
-//! A Request Assessment is a presentation label derived from independent evidence
-//! — Request Outcome, HTTP status, Provider Error, and protocol diagnostics — not
-//! a replacement for it. Active takes temporary visual precedence, every finding
-//! stays separately available for Diagnostics, and one prioritized primary
-//! finding supplies the compact label.
+//! A Request Assessment is a presentation label derived from independent
+//! evidence: Request Outcome, HTTP status, Provider Error, and protocol
+//! diagnostics. Active takes temporary visual precedence, every finding stays
+//! separately available for Diagnostics, and one prioritized primary finding
+//! supplies the compact label.
 //!
-//! [`refresh_assessment`] materializes the value into the Summary on the write
-//! path so lists never recompute it, while [`effective_assessment`] re-derives
-//! the interrupted case at read time. See
-//! `docs/adr/0009-request-evidence-and-projections.md`.
+//! [`refresh_assessment`] materializes a write-path projection in the Summary.
+//! [`effective_assessment`] re-derives display state for active and interrupted
+//! Requests at read time. See
+//! `docs/adr/0007-request-evidence-and-materialized-projections.md`.
 
 use crate::request::model::{
     AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, Outcome,

@@ -48,7 +48,7 @@ pub(crate) struct LatestEntry {
     pub(crate) error: Option<String>,
 }
 
-/// The most recent explicit Component Update Check.
+/// A timestamped batch of Latest Release observations.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct LatestSnapshot {
@@ -152,23 +152,6 @@ impl LatestProvider for OfficialLatestProvider {
     fn fetch(&self, kind: ComponentKind) -> BoxFuture<'static, LatestResult> {
         let client = self.client.clone();
         Box::pin(async move { Self::fetch_kind(client, kind).await })
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct FixtureLatestProvider {
-    pub(crate) results: std::collections::BTreeMap<String, LatestResult>,
-}
-
-#[cfg(test)]
-impl LatestProvider for FixtureLatestProvider {
-    fn fetch(&self, kind: ComponentKind) -> BoxFuture<'static, LatestResult> {
-        let result = self
-            .results
-            .get(kind.name())
-            .cloned()
-            .unwrap_or_else(|| unavailable(kind.name(), "fixture has no result"));
-        Box::pin(async move { result })
     }
 }
 

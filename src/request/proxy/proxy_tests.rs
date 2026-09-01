@@ -1,3 +1,4 @@
+use super::capture::*;
 use super::request_stream::*;
 use super::response_stream::*;
 use super::target::*;

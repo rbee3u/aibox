@@ -20,7 +20,10 @@ pub(crate) struct ConfigCatalog {
     pub(crate) credential_propagation_available: bool,
 }
 
-pub(crate) struct AuthPropagationPreview {
+/// A Credential Propagation plan held server-side, with its preview.
+///
+/// The `plan_id` binds execution to this prepared snapshot.
+pub(crate) struct PreparedAuthPropagation {
     pub(crate) plan_id: String,
     pub(crate) preview: config::AuthPropagationPreview,
 }
@@ -97,7 +100,7 @@ impl ConfigCoordinator {
         .await
     }
 
-    pub(crate) async fn preview_auth_propagation(&self) -> Result<AuthPropagationPreview> {
+    pub(crate) async fn preview_auth_propagation(&self) -> Result<PreparedAuthPropagation> {
         let root = self.state.root();
         let host_home = self.state.host_home();
         let plan_store = self.state.clone();
@@ -106,7 +109,7 @@ impl ConfigCoordinator {
             let preview = config::preview_auth_propagation(&plan);
             let plan_id = uuid::Uuid::now_v7().to_string();
             plan_store.auth_propagation_plan(plan_id.clone(), plan);
-            Ok(AuthPropagationPreview { plan_id, preview })
+            Ok(PreparedAuthPropagation { plan_id, preview })
         })
         .await
     }

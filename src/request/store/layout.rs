@@ -1,6 +1,6 @@
 //! Safe flat Request layout, filenames, atomic writes, and path validation.
 
-use super::reading::summary_ended_at;
+use super::summary::summary_ended_at;
 use super::{RecordedHeader, SummaryMetadata};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};

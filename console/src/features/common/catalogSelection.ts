@@ -1,22 +1,14 @@
 /**
  * The batch-selection state machine every catalog page shares.
  *
- * Tenants, Configs, Sessions, and Requests all let a user enter selection
- * mode, toggle rows, select or clear a whole page, drop rows a refresh removed,
- * and resume a selection after a partial delete. Those six transitions were
- * implemented four separate times with different field and action names, so a
- * fix to one did not reach the others. Requests kept a fifth implementation as
- * a hook for longer than the rest, because it alone needed per-row context;
- * that need is now `Context` below.
- *
  * A feature composes this by spreading `CatalogSelectionState` into its own
  * state and delegating the `selection_*` actions, keeping its mutation or
  * dialog state to itself.
  *
  * `Context` is optional per-row data recorded when a row is selected, for
- * features whose selection outlives the view it was made in: Requests paginates,
- * so it records which page each Request was selected on and returns to the
- * earliest of them after a delete. Features that need none leave it `never`.
+ * features whose selection outlives the view it was made in. Requests records
+ * the page for each selection so deletion can return to the earliest selected
+ * page. Features that need none leave it `never`.
  */
 
 export interface CatalogSelectionState<Key extends string, Context = never> {

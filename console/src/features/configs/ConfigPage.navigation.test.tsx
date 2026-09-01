@@ -2,8 +2,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigListData } from "@/api/configs";
-import { configFile } from "@/features/configs/ConfigPage.testFixtures";
-import { ConfigPage, configApi } from "@/features/configs/testSupport";
+import { configFile } from "@/features/configs/testFixtures";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");

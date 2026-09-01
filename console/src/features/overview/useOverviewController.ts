@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type KeyboardEvent,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 
 import type { Operation } from "@/api/operations";
-import type { OverviewApi, TopologyData } from "@/api/overview";
+import type { OverviewApi, OverviewData, TopologyData } from "@/api/overview";
 import {
   buildDisabledReason,
   buildTopologyTree,
@@ -19,8 +29,15 @@ import {
   type AttentionItem,
   type SessionLoad,
   type SessionRequest,
+  type TopologyHealth,
+  type TopologyMetrics,
+  type TopologyNode,
+  type TopologySearchResult,
 } from "@/features/overview/topology/topologyModel";
-import { useTopologyInteraction } from "@/features/overview/topology/useTopologyInteraction";
+import {
+  useTopologyInteraction,
+  type TopologyZoomMode,
+} from "@/features/overview/topology/useTopologyInteraction";
 import { useOverviewData } from "@/features/overview/useOverviewData";
 import { messageOf } from "@/shared/lib/errors";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
@@ -30,6 +47,65 @@ interface ControllerOptions {
   operation: Operation | null;
   onNavigate: ConsoleNavigate;
   onOperation: (operation: Operation) => void;
+}
+
+/**
+ * What the Overview page reads, grouped by what the page is showing.
+ *
+ * Overview has neither a catalog nor a detail pane, so it groups by its own three
+ * concerns rather than borrowing the other four pages' names: the Service and its
+ * Runtime Image, the topology tree and its viewport, and the attention summary
+ * derived from both.
+ */
+export interface OverviewViewModel {
+  service: {
+    build: (force: boolean) => Promise<void>;
+    buildDisabled: boolean;
+    buildUnavailableReason: string | null;
+    elapsedUptime: number;
+    loadOverview: (visibleRefresh?: boolean) => Promise<void>;
+    overview: OverviewData | null;
+    overviewError: string | null;
+    overviewRefreshing: boolean;
+  };
+  topology: {
+    collapseAll: () => void;
+    expandAll: () => void;
+    expanded: Set<string>;
+    filteredTree: TopologyNode | null;
+    fitTopology: () => void;
+    forcedExpanded: Set<string>;
+    loadSessionSummary: (id: string, request: SessionRequest, force?: boolean) => Promise<void>;
+    loadTopology: (visibleRefresh?: boolean) => Promise<void>;
+    metrics: TopologyMetrics | null;
+    navigateTree: (event: KeyboardEvent<HTMLDivElement>, node: TopologyNode) => void;
+    pageRef: RefObject<HTMLDivElement | null>;
+    query: string;
+    registerNode: (id: string, element: HTMLDivElement | null) => void;
+    renderedActiveNode: string;
+    resetZoom: () => void;
+    sessionLoads: Record<string, SessionLoad>;
+    setActiveNode: Dispatch<SetStateAction<string>>;
+    setQuery: Dispatch<SetStateAction<string>>;
+    toggleNode: (node: TopologyNode) => void;
+    topology: TopologyData | null;
+    topologyError: string | null;
+    topologyRefreshing: boolean;
+    topologySearch: TopologySearchResult;
+    treeRef: RefObject<HTMLElement | null>;
+    updateMetrics: (next: TopologyMetrics) => void;
+    zoom: number;
+    zoomIn: () => void;
+    zoomMode: TopologyZoomMode;
+    zoomOut: () => void;
+  };
+  attention: {
+    attentionItems: AttentionItem[];
+    attentionOnly: boolean;
+    health: TopologyHealth | null;
+    revealAttention: () => void;
+    toggleAttention: () => void;
+  };
 }
 
 export function useOverviewController({
@@ -219,51 +295,58 @@ export function useOverviewController({
     }
   }
 
-  return {
-    attentionItems,
-    attentionOnly,
-    build,
-    buildDisabled,
-    buildUnavailableReason,
-    collapseAll: topologyInteraction.collapseAll,
-    elapsedUptime,
-    expandAll: topologyInteraction.expandAll,
-    expanded,
-    filteredTree,
-    fitTopology: topologyInteraction.fit,
-    forcedExpanded,
-    health,
-    loadOverview,
-    loadSessionSummary,
-    loadTopology,
-    navigateTree: topologyInteraction.navigateTree,
-    overview,
-    overviewError,
-    overviewRefreshing,
-    pageRef: topologyInteraction.pageRef,
-    query,
-    registerNode: topologyInteraction.registerNode,
-    renderedActiveNode: topologyInteraction.activeNode,
-    resetZoom: topologyInteraction.resetZoom,
-    revealAttention: () => {
-      setAttentionOnly(true);
-      window.requestAnimationFrame(topologyInteraction.reveal);
+  const viewModel: OverviewViewModel = {
+    service: {
+      build,
+      buildDisabled,
+      buildUnavailableReason,
+      elapsedUptime,
+      loadOverview,
+      overview,
+      overviewError,
+      overviewRefreshing,
     },
-    sessionLoads,
-    setActiveNode: topologyInteraction.setActiveNode,
-    setQuery,
-    toggleAttention: () => setAttentionOnly((value) => !value),
-    toggleNode: topologyInteraction.toggleNode,
-    topology,
-    topologyError,
-    topologyMetrics: topologyInteraction.metrics,
-    topologyRefreshing,
-    topologySearch,
-    topologyZoom: topologyInteraction.zoom,
-    topologyZoomMode: topologyInteraction.zoomMode,
-    treeRef: topologyInteraction.treeRef,
-    updateTopologyMetrics: topologyInteraction.updateMetrics,
-    zoomIn: topologyInteraction.zoomIn,
-    zoomOut: topologyInteraction.zoomOut,
+    topology: {
+      collapseAll: topologyInteraction.collapseAll,
+      expandAll: topologyInteraction.expandAll,
+      expanded,
+      filteredTree,
+      fitTopology: topologyInteraction.fit,
+      forcedExpanded,
+      loadSessionSummary,
+      loadTopology,
+      metrics: topologyInteraction.metrics,
+      navigateTree: topologyInteraction.navigateTree,
+      pageRef: topologyInteraction.pageRef,
+      query,
+      registerNode: topologyInteraction.registerNode,
+      renderedActiveNode: topologyInteraction.activeNode,
+      resetZoom: topologyInteraction.resetZoom,
+      sessionLoads,
+      setActiveNode: topologyInteraction.setActiveNode,
+      setQuery,
+      toggleNode: topologyInteraction.toggleNode,
+      topology,
+      topologyError,
+      topologyRefreshing,
+      topologySearch,
+      treeRef: topologyInteraction.treeRef,
+      updateMetrics: topologyInteraction.updateMetrics,
+      zoom: topologyInteraction.zoom,
+      zoomIn: topologyInteraction.zoomIn,
+      zoomMode: topologyInteraction.zoomMode,
+      zoomOut: topologyInteraction.zoomOut,
+    },
+    attention: {
+      attentionItems,
+      attentionOnly,
+      health,
+      revealAttention: () => {
+        setAttentionOnly(true);
+        window.requestAnimationFrame(topologyInteraction.reveal);
+      },
+      toggleAttention: () => setAttentionOnly((value) => !value),
+    },
   };
+  return viewModel;
 }

@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import eslint from "@eslint/js";
 import { defineConfig } from "eslint/config";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -36,8 +38,8 @@ const requireAliases = {
   message: "Use the @/ aliases inside src so layer boundaries remain visible to ESLint.",
 };
 
-const featureBoundaries = features.map((feature) =>
-  layerBoundary(`features/${feature}`, [
+function featurePatterns(feature) {
+  return [
     {
       group: features.filter((other) => other !== feature).map((other) => `@/features/${other}/*`),
       message:
@@ -54,8 +56,52 @@ const featureBoundaries = features.map((feature) =>
         "Features must use a domain API adapter. Keep generated wire values and HTTP details inside api/.",
     },
     requireAliases,
-  ]),
+  ];
+}
+
+const featureBoundaries = features.map((feature) =>
+  layerBoundary(`features/${feature}`, featurePatterns(feature)),
 );
+
+/**
+ * The concern subdirectories each feature owns.
+ *
+ * A subdirectory holds what exactly one concern uses; modules shared by
+ * concerns belong at the feature root. Direct cross-concern imports are
+ * forbidden. The set is read from disk so new concern directories are governed
+ * immediately. Overview owns `topology` and `components` because it has neither
+ * a catalog nor a detail pane; Requests has no `mutation/`.
+ */
+function concernsOf(feature) {
+  return readdirSync(join(import.meta.dirname, "src/features", feature), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * Concern configs repeat their feature's patterns on purpose.
+ *
+ * `no-restricted-imports` options are replaced rather than merged when a later
+ * config matches the same file, so a concern config that listed only its
+ * siblings would silently drop the cross-feature and app-shell rules for every
+ * file inside that subdirectory.
+ */
+const concernBoundaries = features.flatMap((feature) => {
+  const concerns = concernsOf(feature);
+  return concerns.map((concern) =>
+    layerBoundary(`features/${feature}/${concern}`, [
+      ...featurePatterns(feature),
+      {
+        group: concerns
+          .filter((other) => other !== concern)
+          .map((other) => `@/features/${feature}/${other}/*`),
+        message:
+          "Concerns may not import each other. A module two concerns read belongs to the feature root instead.",
+      },
+    ]),
+  );
+});
 
 export default defineConfig(
   eslint.configs.recommended,
@@ -110,4 +156,5 @@ export default defineConfig(
     requireAliases,
   ]),
   ...featureBoundaries,
+  ...concernBoundaries,
 );

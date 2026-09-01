@@ -60,8 +60,9 @@ pub(crate) enum Outcome {
 
 /// Lifecycle state of a Request, independent from its terminal outcome.
 ///
-/// An interrupted Request has no terminal Outcome because the process stopped
-/// before finalization; the Control adapter serializes this same closed set.
+/// An interrupted Request has no terminal Request Outcome because the process
+/// stopped before finalization; the Control adapter serializes this same closed
+/// set.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -91,8 +92,8 @@ impl RequestState {
     }
 }
 
-/// Domain-facing name for the terminal result enum. `Outcome` remains as the
-/// compatibility spelling used by persistence and protocol code.
+/// Domain-facing name for the terminal result enum. Persistence and protocol
+/// code use the internal `Outcome` spelling.
 pub(crate) type RequestOutcome = Outcome;
 
 impl Outcome {

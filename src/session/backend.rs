@@ -22,15 +22,15 @@ pub(crate) trait SessionBackend {
     /// entries so agent-created symlinks are never followed.
     fn session_dir_components(&self) -> &'static [&'static str];
 
-    /// Whether a `.jsonl` file name is a transcript. Claude keeps all; Codex
-    /// keeps only `rollout-` names. Shared by [`files`](Self::files) and
-    /// [`list_files`](Self::list_files), so `list` can never show a row that
-    /// `get`/`delete` then refuse to resolve.
+    /// Whether a `.jsonl` file name is eligible as a Transcript. Claude keeps
+    /// all; Codex keeps only `rollout-` names. Strict and tolerant discovery
+    /// share this filter, but tolerant listing may still return readable
+    /// Sessions that strict detail or deletion rejects after a partial walk.
     fn keep_transcript_name(&self, name: &str) -> bool;
 
-    /// All transcript files under this tenant home (empty if none yet). The
-    /// strict walk: `get`/`delete` use it, and a destructive or single-target
-    /// action must not act on a partial view of the tree.
+    /// All Transcript files under this Tenant Home, or empty when none exist.
+    /// Detail and deletion use this strict walk so a single-target or
+    /// destructive action never acts on a partial tree view.
     fn files(&self, home: &Path) -> Result<Vec<PathBuf>> {
         let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
             return Ok(Vec::new());
@@ -38,8 +38,8 @@ pub(crate) trait SessionBackend {
         walk_jsonl(&base, |name| self.keep_transcript_name(name))
     }
 
-    /// Transcript files for Console Session listing: the tolerant walk, so one bad
-    /// child path does not hide every readable session.
+    /// Transcript files for Console Session listing. The tolerant walk keeps
+    /// one bad child path from hiding every readable Session.
     fn list_files(&self, home: &Path) -> Result<SessionDiscovery> {
         let Some(base) = checked_session_dir(home, self.session_dir_components())? else {
             return Ok(SessionDiscovery::default());
@@ -50,11 +50,10 @@ pub(crate) trait SessionBackend {
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
 
-    /// Classify one line for the list title and compatibility parser, filtering injected/wrapper
+    /// Classify one line for list titles and detail parsing, filtering injected
     /// turns while distinguishing recognized non-prompts from unsupported
-    /// user-like records. This is the heart of the divergence: Claude keys off
-    /// `promptSource:typed`, Codex off a wrapper-filtered `response_item` user
-    /// message.
+    /// user-like records. Claude keys off `promptSource:typed`; Codex uses a
+    /// wrapper-filtered `response_item` user message.
     fn prompt_record(&self, value: &Value) -> PromptRecord;
 
     /// Project one native Transcript Entry into the Console's shared detail

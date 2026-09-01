@@ -50,50 +50,51 @@ interface OverviewPageProps {
 }
 
 export function OverviewPage(props: OverviewPageProps) {
+  const { attention, service, topology: tree } = useOverviewController(props);
   const {
-    attentionItems,
-    attentionOnly,
     build,
     buildDisabled,
     buildUnavailableReason,
-    collapseAll,
     elapsedUptime,
+    loadOverview,
+    overview,
+    overviewError,
+    overviewRefreshing,
+  } = service;
+  const { attentionItems, attentionOnly, health, revealAttention, toggleAttention } = attention;
+  // The group is aliased because it holds a `topology` of its own: the tree data
+  // sits inside the tree concern alongside the viewport state that renders it.
+  const {
+    collapseAll,
     expandAll,
     expanded,
     filteredTree,
     fitTopology,
     forcedExpanded,
-    health,
-    loadOverview,
     loadSessionSummary,
     loadTopology,
+    metrics,
     navigateTree,
-    overview,
-    overviewError,
-    overviewRefreshing,
     pageRef,
     query,
     registerNode,
     renderedActiveNode,
     resetZoom,
-    revealAttention,
     sessionLoads,
     setActiveNode,
     setQuery,
-    toggleAttention,
     toggleNode,
     topology,
     topologyError,
-    topologyMetrics,
     topologyRefreshing,
     topologySearch,
-    topologyZoom,
-    topologyZoomMode,
     treeRef,
-    updateTopologyMetrics,
+    updateMetrics,
+    zoom,
     zoomIn,
+    zoomMode,
     zoomOut,
-  } = useOverviewController(props);
+  } = tree;
   const { onNavigate, operation } = props;
 
   return (
@@ -305,7 +306,7 @@ export function OverviewPage(props: OverviewPageProps) {
             <div className={styles.zoomControls} aria-label="Topology zoom controls">
               <IconButton
                 label="Zoom out"
-                disabled={!topologyMetrics || topologyZoom <= MIN_ZOOM}
+                disabled={!metrics || zoom <= MIN_ZOOM}
                 onClick={zoomOut}
               >
                 <Minus size={15} />
@@ -313,23 +314,19 @@ export function OverviewPage(props: OverviewPageProps) {
               <button
                 type="button"
                 className={styles.zoomValue}
-                disabled={!topologyMetrics}
-                aria-label={`Reset topology zoom to 100% (currently ${Math.round(topologyZoom * 100)}%)`}
+                disabled={!metrics}
+                aria-label={`Reset topology zoom to 100% (currently ${Math.round(zoom * 100)}%)`}
                 onClick={resetZoom}
               >
-                {Math.round(topologyZoom * 100)}%
+                {Math.round(zoom * 100)}%
               </button>
-              <IconButton
-                label="Zoom in"
-                disabled={!topologyMetrics || topologyZoom >= MAX_ZOOM}
-                onClick={zoomIn}
-              >
+              <IconButton label="Zoom in" disabled={!metrics || zoom >= MAX_ZOOM} onClick={zoomIn}>
                 <Plus size={15} />
               </IconButton>
               <IconButton
                 label="Fit topology to width"
-                disabled={!topologyMetrics}
-                aria-pressed={topologyZoomMode === "fit"}
+                disabled={!metrics}
+                aria-pressed={zoomMode === "fit"}
                 onClick={fitTopology}
               >
                 <Scan size={15} />
@@ -352,9 +349,9 @@ export function OverviewPage(props: OverviewPageProps) {
               activeNode={renderedActiveNode}
               query={query.trim()}
               search={topologySearch}
-              zoom={topologyZoom}
+              zoom={zoom}
               sessionLoads={sessionLoads}
-              onMetricsChange={updateTopologyMetrics}
+              onMetricsChange={updateMetrics}
               registerNode={registerNode}
               onFocus={setActiveNode}
               onKeyDown={navigateTree}

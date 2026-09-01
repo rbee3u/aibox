@@ -1,8 +1,8 @@
 //! Upstream response recording, downstream streaming, and terminal mapping.
 
 use super::attempt::{RequestAttempt, RequestTerminal};
-use super::headers::{forwarded_headers, recorded_headers};
-use super::target::version_name;
+use super::error_response::{bare_error, recording_failure};
+use super::headers::{forwarded_headers, is_event_stream, recorded_headers, version_name};
 use crate::request::RequestProxyState;
 use crate::request::interpretation::{BodyContentCoding, body_content_coding};
 use crate::request::model::{
@@ -15,7 +15,7 @@ use crate::request::store::FORMAT_VERSION;
 use axum::body::Body;
 use axum::http::{HeaderMap, Response, StatusCode, header};
 use bytes::Bytes;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use std::io;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -607,15 +607,6 @@ pub(super) fn client_closed_terminal(
     ))
 }
 
-pub(super) fn declared_content_length(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get(header::CONTENT_LENGTH)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
-}
-
 /// An Agent's normal close immediately after a complete SSE response must not
 /// be recorded as a failed client disconnect. A content-coded stream has no
 /// incremental indexer, so decode the recorded body prefix and look for a
@@ -644,130 +635,6 @@ pub(super) fn encoded_terminal_seen_on_close(
     observation.terminal_seen
 }
 
-pub(super) async fn reject_with_body(
-    guard: &mut RequestAttempt,
-    body: Body,
-    shutdown: tokio_util::sync::CancellationToken,
-    status: StatusCode,
-    message: &str,
-    outcome: Outcome,
-    kind: ErrorKind,
-) -> Response<Body> {
-    let request_file = match guard.clone_request_body() {
-        Ok(file) => tokio::fs::File::from_std(file),
-        Err(error) => return recording_failure(guard, format!("clone request body file: {error}")),
-    };
-    let mut stream = body.into_data_stream();
-    let mut file = request_file;
-    loop {
-        let next = tokio::select! {
-            () = shutdown.cancelled() => {
-                return finish_proxy_response(
-                    guard,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "AIBox Request Proxy is shutting down",
-                    Outcome::ServerShutdown,
-                    ErrorKind::ServerShutdown,
-                );
-            }
-            next = stream.next() => next,
-        };
-        let Some(next) = next else { break };
-        let chunk = match next {
-            Ok(chunk) => chunk,
-            Err(error) => {
-                return finish_proxy_response(
-                    guard,
-                    StatusCode::BAD_REQUEST,
-                    &format!("read client request body: {error}"),
-                    Outcome::ClientDisconnected,
-                    ErrorKind::RequestBodyFailed,
-                );
-            }
-        };
-        if let Err(error) = file.write_all(&chunk).await {
-            return recording_failure(guard, format!("write Request body: {error}"));
-        }
-        guard.add_request_bytes(chunk.len());
-    }
-    if let Err(error) = file.sync_all().await {
-        return recording_failure(guard, format!("sync request body: {error}"));
-    }
-    guard.mark_request_body_finished();
-    finish_proxy_response(guard, status, message, outcome, kind)
-}
-
-pub(super) fn finish_proxy_response(
-    guard: &mut RequestAttempt,
-    status: StatusCode,
-    message: &str,
-    outcome: Outcome,
-    kind: ErrorKind,
-) -> Response<Body> {
-    let body = format!("{message}\n");
-    let mut headers = HeaderMap::from_iter([
-        (
-            header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-        ),
-        (
-            header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-store"),
-        ),
-    ]);
-    headers.insert(
-        header::CONTENT_LENGTH,
-        axum::http::HeaderValue::from_str(&body.len().to_string())
-            .expect("proxy error body length is a valid header"),
-    );
-    let finish = guard.finish(
-        outcome,
-        Some(ErrorMetadata {
-            kind,
-            message: message.to_string(),
-        }),
-    );
-    if let Err(error) = finish {
-        return bare_error(StatusCode::INSUFFICIENT_STORAGE, &error.to_string());
-    }
-    response_with_headers(status, headers, Body::from(body))
-}
-
-pub(super) fn recording_failure(
-    guard: &mut RequestAttempt,
-    message: impl Into<String>,
-) -> Response<Body> {
-    let message = message.into();
-    let _ = guard.finish(
-        Outcome::RecordingFailed,
-        Some(ErrorMetadata {
-            kind: ErrorKind::RecordingFailed,
-            message: message.clone(),
-        }),
-    );
-    bare_error(StatusCode::INSUFFICIENT_STORAGE, &message)
-}
-
-pub(super) fn response_with_headers(
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Body,
-) -> Response<Body> {
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-    *response.headers_mut() = headers;
-    response
-}
-
-pub(super) fn is_event_stream(headers: &HeaderMap) -> bool {
-    headers
-        .get_all(header::CONTENT_TYPE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .filter_map(|value| value.split(';').next())
-        .any(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
-}
-
 pub(super) fn response_stream_mode(
     headers: &HeaderMap,
     status: StatusCode,
@@ -792,14 +659,4 @@ pub(super) fn response_stream_mode(
         return ResponseStreamMode::Detect;
     }
     ResponseStreamMode::Normal
-}
-
-pub(crate) fn bare_error(status: StatusCode, message: &str) -> Response<Body> {
-    let mut response = Response::new(Body::from(format!("{message}\n")));
-    *response.status_mut() = status;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    response
 }

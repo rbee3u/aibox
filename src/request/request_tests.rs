@@ -1,11 +1,28 @@
 use super::*;
 use crate::request::store::{Outcome, StoredRequest};
+use axum::Router;
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use axum::routing::{get, post};
 use bytes::Bytes;
 use http_body_util::BodyExt as _;
+use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::TcpListener;
+
+/// Serve the proxy the way [`crate::service`] does, for the ignored real-socket
+/// transport checks below.
+fn router(state: RequestProxyState) -> Router {
+    Router::new().fallback(proxy_fallback).with_state(state)
+}
+
+async fn proxy_fallback(
+    State(state): State<RequestProxyState>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    proxy::handle(state, request).await
+}
 
 async fn echo(request: Request<Body>) -> Response<Body> {
     let body = request.into_body().collect().await.unwrap().to_bytes();
@@ -65,7 +82,7 @@ async fn test_servers(
 
 async fn wait_for_terminal(state: &RequestProxyState) -> StoredRequest {
     for _ in 0..100 {
-        let requests = state.inspection().store().scan().unwrap();
+        let requests = state.store().scan().unwrap();
         if let Some(request) = requests.into_iter().next()
             && request.result.is_some()
         {

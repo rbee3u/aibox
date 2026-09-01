@@ -6,8 +6,8 @@ import {
   claudeVisualOptions,
   configFile,
   type VisualOptionFixture,
-} from "@/features/configs/ConfigPage.testFixtures";
-import { ConfigPage, configApi } from "@/features/configs/testSupport";
+} from "@/features/configs/testFixtures";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  capitalize,
   compactDuration,
   concatChunks,
   duration,
@@ -63,6 +64,18 @@ describe("shared display formatting", () => {
       [1048576, "1.0 MB"],
     ] as const) {
       expect(formatByteSize(input), String(input)).toBe(expected);
+    }
+  });
+
+  it("capitalizes a leading character and leaves an empty value alone", () => {
+    for (const [input, expected] of [
+      ["", ""],
+      ["built", "Built"],
+      ["Built", "Built"],
+      ["a", "A"],
+      ["danger-full-access", "Danger-full-access"],
+    ] as const) {
+      expect(capitalize(input), JSON.stringify(input)).toBe(expected);
     }
   });
 

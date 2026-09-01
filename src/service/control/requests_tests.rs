@@ -178,7 +178,6 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
     let mut ids = Vec::new();
     for (status, provider_error) in [(401, false), (200, true)] {
         let (request, _) = state
-            .inspection()
             .store()
             .begin(ObservedRequest {
                 upstream_url: Some("https://api.example.test/v1/responses"),
@@ -187,7 +186,6 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
             })
             .unwrap();
         state
-            .inspection()
             .store()
             .write_response(
                 &request.locator,
@@ -204,7 +202,6 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
             .unwrap();
         if provider_error {
             state
-                .inspection()
                 .store()
                 .update_summary(&request.locator, &request.summary, |summary| {
                     summary
@@ -224,7 +221,6 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
                 .unwrap();
         }
         state
-            .inspection()
             .store()
             .finish(
                 &request,
@@ -331,12 +327,10 @@ async fn active_durations_do_not_depend_on_the_wall_clock_anchor() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
     let (request, _) = state
-        .inspection()
         .store()
         .begin(ObservedRequest::test("GET", "/active"))
         .unwrap();
     state
-        .inspection()
         .store()
         .update_summary(&request.locator, &request.summary, |summary| {
             summary.observed_at = "9999-01-01T00:00:00Z".to_string();
@@ -365,15 +359,10 @@ async fn request_detail_adds_event_timing_index_diagnostics_on_demand() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
     let (request, _) = state
-        .inspection()
         .store()
         .begin(ObservedRequest::test("GET", "/events"))
         .unwrap();
-    let mut index = state
-        .inspection()
-        .store()
-        .create_event_index(&request)
-        .unwrap();
+    let mut index = state.store().create_event_index(&request).unwrap();
     writeln!(index, "not json").unwrap();
     index.flush().unwrap();
 
@@ -394,15 +383,10 @@ async fn request_detail_ignores_only_an_active_unterminated_event_index_tail() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
     let (request, _) = state
-        .inspection()
         .store()
         .begin(ObservedRequest::test("GET", "/events"))
         .unwrap();
-    let mut index = state
-        .inspection()
-        .store()
-        .create_event_index(&request)
-        .unwrap();
+    let mut index = state.store().create_event_index(&request).unwrap();
     write!(index, "{{\"schema_version\":").unwrap();
     index.flush().unwrap();
 
@@ -411,7 +395,7 @@ async fn request_detail_ignores_only_an_active_unterminated_event_index_tail() {
     let json = response_json(response).await;
     assert!(json["summary"]["warnings"].as_array().unwrap().is_empty());
 
-    state.inspection().store().abandon_active(&request.id);
+    state.store().abandon_active(&request.id);
     let response = request_detail(State(state), Path(request.id)).await;
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
@@ -439,7 +423,6 @@ async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
     let (mut request, _) = state
-        .inspection()
         .store()
         .begin(ObservedRequest {
             upstream_url: Some("https://example.test/v1/responses"),
@@ -453,7 +436,6 @@ async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
         .write_all(b"not response json")
         .unwrap();
     state
-        .inspection()
         .store()
         .update_summary(&request.locator, &request.summary, |summary| {
             let protocol = summary.protocol.as_mut().unwrap();
@@ -464,7 +446,6 @@ async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
         .unwrap();
     let id = request.id.clone();
     state
-        .inspection()
         .store()
         .finish(
             &request,
@@ -707,15 +688,10 @@ async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() 
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
     let (request, _) = state
-        .inspection()
         .store()
         .begin(ObservedRequest::test("GET", "/events"))
         .unwrap();
-    let mut index = state
-        .inspection()
-        .store()
-        .create_event_index(&request)
-        .unwrap();
+    let mut index = state.store().create_event_index(&request).unwrap();
     for (sequence, completed_at_ns) in [(0, "1000000"), (1, "2500000")] {
         writeln!(
             index,
@@ -737,7 +713,6 @@ async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() 
     index.flush().unwrap();
     let id = request.id.clone();
     state
-        .inspection()
         .store()
         .finish(
             &request,
@@ -784,7 +759,7 @@ fn active_event_timing_reader_ignores_an_unterminated_tail() {
 async fn event_timing_api_reports_a_missing_index_as_unavailable() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::for_test(temp.path()).unwrap();
-    let id = finished_request(&state.inspection().store(), "/without-events", b"", b"");
+    let id = finished_request(&state.store(), "/without-events", b"", b"");
 
     let response = response_event_timings(
         State(state),
@@ -806,7 +781,7 @@ async fn event_timing_api_reports_a_missing_index_as_unavailable() {
 async fn deletion_api_maps_selection_conflicts_and_successes() {
     let temp = tempfile::tempdir().unwrap();
     let state = test_state(temp.path());
-    let store = state.request().inspection().store();
+    let store = state.request().store();
     let (active, _) = store
         .begin(ObservedRequest::test("GET", "/active"))
         .unwrap();

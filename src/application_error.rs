@@ -9,7 +9,7 @@ pub(crate) enum ApplicationErrorKind {
     InvalidInput,
     /// The explicitly selected resource does not exist.
     NotFound,
-    /// Current state conflicts with the requested mutation.
+    /// Current state conflicts with the requested action.
     Conflict,
     /// A bounded application input exceeds its supported size.
     InputTooLarge,

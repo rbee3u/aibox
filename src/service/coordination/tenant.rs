@@ -1,8 +1,7 @@
 //! Managed Tenant catalog and lifecycle coordination.
 
-use super::run_blocking;
+use super::{run_blocking, tenant_scopes};
 use crate::application_error::{ApplicationErrorKind, application_error};
-use crate::foundation::safe_fs;
 use crate::service::state::ServiceState;
 use crate::tenant::{self, ManagedTenant};
 use anyhow::Result;
@@ -42,19 +41,19 @@ impl TenantCoordinator {
         let root = self.state.root();
         let host_home = self.state.host_home();
         run_blocking(move || {
-            let host_exists = safe_fs::real_dir_exists(&host_home, "Host Home")?;
-            let mut entries = vec![TenantCatalogEntry::Host {
-                home: host_home.display().to_string(),
-                exists: host_exists,
-            }];
-            for name in tenant::list_tenants(&root)? {
-                let managed = ManagedTenant::resolve(&root, &name)?;
-                entries.push(TenantCatalogEntry::Managed {
-                    name,
-                    home: managed.home_dir().display().to_string(),
-                });
-            }
-            Ok(entries)
+            Ok(tenant_scopes(&root, &host_home)?
+                .into_iter()
+                .map(|scope| {
+                    let home = scope.tenant.home_dir().display().to_string();
+                    match scope.name {
+                        Some(name) => TenantCatalogEntry::Managed { name, home },
+                        None => TenantCatalogEntry::Host {
+                            home,
+                            exists: scope.exists,
+                        },
+                    }
+                })
+                .collect())
         })
         .await
     }

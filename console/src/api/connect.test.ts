@@ -250,12 +250,14 @@ describe("Control API endpoints", () => {
               agents: [
                 {
                   agent: "codex",
-                  current_config: { present_files: 0, expected_files: 2, error: null },
-                  named_configs: { entries: [], error: null },
-                  application: { last_application: null, drift: "untracked", detail: null },
+                  // The Service omits an absent `error` and `detail` rather than
+                  // sending null, which is what the wire types now declare.
+                  current_config: { present_files: 0, expected_files: 2 },
+                  named_configs: { entries: [] },
+                  application: { last_application: null, drift: "untracked" },
                 },
               ],
-              components: { entries: [], error: null },
+              components: { entries: [] },
             },
           ],
         }),

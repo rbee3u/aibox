@@ -7,8 +7,14 @@ import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
 import styles from "@/shared/ui/ConfirmDialog.module.css";
 
+export interface ConfirmDialogFact {
+  label: string;
+  value: ReactNode;
+}
+
 interface ConfirmDialogProps {
   title: string;
+  facts?: ReadonlyArray<ConfirmDialogFact>;
   message?: string;
   description?: ReactNode;
   confirmation?: string;
@@ -21,6 +27,7 @@ interface ConfirmDialogProps {
 
 export function ConfirmDialog({
   title,
+  facts,
   message,
   description,
   confirmation,
@@ -50,7 +57,17 @@ export function ConfirmDialog({
           <AlertTriangle size={20} aria-hidden="true" />
         </div>
         <h2 id={titleId}>{title}</h2>
-        {message && <p>{message}</p>}
+        {facts && facts.length > 0 && (
+          <dl className={styles.facts}>
+            {facts.map((fact) => (
+              <div key={fact.label}>
+                <dt>{fact.label}</dt>
+                <dd>{fact.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {message && <p className={styles.message}>{message}</p>}
         {description}
         {confirmation && (
           <label className={styles.confirmation}>

@@ -1,8 +1,8 @@
-//! Shared Request state plus the socket-free proxy test router. The foreground
-//! listener and Control adapters live in [`crate::service`].
+//! Shared Request state. The foreground listener and Control adapters live in
+//! [`crate::service`].
 //!
 //! The proxy is global rather than Tenant-owned and never starts Docker; see
-//! `docs/adr/0008-global-trusted-request-service.md`.
+//! `docs/adr/0006-global-request-proxy-and-shared-listener.md`.
 
 mod assessment;
 mod inspection;
@@ -35,7 +35,7 @@ pub(crate) use model::{
 /// Control API response — including ones no production caller mentions, such as
 /// `TokenUsage` inside [`ProtocolSummary`]. That exporter is test-only in its
 /// entirety, so these are `cfg(test)` rather than a permanently wider facade.
-/// See `docs/adr/0024-domain-first-single-crate-modules.md`.
+/// See `docs/adr/0009-rust-owned-console-contract.md`.
 #[cfg(test)]
 pub(crate) use model::{
     AssessmentPrimary, DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic,
@@ -52,15 +52,6 @@ pub(crate) fn format_version() -> u32 {
 
 #[cfg(test)]
 pub(crate) use store::{ObservedRequest, RequestStore, RuntimeMeasurements};
-
-#[cfg(test)]
-use axum::Router;
-#[cfg(test)]
-use axum::extract::State;
-#[cfg(test)]
-use std::net::SocketAddr;
-#[cfg(test)]
-use tokio::net::TcpListener;
 
 #[derive(Clone)]
 pub(crate) struct RequestProxyState {
@@ -106,6 +97,19 @@ impl RequestProxyState {
         RequestInspection::new(self.store.clone())
     }
 
+    /// The writable store handle, for suites that seed recorded Requests before
+    /// exercising a reader.
+    ///
+    /// This is on the owning state rather than on [`RequestInspection`] because
+    /// that facade is the read path; a writable handle reached through it let a
+    /// test bypass the very boundary the facade exists to hold. Sharing this
+    /// handle matters: the active-Request map is per-handle, so a separately
+    /// opened store would not see this state's in-flight Requests.
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> Store {
+        self.store.clone()
+    }
+
     pub(crate) fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
     }
@@ -125,19 +129,6 @@ impl RequestProxyState {
     pub(crate) async fn wait_for_response_tasks(&self) {
         self.response_tasks.wait().await;
     }
-}
-
-#[cfg(test)]
-fn router(state: RequestProxyState) -> Router {
-    Router::new().fallback(proxy_fallback).with_state(state)
-}
-
-#[cfg(test)]
-async fn proxy_fallback(
-    State(state): State<RequestProxyState>,
-    request: axum::extract::Request,
-) -> axum::response::Response {
-    proxy::handle(state, request).await
 }
 
 #[cfg(test)]

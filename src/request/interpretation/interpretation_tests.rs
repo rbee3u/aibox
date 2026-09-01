@@ -143,7 +143,10 @@ fn request_metadata_maps_provider_specific_reasoning_effort() {
         summary.response_mode.requested,
         Some(ResponseModeValue::Stream)
     );
-    assert!(chat.expects_stream_usage);
+    // Nothing has reported usage yet, so this is exactly the recorded
+    // `stream_options.include_usage` expectation, read through the accessor
+    // `apply_chat_done` uses rather than by peeking at a private field.
+    assert!(chat.usage.stream_usage_missing());
 }
 
 #[test]

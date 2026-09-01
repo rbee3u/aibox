@@ -20,7 +20,7 @@ import {
   tokenCount,
 } from "@/features/requests/summary";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
-import { duration, formatTimestamp } from "@/shared/lib/format";
+import { capitalize, duration, formatTimestamp } from "@/shared/lib/format";
 import { decodeHeader, requestDetailUrl } from "@/features/requests/requestFormat";
 import { BodyViewer } from "@/features/requests/detail/BodyViewer";
 import styles from "@/features/requests/detail/RequestDetail.module.css";
@@ -187,7 +187,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
         </div>
         <dl className={styles.sessionMeta}>
           <div className={styles.sessionFact}>
-            <dt>Session ID</dt>
+            <dt>Coding Agent Session ID</dt>
             <dd>
               <span className={styles.sessionValue}>{sessionId ?? "Not reported"}</span>
               {sessionId && (
@@ -195,8 +195,16 @@ function Summary({ detail }: { detail: RequestDetailData }) {
                   className={styles.copySession}
                   type="button"
                   onClick={copySessionId}
-                  aria-label={sessionCopied ? "Session ID copied" : "Copy Session ID"}
-                  title={sessionCopied ? "Session ID copied" : "Copy Session ID"}
+                  aria-label={
+                    sessionCopied
+                      ? "Coding Agent Session ID copied"
+                      : "Copy Coding Agent Session ID"
+                  }
+                  title={
+                    sessionCopied
+                      ? "Coding Agent Session ID copied"
+                      : "Copy Coding Agent Session ID"
+                  }
                 >
                   {sessionCopied ? (
                     <Check size={14} aria-hidden="true" />
@@ -444,10 +452,6 @@ function usageStateMessage(detail: RequestDetailData): string {
 
 function displayTokenCount(value: number | null): string {
   return value === null ? "—" : tokenCount(value);
-}
-
-function capitalize(value: string): string {
-  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
 
 function MessageData({

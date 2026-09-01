@@ -2,8 +2,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigListData } from "@/api/configs";
-import { configFile } from "@/features/configs/ConfigPage.testFixtures";
-import { ConfigPage, configApi } from "@/features/configs/testSupport";
+import { configFile } from "@/features/configs/testFixtures";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -25,7 +25,7 @@ describe("ConfigPage", () => {
     await user.click(await screen.findByRole("button", { name: "Delete Named Config custom" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Named Config custom?" });
     expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
-    expect(dialog).toHaveTextContent("Current Config stays unchanged");
+    expect(dialog).toHaveTextContent("Current Config is unchanged");
     await user.click(within(dialog).getByRole("button", { name: "Delete Config" }));
     expect(deleteConfigs).toHaveBeenCalledWith({ kind: "managed", name: "default" }, "codex", [
       "custom",
@@ -85,11 +85,11 @@ describe("ConfigPage", () => {
       }),
     );
     let dialog = screen.getByRole("dialog", {
-      name: "Apply Named Config custom to Current Config?",
+      name: "Apply custom to Current Config?",
     });
-    expect(dialog).toHaveTextContent("Tenant: default");
-    expect(dialog).toHaveTextContent("Source: Named Config custom");
-    expect(dialog).toHaveTextContent("Target: Current Config");
+    expect(within(dialog).getByText("default")).toBeInTheDocument();
+    expect(within(dialog).getByText("Named Config custom")).toBeInTheDocument();
+    expect(within(dialog).getByText("Current Config")).toBeInTheDocument();
     expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("button", { name: "Tenant: default" }));
@@ -100,11 +100,11 @@ describe("ConfigPage", () => {
       }),
     );
     dialog = screen.getByRole("dialog", {
-      name: "Apply Named Config custom to Current Config?",
+      name: "Apply custom to Current Config?",
     });
     const confirmation = within(dialog).getByRole("textbox");
     const confirm = within(dialog).getByRole("button", { name: "Apply to Current Config" });
-    expect(dialog).toHaveTextContent("Tenant: Host Tenant");
+    expect(dialog.querySelector("dd")).toHaveTextContent("Host Tenant");
     expect(confirm).toBeDisabled();
     await user.type(confirmation, "Host Tenant");
     await user.click(confirm);
@@ -141,9 +141,10 @@ describe("ConfigPage", () => {
       screen.getByRole("button", { name: "Apply Named Config custom to Current Config" }),
     );
     await user.click(
-      within(
-        screen.getByRole("dialog", { name: "Apply Named Config custom to Current Config?" }),
-      ).getByRole("button", { name: "Apply to Current Config" }),
+      within(screen.getByRole("dialog", { name: "Apply custom to Current Config?" })).getByRole(
+        "button",
+        { name: "Apply to Current Config" },
+      ),
     );
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "applied content",

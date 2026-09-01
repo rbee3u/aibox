@@ -5,7 +5,8 @@ use super::layout::{
     remove_controlled_request_dir, rename_noreplace, restrict_dir, safe_display_host,
     sanitize_host, utc_basic_at, validate_request_ancestor,
 };
-use super::reading::{error_phase, summary_ended_at, summary_to_result, terminal_summary_matches};
+use super::reading::terminal_summary_matches;
+use super::summary::{error_phase, summary_ended_at, summary_to_result};
 use super::{
     DiagnosticMetadata, ErrorMetadata, FORMAT_VERSION, FinishedRequest, NewRequest,
     ObservedRequest, Outcome, ProtocolSummary, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
@@ -27,11 +28,11 @@ use uuid::Uuid;
 
 impl RequestStore {
     #[cfg(test)]
-    pub fn open(aibox_root: &Path) -> Result<Self> {
+    pub(crate) fn open(aibox_root: &Path) -> Result<Self> {
         Self::open_with_warning_sink(aibox_root, None)
     }
 
-    pub fn open_with_warning_sink(
+    pub(crate) fn open_with_warning_sink(
         aibox_root: &Path,
         warning_sink: Option<RequestWarningSink>,
     ) -> Result<Self> {
@@ -57,7 +58,10 @@ impl RequestStore {
         }
     }
 
-    pub fn begin(&self, observed: ObservedRequest<'_>) -> Result<(NewRequest, RequestMetadata)> {
+    pub(crate) fn begin(
+        &self,
+        observed: ObservedRequest<'_>,
+    ) -> Result<(NewRequest, RequestMetadata)> {
         let ObservedRequest {
             method,
             incoming_uri,
@@ -162,7 +166,7 @@ impl RequestStore {
     /// The callback is not run after terminalization; callers may therefore
     /// race optional observations with [`Self::finish`] without reopening a
     /// terminal Summary.
-    pub fn update_summary(
+    pub(crate) fn update_summary(
         &self,
         locator: &RequestLocator,
         handle: &SummaryHandle,
@@ -183,7 +187,7 @@ impl RequestStore {
         Ok(changed)
     }
 
-    pub fn write_response(
+    pub(crate) fn write_response(
         &self,
         locator: &RequestLocator,
         handle: &SummaryHandle,
@@ -214,7 +218,7 @@ impl RequestStore {
         atomic_write_json(&directory, RESPONSE_JSON, &file)
     }
 
-    pub fn create_event_index(&self, request: &NewRequest) -> Result<fs::File> {
+    pub(crate) fn create_event_index(&self, request: &NewRequest) -> Result<fs::File> {
         let _namespace = read_unpoisoned(&self.namespace);
         let directory = request.locator.path();
         validate_request_ancestor(&self.root, &directory)?;
@@ -225,7 +229,7 @@ impl RequestStore {
     ///
     /// The supplied path is valid only for the duration of `operation`; callers
     /// must not retain it after this method returns.
-    pub fn with_request_path<R>(
+    pub(crate) fn with_request_path<R>(
         &self,
         locator: &RequestLocator,
         operation: impl FnOnce(&Path) -> R,
@@ -241,7 +245,7 @@ impl RequestStore {
     /// Repeated calls preserve the first terminal outcome. Renaming the Request
     /// directory to its end-time ordering key is best-effort and cannot undo a
     /// successfully committed terminal Summary.
-    pub fn finish(
+    pub(crate) fn finish(
         &self,
         request: &NewRequest,
         started: Instant,
@@ -360,7 +364,7 @@ impl RequestStore {
         }
     }
 
-    pub fn abandon_active(&self, id: &str) {
+    pub(crate) fn abandon_active(&self, id: &str) {
         lock_unpoisoned(&self.active).remove(id);
     }
 }

@@ -183,8 +183,8 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "Remove Codex Statusline" }));
     const dialog = screen.getByRole("dialog", { name: "Remove Codex Statusline?" });
-    expect(dialog).toHaveTextContent("Tenant: default");
-    expect(dialog).toHaveTextContent("Current state: Modified");
+    expect(within(dialog).getByText("default")).toBeInTheDocument();
+    expect(within(dialog).getByText("Modified")).toBeInTheDocument();
     expect(mutateComponent).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Remove Component" }));
     expect(mutateComponent).toHaveBeenCalledWith(

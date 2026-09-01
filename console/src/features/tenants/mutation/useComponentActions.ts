@@ -11,9 +11,9 @@ import {
   latestEntryFor,
   tenantSelection,
 } from "@/features/tenants/componentCatalog";
-import { useComponentCatalog } from "@/features/tenants/detail/useComponentCatalog";
-import { useComponentLatest } from "@/features/tenants/detail/useComponentLatest";
-import { useComponentMenu } from "@/features/tenants/detail/useComponentMenu";
+import { useComponentCatalog } from "@/features/tenants/mutation/useComponentCatalog";
+import { useComponentLatest } from "@/features/tenants/mutation/useComponentLatest";
+import { useComponentMenu } from "@/features/tenants/mutation/useComponentMenu";
 import { tenantSelectionValueOf } from "@/features/tenants/route";
 import type { TenantSelectionValue } from "@/domain/tenant";
 import { messageOf } from "@/shared/lib/errors";

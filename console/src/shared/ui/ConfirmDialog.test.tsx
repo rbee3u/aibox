@@ -126,4 +126,37 @@ describe("ConfirmDialog", () => {
     await act(() => vi.advanceTimersByTimeAsync(1400));
     expect(screen.getByRole("button", { name: "Copy work" })).toBeInTheDocument();
   });
+
+  it("renders facts before the risk message", () => {
+    render(
+      <ConfirmDialog
+        title="Apply openai to Current Config?"
+        facts={[
+          { label: "Tenant", value: "Host Tenant" },
+          { label: "Coding Agent", value: "Codex" },
+          { label: "Source", value: "Named Config openai" },
+          { label: "Target", value: "Current Config" },
+        ]}
+        message="Present fields replace; omitted fixed fields are removed."
+        confirmLabel="Apply to Current Config"
+        variant="primary"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Apply openai to Current Config?" });
+    expect(within(dialog).getByText("Tenant")).toBeInTheDocument();
+    expect(within(dialog).getByText("Host Tenant")).toBeInTheDocument();
+    expect(within(dialog).getByText("Coding Agent")).toBeInTheDocument();
+    expect(within(dialog).getByText("Codex")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Present fields replace; omitted fixed fields are removed.");
+
+    const facts = dialog.querySelector("dl");
+    const message = within(dialog).getByText(
+      "Present fields replace; omitted fixed fields are removed.",
+    );
+    expect(facts).not.toBeNull();
+    expect(facts!.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

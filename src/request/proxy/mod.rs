@@ -1,21 +1,21 @@
 //! The forwarding path: proxy one request upstream and capture it as it streams.
 
 mod attempt;
+mod capture;
+mod error_response;
 mod headers;
 mod request_stream;
 mod response_stream;
 mod target;
 
 use attempt::RequestAttempt;
-use headers::{forwarded_headers, recorded_headers};
-use request_stream::prepare_recorded_request_stream;
-use response_stream::{
-    bare_error, declared_content_length, finish_proxy_response, reject_with_body,
-    stream_upstream_response,
-};
+use error_response::{bare_error, finish_proxy_response};
+use headers::{declared_content_length, forwarded_headers, recorded_headers, version_name};
+use request_stream::{prepare_recorded_request_stream, reject_with_body};
+use response_stream::stream_upstream_response;
 use target::{
     ReqwestUpstreamSender, UpstreamRequest, UpstreamSender, prepare_upstream, request_rejection,
-    upstream_host, upstream_request_failure, version_name,
+    upstream_host, upstream_request_failure,
 };
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ import {
   type JsonValue,
 } from "@/features/requests/detail/bodyPresentation";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
+import { capitalize } from "@/shared/lib/format";
 import styles from "@/features/requests/detail/JsonTree.module.css";
 
 interface JsonTreeProps {
@@ -264,8 +265,4 @@ function JsonScalar({ value, preview }: { value: JsonValue; preview: string | nu
 
 function escapePath(value: string): string {
   return value.replaceAll("~", "~0").replaceAll("/", "~1");
-}
-
-function capitalize(value: string): string {
-  return `${value[0].toUpperCase()}${value.slice(1)}`;
 }

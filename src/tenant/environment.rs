@@ -108,7 +108,7 @@ unset aibox_rust_installed aibox_go_installed
 
 exec "$@""#;
 
-/// Healthy Tenant Components that contribute defaults to a Tenant Environment.
+/// Healthy Components that contribute defaults to a Tenant Environment.
 ///
 /// Construct this with a struct literal so each capability is named at the call
 /// site; five positional booleans would be indistinguishable to the compiler.

@@ -4,9 +4,9 @@ import type { SessionSummaryData } from "@/api/sessions";
 import type { ComponentRow } from "@/api/tenants";
 import { tenantSelectionValue, type TenantSelection } from "@/domain/tenant";
 import type { ModuleId } from "@/shared/lib/navigation";
-import { formatTimestamp } from "@/shared/lib/format";
+import { capitalize, formatTimestamp } from "@/shared/lib/format";
+import type { Tone } from "@/features/overview/viewTypes";
 
-export type Tone = "good" | "neutral" | "warning" | "error";
 export type TreeIcon =
   | "service"
   | "host"
@@ -323,7 +323,4 @@ export function sessionLoadDetail(load?: SessionLoad): string {
   if (load.state === "loading") return "Discovering Transcripts";
   if (load.state === "error") return "Summary unavailable";
   return `${load.data!.count} Sessions${load.data!.partial ? " · Partial" : ""}`;
-}
-export function capitalize(value: string): string {
-  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }

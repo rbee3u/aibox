@@ -237,7 +237,7 @@ export function App() {
       {pendingNavigation && (
         <ConfirmDialog
           title="Discard unsaved Config changes?"
-          message="Your unsaved Config changes will be lost if you continue."
+          message="Unsaved Config changes will be lost if you continue."
           confirmLabel="Discard and continue"
           variant="primary"
           onCancel={cancelPendingNavigation}

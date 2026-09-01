@@ -8,7 +8,7 @@ import type {
   PropagationReport,
 } from "@/api/configs";
 import { propagationGroup } from "@/features/configs/configCatalog";
-import type { ConfigCatalogLoadKind } from "@/features/configs/catalog/useConfigCatalog";
+import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { messageOf } from "@/shared/lib/errors";
 
 interface CredentialPropagationOptions {

@@ -1,4 +1,5 @@
-import type { Tone, TopologyNode, TreeIcon } from "@/features/overview/topology/coreTree";
+import type { TopologyNode, TreeIcon } from "@/features/overview/topology/coreTree";
+import type { Tone } from "@/features/overview/viewTypes";
 
 export const MIN_ZOOM = 0.65;
 export const MAX_ZOOM = 1.5;

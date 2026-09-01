@@ -11,7 +11,7 @@ use std::time::Duration;
 
 /// Cache policy for a Docker build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildCache {
+pub(crate) enum BuildCache {
     /// Keep Docker's cache enabled.
     Cached,
     /// Re-run every layer, but do not pull the `FROM` image.
@@ -125,7 +125,7 @@ pub(crate) fn build_image_for_service(
 /// A failed exact inspection is checked with an exact `docker image ls` query;
 /// if Docker cannot complete either query, the daemon error is returned rather
 /// than treating the image as absent.
-pub fn image_exists(image: &str) -> Result<bool> {
+pub(crate) fn image_exists(image: &str) -> Result<bool> {
     image_exists_with(&DockerCli::system(), image)
 }
 

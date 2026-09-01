@@ -18,8 +18,6 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use toml_edit::DocumentMut;
 
-pub(crate) use super::application::{application_status, apply_named_config};
-
 /// A validated Named Config definition in native main/auth formats.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NamedConfigDefinition {
@@ -415,3 +413,7 @@ fn display_path(root: &str, path: &[String]) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[path = "definition_tests.rs"]
+mod tests;

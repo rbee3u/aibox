@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::path::Path;
 
 /// Parser for Claude Code's on-disk transcript format.
-pub struct Claude;
+pub(super) struct Claude;
 
 impl SessionBackend for Claude {
     fn session_dir_components(&self) -> &'static [&'static str] {
@@ -40,7 +40,7 @@ impl SessionBackend for Claude {
 
     /// A real prompt is a non-meta `type:user` turn with human text, identified
     /// by `promptSource:typed` or `userType:external`. Tool results have no text
-    /// blocks. Feeds shared title selection and `get` paths.
+    /// blocks. Used by shared title selection and detail parsing.
     fn prompt_record(&self, value: &Value) -> PromptRecord {
         if value.get("type").and_then(Value::as_str) != Some("user") {
             return PromptRecord::NotTyped;

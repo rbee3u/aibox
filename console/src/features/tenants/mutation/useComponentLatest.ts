@@ -6,7 +6,7 @@ import { LatestRequest } from "@/shared/lib/latestRequest";
 
 type ComponentLatestApi = Pick<TenantApi, "latestComponents" | "checkLatestComponents">;
 
-/** Owns the global Latest Release snapshot independently of Tenant Component state. */
+/** Owns the global Latest Release snapshot independently of Component state. */
 export function useComponentLatest(
   api: ComponentLatestApi,
   onError: (message: string | null) => void,

@@ -1,6 +1,6 @@
 import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Tone } from "@/features/overview/topology/topologyModel";
+import type { Tone } from "@/features/overview/viewTypes";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/overview/OverviewPage.module.css";
 

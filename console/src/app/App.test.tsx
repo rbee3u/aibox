@@ -218,7 +218,7 @@ describe("Console App", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Discard unsaved Config changes?",
     });
-    expect(dialog).toHaveTextContent("Your unsaved Config changes will be lost if you continue.");
+    expect(dialog).toHaveTextContent("Unsaved Config changes will be lost if you continue.");
     expect(window.location.pathname).toBe("/_aibox/ui/configs");
     expect(editor).toHaveValue('model = "test"\nchanged');
 

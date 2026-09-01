@@ -4,11 +4,6 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-pub(crate) use super::editing::{
-    config_file_warnings, diagnose_config_file, inspect_named_codex_auth, read_config_file_target,
-    save_config_file_target, visual_config_state,
-};
-
 pub(super) fn parse_json_object(content: &str, label: &str) -> Result<Map<String, Value>> {
     let value = serde_json::from_str::<Value>(content).with_context(|| format!("parse {label}"))?;
     value

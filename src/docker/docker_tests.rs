@@ -1,3 +1,4 @@
+use super::supervision::*;
 use super::*;
 use std::ffi::OsString;
 use std::fs;

@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help install format build test lint check \
-	rust-format rust-build rust-test rust-lint rust-check \
+	rust-format rust-build rust-test rust-lint rust-doc-check rust-check \
 	console-ci console-format console-build console-test console-lint console-check \
 	console-contract console-contract-check console-assets-check
 
@@ -19,6 +19,7 @@ help:
 		"  make rust-build         Build the CLI" \
 		"  make rust-test          Run Rust tests" \
 		"  make rust-lint          Lint Rust sources" \
+		"  make rust-doc-check     Check private-item Rust documentation" \
 		"  make rust-check         Run all Rust checks" \
 		"Console UI:" \
 		"  make console-ci         Install frontend dependencies with npm ci" \
@@ -66,10 +67,14 @@ rust-test:
 rust-lint:
 	cargo clippy --locked --all-targets -- -D warnings
 
+rust-doc-check:
+	RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --document-private-items
+
 rust-check:
 	cargo fmt --check
 	cargo test --locked
 	cargo clippy --locked --all-targets -- -D warnings
+	$(MAKE) rust-doc-check
 
 console-ci:
 	npm --prefix console ci

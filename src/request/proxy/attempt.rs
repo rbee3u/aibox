@@ -1,6 +1,6 @@
 //! One Request attempt's terminal state, protocol observation, and reporting.
 
-use super::request_stream::{RequestStreamContext, RequestStreamFailure, RequestTarget};
+use super::capture::{RequestStreamContext, RequestStreamFailure, RequestTarget};
 use crate::foundation::sync::lock_unpoisoned;
 use crate::request::interpretation::{BodyContentCoding, ProtocolObserver};
 use crate::request::model::{

@@ -17,7 +17,6 @@ export function fallbackTenantSelectionValue(rows: TenantRow[]): TenantSelection
   return fallback ? tenantSelectionValueOf(fallback) : null;
 }
 
-/** Tenants uses only `tenant`; historical `component` values are dropped. */
 export function tenantLocation(key: TenantSelectionValue | null): URLSearchParams {
   const query = new URLSearchParams();
   if (key) query.set("tenant", key);

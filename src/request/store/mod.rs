@@ -3,8 +3,10 @@
 //! The facade exposes one concrete Store while writing, inspection/deletion,
 //! and safe layout mechanics remain separately owned.
 
+mod event_index;
 mod layout;
 mod reading;
+mod summary;
 mod writing;
 
 use crate::foundation::sync::lock_unpoisoned;
@@ -32,7 +34,7 @@ pub(crate) use layout::offset_ns;
 #[cfg(test)]
 use layout::safe_display_host;
 #[cfg(test)]
-use reading::{summary_to_result, validate_schema};
+use summary::{summary_to_result, validate_schema};
 
 pub(crate) const FORMAT_VERSION: u32 = 4;
 const REQUEST_JSON: &str = "request.json";
@@ -180,7 +182,7 @@ pub(crate) struct ObservedRequest<'a> {
 impl<'a> ObservedRequest<'a> {
     /// A plain HTTP/1.1 request with no upstream target, headers, or host hint.
     /// Combine with struct-update syntax so a test names only what it varies.
-    pub fn test(method: &'a str, incoming_uri: &'a str) -> Self {
+    pub(crate) fn test(method: &'a str, incoming_uri: &'a str) -> Self {
         Self {
             method,
             incoming_uri,

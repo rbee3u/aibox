@@ -59,7 +59,8 @@ pub(crate) struct PendingAuthPropagation {
     plan: config::AuthPropagationPlan,
 }
 
-/// Exclusive ownership of one Service management mutation.
+/// Exclusive ownership of one mutation participating in the shared management
+/// gate.
 pub(crate) struct ManagementMutation {
     _guard: OwnedMutexGuard<()>,
 }

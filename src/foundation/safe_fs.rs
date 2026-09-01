@@ -1,8 +1,10 @@
 //! Mechanical filesystem primitives for paths that may be container-writable.
 //!
-//! These helpers validate only the final path entry. Domain callers remain
-//! responsible for validating ancestors and deciding which paths may be
-//! created, replaced, or removed and which permissions they require.
+//! Ordinary helpers validate only the final path entry. The `*_beneath`
+//! helpers anchor traversal at a selected base and reject symlinked entries
+//! below it. Domain callers remain responsible for the base's ancestry and for
+//! deciding which paths may be created, replaced, or removed and which
+//! permissions they require.
 
 use anyhow::{Context, Result, bail};
 use std::fs;

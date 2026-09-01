@@ -11,7 +11,7 @@
 //! also records injected wrapper turns (environment/instructions context blocks,
 //! `!`-shell commands, skill payloads, the per-Workspace AGENTS.md preamble) as
 //! text-like content items; [`real_text_fragment`] removes those prefixes. A
-//! turn left with no text after filtering is skipped for previews and `get`.
+//! turn left with no text after filtering is skipped for previews and detail.
 //!
 //! The session id is the trailing uuid of the filename (last 36 chars of the
 //! stem after `rollout-<date>-`).
@@ -110,7 +110,7 @@ fn first_line_is_instructions_preamble(text: &str) -> bool {
 }
 
 /// Parser for OpenAI Codex's on-disk rollout format.
-pub struct Codex;
+pub(super) struct Codex;
 
 impl SessionBackend for Codex {
     fn session_dir_components(&self) -> &'static [&'static str] {
@@ -132,7 +132,7 @@ impl SessionBackend for Codex {
     }
 
     /// A real prompt is a wrapper-filtered `response_item` user message; see
-    /// [`user_turn_record`]. Feeds shared summary and `get` paths.
+    /// [`user_turn_record`]. Used by shared summary and detail parsing.
     fn prompt_record(&self, value: &Value) -> PromptRecord {
         user_turn_record(value)
     }

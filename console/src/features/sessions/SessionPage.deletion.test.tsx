@@ -42,7 +42,7 @@ describe("SessionPage", () => {
     );
     const dialog = screen.getByRole("dialog", { name: "Delete Session 111111111111?" });
     expect(dialog).toHaveTextContent(
-      "This permanently deletes its Transcript from Tenant default Codex.",
+      "Permanently deletes its Transcript from Tenant default Codex.",
     );
     expect(detailSignal?.aborted).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));

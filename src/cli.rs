@@ -16,7 +16,7 @@ use std::net::SocketAddr;
     arg_required_else_help = true,
     version
 )]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Operation to perform.
     #[command(subcommand)]
     pub command: Command,
@@ -24,7 +24,7 @@ pub struct Cli {
 
 impl Cli {
     /// Parse a pre-split argument iterator, printing clap errors before exiting.
-    pub fn parse_from<I, T>(itr: I) -> Self
+    pub(crate) fn parse_from<I, T>(itr: I) -> Self
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
@@ -36,7 +36,7 @@ impl Cli {
     }
 
     /// Parse arguments without exiting on an error.
-    pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
+    pub(crate) fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
@@ -201,7 +201,7 @@ fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Err
 
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
-pub enum Command {
+pub(crate) enum Command {
     /// Run a Coding Agent inside the AIBox container.
     ///
     /// Pass arguments verbatim after `--`, for example:
@@ -215,7 +215,7 @@ pub enum Command {
 
 /// Options for the local AIBox Console.
 #[derive(Debug, Args)]
-pub struct ConsoleArgs {
+pub(crate) struct ConsoleArgs {
     /// IP address and port to listen on.
     #[arg(
         long,
@@ -238,7 +238,7 @@ fn parse_listen(value: &str) -> Result<SocketAddr, String> {
 
 /// Options for launching a Coding Agent in Docker.
 #[derive(Debug, Args)]
-pub struct RunArgs {
+pub(crate) struct RunArgs {
     /// Coding Agent to run. Omit for Codex.
     #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
@@ -263,7 +263,7 @@ pub struct RunArgs {
 
 /// Options for opening a Managed Tenant Debug Shell.
 #[derive(Debug, Args)]
-pub struct DebugArgs {
+pub(crate) struct DebugArgs {
     /// Managed Tenant lowercase DNS label (default: `default`).
     #[arg(
         id = "debug-tenant",
@@ -281,7 +281,7 @@ fn parse_tenant(value: &str) -> Result<String, String> {
 }
 
 /// Split argv at the first `--`. The boundary itself is dropped.
-pub fn split_passthrough<T: AsRef<OsStr>>(argv: Vec<T>) -> (Vec<T>, Vec<T>) {
+pub(crate) fn split_passthrough<T: AsRef<OsStr>>(argv: Vec<T>) -> (Vec<T>, Vec<T>) {
     match argv.iter().position(|arg| arg.as_ref() == OsStr::new("--")) {
         Some(index) => {
             let mut left = argv;

@@ -9,7 +9,7 @@
 //! Interpretation is observational, never authoritative: a failure becomes a
 //! deduplicated warning on the Summary and leaves the raw bodies, forwarding, and
 //! Request Outcome untouched. See
-//! `docs/adr/0009-request-evidence-and-projections.md`.
+//! `docs/adr/0007-request-evidence-and-materialized-projections.md`.
 
 mod claude;
 mod http;
@@ -18,14 +18,14 @@ mod usage;
 mod wire;
 
 use self::http::{family_from_url, header_text, nonempty, parse_request, trim_ascii};
-use self::usage::{UsageAccumulator, merge_option};
+use self::usage::UsageAccumulator;
 use self::wire::{
     ChoiceEnvelope, JsonResponseEnvelope, ResponseEnvelope, StreamEvent, UsageEnvelope, error_parts,
 };
+use crate::request::model::RecordedHeader;
 pub(crate) use crate::request::model::{
     ProtocolDiagnostic, ProtocolFamily, ProtocolSummary, ResponseModeValue,
 };
-use crate::request::model::{RecordedHeader, TokenUsage};
 use anyhow::Context as _;
 pub(crate) use http::{
     BodyContentCoding, body_content_coding, body_reader, coding_agent_session_id,
@@ -194,8 +194,6 @@ fn push_unique(target: &mut Vec<ProtocolDiagnostic>, value: ProtocolDiagnostic) 
 pub(crate) struct ProtocolObserver {
     summary: ProtocolSummary,
     usage: UsageAccumulator,
-    has_usage: bool,
-    expects_stream_usage: bool,
 }
 
 impl ProtocolObserver {
@@ -244,10 +242,12 @@ impl ProtocolObserver {
             .set_requested_effort(nonempty(effort), Some(at_ns.clone()));
         let streaming = envelope.stream.unwrap_or(false);
         if self.summary.family == ProtocolFamily::OpenaiChatCompletions {
-            self.expects_stream_usage = streaming
-                && envelope
-                    .stream_options
-                    .is_some_and(|options| options.include_usage == Some(true));
+            self.usage.expect_stream_usage(
+                streaming
+                    && envelope
+                        .stream_options
+                        .is_some_and(|options| options.include_usage == Some(true)),
+            );
         }
         changed |= self.summary.set_requested_mode(
             Some(if streaming {
@@ -383,7 +383,7 @@ impl ProtocolObserver {
             self.summary.response_terminal = true;
             changed = true;
         }
-        changed | self.commit_final_usage()
+        changed | self.usage.commit(&mut self.summary)
     }
 
     pub(crate) fn observe_sse_event(
@@ -494,7 +494,7 @@ impl ProtocolObserver {
             return false;
         }
         let mut changed = false;
-        if self.expects_stream_usage && !self.has_usage {
+        if self.usage.stream_usage_missing() {
             changed |= self.summary.add_warning(
                 "token_usage_missing",
                 "OpenAI Chat Completions was asked to include stream usage but reported none",
@@ -647,212 +647,21 @@ impl ProtocolObserver {
         changed
     }
 
+    fn apply_usage(&mut self, usage: &UsageEnvelope, at_ns: Option<String>) -> bool {
+        self.usage.apply(usage, &mut self.summary, at_ns)
+    }
+
+    /// Record the protocol response as terminal and freeze Token Usage.
+    ///
+    /// Terminality is a lifecycle fact about the response, so it stays here;
+    /// only the token arithmetic belongs to the accumulator.
     fn mark_terminal_and_commit_usage(&mut self) -> bool {
         let mut changed = false;
         if !self.summary.response_terminal {
             self.summary.response_terminal = true;
             changed = true;
         }
-        changed | self.commit_final_usage()
-    }
-
-    fn apply_usage(&mut self, usage: &UsageEnvelope, at_ns: Option<String>) -> bool {
-        let chat = self.summary.family == ProtocolFamily::OpenaiChatCompletions;
-        merge_option(
-            &mut self.usage.input_tokens,
-            if chat {
-                usage.prompt_tokens
-            } else {
-                usage.input_tokens
-            },
-        );
-        let input_details = if chat {
-            usage.prompt_tokens_details.as_ref()
-        } else {
-            usage.input_tokens_details.as_ref()
-        };
-        merge_option(
-            &mut self.usage.cached_tokens,
-            input_details.and_then(|value| value.cached_tokens),
-        );
-        merge_option(
-            &mut self.usage.cache_write_tokens,
-            input_details.and_then(|value| value.cache_write_tokens),
-        );
-        let output_details = if chat {
-            usage.completion_tokens_details.as_ref()
-        } else {
-            usage.output_tokens_details.as_ref()
-        };
-        merge_option(
-            &mut self.usage.reasoning_tokens,
-            output_details.and_then(|value| value.reasoning_tokens),
-        );
-        merge_option(
-            &mut self.usage.output_tokens,
-            if chat {
-                usage.completion_tokens
-            } else {
-                usage.output_tokens
-            },
-        );
-        merge_option(&mut self.usage.total_tokens, usage.total_tokens);
-        merge_option(
-            &mut self.usage.cache_read_tokens,
-            usage.cache_read_input_tokens,
-        );
-        merge_option(
-            &mut self.usage.cache_creation_tokens,
-            usage.cache_creation_input_tokens,
-        );
-        let cache_creation = usage.cache_creation.as_ref();
-        let five_minute_cache_writes =
-            cache_creation.and_then(|value| value.ephemeral_5m_input_tokens);
-        let one_hour_cache_writes =
-            cache_creation.and_then(|value| value.ephemeral_1h_input_tokens);
-        merge_option(
-            &mut self.usage.cache_write_5m_tokens,
-            five_minute_cache_writes.or(usage.cache_creation_5m_input_tokens),
-        );
-        merge_option(
-            &mut self.usage.cache_write_1h_tokens,
-            one_hour_cache_writes.or(usage.cache_creation_1h_input_tokens),
-        );
-        self.has_usage = true;
-        self.validate_usage(at_ns)
-    }
-
-    fn validate_usage(&mut self, at_ns: Option<String>) -> bool {
-        match self.summary.family {
-            ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
-                let mut changed = false;
-                if let Some(total) = self.usage.input_tokens {
-                    let cached = self.usage.cached_tokens.unwrap_or(0);
-                    let writes = self.usage.cache_write_tokens.unwrap_or(0);
-                    if total
-                        .checked_sub(cached)
-                        .and_then(|value| value.checked_sub(writes))
-                        .is_none()
-                    {
-                        changed |= self.summary.add_warning(
-                            "token_usage_inconsistent",
-                            "OpenAI input token details exceed the reported total input tokens",
-                            at_ns.clone(),
-                        );
-                    }
-                }
-                if self.summary.family == ProtocolFamily::OpenaiChatCompletions
-                    && let (Some(input), Some(output), Some(total)) = (
-                        self.usage.input_tokens,
-                        self.usage.output_tokens,
-                        self.usage.total_tokens,
-                    )
-                    && input.checked_add(output) != Some(total)
-                {
-                    changed |= self.summary.add_warning(
-                        "token_usage_inconsistent",
-                        format!(
-                            "OpenAI Chat Completions total tokens ({total}) do not equal prompt plus completion tokens ({input} + {output})"
-                        ),
-                        at_ns,
-                    );
-                }
-                return changed;
-            }
-            ProtocolFamily::ClaudeMessages => {
-                let split = self
-                    .usage
-                    .cache_write_5m_tokens
-                    .unwrap_or(0)
-                    .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0));
-                if let (Some(total), Some(split)) = (self.usage.cache_creation_tokens, split)
-                    && (self.usage.cache_write_5m_tokens.is_some()
-                        || self.usage.cache_write_1h_tokens.is_some())
-                    && total != split
-                {
-                    return self.summary.add_warning(
-                        "cache_write_breakdown_inconsistent",
-                        format!(
-                            "Claude cache write total ({total}) does not match the reported 5m/1h breakdown ({split})"
-                        ),
-                        at_ns,
-                    );
-                }
-            }
-            ProtocolFamily::Unknown => {}
-        }
-        false
-    }
-
-    fn commit_final_usage(&mut self) -> bool {
-        if self.summary.token_usage.is_some() {
-            return false;
-        }
-        let Some(usage) = self.normalized_usage() else {
-            return false;
-        };
-        self.summary.token_usage = Some(usage);
-        true
-    }
-
-    fn normalized_usage(&self) -> Option<TokenUsage> {
-        if !self.has_usage {
-            return None;
-        }
-        match self.summary.family {
-            ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
-                let total = self.usage.input_tokens;
-                let cached = self.usage.cached_tokens;
-                let writes = self.usage.cache_write_tokens;
-                let base = total.and_then(|value| {
-                    value
-                        .checked_sub(cached.unwrap_or(0))
-                        .and_then(|value| value.checked_sub(writes.unwrap_or(0)))
-                });
-                Some(TokenUsage {
-                    total_input_tokens: total,
-                    base_input_tokens: base,
-                    cached_input_tokens: cached,
-                    cache_write_tokens: writes,
-                    output_tokens: self.usage.output_tokens,
-                    reasoning_output_tokens: self.usage.reasoning_tokens,
-                    ..TokenUsage::default()
-                })
-            }
-            ProtocolFamily::ClaudeMessages => {
-                let split_reported = self.usage.cache_write_5m_tokens.is_some()
-                    || self.usage.cache_write_1h_tokens.is_some();
-                let split_sum = split_reported
-                    .then(|| {
-                        self.usage
-                            .cache_write_5m_tokens
-                            .unwrap_or(0)
-                            .checked_add(self.usage.cache_write_1h_tokens.unwrap_or(0))
-                    })
-                    .flatten();
-                let writes = self.usage.cache_creation_tokens.or(split_sum);
-                let split_valid = split_reported && writes.is_some() && split_sum == writes;
-                let total = self.usage.input_tokens.and_then(|base| {
-                    base.checked_add(self.usage.cache_read_tokens.unwrap_or(0))?
-                        .checked_add(writes.unwrap_or(0))
-                });
-                Some(TokenUsage {
-                    total_input_tokens: total,
-                    base_input_tokens: self.usage.input_tokens,
-                    cached_input_tokens: self.usage.cache_read_tokens,
-                    cache_write_tokens: (!split_valid).then_some(writes).flatten(),
-                    cache_write_5m_tokens: split_valid
-                        .then_some(self.usage.cache_write_5m_tokens)
-                        .flatten(),
-                    cache_write_1h_tokens: split_valid
-                        .then_some(self.usage.cache_write_1h_tokens)
-                        .flatten(),
-                    output_tokens: self.usage.output_tokens,
-                    reasoning_output_tokens: None,
-                })
-            }
-            ProtocolFamily::Unknown => None,
-        }
+        changed | self.usage.commit(&mut self.summary)
     }
 }
 

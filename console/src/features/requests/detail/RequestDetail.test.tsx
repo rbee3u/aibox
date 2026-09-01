@@ -325,7 +325,9 @@ describe("RequestDetail", () => {
     };
     const { rerender } = renderDetail(terminal);
     let modelSummary = screen.getByRole("region", { name: "Model" });
-    expect(definitionValue(modelSummary, "Session ID")).toHaveTextContent("Not reported");
+    expect(definitionValue(modelSummary, "Coding Agent Session ID")).toHaveTextContent(
+      "Not reported",
+    );
     expect(within(modelSummary).getByTitle("Model Not reported")).toHaveTextContent("Not reported");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
     expect(within(modelSummary).queryByText("Streaming")).not.toBeInTheDocument();
@@ -376,7 +378,7 @@ describe("RequestDetail", () => {
       ...terminalWithoutUsage,
       summary: {
         ...terminalWithoutUsage.summary,
-        outcome: "upstream_error",
+        outcome: "upstream_error" as const,
         protocol: {
           ...terminalWithoutUsage.summary.protocol,
           response_terminal: false,
@@ -406,7 +408,7 @@ describe("RequestDetail", () => {
     ).toBeInTheDocument();
   });
 
-  it("copies the Session ID and renders OpenAI token labels including zero", async () => {
+  it("copies the Coding Agent Session ID and renders OpenAI token labels including zero", async () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
     const detail = withTokenUsage(completedDetail, {
@@ -426,10 +428,12 @@ describe("RequestDetail", () => {
       name: "Output includes 64 reasoning tokens",
     });
     expect(definitionValue(reasoning, "Reasoning")).toHaveTextContent("64");
-    const copy = screen.getByRole("button", { name: "Copy Session ID" });
+    const copy = screen.getByRole("button", { name: "Copy Coding Agent Session ID" });
     await user.click(copy);
     expect(writeText).toHaveBeenCalledWith("629a8f94-d2cb-404c-9c10-a2a682478259");
-    expect(screen.getByRole("button", { name: "Session ID copied" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Coding Agent Session ID copied" }),
+    ).toBeInTheDocument();
 
     rerender(
       <RequestDetail
@@ -439,7 +443,9 @@ describe("RequestDetail", () => {
         })}
       />,
     );
-    expect(screen.getByRole("button", { name: "Copy Session ID" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Copy Coding Agent Session ID" }),
+    ).toBeInTheDocument();
   });
 
   it("renders Chat Completions with the existing OpenAI token hierarchy", () => {

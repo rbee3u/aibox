@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-// Measured after the feature-first restructure; the allowance is unchanged.
 const baselineBytes = 378_629;
 const maxGrowthBytes = 65_536;
 const outputDirectory = resolve(

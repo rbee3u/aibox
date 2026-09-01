@@ -2,11 +2,8 @@ import { useCallback, useMemo, useRef } from "react";
 
 /**
  * Keeps a keyed map of live DOM elements so a page can move focus to a row it
- * does not otherwise hold a ref to.
- *
- * Six call sites built this by hand with a bare `useRef(new Map(...))` plus a
- * register callback. The map is a ref because it never affects rendering; only
- * the keys a caller focuses do.
+ * does not otherwise hold a ref to. Registration affects focus, not rendering,
+ * so the map remains in a ref.
  */
 export function useElementRegistry<Element extends HTMLElement, Key extends string = string>() {
   const elements = useRef(new Map<Key, Element>());

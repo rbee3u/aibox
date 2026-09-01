@@ -100,12 +100,7 @@ export function TenantDialogs({
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
           title={`Delete Tenant ${deleteTarget.names[0]}?`}
-          description={
-            <p className={layout.dialogDescription}>
-              This permanently deletes the Tenant Home, Sessions, Components state, and Named
-              Configs for this Tenant.
-            </p>
-          }
+          message="Permanently deletes Tenant Home, Sessions, Components state, and Named Configs."
           confirmation={deleteTarget.names[0]}
           confirmLabel="Delete Tenant"
           busy={mutationBusy}
@@ -116,18 +111,13 @@ export function TenantDialogs({
       {deleteTarget && deleteTarget.names.length > 1 && (
         <ConfirmDialog
           title="Delete selected Managed Tenants?"
+          message="Permanently deletes each Tenant Home, Sessions, Components state, and Named Configs."
           description={
-            <>
-              <p className={layout.dialogDescription}>
-                This permanently deletes each Tenant Home, its Sessions and Components state, and
-                its Named Configs.
-              </p>
-              <div className={layout.planList}>
-                {deleteTarget.names.map((name) => (
-                  <code key={name}>{name}</code>
-                ))}
-              </div>
-            </>
+            <div className={layout.planList}>
+              {deleteTarget.names.map((name) => (
+                <code key={name}>{name}</code>
+              ))}
+            </div>
           }
           confirmLabel="Delete selected"
           busy={mutationBusy}
@@ -212,21 +202,14 @@ export function TenantDialogs({
       {componentRemoveTarget && (
         <ConfirmDialog
           title={`Remove ${componentLabel(componentRemoveTarget.row.kind)}?`}
-          description={
-            <div className={layout.dialogDescription}>
-              <p>
-                Tenant: <strong>{componentRemoveTarget.tenantLabel}</strong>
-              </p>
-              <p>
-                Current state:{" "}
-                <strong>{canonicalComponentStatus(componentRemoveTarget.row)}</strong>
-              </p>
-              <p>
-                Existing Component-owned state will be deleted. Workspace environments and
-                user-owned package, cache, credential, and configuration state are preserved.
-              </p>
-            </div>
-          }
+          facts={[
+            { label: "Tenant", value: componentRemoveTarget.tenantLabel },
+            {
+              label: "Current state",
+              value: canonicalComponentStatus(componentRemoveTarget.row),
+            },
+          ]}
+          message="Deletes Component-owned state. Workspace environments and user-owned package, cache, credential, and config state are kept."
           confirmLabel="Remove Component"
           busy={mutationBusy}
           onCancel={cancelComponentRemove}

@@ -1,11 +1,8 @@
 import { formatBinaryByteSize as formatBytes } from "@/shared/lib/encoding";
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
-import {
-  orderTenants,
-  type NavigationTarget,
-  type Tone,
-} from "@/features/overview/topology/coreTree";
+import { orderTenants, type NavigationTarget } from "@/features/overview/topology/coreTree";
+import type { Tone } from "@/features/overview/viewTypes";
 
 export interface TopologyHealth {
   configTotal: number;
@@ -124,16 +121,6 @@ export function requestAttentionDetail(data: OverviewData): string {
   const errorLabel = `${data.requests.error} error${data.requests.error === 1 ? "" : "s"}`;
   const warningLabel = `${data.requests.warning} warning${data.requests.warning === 1 ? "" : "s"}`;
   return `${errorLabel} · ${warningLabel}`;
-}
-export function imageTone(status?: OverviewData["runtime_image"]["status"]): Tone {
-  if (status === "built") return "good";
-  if (status === "missing") return "warning";
-  return "neutral";
-}
-export function shortImageId(id: string | null | undefined): string {
-  if (!id) return "—";
-  const value = id.startsWith("sha256:") ? id.slice(7) : id;
-  return value.slice(0, 12);
 }
 export function buildDisabledReason(
   data: OverviewData | null,

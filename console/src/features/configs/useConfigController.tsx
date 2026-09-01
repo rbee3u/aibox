@@ -32,10 +32,8 @@ import {
   type ConfigPendingAction,
   type ConfigSelection,
 } from "@/features/configs/route";
-import {
-  useConfigCatalog,
-  type ConfigCatalogLoadKind,
-} from "@/features/configs/catalog/useConfigCatalog";
+import { useConfigCatalog } from "@/features/configs/catalog/useConfigCatalog";
+import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { useConfigCrud } from "@/features/configs/mutation/useConfigCrud";
 import { useCredentialPropagation } from "@/features/configs/mutation/useCredentialPropagation";
 import { useElementRegistry } from "@/features/common/useElementRegistry";

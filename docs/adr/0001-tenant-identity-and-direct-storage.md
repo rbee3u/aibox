@@ -1,8 +1,7 @@
-# Model persistent identity as Tenants in direct storage
+# Model Tenant identity through direct storage
 
-AIBox models persistent Coding Agent state as either a runnable Managed Tenant
-or the management-only Host Tenant, while Runs and Debug Shells remain
-transient and unrelated to Session identity. The dedicated but unmarked AIBox
-Root uses native files and real Tenant directories as its direct source of
-truth, keeping state inspectable and Tenant scoping uniform without management
-wrappers, layout metadata, or Run History.
+AIBox defines a Managed Tenant by a real directory under the AIBox Root and
+keeps the Root dedicated but unmarked. Host Tenant native Coding Agent state
+lives in the Host Home, while its AIBox-owned Named Config catalog lives under
+the Root in the Agent-specific `__host` catalog; this avoids a registry while
+requiring structural checks at filesystem boundaries.

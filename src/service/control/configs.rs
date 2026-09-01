@@ -251,6 +251,14 @@ pub(crate) struct DiagnoseConfigRequest {
     content_base64: String,
 }
 
+/// One Config syntax error as the Console reads it.
+///
+/// This mirrors [`config::ConfigDiagnostic`] rather than reusing it because the
+/// wire shape carries a `severity` the domain has no notion of. Where a wire
+/// shape matches its domain type exactly, pass the domain type straight through
+/// instead — `RequestOverview` and `ProtocolSummary` do — and keep a second
+/// name only for a genuine difference like this one. A field added to the
+/// domain type has to be added here too before it reaches the Console.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ConfigDiagnostic {

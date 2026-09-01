@@ -1,69 +1,29 @@
 //! Client request-body recording and upstream stream construction.
 
 use super::attempt::RequestAttempt;
-use super::response_stream::recording_failure;
+#[cfg(test)]
+use super::capture::RequestStreamFailure;
+use super::capture::{RequestStreamContext, RequestTarget, request_failure};
+use super::error_response::{finish_proxy_response, recording_failure};
 use crate::foundation::sync::lock_unpoisoned;
 use crate::request::interpretation::ProtocolObserver;
 #[cfg(test)]
 use crate::request::model::ProtocolSummary;
-use crate::request::model::{ErrorKind, RecordedHeader, SummaryMetadata};
-use crate::request::store::{
-    RequestLocator, RequestStore, RuntimeMeasurements, SummaryHandle, offset_ns,
-};
+use crate::request::model::{ErrorKind, Outcome, RecordedHeader, SummaryMetadata};
+#[cfg(test)]
+use crate::request::store::RuntimeMeasurements;
+use crate::request::store::{SummaryHandle, offset_ns};
 use axum::body::Body;
-use axum::http::Response;
+use axum::http::{Response, StatusCode};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use std::io;
-use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::sync::Arc;
+use std::sync::Mutex;
+#[cfg(test)]
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
-
-pub(super) enum RequestTarget {
-    Stored {
-        store: RequestStore,
-        locator: RequestLocator,
-    },
-    #[cfg(test)]
-    Unstored { directory: std::path::PathBuf },
-}
-
-impl RequestTarget {
-    pub(super) fn with_request_path<R>(
-        &self,
-        operation: impl FnOnce(&std::path::Path) -> R,
-    ) -> anyhow::Result<R> {
-        match self {
-            Self::Stored { store, locator } => store.with_request_path(locator, operation),
-            #[cfg(test)]
-            Self::Unstored { directory } => Ok(operation(directory)),
-        }
-    }
-
-    pub(super) fn update_summary(
-        &self,
-        summary: &SummaryHandle,
-        update: impl FnOnce(&mut SummaryMetadata) -> bool,
-    ) -> anyhow::Result<bool> {
-        match self {
-            Self::Stored { store, locator } => store.update_summary(locator, summary, update),
-            #[cfg(test)]
-            Self::Unstored { .. } => Ok(summary.update(update)),
-        }
-    }
-}
-
-pub(super) struct RequestStreamContext {
-    pub(super) measurements: Arc<Mutex<RuntimeMeasurements>>,
-    pub(super) error_slot: Arc<Mutex<Option<RequestStreamFailure>>>,
-    pub(super) summary: SummaryHandle,
-    pub(super) protocol: Arc<Mutex<ProtocolObserver>>,
-    pub(super) request_headers: Vec<RecordedHeader>,
-    pub(super) expected_body_bytes: Option<u64>,
-    pub(super) request: RequestTarget,
-    pub(super) origin: Instant,
-    pub(super) shutdown: tokio_util::sync::CancellationToken,
-}
 
 pub(super) async fn prepare_recorded_request_stream(
     guard: &mut RequestAttempt,
@@ -116,23 +76,6 @@ pub(super) async fn prepare_recorded_request_stream(
         request_file,
         context,
     ))
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct RequestStreamFailure {
-    pub(super) kind: ErrorKind,
-    pub(super) message: String,
-}
-
-pub(super) fn request_failure(
-    slot: &Mutex<Option<RequestStreamFailure>>,
-    kind: ErrorKind,
-    error: &impl ToString,
-) {
-    *lock_unpoisoned(slot) = Some(RequestStreamFailure {
-        kind,
-        message: error.to_string(),
-    });
 }
 
 pub(super) fn recorded_request_stream_with_summary(
@@ -311,4 +254,64 @@ pub(super) fn checkpoint_summary_update(
     update: impl FnOnce(&mut SummaryMetadata) -> bool,
 ) -> anyhow::Result<bool> {
     captured_request.update_summary(summary, update)
+}
+
+/// Drains and records the client request body, then ends the attempt with the
+/// given rejection.
+///
+/// A rejected Request still has a body in flight. Reading it to completion keeps
+/// the recording faithful and lets the client finish its write instead of seeing
+/// a reset, which is why a rejection lives on the request side rather than beside
+/// the response path it never reaches.
+pub(super) async fn reject_with_body(
+    guard: &mut RequestAttempt,
+    body: Body,
+    shutdown: tokio_util::sync::CancellationToken,
+    status: StatusCode,
+    message: &str,
+    outcome: Outcome,
+    kind: ErrorKind,
+) -> Response<Body> {
+    let request_file = match guard.clone_request_body() {
+        Ok(file) => tokio::fs::File::from_std(file),
+        Err(error) => return recording_failure(guard, format!("clone request body file: {error}")),
+    };
+    let mut stream = body.into_data_stream();
+    let mut file = request_file;
+    loop {
+        let next = tokio::select! {
+            () = shutdown.cancelled() => {
+                return finish_proxy_response(
+                    guard,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "AIBox Request Proxy is shutting down",
+                    Outcome::ServerShutdown,
+                    ErrorKind::ServerShutdown,
+                );
+            }
+            next = stream.next() => next,
+        };
+        let Some(next) = next else { break };
+        let chunk = match next {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                return finish_proxy_response(
+                    guard,
+                    StatusCode::BAD_REQUEST,
+                    &format!("read client request body: {error}"),
+                    Outcome::ClientDisconnected,
+                    ErrorKind::RequestBodyFailed,
+                );
+            }
+        };
+        if let Err(error) = file.write_all(&chunk).await {
+            return recording_failure(guard, format!("write Request body: {error}"));
+        }
+        guard.add_request_bytes(chunk.len());
+    }
+    if let Err(error) = file.sync_all().await {
+        return recording_failure(guard, format!("sync request body: {error}"));
+    }
+    guard.mark_request_body_finished();
+    finish_proxy_response(guard, status, message, outcome, kind)
 }

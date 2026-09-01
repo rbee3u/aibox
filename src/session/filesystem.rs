@@ -70,9 +70,8 @@ pub(crate) struct SessionDiscoverySummary {
 
 /// Whether a walked entry is a Transcript we want: a regular `.jsonl` file
 /// whose name passes `keep`. Do not follow a Transcript-shaped symlink created
-/// inside the selected Home: host-side Session access must stay beneath
-/// the selected Home. Shared by the strict and tolerant walks so they cannot
-/// drift on which files count.
+/// inside the selected Home: host-side Session access must stay beneath the
+/// selected Home. Strict and tolerant walks share this predicate.
 fn is_wanted_transcript(entry: &walkdir::DirEntry, keep: &impl Fn(&str) -> bool) -> bool {
     entry.file_type().is_file() && has_wanted_transcript_name(entry.path(), keep)
 }

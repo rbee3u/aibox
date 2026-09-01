@@ -1,36 +1,35 @@
 //! Strict Request detail reads, tolerant catalogs, event timings, and deletion.
 
+use super::event_index::{EventIndexLine, EventIndexReader};
 use super::layout::{
     RequestFile, ResponseFile, canonical_sort_key, optional_json, parse_request_directory_name,
     read_json, regular_file_length, remove_controlled_request_dir, validate_id,
     validate_regular_file, validate_request_ancestor,
 };
+use super::summary::{summary_to_result, validate_schema, validate_summary};
 use super::{
-    DiagnosticMetadata, ErrorKind, ErrorMetadata, FORMAT_VERSION, Outcome, REQUEST_BODY,
-    REQUEST_JSON, RESPONSE_BODY, RESPONSE_EVENTS_JSONL, RESPONSE_JSON, RESULT_JSON,
-    RequestDetailReadError, RequestMetadata, RequestStore, ResponseMetadata, ResponseSource,
-    ResultMetadata, SUMMARY_JSON, StoredEventTiming, StoredEventTimings, StoredRequest,
-    StoredRequestSummary, SummaryMetadata, anchored_at, offset_ns,
+    DiagnosticMetadata, FORMAT_VERSION, Outcome, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
+    RESPONSE_EVENTS_JSONL, RESPONSE_JSON, RESULT_JSON, RequestDetailReadError, RequestMetadata,
+    RequestStore, ResponseMetadata, ResponseSource, SUMMARY_JSON, StoredEventTiming,
+    StoredEventTimings, StoredRequest, StoredRequestSummary, SummaryMetadata, anchored_at,
+    offset_ns,
 };
 use crate::foundation::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
-use crate::request::assessment::calculate_assessment;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use time::OffsetDateTime;
 
 impl RequestStore {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn scan(&self) -> Result<Vec<StoredRequest>> {
+    pub(crate) fn scan(&self) -> Result<Vec<StoredRequest>> {
         let _namespace = read_unpoisoned(&self.namespace);
         self.scan_unlocked()
     }
 
-    pub fn scan_summaries(&self) -> Result<Vec<StoredRequestSummary>> {
+    pub(crate) fn scan_summaries(&self) -> Result<Vec<StoredRequestSummary>> {
         let _namespace = read_unpoisoned(&self.namespace);
         self.scan_summaries_unlocked()
     }
@@ -159,20 +158,25 @@ impl RequestStore {
         Ok(requests)
     }
 
-    pub fn find(&self, id: &str) -> Result<StoredRequest> {
+    pub(crate) fn find(&self, id: &str) -> Result<StoredRequest> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         self.find_unlocked(id)
     }
 
-    pub fn open_body(&self, id: &str, response: bool, offset: u64) -> Result<(fs::File, u64)> {
+    pub(crate) fn open_body(
+        &self,
+        id: &str,
+        response: bool,
+        offset: u64,
+    ) -> Result<(fs::File, u64)> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         let request = self.find_unlocked(id)?;
         self.open_request_body_unlocked(&request, response, offset)
     }
 
-    pub fn open_request_body(
+    pub(crate) fn open_request_body(
         &self,
         request: &StoredRequest,
         response: bool,
@@ -205,13 +209,18 @@ impl RequestStore {
         Ok((file, length))
     }
 
-    pub fn read_event_timings(&self, id: &str, after_sequence: u64) -> Result<StoredEventTimings> {
+    pub(crate) fn read_event_timings(
+        &self,
+        id: &str,
+        after_sequence: u64,
+    ) -> Result<StoredEventTimings> {
         let _namespace = read_unpoisoned(&self.namespace);
         validate_id(id)?;
         let request = self.find_unlocked(id)?;
         validate_request_ancestor(&self.root, &request.directory)?;
-        let path = request.directory.join(RESPONSE_EVENTS_JSONL);
-        if !crate::foundation::safe_fs::real_file_exists(&path, "Request SSE event index")? {
+        let Some(lines) =
+            EventIndexReader::open(&request.directory, &request.request.id, request.active)?
+        else {
             return Ok(StoredEventTimings {
                 available: false,
                 partial: false,
@@ -219,32 +228,14 @@ impl RequestStore {
                 next_sequence: after_sequence,
                 warning: Some("SSE Event timing index is unavailable".to_string()),
             });
-        }
+        };
 
-        let file = crate::foundation::safe_fs::open_real_file(&path, "Request SSE event index")?;
-        let mut reader = std::io::BufReader::new(file);
         let mut events = Vec::new();
         let mut warnings = Vec::new();
         let mut next_sequence = after_sequence;
-        let mut line_number = 0usize;
-        loop {
-            let mut line = Vec::new();
-            let read = reader.read_until(b'\n', &mut line)?;
-            if read == 0 {
-                break;
-            }
-            line_number += 1;
-            let terminated = line.last() == Some(&b'\n');
-            if terminated {
-                line.pop();
-            } else if request.active {
-                break;
-            }
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_slice::<EventIndexLine>(&line) {
-                Ok(entry) if event_index_entry_valid(&entry, &request.request.id) => {
+        for (line_number, line) in lines {
+            match line? {
+                EventIndexLine::Entry(entry) => {
                     next_sequence = next_sequence.max(entry.sequence.saturating_add(1));
                     if entry.sequence >= after_sequence {
                         events.push(StoredEventTiming {
@@ -253,10 +244,10 @@ impl RequestStore {
                         });
                     }
                 }
-                Ok(_) => warnings.push(format!(
+                EventIndexLine::InvalidMetadata => warnings.push(format!(
                     "line {line_number}: SSE Event timing index line has invalid metadata"
                 )),
-                Err(error) => warnings.push(format!(
+                EventIndexLine::Unparsable(error) => warnings.push(format!(
                     "line {line_number}: cannot parse SSE Event timing index line: {error}"
                 )),
             }
@@ -278,7 +269,7 @@ impl RequestStore {
         })
     }
 
-    pub fn find_with_event_index_warnings(
+    pub(crate) fn find_with_event_index_warnings(
         &self,
         id: &str,
     ) -> std::result::Result<StoredRequest, RequestDetailReadError> {
@@ -292,7 +283,7 @@ impl RequestStore {
         Ok(request)
     }
 
-    pub fn delete_ids(&self, ids: &[String]) -> Result<usize> {
+    pub(crate) fn delete_ids(&self, ids: &[String]) -> Result<usize> {
         let _namespace = write_unpoisoned(&self.namespace);
         if ids.is_empty() {
             bail!("at least one Request id is required");
@@ -338,7 +329,7 @@ impl RequestStore {
     }
 }
 
-pub(super) fn read_request_summary(
+fn read_request_summary(
     path: &Path,
     active: &HashMap<String, Instant>,
 ) -> Result<StoredRequestSummary> {
@@ -446,7 +437,7 @@ fn read_request(path: &Path, active: &HashMap<String, Instant>) -> Result<Stored
     })
 }
 
-pub(super) fn active_elapsed_ns(
+fn active_elapsed_ns(
     terminal: bool,
     active: &HashMap<String, Instant>,
     request_id: &str,
@@ -455,105 +446,6 @@ pub(super) fn active_elapsed_ns(
         None
     } else {
         active.get(request_id).copied().map(offset_ns)
-    }
-}
-
-pub(super) fn validate_schema(version: u32, kind: &str, expected: &str) -> Result<()> {
-    if version != FORMAT_VERSION {
-        bail!("unsupported Request schema version {version}");
-    }
-    if kind != expected {
-        bail!("Request metadata kind is not {expected}");
-    }
-    Ok(())
-}
-
-pub(super) fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
-    if summary.terminal != summary.outcome.is_some() {
-        bail!("Request summary terminal and outcome fields are inconsistent");
-    }
-    if summary.terminal && summary.timing.finished_at_ns.is_none() {
-        bail!("terminal Request summary has no finished timing");
-    }
-    if summary.request.method.is_empty() || summary.request.http_version.is_empty() {
-        bail!("Request summary request projection is incomplete");
-    }
-    if summary
-        .protocol
-        .as_ref()
-        .is_some_and(|protocol| protocol.token_usage.is_some() && !protocol.response_terminal)
-    {
-        bail!("Request protocol summary has final Token Usage before a terminal response");
-    }
-    let expected_assessment = calculate_assessment(summary, !summary.terminal, false);
-    if summary.assessment != expected_assessment {
-        bail!("Request summary assessment is inconsistent with its evidence");
-    }
-    let protocol_offsets = summary.protocol.as_ref().into_iter().flat_map(|protocol| {
-        std::iter::once(protocol.first_token_at_ns.as_deref())
-            .chain(
-                protocol
-                    .errors
-                    .iter()
-                    .chain(&protocol.warnings)
-                    .map(|diagnostic| diagnostic.at_ns.as_deref()),
-            )
-            .flatten()
-    });
-    for value in [
-        summary.timing.upstream_request_started_at_ns.as_deref(),
-        summary
-            .timing
-            .upstream_request_body_first_byte_at_ns
-            .as_deref(),
-        summary
-            .timing
-            .upstream_request_body_completed_at_ns
-            .as_deref(),
-        summary.timing.upstream_response_headers_at_ns.as_deref(),
-        summary
-            .timing
-            .upstream_response_body_first_byte_at_ns
-            .as_deref(),
-        summary
-            .timing
-            .upstream_response_body_completed_at_ns
-            .as_deref(),
-        summary.timing.finished_at_ns.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .chain(protocol_offsets)
-    {
-        if value.parse::<u128>().is_err() {
-            bail!("Request summary timing offset is not a decimal string");
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn summary_to_result(summary: &SummaryMetadata) -> ResultMetadata {
-    let outcome = summary.outcome.unwrap_or(Outcome::RecordingFailed);
-    let total_ms = summary
-        .timing
-        .finished_at_ns
-        .as_deref()
-        .and_then(|value| value.parse::<u128>().ok())
-        .map(|ns| (ns / 1_000_000) as u64)
-        .unwrap_or_default();
-    let error = summary.errors.last().map(|error| ErrorMetadata {
-        kind: parse_error_kind(&error.kind),
-        message: error.message.clone(),
-    });
-    ResultMetadata {
-        format_version: FORMAT_VERSION,
-        ended_at: summary_ended_at(summary),
-        request_bytes: 0,
-        response_bytes: 0,
-        request_body_ms: None,
-        total_ms,
-        outcome,
-        error,
     }
 }
 
@@ -573,118 +465,32 @@ pub(super) fn terminal_summary_matches(
     )
 }
 
-pub(super) fn summary_ended_at(summary: &SummaryMetadata) -> String {
-    let Some(offset) = summary
-        .timing
-        .finished_at_ns
-        .as_deref()
-        .and_then(|value| value.parse::<i64>().ok())
-    else {
-        return summary.observed_at.clone();
-    };
-    let format = time::format_description::well_known::Rfc3339;
-    let Some(observed) = OffsetDateTime::parse(&summary.observed_at, &format).ok() else {
-        return summary.observed_at.clone();
-    };
-    (observed + time::Duration::nanoseconds(offset))
-        .format(&format)
-        .unwrap_or_else(|_| summary.observed_at.clone())
-}
-
-pub(super) fn parse_error_kind(kind: &str) -> ErrorKind {
-    serde_json::from_str(&format!("\"{kind}\"")).unwrap_or(ErrorKind::RecordingFailed)
-}
-
-pub(super) fn error_phase(kind: ErrorKind) -> &'static str {
-    match kind {
-        ErrorKind::ClientConfiguration
-        | ErrorKind::ConnectNotSupported
-        | ErrorKind::ConnectTimeout
-        | ErrorKind::DnsError
-        | ErrorKind::InvalidTargetUrl
-        | ErrorKind::NonPublicTarget
-        | ErrorKind::RequestBodyFailed
-        | ErrorKind::RequestRecordingFailed
-        | ErrorKind::UpgradeNotSupported
-        | ErrorKind::UpstreamRequestFailed => "request",
-        ErrorKind::ClientDisconnected
-        | ErrorKind::ResponseRecordingFailed
-        | ErrorKind::UpstreamResponseFailed => "response",
-        ErrorKind::EventIndexFailed | ErrorKind::RecordingFailed => "recording",
-        ErrorKind::ServerShutdown => "lifecycle",
-    }
-}
-
-#[derive(Deserialize)]
-struct EventIndexLine {
-    schema_version: u32,
-    request_id: String,
-    kind: String,
-    sequence: u64,
-    body_start: u64,
-    body_end: u64,
-    first_arrival_at_ns: String,
-    completed_at_ns: String,
-}
-
-fn event_index_entry_valid(entry: &EventIndexLine, request_id: &str) -> bool {
-    entry.schema_version == FORMAT_VERSION
-        && entry.request_id == request_id
-        && entry.kind == "sse_event"
-        && entry.body_start <= entry.body_end
-        && entry.first_arrival_at_ns.parse::<u128>().is_ok()
-        && entry.completed_at_ns.parse::<u128>().is_ok()
-}
-
 fn append_event_index_warnings(
     path: &Path,
     summary: &mut SummaryMetadata,
     active: bool,
 ) -> Result<()> {
-    let index_path = path.join(RESPONSE_EVENTS_JSONL);
-    if !crate::foundation::safe_fs::real_file_exists(&index_path, "Request SSE event index")? {
+    let Some(lines) = EventIndexReader::open(path, &summary.request_id, active)? else {
         return Ok(());
-    }
-    let file = crate::foundation::safe_fs::open_real_file(&index_path, "Request SSE event index")?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut line_number = 0usize;
-    loop {
-        let mut line = Vec::new();
-        let read = match reader.read_until(b'\n', &mut line) {
-            Ok(read) => read,
-            Err(error) => {
-                let warning = event_index_warning(
-                    summary,
-                    line_number + 1,
-                    &format!("cannot read SSE event index line: {error}"),
-                );
-                summary.warnings.push(warning);
-                break;
+    };
+    for (line_number, line) in lines {
+        let (message, stop) = match line {
+            Ok(EventIndexLine::Entry(_)) => continue,
+            Ok(EventIndexLine::InvalidMetadata) => (
+                "SSE event index line has invalid metadata".to_string(),
+                false,
+            ),
+            Ok(EventIndexLine::Unparsable(error)) => {
+                (format!("cannot parse SSE event index line: {error}"), false)
             }
+            // A read failure recurs on every further line, so it ends the walk.
+            Err(error) => (format!("cannot read SSE event index line: {error}"), true),
         };
-        if read == 0 {
-            break;
-        }
-        line_number += 1;
-        let terminated = line.last() == Some(&b'\n');
-        if terminated {
-            line.pop();
-        } else if active {
-            break;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let warning = match serde_json::from_slice::<EventIndexLine>(&line) {
-            Ok(entry) if event_index_entry_valid(&entry, &summary.request_id) => {
-                let _ = entry.sequence;
-                continue;
-            }
-            Ok(_) => "SSE event index line has invalid metadata".to_string(),
-            Err(error) => format!("cannot parse SSE event index line: {error}"),
-        };
-        let warning = event_index_warning(summary, line_number, &warning);
+        let warning = event_index_warning(summary, line_number, &message);
         summary.warnings.push(warning);
+        if stop {
+            break;
+        }
     }
     Ok(())
 }

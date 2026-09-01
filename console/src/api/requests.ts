@@ -6,7 +6,6 @@ import type {
   AssessmentLevel,
   AssessmentPrimary,
   AssessmentSource,
-  DiagnosticGroups as GeneratedDiagnosticGroups,
   EventTimingEntry,
   EventTimingResponse,
   EventTimingState,
@@ -22,9 +21,9 @@ import type {
   RequestSummary,
   RequestedEffective,
   RequestedObserved,
+  ResponseDetail as GeneratedResponseDetail,
   ResponseModeValue,
   ResultMetadata as GeneratedResultMetadata,
-  SummaryMetadata as GeneratedSummaryMetadata,
   TokenUsage,
 } from "@/api/generated/wire";
 
@@ -51,38 +50,27 @@ export type BodyKind = "request" | "response";
 
 export type EventTimingIndex = EventTimingResponse;
 
+/**
+ * The three stored documents, minus what only the store itself reads.
+ *
+ * Each is derived from its generated type rather than restated, so a field added
+ * on the Rust side arrives here instead of being silently dropped: a hand-written
+ * mirror of a wire type stays compilable while it goes stale.
+ */
 export type RequestMetadata = Omit<GeneratedRequestMetadata, "format_version">;
-
-export interface ResponseMetadata {
-  status: number;
-  source: string;
-  headers_at: string;
-  http_version: string;
-  reason_phrase: string | null;
-  headers: HeaderValue[];
-}
-
-type DiagnosticGroups = GeneratedDiagnosticGroups;
-type SummaryMetadata = Omit<GeneratedSummaryMetadata, "outcome"> & { outcome: string | null };
+export type ResponseMetadata = Omit<GeneratedResponseDetail, "format_version">;
 type ResultMetadata = Omit<
   GeneratedResultMetadata,
   "format_version" | "request_bytes" | "response_bytes" | "request_body_ms"
 >;
 export type RequestList = GeneratedRequestList;
 
-export interface RequestDetail {
+/** A Request's detail read, with the three documents narrowed as above. */
+export type RequestDetail = Omit<GeneratedRequestDetail, "request" | "response" | "result"> & {
   request: RequestMetadata;
   response: ResponseMetadata | null;
   result: ResultMetadata | null;
-  summary: SummaryMetadata;
-  assessment: RequestAssessment;
-  diagnostics: DiagnosticGroups;
-  state: RequestState;
-  request_body_bytes: number;
-  response_body_bytes: number;
-  live_total_ms: number | null;
-  timeline_end_at_ns: string | null;
-}
+};
 
 export type RequestLookup = RequestDetail | { kind: "missing" };
 

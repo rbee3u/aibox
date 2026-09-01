@@ -10,7 +10,7 @@ import {
   type ConfigDeleteTarget,
   type ConfigSelection,
 } from "@/features/configs/route";
-import type { ConfigCatalogLoadKind } from "@/features/configs/catalog/useConfigCatalog";
+import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { messageOf } from "@/shared/lib/errors";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 

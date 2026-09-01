@@ -3,9 +3,8 @@ import { useEffect, type RefObject } from "react";
 const NARROW_LAYOUT_QUERY = "(max-width: 760px)";
 
 /**
- * Moves focus to a detail pane's back control when a narrow layout replaces the
- * catalog with that detail. Desktop layouts keep both panes visible and are
- * therefore left alone.
+ * Moves focus into a detail region when a narrow layout replaces the catalog.
+ * Desktop layouts keep both regions visible and are left alone.
  */
 export function useNarrowDetailFocus(
   target: RefObject<HTMLElement | null>,

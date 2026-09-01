@@ -26,6 +26,7 @@ mod tenants;
 pub(crate) use components::ComponentRow;
 use components::component_rows_from;
 use response::content;
+pub(crate) use tenants::TenantRow;
 
 pub(crate) fn router() -> Router<ServiceState> {
     routes::router()
@@ -94,10 +95,6 @@ fn status_for_application_error(kind: ApplicationErrorKind) -> StatusCode {
     }
 }
 
-fn busy(message: &str) -> Response<Body> {
-    api_error(StatusCode::CONFLICT, message)
-}
-
 fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Response<Body> {
     match serde_json::to_vec(value) {
         Ok(bytes) => content(status, "application/json; charset=utf-8", bytes),
@@ -110,10 +107,8 @@ fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Response<Body> 
 
 /// Render one Control API failure.
 ///
-/// Every Control route shares this envelope. The HTTP status already carries
-/// the code, so the body holds only the message: a second nested `code` field
-/// duplicated the status without a reader, and the two shapes that existed
-/// before meant the Console could only decode one of them.
+/// Every Control route returns the same `{"error":"<message>"}` envelope; the
+/// HTTP status carries the failure category.
 fn api_error(status: StatusCode, message: &str) -> Response<Body> {
     let body = serde_json::to_vec(&ControlErrorResponse { error: message })
         .unwrap_or_else(|_| b"{\"error\":\"Control API error\"}".to_vec());

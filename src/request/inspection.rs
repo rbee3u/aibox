@@ -11,6 +11,7 @@ use super::store::{
     timeline_end_at_ns,
 };
 use anyhow::{Context as _, Result};
+use serde::Serialize;
 use std::fs;
 
 #[derive(Clone)]
@@ -18,6 +19,11 @@ pub(crate) struct RequestInspection {
     store: RequestStore,
 }
 
+/// Aggregate counts across every recorded Request.
+///
+/// This is a read-time projection, not persisted Request evidence.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RequestOverview {
     pub(crate) total: usize,
     pub(crate) active: usize,
@@ -118,11 +124,6 @@ impl RequestInspection {
             }
         }
         Ok(overview)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn store(&self) -> RequestStore {
-        self.store.clone()
     }
 }
 

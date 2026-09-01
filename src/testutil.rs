@@ -1,7 +1,38 @@
 //! Shared test helpers for executable stubs, argv assertions, filesystem
-//! permissions, and JSONL fixtures.
+//! permissions, JSONL fixtures, and cross-suite test doubles.
 
+use crate::component::{ComponentKind, LatestProvider, LatestResult};
+use futures_util::future::BoxFuture;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// A [`LatestProvider`] that answers from a fixed table instead of the network.
+pub(crate) struct FixtureLatestProvider {
+    pub(crate) results: BTreeMap<String, LatestResult>,
+}
+
+impl FixtureLatestProvider {
+    /// A provider with no results, so every Component reports unavailable.
+    pub(crate) fn empty() -> Self {
+        Self {
+            results: BTreeMap::new(),
+        }
+    }
+}
+
+impl LatestProvider for FixtureLatestProvider {
+    fn fetch(&self, kind: ComponentKind) -> BoxFuture<'static, LatestResult> {
+        let result =
+            self.results
+                .get(kind.name())
+                .cloned()
+                .unwrap_or_else(|| LatestResult::Unavailable {
+                    source: kind.name(),
+                    error: "fixture has no result".to_string(),
+                });
+        Box::pin(async move { result })
+    }
+}
 
 /// Write `body` to `dir/name` as an executable stub, returning its path.
 #[cfg(unix)]

@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 /// True when the host is Linux. Gates the `--user host-uid:gid` and
 /// `--add-host host.docker.internal:host-gateway` Docker flags. Docker Desktop
 /// on macOS handles ownership and that hostname without these flags.
-pub fn is_linux() -> bool {
+pub(crate) fn is_linux() -> bool {
     cfg!(target_os = "linux")
 }
 
@@ -17,7 +17,7 @@ pub fn is_linux() -> bool {
 /// `/workspace` stay owned by the invoking user. Only meaningful on Linux;
 /// callers gate on [`is_linux`] first.
 #[cfg(unix)]
-pub fn uid_gid() -> (u32, u32) {
+pub(crate) fn uid_gid() -> (u32, u32) {
     use rustix::process::{getgid, getuid};
     (getuid().as_raw(), getgid().as_raw())
 }
@@ -31,7 +31,7 @@ pub fn uid_gid() -> (u32, u32) {
 
 /// True only when both stdin and stdout are TTYs. Decides `-it` (interactive)
 /// vs `-i` (piped) so that piping into the agent or Debug Shell still works.
-pub fn has_tty() -> bool {
+pub(crate) fn has_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 

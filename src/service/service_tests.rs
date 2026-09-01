@@ -17,9 +17,7 @@ pub(crate) fn test_state(root: &Path) -> ServiceState {
         "127.0.0.1:9923".parse().unwrap(),
         "test-csrf".to_string(),
         RequestProxyState::new_with_reporter(root, shutdown, None).unwrap(),
-        Arc::new(crate::component::FixtureLatestProvider {
-            results: std::collections::BTreeMap::new(),
-        }),
+        Arc::new(crate::testutil::FixtureLatestProvider::empty()),
     )
 }
 
@@ -414,7 +412,8 @@ async fn management_routes_require_loopback_and_reserve_the_aibox_namespace() {
 
 #[tokio::test]
 async fn component_update_check_is_shared_partial_and_socket_free() {
-    use crate::component::{FixtureLatestProvider, LatestResult};
+    use crate::component::LatestResult;
+    use crate::testutil::FixtureLatestProvider;
     use std::collections::BTreeMap;
 
     let root = tempfile::tempdir().unwrap();

@@ -65,9 +65,10 @@ from a rendered page. A unit test follows its module into `catalog/`, `detail/`,
 or `mutation/`; a page-level interaction test stays at the feature root. Each
 domain keeps interaction tests that render its real page against a strict fake
 of its own API interface, split by theme rather than collected into one suite.
-Test
-doubles live with what they double: each feature has its own `testSupport.tsx`
-(Requests calls its pair `testFixtures.ts` and `testHarness.tsx`), and
+Test doubles live with what they double. Sessions and Tenants keep one
+`testSupport.tsx`; Requests and Configs have enough fixture data to separate it
+from the harness that renders the page, so both name that pair
+`testFixtures.ts` and `testHarness.tsx`.
 `features/common/testFixtures.ts` holds the Tenant rows several features assume.
 The Tenants fixture stays local because its Tenant Homes are load-bearing: one
 sits under the Host Home to exercise `~/...` abbreviation and one outside it to
@@ -127,7 +128,13 @@ Console layer. `api/` and `shared/` may depend on `domain/` but not on each
 other. `features/common/` may depend on `api/`, `shared/`, and `domain/`, but on
 no feature. A feature may depend on its own files plus those four layers; `app/`
 composes every layer. ESLint's `no-restricted-imports` rules reject reversed
-edges and cross-feature imports. `src/test` is exempt because its harnesses
+edges and cross-feature imports, and one further rule per concern subdirectory
+rejects a `catalog/`, `detail/`, `mutation/`, `topology/`, or `components/`
+module importing a sibling concern. Those subdirectory rules restate their
+feature's patterns because `no-restricted-imports` options are replaced rather
+than merged for a file two configs match. The concern list is read from
+`src/features/<feature>/` at config load, so a newly added subdirectory is
+governed the day it appears. `src/test` is exempt because its harnesses
 compose whole pages. Files are imported through the `@/` alias; there are no
 barrel files, so every import names the module it uses.
 
@@ -165,16 +172,26 @@ subdirectories hold what exactly one concern uses, so a module's location states
 who depends on it: `sessions/sessionSource.ts` stays at the root because the
 catalog, detail, mutation, and route code all read it, while
 `sessions/detail/sessionFormat.ts` moved down because only detail does.
+The rule runs the other way too. `configs/viewTypes.ts` holds the catalog load
+kind at the feature root because both `mutation/` hooks and the controller read
+it, and `overview/viewTypes.ts` holds the `Tone` union because both `topology/`
+and `components/` render from it. One concern reaching sideways for another's
+module is the signal that the module belongs to the feature instead, so ESLint
+forbids that edge and the diagnostic names the fix. A single reader moves the
+other way: `overview/components/runtimeImage.ts` holds the Runtime Image tone
+and short-id projections because only that concern reads them.
 `features/overview/` keeps `topology/` and `components/` instead — it has
 neither a catalog nor a detail pane.
 
 Controllers own URL synchronization, latest-request ownership, dialogs, and
-mutation orchestration. All four catalog controllers expose grouped view models
-such as `catalog`, `detail`, `selection`, `mutations`, `dialogs`, and
-`feedback`, with feature-specific `editor` or `components` groups, so views do
-not receive a flat collection of setters, refs, mutable maps, or inferred
-controller return types. A hook whose result spans more than one group returns
-those groups itself. `useComponentActions` returns `components` and `dialogs`;
+mutation orchestration. Every controller exposes a grouped view model rather
+than a flat collection of setters, refs, mutable maps, or inferred controller
+return types. The four catalog controllers group by `catalog`, `detail`,
+`selection`, `mutations`, `dialogs`, and `feedback`, with feature-specific
+`editor` or `components` groups. Overview has none of those panes, so it groups
+by its own three concerns instead: `service`, `topology`, and `attention`.
+A hook whose result spans more than one group returns those groups itself:
+`useComponentActions` returns `components` and `dialogs`, and
 `useSessionDeletion` returns `mutations` and `dialogs`. So the controller
 spreads them instead of forwarding each field, and adding a field is one edit
 rather than three. Their feature-local reducers own only cross-action workflow
@@ -194,9 +211,11 @@ two read-only resource lifecycles.
 vocabulary, version comparison, Latest Release observation, and row derivation
 in `componentCatalog.ts`, with `useTenantController.ts` composing separate
 Tenant and Component catalog hooks plus actions and dialogs.
-`useComponentCatalog.ts` owns the selected Tenant's Component snapshot,
-`useComponentLatest.ts` owns the Service-wide Latest Release snapshot, and
-`useComponentMenu.ts` owns anchored menu focus and positioning.
+Its three Component hooks sit under `mutation/` because
+`useComponentActions.ts` is their only reader: `useComponentCatalog.ts` owns the
+selected Tenant's Component snapshot, `useComponentLatest.ts` owns the
+Service-wide Latest Release snapshot, and `useComponentMenu.ts` owns anchored
+menu focus and positioning.
 `features/configs/` keeps the file editor, visual option editor, and CodeMirror
 integration under `detail/`, since editing a Config is what its detail pane
 does; `useConfigEditorSession.ts` coordinates file controllers and ordered
@@ -235,8 +254,8 @@ Config, Session, Requests, and Operation interfaces over the single
 binary Bodies; each `api/<domain>.ts` owns its paths, query strings, wire
 bodies, conversion, and feature-facing port, and `api/operations.ts` owns the
 SSE subscription. Generated TypeScript interfaces mirror the Rust JSON
-responses, including raw Summary timing, Request Outcome, the top-level Coding
-Agent Session ID, the persisted Model Protocol Summary and Request Assessment,
+responses, including raw Summary timing, Request Outcome, and the top-level
+`Coding Agent Session ID`, the persisted Model Protocol Summary and Request Assessment,
 and normalized Diagnostics groups. Pages receive only their domain API
 interface so tests can use strict, deterministic fakes without sockets, HTTP
 paths, snake_case, or wire-body knowledge. Adapter tests alone own those HTTP
@@ -560,8 +579,8 @@ compact desktop label-and-control rows that stack on narrow screens. Native
 paths stay in Raw, descriptions use hover-and-focus help tooltips, and required
 Options use an accessible `*`. Closed enum controls use declared native values;
 optional enums and booleans expose **Default** to omit their Config Field.
-Current Config files always open in Raw, with Visual available only as an
-optional view when supported. The editor header keeps Tenant, Coding Agent,
+Current Config files always open in Raw; Visual is available only for supported
+Named Config main files. The editor header keeps Tenant, Coding Agent,
 Config, and File visible as separate context fields. **Apply to Current Config**
 is a one-shot projection of fixed Config Fields, never an Active Config
 association. Confirmation, success feedback, Last applied, and Config Drift use
@@ -750,8 +769,8 @@ output.
 The detail Summary presents Model and Token Usage in one pale hierarchy card.
 The effective-or-requested model is the primary value, followed after a space by
 a weaker reasoning effort. A `Streaming` or `Non-streaming` badge follows when
-that fact is available. Session ID remains on its own secondary row with an
-inline copy control. A missing model says `Not reported`, or `Detecting…` while
+that fact is available. Coding Agent Session ID remains on its own secondary row
+with an inline copy control. A missing model says `Not reported`, or `Detecting…` while
 active; missing optional qualifiers are omitted.
 
 Token Usage follows the provider billing categories in one responsive table.

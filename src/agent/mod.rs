@@ -1,8 +1,9 @@
 //! Coding Agent-specific runtime and configuration contracts.
 //!
-//! [`AgentKind`] holds every match over the closed Agent set, so adding an
-//! Agent makes the compiler name each contract still missing. Each Agent's
-//! field table and templates live in its own module.
+//! [`AgentKind`] centralizes matches that define shared runtime and Config
+//! contracts for the closed Agent set. Domain-owned behavior matches the Agent
+//! in its owning module. Each Agent's Config Field table and templates live in
+//! its own module.
 //!
 //! Shared orchestration asks [`AgentKind`] for paths, Named Config files, and
 //! command construction. Transcript parsing remains in the two Session backend
@@ -53,15 +54,13 @@ pub(crate) struct MainConfigField {
 
 const NO_ENUM_VALUES: &[&str] = &[];
 
-/// Which Coding Agent a command targets.
-///
-/// Selected by `--agent` on Coding Agent-scoped commands.
+/// Coding Agent identity used across execution and management domains.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
 )]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
-pub enum AgentKind {
+pub(crate) enum AgentKind {
     /// Anthropic Claude Code.
     Claude,
     /// OpenAI Codex.
@@ -70,10 +69,10 @@ pub enum AgentKind {
 
 impl AgentKind {
     /// Every Coding Agent supported by AIBox.
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+    pub(crate) const ALL: [Self; 2] = [Self::Claude, Self::Codex];
 
     /// Lowercase name used by the CLI, paths, and executable.
-    pub const fn tag(self) -> &'static str {
+    pub(crate) const fn tag(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -81,7 +80,7 @@ impl AgentKind {
     }
 
     /// Agent state directory relative to the selected Tenant Home or Host Home.
-    pub const fn state_dir_name(self) -> &'static str {
+    pub(crate) const fn state_dir_name(self) -> &'static str {
         match self {
             Self::Claude => ".claude",
             Self::Codex => ".codex",
@@ -89,7 +88,7 @@ impl AgentKind {
     }
 
     /// Primary native Current Config file.
-    pub const fn main_config_file(self) -> &'static str {
+    pub(crate) const fn main_config_file(self) -> &'static str {
         match self {
             Self::Claude => "settings.json",
             Self::Codex => "config.toml",
@@ -97,7 +96,7 @@ impl AgentKind {
     }
 
     /// Native authentication file in the Current Config, when separate.
-    pub const fn native_auth_file(self) -> Option<&'static str> {
+    pub(crate) const fn native_auth_file(self) -> Option<&'static str> {
         match self {
             Self::Claude => None,
             Self::Codex => Some("auth.json"),
@@ -105,7 +104,7 @@ impl AgentKind {
     }
 
     /// Native files comprising a Named Config or Current Config.
-    pub const fn config_files(self) -> &'static [&'static str] {
+    pub(crate) const fn config_files(self) -> &'static [&'static str] {
         match self {
             Self::Claude => &["settings.json"],
             Self::Codex => &["config.toml", "auth.json"],
@@ -113,7 +112,7 @@ impl AgentKind {
     }
 
     /// Empty native content used when editing a missing Current Config file.
-    pub fn empty_config_file(self, file: &str) -> Option<&'static str> {
+    pub(crate) fn empty_config_file(self, file: &str) -> Option<&'static str> {
         match (self, file) {
             (Self::Claude, "settings.json") | (Self::Codex, "auth.json") => Some("{}\n"),
             (Self::Codex, "config.toml") => Some(""),
@@ -130,7 +129,7 @@ impl AgentKind {
     }
 
     /// Built-in native main configuration used when the Console creates a Named Config.
-    pub const fn config_template(self) -> &'static str {
+    pub(crate) const fn config_template(self) -> &'static str {
         match self {
             Self::Claude => claude::DEFAULT_CONFIG,
             Self::Codex => codex::DEFAULT_CONFIG,
@@ -138,7 +137,7 @@ impl AgentKind {
     }
 
     /// Built-in native credential template used when the Console creates a Named Config.
-    pub const fn config_auth_template(self) -> Option<&'static str> {
+    pub(crate) const fn config_auth_template(self) -> Option<&'static str> {
         match self {
             Self::Claude => None,
             Self::Codex => Some(codex::DEFAULT_AUTH),

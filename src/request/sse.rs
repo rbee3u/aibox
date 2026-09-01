@@ -5,7 +5,9 @@
 //! request that asked for streaming but received no Content-Type. Identity
 //! streams are then parsed by [`SseIndexer`] as they are forwarded; its
 //! `response.events.jsonl` entries point into the unchanged `response.body`
-//! rather than copying payloads. Content-encoded streams remain opaque.
+//! rather than copying payloads. Content-encoded streams remain opaque to live
+//! byte-range indexing, while completed bodies or recorded prefixes may still
+//! be decoded and replayed for protocol evidence.
 //!
 //! Indexing is deliberately subordinate to forwarding: a non-contiguous chunk or
 //! a write failure disables it and becomes a Request warning without altering the

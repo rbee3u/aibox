@@ -17,6 +17,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub(crate) use application::{application_status, apply_named_config};
 pub(crate) use auth::{
     AuthPropagationPlan, AuthPropagationPreview, AuthPropagationReport,
     credential_propagation_source_available, execute_auth_propagation, plan_auth_propagation_from,
@@ -30,15 +31,14 @@ pub(crate) use catalog::{
     ConfigCatalogEntry, CurrentConfigInspection, create_named_config, delete_named_configs,
     inspect_current_config, inspect_named_configs,
 };
-pub(crate) use definition::{application_status, apply_named_config};
+pub(crate) use editing::{
+    config_file_warnings, diagnose_config_file, inspect_named_codex_auth, read_config_file_target,
+    save_config_file_target, visual_config_state,
+};
 #[cfg(test)]
 pub(crate) use editing::{read_config_file, save_config_file, save_config_file_with_linked};
 #[cfg(test)]
 pub(crate) use files::ensure_named_config_directory;
-pub(crate) use native::{
-    config_file_warnings, diagnose_config_file, inspect_named_codex_auth, read_config_file_target,
-    save_config_file_target, visual_config_state,
-};
 pub(crate) use visual::{
     CodexAuthInspection, CustomProviderInput, CustomProviderState, VisualAuthInput,
     VisualConfigOptionInput, VisualConfigOptionState, VisualConfigState,
@@ -146,7 +146,10 @@ impl ConfigTarget {
 /// One legal Raw or Visual Config edit submitted after wire decoding.
 #[derive(Clone, Debug)]
 pub(crate) enum ConfigEdit {
-    /// Replace the selected native file with arbitrary decoded bytes.
+    /// Submit decoded bytes for the selected native file.
+    ///
+    /// Current Config accepts arbitrary bytes; Named Config validates the
+    /// selected file before committing it.
     Raw {
         content: Vec<u8>,
         custom_provider: Option<CustomProviderInput>,
@@ -259,7 +262,3 @@ pub(crate) struct ConfigDiagnostic {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "definition_visual_tests.rs"]
-mod definition_visual_tests;

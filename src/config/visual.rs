@@ -361,3 +361,7 @@ pub(crate) fn inspect_codex_auth(
         warnings,
     })
 }
+
+#[cfg(test)]
+#[path = "visual_tests.rs"]
+mod tests;

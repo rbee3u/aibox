@@ -1,8 +1,9 @@
 //! Overview and Topology Control API read projections.
 
-use super::{ComponentRow, ControlResult, component_rows_from, json_response};
+use super::{ComponentRow, ControlResult, TenantRow, component_rows_from, json_response};
 use crate::agent::AgentKind;
 use crate::config;
+use crate::request::RequestOverview;
 use crate::service::coordination::{
     OverviewCoordinator, OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot,
 };
@@ -48,32 +49,48 @@ pub(crate) struct ServiceOverview {
     aibox_root: String,
 }
 
+/// Whether the Docker client answered.
+///
+/// A closed enum rather than a `&'static str` so the generated Console binding
+/// is a union of the states this actually emits. The Console decides what to
+/// render from it, and a bare `string` there would push that check to runtime.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DockerStatus {
+    Available,
+    Unavailable,
+}
+
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DockerOverview {
-    status: &'static str,
+    status: DockerStatus,
     error: Option<String>,
+}
+
+/// Whether the Runtime Image is present, absent, or unobservable.
+///
+/// `Unknown` is what Docker being unreachable looks like from here, which is why
+/// this is not an `Option`: the Console renders all three differently.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RuntimeImageStatus {
+    Built,
+    Missing,
+    Unknown,
 }
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct RuntimeImageOverview {
     reference: String,
-    status: &'static str,
+    status: RuntimeImageStatus,
     id: Option<String>,
     created_at: Option<String>,
     size_bytes: Option<u64>,
     detail: Option<String>,
-}
-
-#[derive(Default, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RequestOverview {
-    total: usize,
-    active: usize,
-    warning: usize,
-    error: usize,
-    bytes: u64,
 }
 
 pub(super) async fn overview(State(state): State<ServiceState>) -> ControlResult {
@@ -85,15 +102,15 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
     let (docker, runtime_image) = match snapshot.runtime_image {
         Ok(inspection) => (
             DockerOverview {
-                status: "available",
+                status: DockerStatus::Available,
                 error: None,
             },
             RuntimeImageOverview {
                 reference: snapshot.image_reference,
                 status: if inspection.present {
-                    "built"
+                    RuntimeImageStatus::Built
                 } else {
-                    "missing"
+                    RuntimeImageStatus::Missing
                 },
                 id: inspection.id,
                 created_at: inspection.created_at,
@@ -103,12 +120,12 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
         ),
         Err(error) => (
             DockerOverview {
-                status: "unavailable",
+                status: DockerStatus::Unavailable,
                 error: Some(error),
             },
             RuntimeImageOverview {
                 reference: snapshot.image_reference,
-                status: "unknown",
+                status: RuntimeImageStatus::Unknown,
                 id: None,
                 created_at: None,
                 size_bytes: None,
@@ -127,13 +144,7 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
         runtime_image,
         managed_tenants: snapshot.managed_tenants,
         host_available: snapshot.host_available,
-        requests: RequestOverview {
-            total: snapshot.requests.total,
-            active: snapshot.requests.active,
-            warning: snapshot.requests.warning,
-            error: snapshot.requests.error,
-            bytes: snapshot.requests.bytes,
-        },
+        requests: snapshot.requests,
     }
 }
 
@@ -143,14 +154,16 @@ pub(crate) struct TopologyResponse {
     tenants: Vec<TopologyTenant>,
 }
 
+/// One Tenant of the Topology view: the Tenant catalog row plus its state.
+///
+/// The row is the same `TenantRow` the Tenants module lists, flattened in rather
+/// than restated, so a Tenant identity is one shape everywhere on the wire and
+/// the Console reads the Host/Managed distinction off the same discriminant.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct TopologyTenant {
-    kind: &'static str,
-    name: Option<String>,
-    display_name: String,
-    home: String,
-    exists: bool,
+    #[serde(flatten)]
+    row: TenantRow,
     agents: Vec<TopologyAgent>,
     components: TopologyComponents,
 }
@@ -170,6 +183,7 @@ pub(crate) struct TopologyCurrentConfig {
     present_files: usize,
     expected_files: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     error: Option<String>,
 }
 
@@ -178,6 +192,7 @@ pub(crate) struct TopologyCurrentConfig {
 pub(crate) struct TopologyNamedConfigs {
     entries: Vec<config::ConfigCatalogEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     error: Option<String>,
 }
 
@@ -186,6 +201,7 @@ pub(crate) struct TopologyNamedConfigs {
 pub(crate) struct TopologyComponents {
     entries: Vec<ComponentRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     error: Option<String>,
 }
 
@@ -200,14 +216,34 @@ pub(super) async fn topology(State(state): State<ServiceState>) -> ControlResult
 }
 
 fn topology_tenant(snapshot: TopologyTenantSnapshot) -> TopologyTenant {
+    let TopologyTenantSnapshot {
+        name,
+        display_name,
+        home,
+        exists,
+        agents,
+        components,
+    } = snapshot;
+    // A Managed row carries its name and the Host row has none, which is the one
+    // distinction between the two variants here.
+    let row = match name {
+        Some(name) => TenantRow::Managed {
+            name,
+            display_name,
+            home,
+            exists,
+        },
+        None => TenantRow::Host {
+            name: None,
+            display_name,
+            home,
+            exists,
+        },
+    };
     TopologyTenant {
-        kind: if snapshot.managed { "managed" } else { "host" },
-        name: snapshot.name,
-        display_name: snapshot.display_name,
-        home: snapshot.home,
-        exists: snapshot.exists,
-        agents: snapshot.agents.into_iter().map(topology_agent).collect(),
-        components: match snapshot.components {
+        row,
+        agents: agents.into_iter().map(topology_agent).collect(),
+        components: match components {
             Ok(inspections) => TopologyComponents {
                 entries: component_rows_from(inspections),
                 error: None,

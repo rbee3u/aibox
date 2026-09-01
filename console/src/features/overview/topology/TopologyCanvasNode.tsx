@@ -3,11 +3,11 @@ import type { KeyboardEvent, ReactNode } from "react";
 import {
   targetHref,
   type SessionLoad,
-  type Tone,
   type TopologyLayoutNode,
   type TopologyNode,
   type TreeIcon,
 } from "@/features/overview/topology/topologyModel";
+import type { Tone } from "@/features/overview/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
 import { RefreshButton } from "@/shared/ui/RefreshButton";

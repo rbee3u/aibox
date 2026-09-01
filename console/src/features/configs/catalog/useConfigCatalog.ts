@@ -2,10 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { ConfigApi, ConfigListData } from "@/api/configs";
 import type { TenantSelection } from "@/domain/tenant";
+import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { messageOf } from "@/shared/lib/errors";
 import { LatestRequest } from "@/shared/lib/latestRequest";
-
-export type ConfigCatalogLoadKind = "initial" | "refresh" | "background";
 
 /** Owns one Tenant-and-Agent Config catalog request lifecycle. */
 export function useConfigCatalog(

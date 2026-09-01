@@ -1,7 +1,10 @@
-//! Raw header recording and hop-by-hop forwarding rules.
+//! Raw HTTP message vocabulary: recording, hop-by-hop rules, and version names.
+//!
+//! Everything here reads a message without deciding anything about the Request
+//! it belongs to, so both the request and the response side can share it.
 
 use crate::request::model::RecordedHeader;
-use axum::http::{HeaderMap, header};
+use axum::http::{HeaderMap, Version, header};
 use base64::Engine as _;
 use std::collections::HashSet;
 
@@ -99,4 +102,33 @@ pub(super) fn is_upgrade(headers: &HeaderMap) -> bool {
                     .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
             })
         })
+}
+
+pub(super) fn declared_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
+}
+
+pub(super) fn is_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::CONTENT_TYPE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .any(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+pub(super) fn version_name(version: Version) -> &'static str {
+    match version {
+        Version::HTTP_09 => "HTTP/0.9",
+        Version::HTTP_10 => "HTTP/1.0",
+        Version::HTTP_11 => "HTTP/1.1",
+        Version::HTTP_2 => "HTTP/2",
+        Version::HTTP_3 => "HTTP/3",
+        _ => "HTTP/unknown",
+    }
 }

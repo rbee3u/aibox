@@ -1,14 +1,15 @@
 //! Upstream target parsing, address policy, connection, and transport errors.
 
 use super::attempt::RequestAttempt;
+use super::error_response::finish_proxy_response;
 use super::headers::is_upgrade;
-use super::response_stream::{finish_proxy_response, reject_with_body};
+use super::request_stream::reject_with_body;
 use crate::request::RequestProxyState;
 use crate::request::model::{ErrorKind, Outcome};
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, Method, Response, StatusCode, Version};
+use axum::http::{HeaderMap, Method, Response, StatusCode};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
@@ -363,15 +364,4 @@ pub(super) fn matches_prefix(value: u32, network: u32, bits: u32) -> bool {
 
 pub(super) fn matches_prefix_v6(value: u128, network: u128, bits: u32) -> bool {
     value & (!0_u128 << (128 - bits)) == network
-}
-
-pub(super) fn version_name(version: Version) -> &'static str {
-    match version {
-        Version::HTTP_09 => "HTTP/0.9",
-        Version::HTTP_10 => "HTTP/1.0",
-        Version::HTTP_11 => "HTTP/1.1",
-        Version::HTTP_2 => "HTTP/2",
-        Version::HTTP_3 => "HTTP/3",
-        _ => "HTTP/unknown",
-    }
 }

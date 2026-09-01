@@ -62,6 +62,11 @@ export function formatByteSize(value: number | null | undefined): string {
   return `${(value / 1048576).toFixed(1)} MB`;
 }
 
+/** Upper-case the first character, leaving the rest as written. */
+export function capitalize(value: string): string {
+  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+}
+
 export function hex(bytesValue: Uint8Array): string {
   return Array.from(bytesValue, (value) => value.toString(16).padStart(2, "0")).join(" ");
 }

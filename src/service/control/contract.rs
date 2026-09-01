@@ -18,10 +18,10 @@ mod tests {
     use crate::request::{
         AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource,
         DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic, ProtocolFamily,
-        ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestedEffective,
-        RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource, ResultMetadata,
-        SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata,
-        TokenUsage,
+        ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestOverview,
+        RequestedEffective, RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource,
+        ResultMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
+        TimingMetadata, TokenUsage,
     };
     use crate::service::control::components::{
         ComponentMutation, ComponentQuery, ComponentRow, ComponentStatusWire,
@@ -38,9 +38,9 @@ mod tests {
         BuildRequest, CancelledOperationResponse, OperationEnvelope, OperationQuery,
     };
     use crate::service::control::overview::{
-        BootstrapResponse, DockerOverview, OverviewResponse, RequestOverview, RuntimeImageOverview,
-        ServiceOverview, TopologyAgent, TopologyComponents, TopologyCurrentConfig,
-        TopologyNamedConfigs, TopologyResponse, TopologyTenant,
+        BootstrapResponse, DockerOverview, DockerStatus, OverviewResponse, RuntimeImageOverview,
+        RuntimeImageStatus, ServiceOverview, TopologyAgent, TopologyComponents,
+        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologyTenant,
     };
     use crate::service::control::requests::{
         BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
@@ -118,7 +118,9 @@ mod tests {
             CancelledOperationResponse,
             OverviewResponse,
             ServiceOverview,
+            DockerStatus,
             DockerOverview,
+            RuntimeImageStatus,
             RuntimeImageOverview,
             RequestOverview,
             TopologyResponse,

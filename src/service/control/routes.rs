@@ -26,7 +26,7 @@ pub(crate) struct EndpointDescription {
 /// Declare each Control API route once.
 ///
 /// One invocation produces both the path constants used by Axum registration
-/// and the ordered test-facing [`ENDPOINTS`] manifest that generates
+/// and the ordered test-facing `ENDPOINTS` manifest that generates
 /// `console/src/api/generated/routes.ts`. Declaring a route in one place keeps
 /// the generated Console manifest from drifting out of the router. A path that
 /// serves several methods lists one `method => key` pair per method, and
@@ -99,7 +99,7 @@ pub(super) fn router() -> Router<ServiceState> {
         .merge(config_routes())
         .merge(session_routes())
         .merge(operation_routes())
-        .merge(requests::api_router())
+        .merge(request_routes())
 }
 
 fn ui_routes() -> Router<ServiceState> {
@@ -172,4 +172,22 @@ fn operation_routes() -> Router<ServiceState> {
         .route(OPERATIONS_EVENTS, get(operations::operation_events))
         .route(OPERATIONS_BUILD, post(operations::start_build))
         .route(OPERATIONS_CANCEL, post(operations::cancel_operation))
+}
+
+/// Read paths extract `RequestProxyState` through `FromRef` because diagnostic
+/// inspection needs no mutation gate. Deletion takes [`ServiceState`] so it
+/// passes through the shared filesystem/domain mutation gate.
+fn request_routes() -> Router<ServiceState> {
+    Router::new()
+        .route(REQUESTS, get(requests::list_requests))
+        .route(REQUESTS_DELETE, post(requests::delete_requests))
+        .route(REQUEST_DETAIL, get(requests::request_detail))
+        .route(REQUEST_BODY, get(requests::request_body))
+        .route(RESPONSE_BODY, get(requests::response_body))
+        .route(REQUEST_BODY_DECODED, get(requests::decoded_request_body))
+        .route(RESPONSE_BODY_DECODED, get(requests::decoded_response_body))
+        .route(
+            RESPONSE_EVENT_TIMINGS,
+            get(requests::response_event_timings),
+        )
 }

@@ -1,7 +1,8 @@
 //! Assemble `docker run` arguments.
 //!
-//! These are pure builders. Every path reaching them must already have passed
-//! the [`super::mount`] checks, which [`super::RunSpec`] guarantees for a Run.
+//! These are pure builders. [`super::RunSpec`] supplies validated Run paths;
+//! Debug Shell and container-based Component callers must canonicalize the
+//! Tenant Home and reject unsupported bind-source syntax before calling them.
 
 use crate::foundation::platform;
 use crate::tenant::CONTAINER_HOME;

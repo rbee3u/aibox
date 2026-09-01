@@ -9,14 +9,14 @@
 //! failing the whole projection: the Console draws a partially readable
 //! topology, matching how `ComponentInspection` already reports its own error.
 
-use super::run_blocking;
+use super::{run_blocking, tenant_scopes};
 use crate::agent::AgentKind;
 use crate::component::{self, ComponentInspection};
 use crate::config;
 use crate::docker;
 use crate::foundation::safe_fs;
 use crate::service::state::ServiceState;
-use crate::tenant::{self, ManagedTenant, Tenant};
+use crate::tenant::{self, Tenant};
 use anyhow::Result;
 
 #[derive(Clone)]
@@ -38,8 +38,10 @@ pub(crate) struct OverviewSnapshot {
 }
 
 /// One Tenant row of the Topology view, before wire projection.
+///
+/// A present `name` is what makes the row Managed; the Host Tenant has none. That
+/// is the only Host/Managed carrier here, so the two cannot disagree.
 pub(crate) struct TopologyTenantSnapshot {
-    pub(crate) managed: bool,
     pub(crate) name: Option<String>,
     pub(crate) display_name: String,
     pub(crate) home: String,
@@ -90,37 +92,23 @@ impl OverviewCoordinator {
         let root = self.state.root();
         let host_home = self.state.host_home();
         run_blocking(move || {
-            let host_exists = safe_fs::real_dir_exists(&host_home, "Host Home")?;
-            let mut selected = vec![(
-                Tenant::Host {
-                    home_dir: host_home.as_ref().clone(),
-                    root_dir: root.as_ref().clone(),
-                },
-                None,
-                "Host Tenant".to_string(),
-                host_exists,
-            )];
-            for name in tenant::list_tenants(&root)? {
-                let managed = ManagedTenant::resolve(&root, &name)?;
-                selected.push((Tenant::Managed(managed), Some(name.clone()), name, true));
-            }
-            Ok(selected
+            Ok(tenant_scopes(&root, &host_home)?
                 .into_iter()
-                .map(
-                    |(tenant, name, display_name, exists)| TopologyTenantSnapshot {
-                        managed: name.is_some(),
-                        home: tenant.home_dir().display().to_string(),
-                        agents: [AgentKind::Codex, AgentKind::Claude]
-                            .into_iter()
-                            .map(|agent| agent_snapshot(&tenant, agent))
-                            .collect(),
-                        components: component::inspect_catalog(&tenant)
-                            .map_err(|error| format!("{error:#}")),
-                        name,
-                        display_name,
-                        exists,
-                    },
-                )
+                .map(|scope| TopologyTenantSnapshot {
+                    home: scope.tenant.home_dir().display().to_string(),
+                    agents: [AgentKind::Codex, AgentKind::Claude]
+                        .into_iter()
+                        .map(|agent| agent_snapshot(&scope.tenant, agent))
+                        .collect(),
+                    components: component::inspect_catalog(&scope.tenant)
+                        .map_err(|error| format!("{error:#}")),
+                    display_name: scope
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "Host Tenant".to_string()),
+                    name: scope.name,
+                    exists: scope.exists,
+                })
                 .collect())
         })
         .await

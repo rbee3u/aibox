@@ -1,4 +1,4 @@
-//! Tenant Component inspection, update observation, and mutation coordination.
+//! Component inspection, update observation, and mutation coordination.
 
 use super::OperationCoordinator;
 use super::run_blocking;

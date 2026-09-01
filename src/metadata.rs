@@ -1,8 +1,8 @@
 //! Shared Tenant-and-Agent metadata storage.
 //!
-//! One host-only document lives beside the selected Named Config catalog.
-//! Known feature sections remain typed by their owning modules while this
-//! module preserves other top-level sections across atomic updates.
+//! One AIBox-owned document lives at the selected Tenant-and-Agent Named Config
+//! catalog root. Known feature sections remain typed by their owning modules
+//! while this module preserves other top-level sections across atomic updates.
 
 use crate::tenant::TenantAgent;
 use anyhow::{Context, Result, bail};
@@ -113,7 +113,7 @@ pub(crate) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
     Ok(MetadataDocument { sections })
 }
 
-/// Resolve the host-only metadata path for one Tenant and Coding Agent.
+/// Resolve the AIBox-owned metadata path for one Tenant and Coding Agent.
 pub(crate) fn metadata_path(selected: &TenantAgent) -> PathBuf {
     selected.named_config_catalog_dir().join(METADATA_FILE)
 }

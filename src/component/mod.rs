@@ -14,9 +14,19 @@ mod rust_go;
 mod statusline;
 mod updates;
 
-#[cfg(test)]
-pub(crate) use updates::{FixtureLatestProvider, LatestEntry, LatestEntryState, LatestResult};
 pub(crate) use updates::{LatestProvider, LatestSnapshot, OfficialLatestProvider, check_snapshot};
+
+/// Types reachable only through a seam production code does not name itself.
+///
+/// [`LatestSnapshot`] carries `Vec<LatestEntry>` and `ts_rs` will not export a
+/// nested type on its own, so `service/control/contract.rs` must name both.
+/// `LatestResult` is [`LatestProvider`]'s return type: production reaches the
+/// provider only through [`check_snapshot`], which yields a whole
+/// [`LatestSnapshot`], while implementing that trait — as the fixture provider
+/// in `testutil` does — requires naming what `fetch` returns.
+/// See `docs/adr/0009-rust-owned-console-contract.md`.
+#[cfg(test)]
+pub(crate) use updates::{LatestEntry, LatestEntryState, LatestResult};
 
 use crate::agent::AgentKind;
 use crate::tenant::{Tenant, TenantEnvironmentCapabilities};
@@ -33,7 +43,7 @@ use crate::foundation::MAX_NATIVE_CONFIG_BYTES as MAX_CONFIG_BYTES;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
-pub enum ComponentKind {
+pub(crate) enum ComponentKind {
     /// Tenant-local Node.js runtime.
     Node,
     /// Tenant-local OpenAI Codex executable.
@@ -66,7 +76,7 @@ impl ComponentKind {
     pub(crate) const STATUSLINES: [Self; 2] = [Self::ClaudeStatusline, Self::CodexStatusline];
 
     /// Stable Component name.
-    pub fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Node => "node",
             Self::Codex => "codex",
@@ -97,7 +107,7 @@ impl ComponentKind {
 
 /// State derived from a Component's native files in one Tenant's Home.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ComponentStatus {
+pub(crate) enum ComponentStatus {
     /// The Component exactly matches the current AIBox definition.
     Installed {
         /// Stable runtime or toolchain version; absent for statusline Components.
@@ -123,10 +133,11 @@ pub(crate) struct ComponentInspection {
 
 /// A Component name and optional stable runtime or toolchain version.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ComponentSpec {
+pub(crate) struct ComponentSpec {
     /// Selected Component.
     kind: ComponentKind,
-    /// Requested stable version, or latest stable when absent.
+    /// Requested stable version; absence selects latest for versioned
+    /// Components and is required for statuslines.
     version: Option<String>,
 }
 
