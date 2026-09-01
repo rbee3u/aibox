@@ -418,7 +418,7 @@ export function useConfigController({
   async function saveAll() {
     onBusyChange(true);
     try {
-      await saveInOrder(saveOrder);
+      if (!(await saveInOrder(saveOrder))) return;
       await loadCatalog("background");
     } finally {
       onBusyChange(false);

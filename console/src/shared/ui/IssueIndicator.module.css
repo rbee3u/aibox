@@ -40,7 +40,7 @@
   outline-offset: 1px;
 }
 .tooltip {
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   color: var(--ink-secondary);

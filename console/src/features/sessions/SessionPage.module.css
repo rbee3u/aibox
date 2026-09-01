@@ -35,7 +35,7 @@
 .sessionWarnings {
   max-height: 150px;
   overflow: auto;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
 }
 
 .sessionWarnings .inlineWarning {
@@ -63,7 +63,7 @@
   align-items: stretch;
   gap: 4px;
   padding: var(--catalog-row-roomy-padding);
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
   background: var(--surface);
 }
 
@@ -200,24 +200,7 @@
 }
 
 .sessionDelete {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
   align-self: center;
-  place-items: center;
-  border-color: transparent;
-  padding: 0;
-  color: var(--danger);
-  background: var(--control-danger-rest);
-  opacity: 1;
-}
-
-.sessionDelete:hover:not(:disabled),
-.sessionDelete:focus-visible {
-  border-color: transparent;
-  color: var(--danger-strong);
-  background: var(--danger-soft);
 }
 
 .sessionSelectionRow .sessionRowMain {
@@ -239,7 +222,7 @@
 .detailHeader {
   min-height: 54px;
   padding: 8px 18px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
@@ -295,7 +278,7 @@
   align-items: stretch;
   gap: 4px;
   padding: 0 18px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
@@ -385,7 +368,7 @@
   min-height: 0;
   justify-content: center;
   overflow: auto;
-  border-right: 1px solid var(--line-soft);
+  border-right: 1px solid var(--line-content);
   background: var(--bg-canvas);
 }
 
@@ -439,7 +422,7 @@
   width: 12px;
   height: 12px;
   place-items: center;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: 50%;
   background: var(--bg-canvas);
 }
@@ -520,9 +503,9 @@
   gap: 1px;
   margin: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-md);
-  background: var(--line);
+  background: var(--line-content);
 }
 
 .sessionDetailsGrid > div,
@@ -628,7 +611,7 @@
   bottom: 18px;
   display: grid;
   margin: -50px 20px 18px auto;
-  border-color: var(--line-strong);
+  border-color: var(--line-control-strong);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
 }
@@ -710,7 +693,7 @@
 .sessionEvidence,
 .sessionActivityGroup {
   width: min(100%, 760px);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-control);
   border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
@@ -759,7 +742,7 @@
 .sessionActivity[open] summary,
 .sessionEvidence[open] summary,
 .sessionActivityGroup[open] summary {
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-content);
 }
 
 .sessionActivity pre,
@@ -771,7 +754,7 @@
 }
 
 .sessionEvidenceRaw {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-content);
 }
 
 .sessionEvidenceRaw button {
@@ -798,7 +781,7 @@
   display: grid;
   gap: 6px;
   padding: 8px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-content);
 }
 
 .sessionActivityGroupItems {
@@ -815,15 +798,6 @@
 .sessionActivityGroupItems .sessionActivity summary,
 .sessionActivityGroupItems .sessionEvidence summary {
   padding: 7px 9px;
-}
-
-@media (pointer: coarse) {
-  .sessionDelete {
-    width: 44px;
-    height: 44px;
-    min-height: 44px;
-    opacity: 1;
-  }
 }
 
 @media (max-width: 760px) {

@@ -71,34 +71,34 @@ export function ConfigCatalogPane({
       <div className={`${layout.toolbar} ${selectionMode ? layout.selectionBar : ""}`}>
         {selectionMode ? (
           <>
-            <button
-              type="button"
+            <ActionButton
+              tone="ghost"
               className={layout.selectionCancel}
               disabled={busy}
               onClick={cancelSelection}
             >
               Cancel
-            </button>
+            </ActionButton>
             <div className={layout.selectionCenter}>
               <span className={layout.selectionCount}>{selectedCount} selected</span>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
                 className={layout.selectionAll}
                 disabled={selectableNames.length === 0 || busy}
                 onClick={toggleAllConfigs}
               >
                 {allSelectable ? "Clear all" : "Select all"}
-              </button>
+              </ActionButton>
             </div>
-            <button
-              type="button"
+            <ActionButton
+              tone="danger"
               className={layout.selectionDelete}
               aria-label="Delete selected Named Configs"
               disabled={selectedCount === 0 || mutationBusy}
               onClick={() => requestDelete([...selectedKeys])}
             >
               <Trash2 size={14} aria-hidden="true" /> Delete
-            </button>
+            </ActionButton>
           </>
         ) : (
           <>
@@ -144,15 +144,15 @@ export function ConfigCatalogPane({
               >
                 Refresh
               </RefreshButton>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Configs"
                 disabled={selectableNames.length === 0 || loadingCatalog || refreshing || busy}
                 onClick={enterSelection}
               >
-                <ListChecks size={14} /> Select
-              </button>
+                <ListChecks size={14} aria-hidden="true" /> Select
+              </ActionButton>
             </div>
           </>
         )}
@@ -212,15 +212,15 @@ export function ConfigCatalogPane({
                 tenant.kind === "host" &&
                 agent === "codex" &&
                 data?.credential_propagation_available && (
-                  <button
-                    type="button"
+                  <ActionButton
+                    tone="secondary"
                     className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
                     aria-label="Propagate credentials"
                     disabled={mutationBusy}
                     onClick={() => void previewPropagation()}
                   >
                     Propagate credentials
-                  </button>
+                  </ActionButton>
                 )}
             </div>
           )}
@@ -294,30 +294,30 @@ export function ConfigCatalogPane({
                 {!selectionMode && (
                   <div className={layout.rowActions}>
                     {entry.state === "ready" && (
-                      <button
-                        type="button"
+                      <ActionButton
+                        tone="secondary"
                         className={styles.configRowPrimaryAction}
                         aria-label={`Apply Named Config ${entry.name} to Current Config`}
                         disabled={mutationBusy || (applied && data.application.drift === "clean")}
                         onClick={() => requestApply(entry.name)}
                       >
-                        Apply to Current Config
-                      </button>
+                        Apply
+                      </ActionButton>
                     )}
                     {entry.state === "incomplete" && (
-                      <button
-                        type="button"
+                      <ActionButton
+                        tone="secondary"
                         className={styles.configRowPrimaryAction}
                         aria-label={`Repair Named Config ${entry.name}`}
                         disabled={mutationBusy}
                         onClick={() => requestEditorAction(() => createConfig(entry.name))}
                       >
                         Repair
-                      </button>
+                      </ActionButton>
                     )}
                     <IconButton
                       className={`${layout.rowAction} ${layout.rowDeleteAction}`}
-                      tone="danger"
+                      tone="dangerQuiet"
                       label={`Delete Named Config ${entry.name}`}
                       disabled={mutationBusy}
                       onClick={() => requestDelete([entry.name])}

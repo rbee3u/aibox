@@ -217,6 +217,7 @@ function ThemeMenu({
     <>
       <ActionButton
         className={`${styles.utilityItem} ${styles.themeButton}`}
+        tone="ghost"
         ref={triggerRef}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -248,6 +249,7 @@ function ThemeMenu({
               return (
                 <ActionButton
                   className={styles.themeOption}
+                  tone="ghost"
                   key={option.value}
                   role="menuitemradio"
                   aria-checked={selected}

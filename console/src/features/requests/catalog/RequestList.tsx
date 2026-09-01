@@ -20,7 +20,9 @@ import {
   assessmentIssueText,
   assessmentPresentation,
 } from "@/features/requests/statusPresentation";
+import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 
@@ -201,8 +203,8 @@ export function RequestList({
         <div className={`${styles.listHeader} ${selectionMode ? layout.selectionBar : ""}`}>
           {selectionMode ? (
             <>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
                 className={layout.selectionCancel}
                 onClick={() => {
                   focusSelectAfterExit.current = true;
@@ -210,20 +212,20 @@ export function RequestList({
                 }}
               >
                 Cancel
-              </button>
+              </ActionButton>
               <div className={layout.selectionCenter}>
                 <span className={styles.selectionCount}>{selected.size} selected</span>
-                <button
-                  type="button"
+                <ActionButton
+                  tone="ghost"
                   className={layout.selectionAll}
                   onClick={onTogglePage}
                   disabled={deletable.length === 0}
                 >
                   {pageSelected ? "Clear page" : "Select page"}
-                </button>
+                </ActionButton>
               </div>
-              <button
-                type="button"
+              <ActionButton
+                tone="danger"
                 className={layout.selectionDelete}
                 onClick={(event) => {
                   event.currentTarget.focus();
@@ -234,7 +236,7 @@ export function RequestList({
               >
                 <Trash2 size={14} aria-hidden="true" />
                 Delete
-              </button>
+              </ActionButton>
             </>
           ) : (
             <div className={styles.headerActions}>
@@ -249,16 +251,16 @@ export function RequestList({
               >
                 Refresh
               </RefreshButton>
-              <button
+              <ActionButton
                 ref={selectButton}
-                type="button"
+                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Requests"
                 onClick={onEnterSelection}
                 disabled={deletableCount === 0 || loading || deletionBusy}
               >
                 <ListChecks size={14} aria-hidden="true" /> Select
-              </button>
+              </ActionButton>
             </div>
           )}
         </div>
@@ -385,15 +387,15 @@ export function RequestList({
                     className={styles.deleteSlot}
                     title={active ? "Active requests cannot be deleted" : undefined}
                   >
-                    <button
+                    <IconButton
                       ref={(element) => {
                         deleteButtons.register(request.id, element);
                       }}
-                      type="button"
                       className={styles.deleteRecord}
+                      tone="dangerQuiet"
                       onClick={() => onDeleteRequest(request.id)}
                       disabled={active || deletionBusy}
-                      aria-label={
+                      label={
                         active
                           ? `Cannot delete active ${request.method} ${target.label}`
                           : deletingRequestId === request.id
@@ -407,7 +409,7 @@ export function RequestList({
                       ) : (
                         <Trash2 size={15} aria-hidden="true" />
                       )}
-                    </button>
+                    </IconButton>
                   </span>
                 )}
               </div>

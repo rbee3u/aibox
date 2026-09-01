@@ -381,7 +381,7 @@ describe("ConfigPage", () => {
       name: "Apply Named Config custom to Current Config",
     });
     expect(apply).toBeEnabled();
-    expect(apply).toHaveTextContent(/^Apply to Current Config$/);
+    expect(apply).toHaveTextContent(/^Apply$/);
     expect(apply.querySelector("svg")).not.toBeInTheDocument();
     const repair = screen.getByRole("button", { name: "Repair Named Config draft" });
     expect(repair).toHaveTextContent(/^Repair$/);

@@ -19,7 +19,7 @@
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-structural);
   color: var(--ink);
   background: var(--bg-shell);
 }
@@ -30,7 +30,7 @@
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
 }
 
 .brandCopy {
@@ -161,7 +161,7 @@
   display: grid;
   gap: 4px;
   padding: 8px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
@@ -212,7 +212,7 @@
 .utilityDivider {
   height: 1px;
   margin: 3px 4px;
-  background: var(--line);
+  background: var(--line-content);
 }
 
 .themeButton {
@@ -279,17 +279,8 @@
 }
 
 .collapseButton {
-  flex: 0 0 30px;
+  flex: 0 0 var(--control-md);
   margin-left: auto;
-  border-color: transparent;
-  color: var(--ink-secondary);
-  background: transparent;
-}
-
-.collapseButton:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
 }
 
 .themeMenu {
@@ -299,7 +290,7 @@
   width: 164px;
   gap: 2px;
   padding: 5px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
@@ -313,15 +304,16 @@
   justify-content: flex-start;
   gap: 9px;
   padding: 6px 8px;
-  border-color: transparent;
+  border: 0;
   color: var(--ink-secondary);
   background: transparent;
   text-align: left;
 }
 
 .themeMenu .themeOption:hover,
+.themeMenu .themeOption:focus-visible,
 .themeMenu .themeOption[aria-checked="true"] {
-  border-color: transparent;
+  outline: none;
   color: var(--accent);
   background: var(--surface-row-hover);
 }
@@ -346,7 +338,7 @@
   justify-content: space-between;
   gap: 14px;
   padding: 6px 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 

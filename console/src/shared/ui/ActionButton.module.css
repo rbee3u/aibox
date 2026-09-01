@@ -1,36 +1,74 @@
 .button {
   display: inline-flex;
+  width: auto;
+  min-width: 0;
+  min-height: var(--control-md);
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--control-gap);
+  border-radius: var(--radius-md);
+  padding: 0 var(--control-padding-x);
   font-family: var(--font-sans);
+  font-size: var(--text-xs);
   font-weight: var(--weight-regular);
   box-shadow: none;
-  min-height: var(--control-compact);
-  padding-block: 4px;
-  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
-.default,
-.primary,
-.quiet {
+.primary {
+  border-color: transparent;
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--accent-contrast);
+  background: var(--accent-strong);
+}
+
+.secondary {
+  border-color: var(--line-control);
+  color: var(--ink-secondary);
+  background: var(--surface);
+}
+
+.secondary:hover:not(:disabled) {
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.ghost {
   border-color: transparent;
   color: var(--ink-secondary);
-  background: var(--control-rest);
+  background: transparent;
 }
 
-.default:hover:not(:disabled),
-.primary:hover:not(:disabled),
-.quiet:hover:not(:disabled) {
+.ghost:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent);
-  background: var(--surface-selected);
+  background: var(--surface-hover);
+}
+
+.dangerQuiet {
+  border-color: transparent;
+  color: var(--ink-secondary);
+  background: transparent;
+}
+
+.dangerQuiet:hover:not(:disabled),
+.dangerQuiet:focus-visible:not(:disabled) {
+  border-color: transparent;
+  color: var(--danger-strong);
+  background: var(--danger-soft);
 }
 
 .danger {
   border-color: transparent;
   color: var(--danger);
-  background: var(--control-danger-rest);
+  background: transparent;
 }
 
 .danger:hover:not(:disabled) {
@@ -48,14 +86,28 @@
   outline-offset: 2px;
 }
 
-.default:disabled,
-.primary:disabled,
-.danger:disabled,
-.quiet:disabled {
+.button:disabled {
+  opacity: 1;
+}
+
+.primary:disabled {
   border-color: transparent;
-  color: var(--faint);
-  background: var(--control-rest);
-  opacity: 0.55;
+  color: var(--control-disabled-primary-ink);
+  background: var(--control-disabled-primary-surface);
+}
+
+.secondary:disabled {
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-ink);
+  background: var(--control-disabled-surface);
+}
+
+.ghost:disabled,
+.dangerQuiet:disabled,
+.danger:disabled {
+  border-color: transparent;
+  color: var(--control-disabled-ink);
+  background: transparent;
 }
 
 @media (pointer: coarse) {

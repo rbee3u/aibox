@@ -57,34 +57,34 @@ export function TenantCatalogPane({
       <div className={`${layout.toolbar} ${selectionMode ? layout.selectionBar : ""}`}>
         {selectionMode ? (
           <>
-            <button
-              type="button"
+            <ActionButton
+              tone="ghost"
               className={layout.selectionCancel}
               disabled={busy}
               onClick={cancelSelection}
             >
               Cancel
-            </button>
+            </ActionButton>
             <div className={layout.selectionCenter}>
               <span className={layout.selectionCount}>{selectedCount} selected</span>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
                 className={layout.selectionAll}
                 disabled={selectableKeys.length === 0 || busy}
                 onClick={toggleAllTenants}
               >
                 {allSelectable ? "Clear all" : "Select all"}
-              </button>
+              </ActionButton>
             </div>
-            <button
-              type="button"
+            <ActionButton
+              tone="danger"
               className={layout.selectionDelete}
               aria-label="Delete selected Tenants"
               disabled={selectedCount === 0 || mutationBusy}
               onClick={() => requestTenantDelete([...selectedKeys].map((key) => key.slice(8)))}
             >
               <Trash2 size={14} aria-hidden="true" /> Delete
-            </button>
+            </ActionButton>
           </>
         ) : (
           <div className={layout.toolbarActions}>
@@ -98,15 +98,15 @@ export function TenantCatalogPane({
             >
               Refresh
             </RefreshButton>
-            <button
-              type="button"
+            <ActionButton
+              tone="ghost"
               className={layout.selectionEnter}
               aria-label="Select Tenants"
               disabled={selectableKeys.length === 0 || refreshing || loadingTenants || busy}
               onClick={enterSelection}
             >
-              <ListChecks size={14} /> Select
-            </button>
+              <ListChecks size={14} aria-hidden="true" /> Select
+            </ActionButton>
           </div>
         )}
       </div>
@@ -199,7 +199,7 @@ export function TenantCatalogPane({
                     <div className={layout.rowActions}>
                       <IconButton
                         className={`${layout.rowAction} ${layout.rowDeleteAction}`}
-                        tone="danger"
+                        tone="dangerQuiet"
                         label={`Delete Tenant ${row.display_name}`}
                         disabled={mutationBusy}
                         onClick={() => requestTenantDelete([row.name])}

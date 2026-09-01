@@ -76,7 +76,7 @@
 .detailHeader {
   min-height: 54px;
   padding: 8px 18px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
@@ -201,7 +201,10 @@
   white-space: nowrap;
 }
 
-.componentCheckButton:disabled,
+.componentCheckButton:disabled {
+  cursor: wait;
+}
+
 .componentHeaderLoading {
   cursor: wait;
   opacity: 0.7;
@@ -253,7 +256,7 @@
 .componentGroupHeader::after {
   height: 1px;
   flex: 1;
-  background: var(--line);
+  background: var(--line-content);
   content: "";
 }
 
@@ -271,7 +274,7 @@
 .componentRow {
   min-height: 52px;
   padding: 5px 8px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
   background: var(--surface);
   transition: background-color var(--transition-fast);
 }
@@ -388,18 +391,20 @@
 
 .componentSplitAction {
   display: flex;
-  width: 93px;
+  width: auto;
+  min-width: 108px;
   align-items: stretch;
-  gap: 1px;
+  gap: 0;
 }
 
 .componentSplitPrimary {
   min-width: 0;
   flex: 1 1 auto;
-  gap: 3px;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  padding-right: 2px;
-  padding-left: 2px;
+  gap: 6px;
+  border-right: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  padding-right: 8px;
+  padding-left: 12px;
   white-space: nowrap;
 }
 
@@ -408,32 +413,32 @@
 }
 
 .componentPrimaryAction {
-  width: 92px;
+  min-width: 92px;
 }
 
 .componentSplitTrigger {
-  width: 28px;
-  min-width: 28px;
-  flex: 0 0 28px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  padding-right: 5px;
-  padding-left: 5px;
+  width: 32px;
+  min-width: 32px;
+  flex: 0 0 32px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding-right: 8px;
+  padding-left: 8px;
 }
 
 .componentSplitAction:hover .componentSplitPrimary:not(:disabled),
 .componentSplitAction:hover .componentSplitTrigger:not(:disabled),
 .componentSplitAction:focus-within .componentSplitPrimary:not(:disabled),
 .componentSplitAction:focus-within .componentSplitTrigger:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  background: var(--surface-hover);
 }
 
 .componentMoreMenu {
   position: fixed;
   z-index: var(--layer-row-menu);
   padding: 5px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
@@ -442,10 +447,12 @@
 .componentMoreMenu button {
   display: inline-flex;
   width: 100%;
+  min-height: 34px;
   align-items: center;
   gap: 6px;
   justify-content: flex-start;
-  border-color: transparent;
+  border: 0;
+  padding: 6px 8px;
   color: var(--ink);
   background: transparent;
   font-size: var(--text-xs);
@@ -455,9 +462,9 @@
 
 .componentMoreMenu button:hover,
 .componentMoreMenu button:focus-visible {
-  border-color: transparent;
+  outline: none;
   color: var(--accent);
-  background: var(--surface-selected);
+  background: var(--surface-row-hover);
 }
 
 .componentDiagnostic {

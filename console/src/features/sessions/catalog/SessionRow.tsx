@@ -6,6 +6,7 @@ import {
 } from "@/features/sessions/sessionSource";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
+import { IconButton } from "@/shared/ui/IconButton";
 import styles from "@/features/sessions/SessionPage.module.css";
 
 const SessionIcon = resourceIcons.session;
@@ -100,11 +101,11 @@ export function SessionRow({
         )}
       </button>
       {!selectionMode && (
-        <button
+        <IconButton
           ref={registerDelete}
-          type="button"
           className={styles.sessionDelete}
-          aria-label={
+          tone="dangerQuiet"
+          label={
             deleting
               ? `Deleting Session ${row.display_id} from ${accessibleSource}`
               : `Delete Session ${row.display_id} from ${accessibleSource}`
@@ -118,7 +119,7 @@ export function SessionRow({
           ) : (
             <Trash2 size={15} aria-hidden="true" />
           )}
-        </button>
+        </IconButton>
       )}
     </div>
   );

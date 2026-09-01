@@ -10,12 +10,13 @@
 .selectionTrigger {
   display: grid;
   width: 100%;
-  min-height: var(--control-compact);
+  min-height: var(--control-md);
   grid-template-columns: 14px minmax(0, 1fr) 13px;
   align-items: center;
   gap: 5px;
   border-color: transparent;
-  padding: 5px 7px;
+  border-radius: var(--radius-md);
+  padding: 0 10px;
   color: var(--ink-secondary);
   background: var(--control-rest);
   font-size: var(--text-xs);
@@ -91,7 +92,7 @@
   gap: 2px;
   padding: 5px;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
@@ -194,17 +195,17 @@
   min-height: 34px;
   align-items: center;
   gap: 5px;
-  border-color: var(--line-soft);
+  border-color: var(--line-content);
 }
 
 .selectionMenuHeader {
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
   padding: 0 2px 4px;
 }
 
 .selectionMenuFooter {
   justify-content: space-between;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--line-content);
   padding: 4px 2px 0;
 }
 
@@ -217,7 +218,7 @@
   padding-left: 0;
 }
 
-.selectionMenuFooter:not(.selectionMenuFooterMultiple) > button {
+.selectionMenuFooter:not(.selectionMenuFooterMultiple) > .selectionMenuAction {
   width: 100%;
 }
 
@@ -227,28 +228,11 @@
   justify-items: start;
 }
 
-.selectionMenuHeader button,
-.selectionMenuFooter button {
-  display: inline-flex;
+.selectionMenuAction {
   min-height: 28px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border-color: transparent;
-  padding: 4px 6px;
-  color: var(--ink-secondary);
-  background: var(--control-rest);
+  min-width: 0;
+  padding: 0 8px;
   font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
-  white-space: nowrap;
-}
-
-.selectionMenuHeader button:hover:not(:disabled),
-.selectionMenuFooter button:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
 }
 
 .selectionModeAction {
@@ -258,12 +242,8 @@
 .selectionCommitActions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   justify-self: end;
-}
-
-.selectionCommitActions button:last-child {
-  font-weight: var(--weight-regular);
 }
 
 @container (max-width: 360px) {

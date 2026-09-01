@@ -39,7 +39,6 @@ export interface ConfigFileSessionOptions {
   selection: ConfigSelection;
   file: string;
   mode: "visual" | "raw";
-  operationBusy: boolean;
   onControllerChange: (file: string, controller: ConfigFileController | null) => void;
   onError: (message: string | null) => void;
   onRevealRetryChange: (file: string, retry: (() => void) | null) => void;
@@ -56,7 +55,6 @@ export function useConfigFileSession({
   selection,
   file,
   mode,
-  operationBusy,
   onControllerChange,
   onError,
   onRevealRetryChange,
@@ -188,7 +186,7 @@ export function useConfigFileSession({
   const canSave = configFileCanSave(snapshot, textEditable, isAuth, authMode, mode);
 
   const save = useCallback(async (): Promise<boolean> => {
-    if (operationBusy || !snapshot || !editorBytes || !canSave) return false;
+    if (!snapshot || !editorBytes || !canSave) return false;
     if (
       mode === "visual" &&
       !isAuth &&
@@ -268,7 +266,6 @@ export function useConfigFileSession({
     onError,
     onLinkedFileSaved,
     onSaved,
-    operationBusy,
     setFromSnapshot,
     snapshot,
     target,

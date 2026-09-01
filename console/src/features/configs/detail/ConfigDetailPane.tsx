@@ -157,7 +157,7 @@ export function ConfigDetailPane({
                     selection={selection}
                     file={name}
                     mode={selection.current ? "raw" : editorMode}
-                    operationBusy={mutationBusy}
+                    controlsDisabled={mutationBusy}
                     onControllerChange={registerFileController}
                     onError={setError}
                     onRevealRetryChange={registerRevealRetry}

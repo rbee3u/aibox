@@ -16,6 +16,17 @@
   --line: #dce1e8;
   --line-soft: #e9edf2;
   --line-strong: #c5ccd6;
+  /* Boundary roles: structure and controls stay clear; repeated content divisions recede. */
+  --line-structural: var(--line);
+  --line-content: color-mix(in srgb, var(--line-soft) 78%, transparent);
+  --line-control: var(--line);
+  --line-control-strong: var(--line-strong);
+  /* Disabled controls stay identifiable without whole-element opacity. */
+  --control-disabled-ink: color-mix(in srgb, var(--muted) 84%, var(--surface));
+  --control-disabled-surface: color-mix(in srgb, var(--surface-inset) 88%, var(--surface));
+  --control-disabled-line: var(--line-control);
+  --control-disabled-primary-ink: color-mix(in srgb, var(--accent) 45%, var(--muted));
+  --control-disabled-primary-surface: color-mix(in srgb, var(--accent-soft) 74%, var(--surface));
   --ink: #18202c;
   --ink-secondary: #465264;
   --muted: #657187;
@@ -24,6 +35,8 @@
   --accent-strong: #4943cb;
   --accent-soft: #efeeff;
   --accent-subtle: #f8f7ff;
+  /* Text on solid --accent (Light: white; Dark: deep ink on bright accent). */
+  --accent-contrast: #ffffff;
   --focus: #7771f3;
   --danger: #ba2f38;
   --danger-strong: #96232b;
@@ -76,6 +89,8 @@
   --control-sm: 32px;
   --control-md: 36px;
   --control-compact: 30px;
+  --control-padding-x: 12px;
+  --control-gap: 8px;
   --icon-xs: 14px;
   --icon-sm: 16px;
   --icon-md: 18px;
@@ -151,6 +166,7 @@
   --accent-strong: #8580ee;
   --accent-soft: #292744;
   --accent-subtle: #211f35;
+  --accent-contrast: #141820;
   --focus: #aaa6ff;
   --danger: #ff858c;
   --danger-strong: #ffabb0;
@@ -218,7 +234,7 @@ select,
 input,
 textarea {
   font: inherit;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-control);
   border-radius: var(--radius-sm);
   color: var(--ink);
   background: var(--surface-raised);
@@ -253,14 +269,15 @@ select {
 
 button:hover:not(:disabled),
 select:hover:not(:disabled) {
-  border-color: var(--line-strong);
+  border-color: var(--line-control-strong);
   background: var(--surface-inset);
 }
 
 button:disabled,
 select:disabled {
   cursor: default;
-  opacity: 0.45;
+  color: var(--control-disabled-ink);
+  opacity: 1;
 }
 
 button:focus-visible,

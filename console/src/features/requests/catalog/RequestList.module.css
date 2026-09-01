@@ -15,7 +15,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: var(--catalog-toolbar-padding);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
@@ -88,7 +88,7 @@
   align-items: stretch;
   gap: 4px;
   padding: var(--catalog-row-padding);
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
   background: var(--surface);
   transition:
     background-color var(--transition-fast),
@@ -273,31 +273,7 @@
 }
 
 .deleteRecord {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  place-items: center;
-  border-color: transparent;
-  padding: 0;
-  color: var(--danger);
-  background: var(--control-danger-rest);
-  opacity: 1;
-}
-
-.deleteRecord:hover:not(:disabled),
-.deleteRecord:focus-visible {
-  border-color: transparent;
-  color: var(--danger-strong);
-  background: var(--danger-soft);
-}
-
-@media (pointer: coarse) {
-  .deleteRecord {
-    width: 44px;
-    height: 44px;
-    min-height: 44px;
-  }
+  align-self: center;
 }
 
 .selectionRecord .rowButton {
@@ -314,7 +290,7 @@
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-sm);
   color: var(--accent);
   background: var(--surface);
@@ -334,7 +310,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-structural);
   color: var(--muted);
   background: var(--bg-shell);
   font-size: var(--text-xs);
@@ -366,7 +342,7 @@
 
 .headerPagination {
   border-top: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
 }
 
 @container (max-width: 430px) {

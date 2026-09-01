@@ -93,11 +93,12 @@ export function ConfirmDialog({
           </label>
         )}
         <div className={styles.actions}>
-          <ActionButton ref={cancelRef} onClick={onCancel} disabled={busy}>
+          <ActionButton ref={cancelRef} tone="secondary" onClick={onCancel} disabled={busy}>
             Cancel
           </ActionButton>
           <ActionButton
             tone={variant === "danger" ? "danger" : "primary"}
+            className={variant === "danger" ? styles.dangerAction : undefined}
             onClick={onConfirm}
             disabled={!enabled || busy}
           >

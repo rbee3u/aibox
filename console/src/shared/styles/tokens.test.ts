@@ -33,6 +33,7 @@ const themeTokens = [
   "accent-strong",
   "accent-soft",
   "accent-subtle",
+  "accent-contrast",
   "focus",
   "danger",
   "danger-strong",
@@ -100,6 +101,17 @@ describe("Console CSS theme tokens", () => {
       ).toBeGreaterThanOrEqual(4.5);
       expect(
         contrastRatio(foreground, tokens.get("component-update-action-hover")!),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps solid Primary action text at WCAG AA contrast in both themes", () => {
+    for (const tokens of [light, dark]) {
+      expect(
+        contrastRatio(tokens.get("accent-contrast")!, tokens.get("accent")!),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(tokens.get("accent-contrast")!, tokens.get("accent-strong")!),
       ).toBeGreaterThanOrEqual(4.5);
     }
   });

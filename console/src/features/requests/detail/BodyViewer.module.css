@@ -129,13 +129,13 @@
 .eventList {
   max-height: 58vh;
   overflow: auto;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
 
 .eventCard + .eventCard {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-content);
 }
 
 .eventHeader {
@@ -198,7 +198,7 @@
 }
 
 .eventBody {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-content);
   padding: 8px;
   background: var(--code-bg);
 }
@@ -221,7 +221,7 @@
 }
 
 .partialEvent {
-  border-top: 1px dashed var(--line);
+  border-top: 1px dashed var(--line-content);
   background: var(--warning-soft);
   color: var(--warning);
 }

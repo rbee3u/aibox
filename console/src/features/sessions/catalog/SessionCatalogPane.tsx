@@ -4,6 +4,7 @@ import { SessionRow } from "@/features/sessions/catalog/SessionRow";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
@@ -55,29 +56,29 @@ export function SessionCatalogPane({
       <div className={`${layout.toolbar} ${selectionMode ? layout.selectionBar : ""}`}>
         {selectionMode ? (
           <>
-            <button
-              type="button"
+            <ActionButton
+              tone="ghost"
               className={layout.selectionCancel}
               disabled={deletionBusy}
               onClick={cancelSelection}
             >
               Cancel
-            </button>
+            </ActionButton>
             <div className={layout.selectionCenter}>
               <span className={layout.selectionCount} title={`${selectedKeys.size} selected`}>
                 {selectedKeys.size} selected
               </span>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
                 className={layout.selectionAll}
                 onClick={toggleAllSessions}
                 disabled={sessions.length === 0 || deletionBusy}
               >
                 {allSelected ? "Clear all" : "Select all"}
-              </button>
+              </ActionButton>
             </div>
-            <button
-              type="button"
+            <ActionButton
+              tone="danger"
               className={layout.selectionDelete}
               aria-label="Delete selected Sessions"
               disabled={selectedKeys.size === 0 || mutationBusy}
@@ -85,7 +86,7 @@ export function SessionCatalogPane({
             >
               <Trash2 size={14} aria-hidden="true" />
               Delete
-            </button>
+            </ActionButton>
           </>
         ) : (
           <>
@@ -133,9 +134,9 @@ export function SessionCatalogPane({
               >
                 Refresh
               </RefreshButton>
-              <button
+              <ActionButton
                 ref={selectButton}
-                type="button"
+                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Sessions"
                 disabled={
@@ -145,7 +146,7 @@ export function SessionCatalogPane({
               >
                 <ListChecks size={14} aria-hidden="true" />
                 Select
-              </button>
+              </ActionButton>
             </div>
           </>
         )}

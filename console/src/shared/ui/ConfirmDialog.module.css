@@ -3,7 +3,7 @@
   max-width: none;
   margin: auto;
   overflow: visible;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-lg);
   padding: 0;
   color: var(--ink);
@@ -51,9 +51,9 @@
   gap: 1px;
   margin: 12px 0 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-md);
-  background: var(--line);
+  background: var(--line-content);
 }
 
 .facts > div {
@@ -152,4 +152,22 @@
 
 .actions button {
   min-width: 90px;
+}
+
+.actions .dangerAction {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--control-danger-rest);
+}
+
+.actions .dangerAction:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger-strong);
+  background: var(--danger-soft);
+}
+
+.actions .dangerAction:disabled {
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-ink);
+  background: var(--control-disabled-surface);
 }

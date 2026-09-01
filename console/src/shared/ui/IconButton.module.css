@@ -1,9 +1,10 @@
 .button {
   display: inline-grid;
-  width: var(--control-compact);
-  height: var(--control-compact);
-  min-height: var(--control-compact);
-  flex: 0 0 var(--control-compact);
+  width: var(--control-md);
+  height: var(--control-md);
+  min-width: var(--control-md);
+  min-height: var(--control-md);
+  flex: 0 0 var(--control-md);
   place-items: center;
   padding: 0;
   box-shadow: none;
@@ -13,6 +14,7 @@
   .button {
     width: 44px;
     height: 44px;
+    min-width: 44px;
     min-height: 44px;
     flex-basis: 44px;
   }

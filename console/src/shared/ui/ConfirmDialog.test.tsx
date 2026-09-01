@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
+import actionButtonStyles from "@/shared/ui/ActionButton.module.css";
+import styles from "@/shared/ui/ConfirmDialog.module.css";
 
 function DialogHarness() {
   const [open, setOpen] = useState(false);
@@ -39,6 +41,8 @@ describe("ConfirmDialog", () => {
     const cancel = within(dialog).getByRole("button", { name: "Cancel" });
     const confirm = within(dialog).getByRole("button", { name: "Delete permanently" });
 
+    expect(cancel).toHaveClass(actionButtonStyles.secondary);
+    expect(confirm).toHaveClass(actionButtonStyles.danger, styles.dangerAction);
     expect(cancel).toHaveFocus();
     fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
     expect(confirm).toHaveFocus();

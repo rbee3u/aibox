@@ -57,7 +57,7 @@
   gap: 3px;
   margin: 0;
   padding: 0 18px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 .tabs button {
@@ -132,7 +132,7 @@
 .modelSummary {
   padding: 0 0 14px;
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-content);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -220,7 +220,7 @@
 }
 .copySession:hover:not(:disabled),
 .copySession:focus-visible {
-  border-color: var(--line);
+  border-color: var(--line-control);
   background: var(--surface);
   color: var(--accent);
 }
@@ -229,9 +229,9 @@
   gap: 1px;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
-  background: var(--line);
+  background: var(--line-content);
 }
 .metric {
   min-width: 0;
@@ -343,7 +343,7 @@
 }
 .usageGroup {
   margin-top: 13px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-content);
   padding-top: 12px;
 }
 .usageHeading {
@@ -358,9 +358,9 @@
   min-width: 0;
   margin: 9px 0 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
-  background: var(--line);
+  background: var(--line-content);
 }
 .tokenInputBlock,
 .tokenOutput {
@@ -370,14 +370,14 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 1px;
-  background: var(--line);
+  background: var(--line-content);
 }
 .tokenInputMetrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   min-width: 0;
-  background: var(--line);
+  background: var(--line-content);
 }
 .tokenInputCell {
   display: grid;
@@ -438,8 +438,8 @@
   gap: 1px;
   min-width: 0;
   margin: 7px -10px -8px;
-  border-top: 1px solid var(--line);
-  background: var(--line);
+  border-top: 1px solid var(--line-content);
+  background: var(--line-content);
 }
 .tokenCacheDetail {
   display: flex;
@@ -502,7 +502,7 @@
   justify-self: end;
   width: 54%;
   margin-top: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: 5px;
   padding: 6px 7px;
   background: var(--surface-inset);
@@ -551,7 +551,7 @@
   min-width: 18px;
   height: 18px;
   place-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-pill);
   background: var(--surface-inset);
   font-size: var(--text-xs);
@@ -563,7 +563,7 @@
 .diagnosticItem {
   min-width: 0;
   padding: 10px 12px;
-  border-left: 3px solid var(--line);
+  border-left: 3px solid var(--line-content);
   background: var(--surface-inset);
 }
 .errorDiagnostics .diagnosticItem {
@@ -624,7 +624,7 @@
 }
 .headers td {
   padding: 7px 8px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-content);
   vertical-align: top;
   overflow-wrap: anywhere;
 }

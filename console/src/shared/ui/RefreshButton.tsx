@@ -1,11 +1,15 @@
 import { RefreshCw } from "lucide-react";
 import { forwardRef, type ReactNode } from "react";
-import { ActionButton, type ActionButtonProps } from "@/shared/ui/ActionButton";
+import {
+  ActionButton,
+  type ActionButtonProps,
+  type ActionButtonTone,
+} from "@/shared/ui/ActionButton";
 import styles from "@/shared/ui/RefreshButton.module.css";
 
 export interface RefreshButtonProps extends Omit<
   ActionButtonProps,
-  "aria-label" | "children" | "title" | "tone"
+  "aria-label" | "children" | "title"
 > {
   label: string;
   busy?: boolean;
@@ -13,6 +17,7 @@ export interface RefreshButtonProps extends Omit<
   children?: ReactNode;
   iconOnly?: boolean;
   iconSize?: number;
+  tone?: Extract<ActionButtonTone, "ghost" | "secondary">;
 }
 
 export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
@@ -25,6 +30,7 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
       className,
       iconOnly = false,
       iconSize = 14,
+      tone = "ghost",
       ...props
     },
     ref,
@@ -35,7 +41,7 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
         ref={ref}
         className={`${styles.button} ${iconOnly ? styles.iconOnly : ""} ${className ?? ""}`}
         data-refresh-button="true"
-        tone="default"
+        tone={tone}
         aria-label={busy && busyLabel ? busyLabel : label}
         aria-busy={busy || undefined}
       >

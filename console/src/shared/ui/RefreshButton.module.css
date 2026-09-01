@@ -1,20 +1,20 @@
 .button {
   display: inline-flex;
-  min-height: var(--control-compact);
+  min-height: var(--control-md);
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 5px 7px;
+  gap: var(--control-gap);
+  padding: 0 var(--control-padding-x);
   font-size: var(--text-xs);
   font-weight: inherit;
   white-space: nowrap;
 }
 
 .iconOnly {
-  width: var(--control-compact);
-  height: var(--control-compact);
-  min-width: var(--control-compact);
+  width: var(--control-md);
+  height: var(--control-md);
+  min-width: var(--control-md);
   padding: 0;
 }
 

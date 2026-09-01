@@ -3,7 +3,7 @@
 }
 
 .control:hover:not(:disabled) {
-  border-color: var(--line-strong);
+  border-color: var(--line-control-strong);
 }
 
 .control:active:not(:disabled) {
@@ -17,7 +17,10 @@
 
 .control:disabled {
   cursor: default;
-  opacity: 0.45;
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-ink);
+  background: var(--control-disabled-surface);
+  opacity: 1;
 }
 
 .toggle {
@@ -44,7 +47,7 @@
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: 4px;
   background: var(--surface-raised);
   transition:
@@ -89,7 +92,22 @@
 
 .toggle:has(input:disabled) {
   cursor: default;
-  opacity: 0.45;
+  color: var(--control-disabled-ink);
+  opacity: 1;
+}
+
+.toggle input:disabled + .toggleMark {
+  border-color: var(--control-disabled-line);
+  background: var(--control-disabled-surface);
+}
+
+.toggle input:checked:disabled + .toggleMark {
+  border-color: transparent;
+  background: var(--control-disabled-primary-surface);
+}
+
+.toggle input:checked:disabled + .toggleMark::after {
+  border-color: var(--control-disabled-primary-ink);
 }
 
 @media (pointer: coarse) {

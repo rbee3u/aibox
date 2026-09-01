@@ -64,7 +64,7 @@
 }
 
 .markdown :not(pre) > code {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: 4px;
   padding: 1px 4px;
   color: var(--code-text);
@@ -89,7 +89,7 @@
 
 .markdown th,
 .markdown td {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   padding: 6px 8px;
   text-align: left;
   white-space: nowrap;
@@ -105,7 +105,7 @@
   display: block;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
@@ -117,7 +117,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px 0 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-content);
   color: var(--muted);
   font: var(--weight-semibold) 11px / 1 var(--font-mono);
   text-transform: lowercase;
@@ -136,7 +136,7 @@
 
 .copyCode:hover,
 .copyCode:focus-visible {
-  border-color: var(--line);
+  border-color: var(--line-control);
   color: var(--accent);
   background: var(--surface);
 }

@@ -11,7 +11,7 @@
   right: 0;
   bottom: 0;
   left: var(--console-sidebar-width, 256px);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
@@ -26,7 +26,7 @@
 .operationPanel header {
   min-height: var(--toolbar-height-compact);
   padding: 6px 9px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-content);
 }
 
 .operationPanel header > div {
@@ -85,7 +85,7 @@
 .operationGap,
 .operationError {
   padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-content);
   font-size: var(--text-xs);
 }
 

@@ -15,20 +15,20 @@ describe("IconButton", () => {
     const button = screen.getByRole("button", { name: "Refresh status" });
     expect(button).toHaveAttribute("aria-pressed", "true");
     expect(button).toHaveAttribute("data-icon-button");
-    expect(button).toHaveClass(actionStyles.default);
+    expect(button).toHaveClass(actionStyles.ghost);
     expect(button).not.toHaveAttribute("title");
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
-  it("supports the danger tone for destructive icon actions", () => {
+  it("supports a quiet danger tone for inline destructive actions", () => {
     render(
-      <IconButton label="Remove Component" tone="danger">
+      <IconButton label="Remove Component" tone="dangerQuiet">
         <RefreshCw aria-hidden="true" />
       </IconButton>,
     );
 
     expect(screen.getByRole("button", { name: "Remove Component" })).toHaveClass(
-      actionStyles.danger,
+      actionStyles.dangerQuiet,
     );
   });
 });

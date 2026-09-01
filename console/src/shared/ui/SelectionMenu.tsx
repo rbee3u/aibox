@@ -1,6 +1,7 @@
 import { Check, ChevronDown, ChevronLeft, ListChecks } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { ActionButton } from "@/shared/ui/ActionButton";
 import styles from "@/shared/ui/SelectionMenu.module.css";
 
 export interface SelectionOption<T extends string> {
@@ -164,14 +165,15 @@ export function SelectionMenu<T extends string>({
         <div id={menuId} className={styles.selectionMenu} role="dialog" aria-label={label}>
           {mode === "choose-one" && (
             <div className={styles.selectionMenuHeader}>
-              <button
-                type="button"
+              <ActionButton
+                tone="ghost"
+                className={styles.selectionMenuAction}
                 aria-label={`Back to multiple ${pluralLabel}`}
                 onClick={() => setMode("multiple")}
               >
                 <ChevronLeft size={13} aria-hidden="true" />
                 Back
-              </button>
+              </ActionButton>
             </div>
           )}
           {mode === "multiple" ? (
@@ -232,9 +234,9 @@ export function SelectionMenu<T extends string>({
           )}
           {mode === "single" && allowMultiple && (
             <div className={styles.selectionMenuFooter}>
-              <button
-                type="button"
-                className={styles.selectionModeAction}
+              <ActionButton
+                tone="ghost"
+                className={`${styles.selectionMenuAction} ${styles.selectionModeAction}`}
                 aria-label={`Select multiple ${pluralLabel}`}
                 onClick={() => {
                   setDraft(new Set(selected));
@@ -243,26 +245,35 @@ export function SelectionMenu<T extends string>({
               >
                 <ListChecks size={13} aria-hidden="true" />
                 Select multiple
-              </button>
+              </ActionButton>
             </div>
           )}
           {mode === "multiple" && (
             <div className={`${styles.selectionMenuFooter} ${styles.selectionMenuFooterMultiple}`}>
-              <button
-                type="button"
-                className={styles.selectionModeAction}
+              <ActionButton
+                tone="ghost"
+                className={`${styles.selectionMenuAction} ${styles.selectionModeAction}`}
                 aria-label={`Choose one ${label}`}
                 onClick={() => setMode("choose-one")}
               >
                 Choose one
-              </button>
+              </ActionButton>
               <div className={styles.selectionCommitActions}>
-                <button type="button" onClick={closeAndFocusTrigger}>
+                <ActionButton
+                  tone="ghost"
+                  className={styles.selectionMenuAction}
+                  onClick={closeAndFocusTrigger}
+                >
                   Cancel
-                </button>
-                <button type="button" disabled={!draftChanged} onClick={applyDraft}>
+                </ActionButton>
+                <ActionButton
+                  tone="secondary"
+                  className={styles.selectionMenuAction}
+                  disabled={!draftChanged}
+                  onClick={applyDraft}
+                >
                   Apply
-                </button>
+                </ActionButton>
               </div>
             </div>
           )}

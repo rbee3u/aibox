@@ -25,7 +25,7 @@ interface ConfigFilePaneProps {
   selection: ConfigSelection;
   file: string;
   mode: "visual" | "raw";
-  operationBusy: boolean;
+  controlsDisabled: boolean;
   onControllerChange: (file: string, controller: ConfigFileController | null) => void;
   onError: (message: string | null) => void;
   onRevealRetryChange: (file: string, retry: (() => void) | null) => void;
@@ -36,7 +36,11 @@ interface ConfigFilePaneProps {
   onRequestRaw: () => void;
 }
 
-export function ConfigFilePane({ onRequestRaw, ...options }: ConfigFilePaneProps) {
+export function ConfigFilePane({
+  onRequestRaw,
+  controlsDisabled,
+  ...options
+}: ConfigFilePaneProps) {
   const [revealed, setRevealed] = useState(false);
   const {
     authKey,
@@ -61,7 +65,7 @@ export function ConfigFilePane({ onRequestRaw, ...options }: ConfigFilePaneProps
     useCodeMirror,
     visualOptions,
   } = useConfigFileSession(options);
-  const { api, file, mode, operationBusy, tenant } = options;
+  const { api, file, mode, tenant } = options;
 
   if (loading)
     return (
@@ -81,7 +85,7 @@ export function ConfigFilePane({ onRequestRaw, ...options }: ConfigFilePaneProps
         {isAuth && mode === "visual" && <span className={styles.authModeBadge}>{authMode}</span>}
         <ActionButton
           tone="primary"
-          disabled={operationBusy || !dirty || !canSave}
+          disabled={controlsDisabled || !dirty || !canSave}
           onClick={() => void save()}
         >
           {feedback === "saving" ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}
@@ -122,11 +126,11 @@ export function ConfigFilePane({ onRequestRaw, ...options }: ConfigFilePaneProps
                   </div>
                   <p>Use Raw to inspect the native token object, or switch to an API key.</p>
                   <div className={styles.dialogActions}>
-                    <button type="button" onClick={onRequestRaw}>
+                    <ActionButton type="button" tone="ghost" onClick={onRequestRaw}>
                       Open Raw
-                    </button>
+                    </ActionButton>
                     <ActionButton
-                      tone="primary"
+                      tone="secondary"
                       onClick={() => {
                         if (!window.confirm("Switch this draft to API-key credentials?")) return;
                         setAuthMode("api-key");

@@ -127,6 +127,7 @@ export function ComponentRowItem({
       <div className={styles.componentActions}>
         {diagnostic && (
           <ActionButton
+            tone="ghost"
             className={styles.componentDetailsButton}
             aria-expanded={expanded}
             aria-controls={`component-diagnostic-${row.kind}`}
@@ -136,14 +137,14 @@ export function ComponentRowItem({
           </ActionButton>
         )}
         {presentation.primaryAction === "Retry inspection" ? (
-          <ActionButton tone="default" disabled={busy} onClick={onRetryInspection}>
+          <ActionButton tone="secondary" disabled={busy} onClick={onRetryInspection}>
             <RefreshCw size={14} aria-hidden="true" />
             Retry inspection
           </ActionButton>
         ) : primaryAction && model.canSpecificVersion ? (
           <div className={styles.componentSplitAction}>
             <ActionButton
-              tone="default"
+              tone="secondary"
               className={styles.componentSplitPrimary}
               disabled={mutationBusy}
               onClick={onInstall}
@@ -157,7 +158,7 @@ export function ComponentRowItem({
             </ActionButton>
             <ActionButton
               ref={registerMenuButton}
-              tone="default"
+              tone="secondary"
               className={styles.componentSplitTrigger}
               aria-label={`${primaryAction} options for ${label}`}
               aria-controls={menuOpen ? `component-install-menu-${row.kind}` : undefined}
@@ -216,7 +217,7 @@ export function ComponentRowItem({
           </div>
         ) : primaryAction ? (
           <ActionButton
-            tone="default"
+            tone="secondary"
             className={styles.componentPrimaryAction}
             disabled={mutationBusy}
             onClick={onInstall}
@@ -231,7 +232,7 @@ export function ComponentRowItem({
         ) : null}
         {presentation.canRemove && (
           <IconButton
-            tone="danger"
+            tone="dangerQuiet"
             label={`Remove ${label}`}
             disabled={mutationBusy}
             onClick={onRemove}
