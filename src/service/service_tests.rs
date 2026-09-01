@@ -391,6 +391,21 @@ async fn management_routes_require_loopback_and_reserve_the_aibox_namespace() {
     assert_eq!(body["requests"], serde_json::json!([]));
     assert!(body.get("records").is_none());
 
+    let overview = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/_aibox/api/overview",
+            "127.0.0.1:5000",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(overview.status(), StatusCode::OK);
+    let overview_body: Value =
+        serde_json::from_slice(&overview.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(overview_body.get("requests").is_none());
+    assert!(overview_body.get("service").is_some());
+
     let bootstrap = app
         .oneshot(request(
             Method::GET,

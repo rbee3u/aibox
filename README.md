@@ -184,7 +184,9 @@ aibox console
 ```
 
 The Service prints its listener and Console address. Requests persist
-under `$AIBOX_ROOT/requests/` (`$HOME/.aibox/requests/` by default).
+under `$AIBOX_ROOT/requests/` (`$HOME/.aibox/requests/` by default). Older
+Requests may be stored inside Request Group directories that exist only as an
+internal count and pagination index.
 
 Request storage format v4 does not read or migrate format v3. Before the first
 start of an upgraded Service, stop the old Service, optionally back up the

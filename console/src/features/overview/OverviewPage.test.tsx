@@ -25,7 +25,6 @@ const overview = {
   },
   managed_tenants: 1,
   host_available: true,
-  requests: { total: 7, active: 1, warning: 2, error: 0, bytes: 4096 },
 } satisfies OverviewData;
 
 const topology = {
@@ -188,23 +187,6 @@ describe("OverviewPage", () => {
       "configs",
       new URLSearchParams("tenant=managed%3Adefault&agent=codex&config=broken"),
     );
-
-    const requestDetail = screen.getByText("0 errors · 2 warnings");
-    await user.click(requestDetail.closest("button")!);
-    expect(onNavigate).toHaveBeenLastCalledWith("requests", undefined);
-  });
-
-  it("uses singular labels for one Request error or warning", async () => {
-    const singularOverview = {
-      ...overview,
-      requests: { ...overview.requests, warning: 0, error: 1 },
-    } satisfies OverviewData;
-    const { api } = fakeApi(topology, singularOverview);
-
-    render(<OverviewPage api={api} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />);
-
-    expect(await screen.findByText("1 error · 0 warnings")).toBeInTheDocument();
-    expect(screen.queryByText("1 errors · 0 warnings")).not.toBeInTheDocument();
   });
 
   it("shows the complete structural map and loads Session counts on demand", async () => {

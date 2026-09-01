@@ -847,6 +847,38 @@ fn pagination_is_fixed_at_fifty_and_recomputes_each_page_from_current_order() {
 }
 
 #[test]
+fn pagination_counts_grouped_requests_from_directory_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    for _ in 0..51 {
+        finished_request(&store, "/grouped", b"", b"");
+    }
+    let mut names: Vec<_> = std::fs::read_dir(store.root())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    let grouped: Vec<_> = names.into_iter().take(20).collect();
+    let timestamp = &grouped[0][..20];
+    let group_path = store.root().join(format!("{timestamp}-20"));
+    std::fs::create_dir(&group_path).unwrap();
+    for name in &grouped {
+        std::fs::rename(store.root().join(name), group_path.join(name)).unwrap();
+    }
+
+    let first = list_requests_inner(&inspection(&store), None).unwrap();
+    assert_eq!(first.total, 51);
+    assert_eq!(first.deletable_count, 51);
+    assert_eq!(first.requests.len(), 50);
+    assert!(first.has_next);
+
+    let second = list_requests_inner(&inspection(&store), Some(2)).unwrap();
+    assert_eq!(second.total, 51);
+    assert_eq!(second.requests.len(), 1);
+    assert!(!second.has_next);
+}
+
+#[test]
 fn invalid_page_is_rejected_before_the_store_is_scanned() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();

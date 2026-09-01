@@ -34,7 +34,6 @@ pub(crate) struct OverviewSnapshot {
     pub(crate) image_reference: String,
     pub(crate) managed_tenants: usize,
     pub(crate) host_available: bool,
-    pub(crate) requests: crate::request::RequestOverview,
 }
 
 /// One Tenant row of the Topology view, before wire projection.
@@ -67,7 +66,6 @@ impl OverviewCoordinator {
         let root = self.state.root();
         let host_home = self.state.host_home();
         let image = self.state.image();
-        let inspection = self.state.request().inspection();
         let listen = self.state.listen();
         let uptime = self.state.uptime_seconds();
         run_blocking(move || {
@@ -82,7 +80,6 @@ impl OverviewCoordinator {
                 image_reference: image.to_string(),
                 managed_tenants: tenants.len(),
                 host_available,
-                requests: inspection.overview()?,
             })
         })
         .await

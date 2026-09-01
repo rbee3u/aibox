@@ -511,7 +511,6 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "config",
                 "docker",
                 "foundation::safe_fs",
-                "request",
                 "service::operation",
                 "service::state",
                 "session",

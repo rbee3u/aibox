@@ -22,7 +22,6 @@ import {
   filterByAttention,
   firstComponentAttentionTarget,
   firstConfigAttentionTarget,
-  requestAttentionDetail,
   searchTopology,
   structuralIds,
   summarizeTopology,
@@ -268,13 +267,6 @@ export function useOverviewController({
         detail: `${health.componentAttention} Component${health.componentAttention === 1 ? " needs" : "s need"} attention.`,
         tone: health.componentErrors ? "error" : "warning",
         target: topology ? firstComponentAttentionTarget(topology) : { module: "tenants" },
-      });
-    if (overview?.requests.error || overview?.requests.warning)
-      items.push({
-        label: "Requests",
-        detail: requestAttentionDetail(overview),
-        tone: overview.requests.error ? "error" : "warning",
-        target: { module: "requests" },
       });
     if (topologyError)
       items.push({ label: "Resource inspection", detail: topologyError, tone: "error" });

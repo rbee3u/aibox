@@ -18,10 +18,10 @@ mod tests {
     use crate::request::{
         AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource,
         DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic, ProtocolFamily,
-        ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestOverview,
-        RequestedEffective, RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource,
-        ResultMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
-        TimingMetadata, TokenUsage,
+        ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestedEffective,
+        RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource, ResultMetadata,
+        SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata,
+        TokenUsage,
     };
     use crate::service::control::components::{
         ComponentMutation, ComponentQuery, ComponentRow, ComponentStatusWire,
@@ -122,7 +122,6 @@ mod tests {
             DockerOverview,
             RuntimeImageStatus,
             RuntimeImageOverview,
-            RequestOverview,
             TopologyResponse,
             TopologyTenant,
             TopologyAgent,

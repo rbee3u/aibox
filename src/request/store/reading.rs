@@ -3,8 +3,9 @@
 use super::event_index::{EventIndexLine, EventIndexReader};
 use super::layout::{
     RequestFile, ResponseFile, canonical_sort_key, optional_json, parse_request_directory_name,
-    read_json, regular_file_length, remove_controlled_request_dir, validate_id,
-    validate_regular_file, validate_request_ancestor,
+    parse_request_group_name, read_json, regular_file_length, remove_controlled_request_dir,
+    rename_noreplace, request_group_directory_name, request_locations_in, validate_id,
+    validate_regular_file, validate_request_ancestor, visit_request_candidates,
 };
 use super::summary::{summary_to_result, validate_schema, validate_summary};
 use super::{
@@ -29,59 +30,118 @@ impl RequestStore {
         self.scan_unlocked()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scan_summaries(&self) -> Result<Vec<StoredRequestSummary>> {
         let _namespace = read_unpoisoned(&self.namespace);
         self.scan_summaries_unlocked()
     }
 
-    fn request_directories(&self) -> Result<Vec<PathBuf>> {
-        if !crate::foundation::safe_fs::real_dir_exists(&self.root, "Request collection")? {
-            return Ok(Vec::new());
-        }
-        let mut directories = Vec::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read Request collection {}", self.root.display()))?
-        {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    self.warning("request collection entry could not be inspected", None);
-                    continue;
-                }
-            };
-            let path = entry.path();
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    self.warning("request entry could not be inspected", None);
-                    continue;
-                }
-            };
-            if !metadata.file_type().is_dir() {
-                self.warning("unexpected request entry ignored", None);
-                continue;
-            }
-            directories.push(path);
+    /// Count the collection and read summaries only for `limit` rows after `start`.
+    pub(crate) fn list_page(&self, start: usize, limit: usize) -> Result<super::RequestListPage> {
+        let _namespace = read_unpoisoned(&self.namespace);
+        self.list_page_unlocked(start, limit)
+    }
+
+    fn all_request_directories_unlocked(&self) -> Result<Vec<PathBuf>> {
+        let inventory = self.inventory_unlocked()?;
+        let mut directories: Vec<_> = inventory
+            .hot
+            .into_iter()
+            .map(|location| location.path)
+            .collect();
+        for group in inventory.groups {
+            directories.extend(
+                request_locations_in(&group.path, |category| self.warning(category, None))?
+                    .into_iter()
+                    .map(|location| location.path),
+            );
         }
         Ok(directories)
     }
 
-    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRequestSummary>> {
-        let directories = self.request_directories()?;
+    fn list_page_unlocked(&self, start: usize, limit: usize) -> Result<super::RequestListPage> {
+        let inventory = self.inventory_unlocked()?;
         let active = lock_unpoisoned(&self.active).clone();
+        let active_count = inventory
+            .hot
+            .iter()
+            .filter(|location| active.contains_key(&location.id))
+            .count();
+        let total = inventory.total();
+        let deletable_count = total.saturating_sub(active_count);
+        let mut hot = inventory.hot;
+        hot.sort_by(|left, right| right.name.cmp(&left.name));
+        let mut groups = inventory.groups;
+        groups.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+
+        let mut paths = Vec::new();
+        if start < hot.len() {
+            paths.extend(
+                hot.iter()
+                    .skip(start)
+                    .take(limit)
+                    .map(|location| location.path.clone()),
+            );
+        }
+        if paths.len() < limit {
+            let mut remaining_skip = start.saturating_sub(hot.len());
+            for group in groups {
+                if remaining_skip >= group.counted {
+                    remaining_skip -= group.counted;
+                    continue;
+                }
+                let mut children =
+                    request_locations_in(&group.path, |category| self.warning(category, None))?;
+                children.sort_by(|left, right| right.name.cmp(&left.name));
+                for location in children.into_iter().skip(remaining_skip) {
+                    if paths.len() >= limit {
+                        break;
+                    }
+                    paths.push(location.path);
+                }
+                remaining_skip = 0;
+                if paths.len() >= limit {
+                    break;
+                }
+            }
+        }
+
         let mut requests = Vec::new();
-        for path in directories {
+        for path in paths {
             match read_request_summary(&path, &active) {
                 Ok(request) => requests.push(request),
                 Err(_) => self.warning("incomplete or invalid request ignored", None),
             }
         }
-        requests.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
-        Ok(requests)
+        Ok(super::RequestListPage {
+            requests,
+            total,
+            deletable_count,
+        })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn scan_summaries_unlocked(&self) -> Result<Vec<StoredRequestSummary>> {
+        let directories = self.all_request_directories_unlocked()?;
+        let active = lock_unpoisoned(&self.active).clone();
+        let mut requests = Vec::new();
+        for path in directories {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            match read_request_summary(&path, &active) {
+                Ok(request) => requests.push((name, request)),
+                Err(_) => self.warning("incomplete or invalid request ignored", None),
+            }
+        }
+        requests.sort_by(|left, right| right.0.cmp(&left.0));
+        Ok(requests.into_iter().map(|(_, request)| request).collect())
     }
 
     fn scan_unlocked(&self) -> Result<Vec<StoredRequest>> {
-        let directories = self.request_directories()?;
+        let directories = self.all_request_directories_unlocked()?;
         let active = lock_unpoisoned(&self.active).clone();
         let mut requests = Vec::new();
         for path in directories {
@@ -90,7 +150,7 @@ impl RequestStore {
                 Err(_) => self.warning("incomplete or invalid request ignored", None),
             }
         }
-        requests.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
+        requests.sort_by(|left, right| directory_basename(right).cmp(directory_basename(left)));
         Ok(requests)
     }
 
@@ -109,52 +169,30 @@ impl RequestStore {
     }
 
     fn find_many_unlocked(&self, ids: &HashSet<&str>) -> Result<HashMap<String, StoredRequest>> {
-        if !crate::foundation::safe_fs::real_dir_exists(&self.root, "Request collection")? {
-            return Ok(HashMap::new());
-        }
         let active = lock_unpoisoned(&self.active).clone();
         let mut requests = HashMap::with_capacity(ids.len());
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("read Request collection {}", self.root.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            let Some(id_start) = name.len().checked_sub(36) else {
-                continue;
-            };
-            if name
-                .as_bytes()
-                .get(id_start.checked_sub(1).unwrap_or(usize::MAX))
-                != Some(&b'-')
-            {
-                continue;
-            }
-            let Some(candidate) = name.get(id_start..) else {
-                continue;
-            };
+        visit_request_candidates(&self.root, |path, candidate| {
             if !ids.contains(candidate) {
-                continue;
+                return Ok(());
             }
-            let metadata = fs::symlink_metadata(&path)
+            let metadata = fs::symlink_metadata(path)
                 .with_context(|| format!("inspect selected Request {}", path.display()))?;
             if !metadata.file_type().is_dir() {
-                bail!(
+                anyhow::bail!(
                     "selected Request is not a real directory: {}",
                     path.display()
                 );
             }
-            let request = read_request(&path, &active)
+            let request = read_request(path, &active)
                 .with_context(|| format!("read selected Request {}", path.display()))?;
             if request.request.id != candidate {
-                bail!("selected Request metadata id does not match its directory name");
+                anyhow::bail!("selected Request metadata id does not match its directory name");
             }
             if requests.insert(candidate.to_string(), request).is_some() {
-                bail!("multiple Request directories match id {candidate}");
+                anyhow::bail!("multiple Request directories match id {candidate}");
             }
-        }
+            Ok(())
+        })?;
         Ok(requests)
     }
 
@@ -321,8 +359,33 @@ impl RequestStore {
             validate_request_ancestor(&self.root, &request.directory)?;
             selected.push(request.directory.clone());
         }
+        let mut group_removed: HashMap<PathBuf, usize> = HashMap::new();
         for path in &selected {
+            if let Some(parent) = path.parent()
+                && parent != self.root
+                && let Some(name) = parent.file_name().and_then(|name| name.to_str())
+                && parse_request_group_name(name).is_ok()
+            {
+                *group_removed.entry(parent.to_path_buf()).or_default() += 1;
+            }
             remove_controlled_request_dir(path)?;
+        }
+        for (group_path, removed) in group_removed {
+            let name = group_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("Request Group directory name is not valid UTF-8")?;
+            let group = parse_request_group_name(name)?;
+            let remaining = group.count.saturating_sub(removed);
+            if remaining == 0 {
+                fs::remove_dir(&group_path)
+                    .with_context(|| format!("delete Request Group {}", group_path.display()))?;
+            } else {
+                let target = self
+                    .root
+                    .join(request_group_directory_name(&group.timestamp, remaining));
+                rename_noreplace(&group_path, &target)?;
+            }
         }
         crate::foundation::safe_fs::sync_dir(&self.root)?;
         Ok(selected.len())
@@ -336,11 +399,10 @@ fn read_request_summary(
     let summary: SummaryMetadata = read_json(&path.join(SUMMARY_JSON), "Request summary metadata")?;
     validate_schema(summary.schema_version, &summary.kind, "summary")?;
     validate_id(&summary.request_id)?;
-    let directory = parse_request_directory_name(path, &summary.request_id)?;
+    parse_request_directory_name(path, &summary.request_id)?;
     validate_summary(&summary)?;
     let live_elapsed_ns = active_elapsed_ns(summary.terminal, active, &summary.request_id);
     Ok(StoredRequestSummary {
-        sort_key: canonical_sort_key(&summary, &directory.host, &summary.request_id)?,
         summary,
         active: live_elapsed_ns.is_some(),
         live_elapsed_ns,
@@ -510,4 +572,12 @@ fn event_index_warning(
             .clone()
             .unwrap_or_else(|| "0".to_string()),
     }
+}
+
+fn directory_basename(request: &StoredRequest) -> &str {
+    request
+        .directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
 }

@@ -40,14 +40,17 @@ impl RequestStore {
         let root = aibox_root.join("requests");
         crate::foundation::safe_fs::ensure_real_dir(&root, "Request collection")?;
         restrict_dir(&root)?;
-        Ok(Self {
+        let store = Self {
             root,
             active: Arc::new(Mutex::new(HashMap::new())),
             namespace: Arc::new(RwLock::new(())),
             warning_sink,
-        })
+        };
+        store.repair_unlocked()?;
+        Ok(store)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

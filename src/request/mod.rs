@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-pub(crate) use inspection::{RequestInspection, RequestOverview};
+pub(crate) use inspection::RequestInspection;
 pub(crate) use interpretation::{BodyContentCoding, body_reader};
 pub(crate) use model::{
     AssessmentFinding, AssessmentLevel, AssessmentSource, ProtocolSummary, RecordedHeader,
@@ -44,7 +44,9 @@ pub(crate) use model::{
 };
 pub(crate) use proxy::handle as handle_proxy;
 pub(crate) use reporter::RequestReporter;
-pub(crate) use store::{RequestDetailReadError, StoredRequestSummary};
+pub(crate) use store::{
+    REQUEST_GROUP_COMPACT_INTERVAL, RequestDetailReadError, StoredRequestSummary,
+};
 
 pub(crate) fn format_version() -> u32 {
     store::FORMAT_VERSION
@@ -95,6 +97,11 @@ impl RequestProxyState {
 
     pub(crate) fn inspection(&self) -> RequestInspection {
         RequestInspection::new(self.store.clone())
+    }
+
+    /// Compact at most one Request Group of the oldest ungrouped Requests.
+    pub(crate) fn compact_once(&self) -> Result<()> {
+        self.store.compact_once()
     }
 
     /// The writable store handle, for suites that seed recorded Requests before

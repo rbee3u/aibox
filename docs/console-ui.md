@@ -383,7 +383,7 @@ baseline of 378,629 bytes; `scripts/check-bundle-budget.mjs` enforces the
 
 Overview is an operational resource map. Key facts combine Service health,
 Managed Tenant count, Host Tenant availability, Config and Component health,
-Requests, version, listen address, and the AIBox Root. The Host Tenant is
+version, listen address, and the AIBox Root. The Host Tenant is
 reported separately as a console-only view and is never included in the
 Managed Tenant count. Needs attention appears immediately below the key facts;
 the complete structural Resource topology follows it, with Runtime below the

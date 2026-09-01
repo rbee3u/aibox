@@ -239,8 +239,12 @@ operation: a Run, Debug Shell, or Component installation.
 
 **Keep the Request Proxy host-side and raw.** The Request Proxy is an always-on part of
 the AIBox Service, global rather than Tenant-owned, never starts Docker, and records raw application-visible header
-values and body bytes under the flat `$AIBOX_ROOT/requests/<request>/` layout.
-The current Request storage contract is format v4 with `request_id`; format v3
+values and body bytes under `$AIBOX_ROOT/requests/`. Ungrouped Request directories
+stay at the collection root; when that hot set grows past 500, the Service
+moves the oldest 200 eligible Requests into a Request Group named
+`{earliest-UTC-basic}-200`. Group counts in the directory name are the list
+total; deletion updates the suffix and removes an empty Group. The current
+Request storage contract is format v4 with `request_id`; format v3
 is unsupported and must be cleared manually before an upgraded Service starts.
 One explicit `--listen` socket serves both the Request Proxy and Console;
 the surrounding network is trusted, so do not add authentication, TLS, request

@@ -6,8 +6,9 @@ mod operation;
 mod state;
 
 use crate::component::{LatestProvider, OfficialLatestProvider};
-use crate::request::RequestProxyState;
-use crate::request::{RequestReporter, handle_proxy};
+use crate::request::{
+    REQUEST_GROUP_COMPACT_INTERVAL, RequestProxyState, RequestReporter, handle_proxy,
+};
 use crate::service::coordination::OperationCoordinator;
 use crate::service::state::{ConsoleCspNonce, ServiceState};
 use crate::tenant;
@@ -99,6 +100,10 @@ async fn serve(
     let router = router(state.clone());
     println!("{}", startup_banner(listen));
 
+    let compact_shutdown = shutdown.clone();
+    let compact_state = state.request();
+    tokio::spawn(request_group_compact_loop(compact_state, compact_shutdown));
+
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
     let signal_task = tokio::spawn(signal_loop(signal_tx));
     let server_shutdown = shutdown.clone();
@@ -173,6 +178,21 @@ fn ensure_default_managed_tenant(root: &Path) -> Result<()> {
     tenant::ManagedTenant::resolve(root, tenant::DEFAULT_TENANT_NAME)?
         .ensure_initialized()
         .context("create or repair Default Managed Tenant")
+}
+
+/// Wait one compact interval, then compact at most one Request Group, until shutdown.
+async fn request_group_compact_loop(state: RequestProxyState, shutdown: CancellationToken) {
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => break,
+            () = tokio::time::sleep(REQUEST_GROUP_COMPACT_INTERVAL) => {}
+        }
+        if shutdown.is_cancelled() {
+            break;
+        }
+        let state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || state.compact_once()).await;
+    }
 }
 
 fn router(state: ServiceState) -> Router {

@@ -1,4 +1,3 @@
-import { formatBinaryByteSize as formatBytes } from "@/shared/lib/encoding";
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
 import { orderTenants, type NavigationTarget } from "@/features/overview/topology/coreTree";
@@ -107,20 +106,6 @@ export function healthTone(attention?: number, errors?: number, loadError?: stri
   if (loadError || errors) return "error";
   if (attention) return "warning";
   return attention === 0 ? "good" : "neutral";
-}
-export function requestDetail(data: OverviewData): string {
-  const states = [
-    data.requests.active ? `${data.requests.active} active` : "",
-    data.requests.warning ? `${data.requests.warning} warning` : "",
-    data.requests.error ? `${data.requests.error} error` : "",
-    formatBytes(data.requests.bytes),
-  ].filter(Boolean);
-  return states.join(" · ");
-}
-export function requestAttentionDetail(data: OverviewData): string {
-  const errorLabel = `${data.requests.error} error${data.requests.error === 1 ? "" : "s"}`;
-  const warningLabel = `${data.requests.warning} warning${data.requests.warning === 1 ? "" : "s"}`;
-  return `${errorLabel} · ${warningLabel}`;
 }
 export function buildDisabledReason(
   data: OverviewData | null,

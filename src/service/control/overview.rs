@@ -3,7 +3,6 @@
 use super::{ComponentRow, ControlResult, TenantRow, component_rows_from, json_response};
 use crate::agent::AgentKind;
 use crate::config;
-use crate::request::RequestOverview;
 use crate::service::coordination::{
     OverviewCoordinator, OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot,
 };
@@ -37,7 +36,6 @@ pub(crate) struct OverviewResponse {
     runtime_image: RuntimeImageOverview,
     managed_tenants: usize,
     host_available: bool,
-    requests: RequestOverview,
 }
 
 #[derive(Serialize)]
@@ -144,7 +142,6 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
         runtime_image,
         managed_tenants: snapshot.managed_tenants,
         host_available: snapshot.host_available,
-        requests: snapshot.requests,
     }
 }
 

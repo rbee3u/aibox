@@ -73,22 +73,18 @@ pub(super) fn list_requests_inner(
         .ok()
         .and_then(|page| page.checked_mul(PAGE_SIZE))
         .context("Request page is too large")?;
-    let requests = inspection.scan_summaries()?;
-    let total = requests.len();
-    let deletable_count = requests.iter().filter(|request| !request.active).count();
+    let requests = inspection.list_page(start, PAGE_SIZE)?;
     let has_next = start
         .checked_add(PAGE_SIZE)
-        .is_some_and(|next| next < total);
-    let requests = requests
-        .iter()
-        .skip(start)
-        .take(PAGE_SIZE)
-        .map(|request| summary(inspection, request))
-        .collect();
+        .is_some_and(|next| next < requests.total);
     Ok(RequestList {
-        requests,
-        total,
-        deletable_count,
+        requests: requests
+            .requests
+            .iter()
+            .map(|request| summary(inspection, request))
+            .collect(),
+        total: requests.total,
+        deletable_count: requests.deletable_count,
         has_next,
     })
 }

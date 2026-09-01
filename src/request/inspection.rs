@@ -5,40 +5,29 @@
 
 use super::assessment::{diagnostic_findings, effective_assessment};
 use super::interpretation::{BodyContentCoding, body_content_coding};
-use super::model::{AssessmentFinding, AssessmentLevel, RequestAssessment, SummaryMetadata};
+use super::model::{AssessmentFinding, RequestAssessment, SummaryMetadata};
 use super::store::{
-    RequestDetailReadError, RequestStore, StoredEventTimings, StoredRequest, StoredRequestSummary,
+    RequestDetailReadError, RequestListPage, RequestStore, StoredEventTimings, StoredRequest,
     timeline_end_at_ns,
 };
-use anyhow::{Context as _, Result};
-use serde::Serialize;
+use anyhow::Result;
 use std::fs;
 
+/// Read-only and destructive inspection handle for recorded Requests.
 #[derive(Clone)]
 pub(crate) struct RequestInspection {
     store: RequestStore,
 }
 
-/// Aggregate counts across every recorded Request.
-///
-/// This is a read-time projection, not persisted Request evidence.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct RequestOverview {
-    pub(crate) total: usize,
-    pub(crate) active: usize,
-    pub(crate) warning: usize,
-    pub(crate) error: usize,
-    pub(crate) bytes: u64,
-}
-
 impl RequestInspection {
+    /// Inspect recorded Requests through `store`.
     pub(crate) fn new(store: RequestStore) -> Self {
         Self { store }
     }
 
-    pub(crate) fn scan_summaries(&self) -> Result<Vec<StoredRequestSummary>> {
-        self.store.scan_summaries()
+    /// Count the collection from directory names and read only this page of summaries.
+    pub(crate) fn list_page(&self, start: usize, limit: usize) -> Result<RequestListPage> {
+        self.store.list_page(start, limit)
     }
 
     pub(crate) fn find(&self, id: &str) -> Result<StoredRequest> {
@@ -105,43 +94,4 @@ impl RequestInspection {
     ) -> Option<String> {
         timeline_end_at_ns(request, live)
     }
-
-    pub(crate) fn overview(&self) -> Result<RequestOverview> {
-        let captured_requests = self.store.scan_summaries()?;
-        let mut overview = RequestOverview {
-            total: captured_requests.len(),
-            active: 0,
-            warning: 0,
-            error: 0,
-            bytes: directory_size(self.store.root())?,
-        };
-        for request in captured_requests {
-            match effective_assessment(&request.summary, request.active).level {
-                AssessmentLevel::Active => overview.active += 1,
-                AssessmentLevel::Warning => overview.warning += 1,
-                AssessmentLevel::Error => overview.error += 1,
-                AssessmentLevel::Ok => {}
-            }
-        }
-        Ok(overview)
-    }
-}
-
-fn directory_size(root: &std::path::Path) -> Result<u64> {
-    let mut total = 0u64;
-    for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if !kind.is_dir() || kind.is_symlink() {
-            continue;
-        }
-        for child in fs::read_dir(entry.path())? {
-            let child = child?;
-            let kind = child.file_type()?;
-            if kind.is_file() && !kind.is_symlink() {
-                total = total.saturating_add(child.metadata()?.len());
-            }
-        }
-    }
-    Ok(total)
 }

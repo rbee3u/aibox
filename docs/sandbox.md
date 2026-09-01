@@ -196,7 +196,8 @@ recognized terminal signal from Claude Messages, OpenAI Responses, or OpenAI
 Chat Completions completes the Request Outcome even when the client closes
 immediately after consuming that signal.
 
-Each direct child of `$AIBOX_ROOT/requests/` is one Request:
+Each direct child of `$AIBOX_ROOT/requests/` is an ungrouped Request, a
+Request Group, or an unfinished grouping directory:
 
 ```text
 active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
@@ -208,7 +209,23 @@ active-<start-UTC-basic-time>-<sanitized-host-or-invalid>-<uuid-v7>/
   response.body
   response.events.jsonl  # optional index for recognized identity-coded SSE
   summary.json
+
+<earliest-end-UTC-basic-time>-<count>/
+  # Request Group: up to 200 older Request directories, unchanged names
+.grouping-<uuid>/
+  # unfinished compaction; listing treats its children as ungrouped
 ```
+
+New Requests are always created at the collection root. When more than 500
+ungrouped Request directories are present, the Service waits ten minutes after
+start and then every ten minutes thereafter, and moves the oldest 200 eligible
+Requests (no `active-` prefix, not in-process active) into a new Request Group
+named from that batch's earliest directory timestamp and the count 200. Groups
+are not merged or refilled. Deletion of a grouped Request rewrites the count
+suffix and removes the Group at 0. A crash during the move leaves a
+`.grouping-<uuid>` directory; opening the collection or the next compact tick
+moves those children back to the root and reconciles published Group suffixes
+from their actual children. Runtime list totals trust Group suffixes.
 
 The UUID is the Request identity. The directory name is a materialized ordering
 hint: `active-` means only that a terminal name has not been successfully
@@ -243,23 +260,30 @@ Request Outcome. Unknown, incompatible, or structurally incomplete
 collection entries are ignored with warnings; selected reads and deletion
 revalidate real paths and reject symlinks or unexpected types.
 
-List scanning opens only each real `summary.json`; it does not inspect raw
-request/response metadata, Bodies, or the SSE index. A valid Summary therefore
-keeps its list row visible when separate raw evidence is malformed or unsafe.
-Detail reads remain strict over that evidence and fail rather than following or
-repairing it. Format v3 Requests are unsupported: they are not read, migrated,
-rewritten, or deleted by the Service. Before the first start of an upgraded
-Service, stop the old Service, optionally back up the collection, and manually
-remove `$AIBOX_ROOT/requests`; the new Service recreates an empty collection.
+List counts sum ungrouped Request directories (including children of an
+unfinished grouping directory) with each Request Group's named count. A list
+page opens `summary.json` only for the rows in that page; skipped Groups are
+not opened. It does not inspect raw request/response metadata, Bodies, or the
+SSE index. A valid Summary therefore keeps its list row visible when separate
+raw evidence is malformed or unsafe. Detail reads remain strict over that
+evidence and fail rather than following or repairing it. Format v3 Requests
+are unsupported: they are not read, migrated, rewritten, or deleted by the
+Service. Before the first start of an upgraded Service, stop the old Service,
+optionally back up the collection, and manually remove `$AIBOX_ROOT/requests`;
+the new Service recreates an empty collection. An older binary that does not
+recognize Request Groups ignores those directories, so grouped Requests
+disappear from its UI until the collection is read by this Service.
 
 Every terminal Request Outcome, including rejection, upstream failure, client
 disconnect, recording failure, and server shutdown, has a Request End Time
 derived from the Summary start anchor and terminal monotonic offset. Active and
-interrupted Requests do not. The Requests module orders canonical directory
-basenames by descending ASCII order: active and interrupted Requests first by
-start time, then terminal Requests by End Time, with host and UUID breaking
-millisecond ties. A terminal Summary stranded under an `active-` name is ordered by the
-terminal name it should have received.
+interrupted Requests do not. The Requests module orders materialized directory
+basenames by descending ASCII order: ungrouped names first, then Request Groups
+from newest frozen timestamp to oldest, and Request names inside a Group by the
+same descending basename order. `active-` names sort before terminal names.
+A terminal Summary stranded under an `active-` name stays in the hot set and is
+ordered by that `active-` name rather than by the terminal name it should have
+received.
 
 The Request Proxy best-effort materializes the protocol overview for OpenAI
 Responses, OpenAI Chat Completions, and Claude Messages as stable facts become
@@ -332,7 +356,8 @@ lock. Authorization values, API keys, prompts, tool data, and model output are
 stored in full and remain after the Service exits. Use the Requests module's
 single-Request or selected delete action when debugging ends. An active Request
 cannot be deleted. Selected deletion strictly validates every target before
-deleting any of them.
+deleting any of them. Deleting a Request inside a Request Group updates that
+Group's count suffix, or removes the Group when the count reaches zero.
 
 Claude Messages, OpenAI Responses, and OpenAI Chat Completions streaming are
 HTTP SSE and work through this path. WebSocket transport is outside the Request

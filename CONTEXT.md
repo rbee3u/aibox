@@ -135,3 +135,7 @@ results, and diagnostic evidence.
 **Coding Agent Session ID**:
 An unverified session identifier found in Request evidence. It does not link a
 Request to an AIBox Session.
+
+**Request Group**:
+A collection-root directory that holds older recorded Requests as a count and
+pagination index. It is not Request evidence and is not a retention policy.

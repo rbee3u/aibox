@@ -34,7 +34,6 @@ const overview = {
   },
   managed_tenants: 1,
   host_available: true,
-  requests: { total: 2, active: 0, warning: 0, error: 0, bytes: 1024 },
 } satisfies OverviewData;
 
 const topology = { tenants: [] } satisfies TopologyData;

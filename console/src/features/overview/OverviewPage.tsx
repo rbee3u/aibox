@@ -25,7 +25,6 @@ import {
   healthTone,
   MAX_ZOOM,
   MIN_ZOOM,
-  requestDetail,
 } from "@/features/overview/topology/topologyModel";
 import { useOverviewController } from "@/features/overview/useOverviewController";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
@@ -39,7 +38,6 @@ import styles from "@/features/overview/OverviewPage.module.css";
 const ComponentGroupIcon = resourceIcons.components;
 const ConfigsModuleIcon = moduleIcons.configs;
 const HostTenantIcon = resourceIcons.hostTenant;
-const RequestsModuleIcon = moduleIcons.requests;
 const TenantsModuleIcon = moduleIcons.tenants;
 
 interface OverviewPageProps {
@@ -176,20 +174,6 @@ export function OverviewPage(props: OverviewPageProps) {
             }
             tone={healthTone(health?.componentAttention, health?.componentErrors, topologyError)}
             onClick={health?.componentAttention ? revealAttention : undefined}
-          />
-          <Fact
-            icon={<RequestsModuleIcon size={18} />}
-            label="Requests"
-            value={overview?.requests.total ?? "—"}
-            detail={overview ? requestDetail(overview) : "Loading"}
-            tone={
-              overview?.requests.error
-                ? "error"
-                : overview?.requests.warning
-                  ? "warning"
-                  : "neutral"
-            }
-            onClick={() => onNavigate("requests")}
           />
         </div>
         <section className={styles.attentionPanel} aria-labelledby="attention-title">

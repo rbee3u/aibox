@@ -3,6 +3,7 @@
 //! The facade exposes one concrete Store while writing, inspection/deletion,
 //! and safe layout mechanics remain separately owned.
 
+mod compact;
 mod event_index;
 mod layout;
 mod reading;
@@ -36,6 +37,7 @@ use layout::safe_display_host;
 #[cfg(test)]
 use summary::{summary_to_result, validate_schema};
 
+pub(crate) use compact::REQUEST_GROUP_COMPACT_INTERVAL;
 pub(crate) const FORMAT_VERSION: u32 = 4;
 const REQUEST_JSON: &str = "request.json";
 const REQUEST_BODY: &str = "request.body";
@@ -103,7 +105,7 @@ pub(crate) struct RuntimeMeasurements {
     pub request_body_duration: Option<Duration>,
 }
 
-/// Process-local handle for the flat Request collection.
+/// Process-local handle for the Request collection.
 ///
 /// Clones share the active-attempt registry and namespace lock. The registry is
 /// deliberately not reconstructed from `active-` directory names: after a
@@ -213,6 +215,7 @@ pub(crate) struct NewRequest {
 #[derive(Clone, Debug)]
 pub(crate) struct StoredRequest {
     pub directory: PathBuf,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub sort_key: String,
     pub request: RequestMetadata,
     pub response: Option<ResponseMetadata>,
@@ -287,10 +290,18 @@ pub(crate) fn timeline_end_at_ns(request: &StoredRequest, live: Option<String>) 
 
 #[derive(Clone, Debug)]
 pub(crate) struct StoredRequestSummary {
-    pub sort_key: String,
     pub summary: SummaryMetadata,
     pub active: bool,
     pub live_elapsed_ns: Option<String>,
+}
+
+/// One page of Request summaries plus collection counts that do not require
+/// opening Request Group interiors.
+#[derive(Clone, Debug)]
+pub(crate) struct RequestListPage {
+    pub requests: Vec<StoredRequestSummary>,
+    pub total: usize,
+    pub deletable_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
