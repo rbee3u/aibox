@@ -105,13 +105,12 @@
   transition: background-color var(--transition-fast);
 }
 
-.request:hover,
-.request:focus-within {
-  background: var(--surface-row-hover);
+.request:hover {
+  background: var(--surface-hover);
 }
 
 .current {
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
 }
 
 .current::before {
@@ -120,16 +119,15 @@
 
 .request.current:hover,
 .request.current:focus-within {
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
 }
 
 .selectionRecord.current {
-  background: var(--surface);
+  background: var(--surface-selected);
 }
 
-.selectionRecord:not(.unselectable):hover,
-.selectionRecord:not(.unselectable):focus-within {
-  background: var(--surface-row-hover);
+.selectionRecord:not(.unselectable):hover {
+  background: var(--surface-hover);
 }
 
 .selectionRecord.unselectable {
@@ -139,7 +137,19 @@
 .selectionRecord.selected,
 .selectionRecord.selected:hover,
 .selectionRecord.selected:focus-within {
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
+}
+
+.request.current .rowButton,
+.request.selected .rowButton {
+  color: var(--accent);
+}
+
+.request.current .requestIcon,
+.request.selected .requestIcon,
+.request.current .targetHost,
+.request.selected .targetHost {
+  color: var(--accent);
 }
 
 .rowButton {
@@ -147,6 +157,7 @@
   grid-template-columns: 20px 45px minmax(0, 1fr) max-content;
   grid-template-rows: 22px 18px;
   width: 100%;
+  min-width: 0;
   min-height: 42px;
   align-items: center;
   column-gap: 5px;
@@ -168,7 +179,6 @@
 
 .rowButton:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--ink);
   background: transparent;
 }
 
@@ -202,13 +212,13 @@
 
 .targetHost {
   font-size: var(--catalog-row-primary-size);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--catalog-row-primary-weight);
 }
 
 .targetPath {
   color: var(--muted);
   font-size: var(--catalog-row-primary-size);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--catalog-row-primary-weight);
 }
 
 .status {
@@ -216,7 +226,9 @@
   grid-row: 1;
   min-width: max-content;
   justify-self: end;
+  padding-left: var(--space-2);
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 .metadata {
@@ -336,8 +348,7 @@
 
 .pageTurn:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
+  background: var(--surface-hover);
 }
 
 .headerPagination {

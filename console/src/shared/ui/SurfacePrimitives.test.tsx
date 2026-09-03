@@ -26,4 +26,14 @@ describe("Surface primitives", () => {
     rerender(<AlertBanner tone="warning">Partial</AlertBanner>);
     expect(screen.getByRole("status")).toHaveTextContent("Partial");
   });
+
+  it("supports informational tones and trailing actions", () => {
+    render(
+      <AlertBanner tone="info" action={<button type="button">Retry</button>}>
+        Operation active
+      </AlertBanner>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Operation active");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
 });

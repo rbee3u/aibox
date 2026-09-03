@@ -19,8 +19,13 @@ const themeTokens = [
   "surface-inset",
   "surface-hover",
   "surface-selected",
-  "surface-row-hover",
   "control-rest",
+  "action-primary-soft-ink",
+  "action-primary-soft-surface",
+  "action-primary-soft-line",
+  "action-primary-soft-hover-ink",
+  "action-primary-soft-hover-surface",
+  "action-primary-soft-hover-line",
   "control-danger-rest",
   "line",
   "line-soft",
@@ -41,9 +46,6 @@ const themeTokens = [
   "danger-line",
   "success",
   "success-soft",
-  "component-update-action",
-  "component-update-action-hover",
-  "component-update-action-ink",
   "warning",
   "warning-soft",
   "warning-line",
@@ -57,6 +59,10 @@ const themeTokens = [
   "syntax-string",
   "syntax-number",
   "syntax-boolean",
+  "viz-request",
+  "viz-wait",
+  "viz-model",
+  "viz-finalize",
   "shadow-sm",
   "shadow-md",
 ] as const;
@@ -93,25 +99,24 @@ describe("Console CSS theme tokens", () => {
     }
   });
 
-  it("keeps the Component Update action at WCAG AA contrast in both themes", () => {
+  it("keeps quiet PrimarySoft readable and independent from selection", () => {
     for (const tokens of [light, dark]) {
-      const foreground = tokens.get("component-update-action-ink")!;
+      expect(tokens.get("action-primary-soft-surface")).toBe("transparent");
+      expect(tokens.get("action-primary-soft-line")).toContain("color-mix");
+      expect(tokens.get("action-primary-soft-hover-surface")).not.toBe(
+        tokens.get("surface-selected"),
+      );
       expect(
-        contrastRatio(foreground, tokens.get("component-update-action")!),
+        contrastRatio(
+          resolveToken(tokens, "action-primary-soft-ink"),
+          resolveToken(tokens, "surface"),
+        ),
       ).toBeGreaterThanOrEqual(4.5);
       expect(
-        contrastRatio(foreground, tokens.get("component-update-action-hover")!),
-      ).toBeGreaterThanOrEqual(4.5);
-    }
-  });
-
-  it("keeps solid Primary action text at WCAG AA contrast in both themes", () => {
-    for (const tokens of [light, dark]) {
-      expect(
-        contrastRatio(tokens.get("accent-contrast")!, tokens.get("accent")!),
-      ).toBeGreaterThanOrEqual(4.5);
-      expect(
-        contrastRatio(tokens.get("accent-contrast")!, tokens.get("accent-strong")!),
+        contrastRatio(
+          resolveToken(tokens, "action-primary-soft-hover-ink"),
+          resolveToken(tokens, "action-primary-soft-hover-surface"),
+        ),
       ).toBeGreaterThanOrEqual(4.5);
     }
   });
@@ -145,31 +150,44 @@ describe("Console CSS theme tokens", () => {
     expect(light.get("radius-md")).toBe("6px");
   });
 
+  it("keeps the role-based typography hierarchy centralized", () => {
+    expect(light.get("text-page-title")).toBe("18px");
+    expect(light.get("text-panel-title")).toBe("var(--text-md)");
+    expect(light.get("text-section-title")).toBe("var(--text-sm)");
+    expect(light.get("text-row-title")).toBe("var(--text-sm)");
+    expect(light.get("text-meta")).toBe("var(--text-xs)");
+    expect(light.get("line-height-page-title")).toBe("var(--line-height-md)");
+    expect(light.get("catalog-row-primary-size")).toBe("var(--text-row-title)");
+    expect(light.get("catalog-row-secondary-size")).toBe("var(--text-meta)");
+  });
+
   it("keeps the catalog Tenant/Agent filter toolbar rhythm centralized", () => {
     expect(light.get("catalog-filter-control-max-width")).toBe("112px");
     expect(light.get("catalog-toolbar-filters-gap")).toBe("8px");
     expect(light.get("catalog-toolbar-cluster-gap")).toBe("14px");
   });
 
-  it("keeps chrome hover between list wash and control float in both themes", () => {
-    expect(light.get("surface-hover")).toBe("#f1f0ff");
+  it("keeps neutral hover distinct from accent-owned selection in both themes", () => {
+    expect(light.get("surface-hover")).toBe("#eef1f5");
     expect(light.get("surface-selected")).toBe("#eceaff");
-    expect(dark.get("surface-hover")).toBe("#25253e");
+    expect(dark.get("surface-hover")).toBe("#272f3d");
     expect(dark.get("surface-selected")).toBe("#292845");
     expect(light.get("surface-hover")).not.toBe(light.get("surface-selected"));
     expect(dark.get("surface-hover")).not.toBe(dark.get("surface-selected"));
   });
 
-  it("keeps list wash distinct from control rest and control float", () => {
-    expect(light.get("surface-row-hover")).toBe("var(--accent-subtle)");
-    expect(light.get("accent-subtle")).toBe("#f8f7ff");
-    expect(dark.get("surface-row-hover")).toBe("#1f1e32");
-    expect(dark.get("control-rest")).toBe("#242338");
+  it("keeps disabled Primary neutral instead of resembling accent selection", () => {
+    expect(light.get("control-disabled-primary-ink")).toBe("var(--control-disabled-ink)");
+    expect(light.get("control-disabled-primary-surface")).toBe("var(--control-disabled-surface)");
+  });
+
+  it("keeps hover, control rest, and accent selection roles distinct", () => {
+    expect(light.get("control-rest")).toBe("#f4f6f9");
+    expect(dark.get("control-rest")).toBe("#222833");
     expect(dark.get("surface-selected")).toBe("#292845");
     for (const tokens of [light, dark]) {
-      // List hover and selected share --surface-row-hover; float uses --surface-selected.
-      expect(tokens.get("surface-row-hover")).not.toBe(tokens.get("control-rest"));
-      expect(tokens.get("surface-row-hover")).not.toBe(tokens.get("surface-selected"));
+      expect(tokens.get("surface-hover")).not.toBe(tokens.get("control-rest"));
+      expect(tokens.get("surface-hover")).not.toBe(tokens.get("surface-selected"));
       expect(tokens.get("control-rest")).not.toBe(tokens.get("surface-selected"));
     }
   });
@@ -213,6 +231,20 @@ function declarations(selector: string): Map<string, string> {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveToken(
+  tokens: Map<string, string>,
+  token: string,
+  seen = new Set<string>(),
+): string {
+  if (seen.has(token)) throw new Error(`Circular token alias: ${token}`);
+  const value = tokens.get(token);
+  if (!value) throw new Error(`Missing token: ${token}`);
+  const nextSeen = new Set(seen).add(token);
+  return value.replace(/var\(--([\w-]+)\)/g, (_, alias: string) =>
+    resolveToken(tokens, alias, nextSeen),
+  );
 }
 
 function contrastRatio(left: string, right: string): number {

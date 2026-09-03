@@ -1,6 +1,7 @@
 import type { RequestAssessment, RequestState, ResponseMetadata } from "@/api/requests";
 import styles from "@/features/requests/RequestStatus.module.css";
 import { IssueIndicator, IssueTooltip } from "@/shared/ui/IssueIndicator";
+import { StatusBadge, type StatusTone } from "@/shared/ui/StatusBadge";
 import {
   assessmentIssueText,
   requestHeadlinePresentation,
@@ -23,19 +24,26 @@ const TONE_CLASS: Record<RequestStatusTone, string> = {
   warning: styles.warningTone,
 };
 
+const STATUS_BADGE_TONE: Record<RequestStatusTone, StatusTone> = {
+  active: "active",
+  error: "error",
+  neutral: "neutral",
+  success: "good",
+  warning: "warning",
+};
+
 export function RequestStatus({ status, state, assessment }: RequestStatusProps) {
   const presentation = requestStatusPresentation({ status, state, assessment });
 
   return (
     <span className={styles.root}>
-      <span className={`${styles.value} ${TONE_CLASS[presentation.tone]}`}>
-        {presentation.tone === "active" && <span className={styles.dot} aria-hidden="true" />}
+      <StatusBadge tone={STATUS_BADGE_TONE[presentation.tone]} variant="inline">
         {presentation.label}
-      </span>
+      </StatusBadge>
       {presentation.phase && (
-        <span className={styles.phase}>
-          <span className={styles.dot} aria-hidden="true" /> {presentation.phase}
-        </span>
+        <StatusBadge tone="active" variant="inline">
+          {presentation.phase}
+        </StatusBadge>
       )}
       {presentation.issue && <CompactIssue issue={presentation.issue} />}
     </span>

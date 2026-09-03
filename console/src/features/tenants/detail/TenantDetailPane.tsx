@@ -137,7 +137,7 @@ export function TenantDetailPane({
                 </div>
                 <RefreshButton
                   className={styles.componentCheckButton}
-                  tone="secondary"
+                  tone="ghost"
                   label="Check for updates"
                   busy={checkingLatest}
                   busyLabel="Checking for updates"

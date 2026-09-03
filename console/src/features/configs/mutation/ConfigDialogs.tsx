@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 
 import { propagationDetail, propagationGroup } from "@/features/configs/configCatalog";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
@@ -6,6 +6,7 @@ import { ActionButton } from "@/shared/ui/ActionButton";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
 
@@ -70,7 +71,7 @@ export function ConfigDialogs({
               before continuing?
             </p>
             <div className={styles.dialogActions}>
-              <ActionButton type="button" tone="ghost" onClick={cancelPending} disabled={busy}>
+              <ActionButton type="button" tone="secondary" onClick={cancelPending} disabled={busy}>
                 Cancel
               </ActionButton>
               <ActionButton
@@ -82,7 +83,7 @@ export function ConfigDialogs({
                 Discard and continue
               </ActionButton>
               <ActionButton
-                tone="primary"
+                tone="primarySoft"
                 onClick={() => void savePending(saveOrder)}
                 disabled={mutationBusy || dirtyFiles.some((name) => !fileStatuses[name]?.canSave)}
               >
@@ -122,26 +123,45 @@ export function ConfigDialogs({
               number.
             </p>
             {newName.length > 0 && !createNameValid && (
-              <div className={styles.inlineWarning} role="alert">
+              <AlertBanner
+                className={styles.dialogAlert}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
                 Enter a valid lowercase DNS label.
-              </div>
+              </AlertBanner>
             )}
-            {createError && <div className={styles.inlineWarning}>{createError}</div>}
+            {createError && (
+              <AlertBanner
+                className={styles.dialogAlert}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
+                {createError}
+              </AlertBanner>
+            )}
             <div className={styles.dialogActions}>
-              <ActionButton type="button" tone="ghost" onClick={closeCreateDialog} disabled={busy}>
+              <ActionButton
+                type="button"
+                tone="secondary"
+                onClick={closeCreateDialog}
+                disabled={busy}
+              >
                 Cancel
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primary"
+                tone="primarySoft"
                 disabled={!createNameValid || mutationBusy}
               >
                 {busy ? (
-                  <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  <>
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                    Creating…
+                  </>
                 ) : (
-                  <Plus size={14} />
+                  "Create"
                 )}
-                {busy ? "Creating…" : "Create"}
               </ActionButton>
             </div>
           </form>
@@ -158,7 +178,7 @@ export function ConfigDialogs({
           ]}
           message="Present fields replace; omitted fixed fields are removed. Unrelated native config is kept. One-shot; no rollback."
           confirmation={tenant.kind === "host" ? "Host Tenant" : undefined}
-          confirmLabel="Apply to Current Config"
+          confirmLabel="Apply"
           variant="primary"
           busy={mutationBusy}
           onCancel={cancelApply}
@@ -169,7 +189,7 @@ export function ConfigDialogs({
         <ConfirmDialog
           title={`Delete Named Config ${deleteTarget.names[0]}?`}
           message="Deletes this Named Config only. Current Config is unchanged; Drift may become Source missing."
-          confirmLabel="Delete Config"
+          confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDelete}
           onConfirm={() => void deleteConfigs()}
@@ -186,7 +206,7 @@ export function ConfigDialogs({
               ))}
             </div>
           }
-          confirmLabel="Delete selected"
+          confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDelete}
           onConfirm={() => void deleteConfigs()}
@@ -259,12 +279,12 @@ export function ConfigDialogs({
               )}
             </div>
             <div className={styles.dialogActions}>
-              <ActionButton type="button" tone="ghost" onClick={closePropagation}>
+              <ActionButton type="button" tone="secondary" onClick={closePropagation}>
                 Close
               </ActionButton>
               {preview && (
                 <ActionButton
-                  tone="primary"
+                  tone="primarySoft"
                   disabled={mutationBusy || preview.preview.updates === 0}
                   onClick={() => void executePropagation()}
                 >

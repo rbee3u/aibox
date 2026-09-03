@@ -30,22 +30,28 @@ export function SectionHeader({
 
 export function AlertBanner({
   tone = "danger",
+  variant = "inline",
   icon,
+  action,
   className,
   children,
+  role,
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
-  tone?: "danger" | "warning" | "success" | "neutral";
+  tone?: "danger" | "warning" | "success" | "info" | "neutral";
+  variant?: "inline" | "page" | "strip";
   icon?: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <div
       {...props}
-      className={`${styles.alert} ${styles[tone]} ${className ?? ""}`}
-      role={props.role ?? (tone === "danger" ? "alert" : "status")}
+      className={`${styles.alert} ${styles[variant]} ${styles[tone]} ${className ?? ""}`}
+      role={role ?? (tone === "danger" ? "alert" : "status")}
     >
       {icon}
-      <span>{children}</span>
+      <span className={styles.content}>{children}</span>
+      {action && <span className={styles.action}>{action}</span>}
     </div>
   );
 }

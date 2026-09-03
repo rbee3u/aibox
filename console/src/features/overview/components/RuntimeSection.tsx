@@ -85,6 +85,7 @@ export function RuntimeSection({
             </span>
           )}
           <ActionButton
+            tone="primarySoft"
             disabled={buildDisabled}
             aria-describedby={buildUnavailableReason ? "runtime-build-unavailable" : undefined}
             onClick={() => onBuild(false)}

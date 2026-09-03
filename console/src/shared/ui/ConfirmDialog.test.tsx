@@ -3,7 +3,6 @@ import { StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import actionButtonStyles from "@/shared/ui/ActionButton.module.css";
-import styles from "@/shared/ui/ConfirmDialog.module.css";
 
 function DialogHarness() {
   const [open, setOpen] = useState(false);
@@ -16,7 +15,7 @@ function DialogHarness() {
         <ConfirmDialog
           title="Delete selected record?"
           message="This cannot be undone."
-          confirmLabel="Delete permanently"
+          confirmLabel="Delete"
           onConfirm={() => undefined}
           onCancel={() => setOpen(false)}
         />
@@ -39,10 +38,11 @@ describe("ConfirmDialog", () => {
     fireEvent.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "Delete selected record?" });
     const cancel = within(dialog).getByRole("button", { name: "Cancel" });
-    const confirm = within(dialog).getByRole("button", { name: "Delete permanently" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete" });
 
     expect(cancel).toHaveClass(actionButtonStyles.secondary);
-    expect(confirm).toHaveClass(actionButtonStyles.danger, styles.dangerAction);
+    expect(confirm).toHaveClass(actionButtonStyles.dangerPrimary);
+    expect(confirm.querySelector("svg")).toBeNull();
     expect(cancel).toHaveFocus();
     fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
     expect(confirm).toHaveFocus();
@@ -62,7 +62,7 @@ describe("ConfirmDialog", () => {
       <ConfirmDialog
         title="Delete selected record?"
         message="This cannot be undone."
-        confirmLabel="Delete permanently"
+        confirmLabel="Delete"
         onConfirm={() => undefined}
         onCancel={onCancel}
         busy
@@ -83,14 +83,14 @@ describe("ConfirmDialog", () => {
       <ConfirmDialog
         title="Delete Tenant work?"
         confirmation="work"
-        confirmLabel="Delete permanently"
+        confirmLabel="Delete"
         onConfirm={() => undefined}
         onCancel={() => undefined}
       />,
     );
 
     const input = screen.getByRole("textbox");
-    const confirm = screen.getByRole("button", { name: "Delete permanently" });
+    const confirm = screen.getByRole("button", { name: "Delete" });
     expect(input).toHaveFocus();
     expect(confirm).toBeDisabled();
 
@@ -107,7 +107,7 @@ describe("ConfirmDialog", () => {
       <ConfirmDialog
         title="Delete Tenant work?"
         confirmation="work"
-        confirmLabel="Delete permanently"
+        confirmLabel="Delete"
         onConfirm={() => undefined}
         onCancel={() => undefined}
       />,
@@ -115,7 +115,7 @@ describe("ConfirmDialog", () => {
 
     const phrase = screen.getByRole("button", { name: "Copy work" });
     const input = screen.getByRole("textbox");
-    const confirm = screen.getByRole("button", { name: "Delete permanently" });
+    const confirm = screen.getByRole("button", { name: "Delete" });
 
     await act(async () => {
       fireEvent.click(phrase);
@@ -142,7 +142,7 @@ describe("ConfirmDialog", () => {
           { label: "Target", value: "Current Config" },
         ]}
         message="Present fields replace; omitted fixed fields are removed."
-        confirmLabel="Apply to Current Config"
+        confirmLabel="Apply"
         variant="primary"
         onConfirm={() => undefined}
         onCancel={() => undefined}
@@ -155,6 +155,9 @@ describe("ConfirmDialog", () => {
     expect(within(dialog).getByText("Coding Agent")).toBeInTheDocument();
     expect(within(dialog).getByText("Codex")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Present fields replace; omitted fixed fields are removed.");
+    expect(within(dialog).getByRole("button", { name: "Apply" })).toHaveClass(
+      actionButtonStyles.primarySoft,
+    );
 
     const facts = dialog.querySelector("dl");
     const message = within(dialog).getByText(
@@ -162,5 +165,20 @@ describe("ConfirmDialog", () => {
     );
     expect(facts).not.toBeNull();
     expect(facts!.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("uses an explicit busy label for domain-specific actions", () => {
+    render(
+      <ConfirmDialog
+        title="Remove Component?"
+        confirmLabel="Remove"
+        busyLabel="Removing…"
+        busy
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
   });
 });

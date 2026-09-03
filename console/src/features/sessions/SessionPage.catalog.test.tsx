@@ -130,7 +130,7 @@ describe("SessionPage", () => {
     const claudeCheckbox = within(menu).getByRole("checkbox", { name: "Claude" });
     expect(codexCheckbox).toBeChecked();
     expect(codexCheckbox).toBeDisabled();
-    expect(claudeCheckbox.closest("label")).toHaveAttribute("title", "Claude");
+    expect(claudeCheckbox.closest("label")).not.toHaveAttribute("title");
     await user.click(claudeCheckbox);
     expect(within(menu).getByRole("button", { name: "Apply" })).toBeEnabled();
     expect(listSessions.mock.calls.some(([, agent]) => agent === "claude")).toBe(false);

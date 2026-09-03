@@ -66,13 +66,13 @@ export async function openActiveRequestBody() {
 
 export async function confirmDeletion(user: User, action: "Delete selected") {
   await user.click(screen.getByRole("button", { name: action }));
-  await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
 }
 
 export async function confirmSingleDeletion(user: User, buttonName: string) {
   await user.click(await screen.findByRole("button", { name: buttonName }));
   expect(screen.getByRole("dialog", { name: "Delete this Request?" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
 }
 
 afterEach(() => {

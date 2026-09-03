@@ -130,7 +130,6 @@ export function SelectionMenu<T extends string>({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={`${label}: ${summary}`}
-        title={`${label}: ${summary}`}
         disabled={disabled}
         onClick={() => {
           if (open) setOpen(false);
@@ -184,7 +183,6 @@ export function SelectionMenu<T extends string>({
                   <label
                     className={`${styles.selectionOption} ${styles.selectionOptionMultiple}`}
                     key={option.value}
-                    title={option.label}
                   >
                     <input
                       autoFocus={index === multiFocusIndex}
@@ -218,7 +216,6 @@ export function SelectionMenu<T extends string>({
                     ref={(element) => {
                       optionRefs.current[index] = element;
                     }}
-                    title={option.label}
                     onClick={() => commitOnly(option.value)}
                     onKeyDown={(event) => handleSingleOptionKeyDown(event, index)}
                   >

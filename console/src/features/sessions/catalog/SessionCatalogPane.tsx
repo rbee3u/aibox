@@ -9,6 +9,7 @@ import { EmptyState } from "@/shared/ui/EmptyState";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/sessions/SessionPage.module.css";
 
@@ -153,10 +154,14 @@ export function SessionCatalogPane({
       </div>
       <div className={styles.sessionWarnings}>
         {data?.warnings.map((warning) => (
-          <div className={styles.inlineWarning} key={warning}>
-            <AlertTriangle size={15} aria-hidden="true" />
-            <span>{warning}</span>
-          </div>
+          <AlertBanner
+            className={styles.inlineWarning}
+            key={warning}
+            tone="warning"
+            icon={<AlertTriangle size={15} aria-hidden="true" />}
+          >
+            {warning}
+          </AlertBanner>
         ))}
       </div>
       <div className={`${styles.catalogList} ${styles.sessionList}`} aria-busy={loadingList}>

@@ -58,13 +58,19 @@
   min-width: 0;
 }
 
-.sectionHeader h2,
+.sectionHeader h2 {
+  margin: 0;
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
+}
+
 .detailHeader h2,
 .dialog h2 {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  line-height: var(--line-height-md);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
 }
 
 .sectionHeader code,
@@ -82,16 +88,7 @@
 }
 
 .alertBanner {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
   margin: 8px 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--danger-line);
-  border-radius: var(--radius-sm);
-  color: var(--danger);
-  background: var(--danger-soft);
-  font-size: var(--text-xs);
 }
 
 .statusGood,
@@ -289,22 +286,29 @@
   content: "";
 }
 
-.row:hover,
-.row:focus-within {
-  background: var(--surface-row-hover);
+.row:hover {
+  background: var(--surface-hover);
 }
 
 .rowInspected,
 .rowInspected:hover,
-.rowInspected:focus-within,
+.rowInspected:focus-within {
+  background: var(--surface-selected);
+}
+
 .rowSelected,
 .rowSelected:hover,
 .rowSelected:focus-within {
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
 }
 
 .rowInspected::before {
   background: var(--accent);
+}
+
+.rowInspected .rowMain,
+.rowSelected .rowMain {
+  color: var(--accent);
 }
 
 .rowSelectable,
@@ -337,7 +341,6 @@
 
 .rowMain:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--ink);
   background: transparent;
 }
 
@@ -509,6 +512,15 @@
 
   .detailHeader > [data-icon-button]:first-child {
     display: inline-grid;
+  }
+
+  .dialogActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dialogActions button {
+    width: 100%;
   }
 }
 

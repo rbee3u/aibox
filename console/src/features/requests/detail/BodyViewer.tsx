@@ -27,6 +27,8 @@ import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { concatChunks, formatByteSize, hex } from "@/shared/lib/format";
 import { JsonTree } from "@/features/requests/detail/JsonTree";
 import styles from "@/features/requests/detail/BodyViewer.module.css";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 
 interface BodyViewerProps {
   kind: BodyKind;
@@ -172,10 +174,9 @@ export function BodyViewer({
           )}
         </h2>
         <div className={styles.bodyActions}>
-          <div className={styles.viewToggle} role="group" aria-label={`${kind} body view`}>
+          <SegmentedControl variant="filled" role="group" aria-label={`${kind} body view`}>
             <button
               type="button"
-              className={resolvedMode === "pretty" ? styles.activeView : ""}
               aria-pressed={resolvedMode === "pretty"}
               disabled={!prettyAvailable && !pendingPretty}
               onClick={() => onMemoryChange({ ...memory, mode: "pretty" })}
@@ -184,13 +185,12 @@ export function BodyViewer({
             </button>
             <button
               type="button"
-              className={resolvedMode === "source" ? styles.activeView : ""}
               aria-pressed={resolvedMode === "source"}
               onClick={() => onMemoryChange({ ...memory, mode: "source" })}
             >
               Source
             </button>
-          </div>
+          </SegmentedControl>
           {loadingBody && (
             <LoaderCircle
               className={`${styles.loading} spin`}
@@ -221,9 +221,9 @@ export function BodyViewer({
           </button>
         </div>
       </div>
-      <div className={styles.bodyNotice} role="note">
+      <AlertBanner className={styles.bodyNotice} tone="warning" role="note">
         Raw Body data may contain sensitive values and is displayed without redaction.
-      </div>
+      </AlertBanner>
       {bodyContent}
     </>
   );
@@ -250,14 +250,19 @@ function SourceView({
   return (
     <div className={styles.sourceWrap}>
       {(message || onRenderLarge) && (
-        <div className={styles.bodyNotice} role="status">
-          <span>{message}</span>
-          {onRenderLarge && (
-            <button type="button" onClick={onRenderLarge}>
-              Render Pretty
-            </button>
-          )}
-        </div>
+        <AlertBanner
+          className={styles.bodyNotice}
+          tone="warning"
+          action={
+            onRenderLarge ? (
+              <button type="button" onClick={onRenderLarge}>
+                Render Pretty
+              </button>
+            ) : undefined
+          }
+        >
+          {message}
+        </AlertBanner>
       )}
       {coding !== "identity" && !decodedText && (
         <div className={styles.encodedLabel}>Encoded original bytes</div>
@@ -313,9 +318,9 @@ function SseEventList({
   return (
     <div className={styles.sseWrap}>
       {timings && timings.state !== "available" && (
-        <div className={styles.bodyNotice} role="status">
+        <AlertBanner className={styles.bodyNotice} tone="warning">
           {timings.warning ?? "The SSE Event timing index is incomplete."}
-        </div>
+        </AlertBanner>
       )}
       <div
         role="list"

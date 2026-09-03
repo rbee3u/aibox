@@ -84,21 +84,8 @@
 
 .operationGap,
 .operationError {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line-content);
-  font-size: var(--text-xs);
+  margin: 0;
 }
-
-.operationGap {
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-
-.operationError {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
 @media (max-width: 900px) {
   .operationPanel {
     left: 0;

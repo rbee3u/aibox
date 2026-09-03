@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TenantPage, tenantApi } from "@/features/tenants/testSupport";
+import actionButtonStyles from "@/shared/ui/ActionButton.module.css";
 import { activeOperation } from "@/test/operations";
 
 afterEach(() => {
@@ -30,7 +31,11 @@ describe("TenantPage", () => {
         ],
       });
       render(<TenantPage api={api} />);
-      expect(await screen.findByText(statusLabel)).toBeInTheDocument();
+      const statusElement = (await screen.findByText(statusLabel)).closest("[data-status-variant]");
+      expect(statusElement).toHaveAttribute(
+        "data-status-variant",
+        status === "installed" || status === "not-installed" ? "inline" : "badge",
+      );
       if (primaryAction) {
         expect(screen.getByRole("button", { name: primaryAction })).toBeEnabled();
       }
@@ -285,7 +290,10 @@ describe("TenantPage", () => {
     });
     const user = userEvent.setup();
     render(<TenantPage api={api} />);
-    await user.click(await screen.findByRole("button", { name: "Check for updates" }));
+    const checkUpdates = await screen.findByRole("button", { name: "Check for updates" });
+    expect(checkUpdates).toHaveClass(actionButtonStyles.ghost);
+    expect(checkUpdates).not.toHaveClass(actionButtonStyles.secondary);
+    await user.click(checkUpdates);
     expect(await screen.findByRole("listitem")).toHaveTextContent("Latest v24.19.0");
     expect(screen.getByText(/Checked/)).toBeInTheDocument();
     expect(checkLatestComponents).toHaveBeenCalledWith();

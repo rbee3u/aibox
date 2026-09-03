@@ -9,6 +9,7 @@ import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
 
@@ -118,7 +119,7 @@ export function ConfigDetailPane({
                   ? `${dirtyFiles.length} unsaved file${dirtyFiles.length === 1 ? "" : "s"}`
                   : "All files saved"}
               </span>
-              <div className={styles.segmented}>
+              <SegmentedControl variant="filled" role="group" aria-label="Editor mode">
                 {visualAvailable && !selection.current && (
                   <button
                     type="button"
@@ -135,9 +136,13 @@ export function ConfigDetailPane({
                 >
                   Raw
                 </button>
-              </div>
+              </SegmentedControl>
               {dirtyFiles.length > 0 && (
-                <ActionButton tone="primary" disabled={mutationBusy} onClick={() => void saveAll()}>
+                <ActionButton
+                  tone="primarySoft"
+                  disabled={mutationBusy}
+                  onClick={() => void saveAll()}
+                >
                   <Save size={14} /> Save all
                 </ActionButton>
               )}

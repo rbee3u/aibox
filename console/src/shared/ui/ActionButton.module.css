@@ -16,16 +16,30 @@
   white-space: nowrap;
 }
 
-.primary {
-  border-color: transparent;
-  color: var(--accent-contrast);
-  background: var(--accent);
+.dangerPrimary {
+  border-color: var(--danger-line);
+  color: var(--action-danger);
+  background: transparent;
+  font-weight: var(--weight-medium);
 }
 
-.primary:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent-contrast);
-  background: var(--accent-strong);
+.dangerPrimary:hover:not(:disabled) {
+  border-color: var(--action-danger-strong);
+  color: var(--action-danger-strong);
+  background: var(--danger-soft);
+}
+
+.primarySoft {
+  border-color: var(--action-primary-soft-line);
+  color: var(--action-primary-soft-ink);
+  background: var(--action-primary-soft-surface);
+  font-weight: var(--weight-medium);
+}
+
+.primarySoft:hover:not(:disabled) {
+  border-color: var(--action-primary-soft-hover-line);
+  color: var(--action-primary-soft-hover-ink);
+  background: var(--action-primary-soft-hover-surface);
 }
 
 .secondary {
@@ -36,7 +50,7 @@
 
 .secondary:hover:not(:disabled) {
   border-color: var(--line-control-strong);
-  color: var(--ink);
+  color: var(--ink-secondary);
   background: var(--surface-hover);
 }
 
@@ -48,7 +62,7 @@
 
 .ghost:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--accent);
+  color: var(--ink-secondary);
   background: var(--surface-hover);
 }
 
@@ -58,8 +72,7 @@
   background: transparent;
 }
 
-.dangerQuiet:hover:not(:disabled),
-.dangerQuiet:focus-visible:not(:disabled) {
+.dangerQuiet:hover:not(:disabled) {
   border-color: transparent;
   color: var(--danger-strong);
   background: var(--danger-soft);
@@ -90,10 +103,16 @@
   opacity: 1;
 }
 
-.primary:disabled {
-  border-color: transparent;
-  color: var(--control-disabled-primary-ink);
-  background: var(--control-disabled-primary-surface);
+.primarySoft:disabled {
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-ink);
+  background: var(--control-disabled-surface);
+}
+
+.dangerPrimary:disabled {
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-danger-ink);
+  background: var(--control-disabled-danger-surface);
 }
 
 .secondary:disabled {

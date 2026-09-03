@@ -1,19 +1,25 @@
 import { AlertTriangle, LoaderCircle } from "lucide-react";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/shared/ui/ManagementFeedback.module.css";
 
 export function PageError({ error, onRetry }: { error: string | null; onRetry?: () => void }) {
   if (!error) return null;
   return (
-    <div className={styles.errorBanner} role="alert">
-      <AlertTriangle size={16} aria-hidden="true" />
-      <span>{error}</span>
-      {onRetry && (
-        <RefreshButton type="button" label="Retry" onClick={onRetry}>
-          Retry
-        </RefreshButton>
-      )}
-    </div>
+    <AlertBanner
+      variant="page"
+      tone="danger"
+      icon={<AlertTriangle size={16} aria-hidden="true" />}
+      action={
+        onRetry ? (
+          <RefreshButton type="button" label="Retry" onClick={onRetry}>
+            Retry
+          </RefreshButton>
+        ) : undefined
+      }
+    >
+      {error}
+    </AlertBanner>
   );
 }
 
@@ -28,9 +34,9 @@ export function Loading() {
 export function MutationUnavailable({ operation }: { operation?: { state: string } | null }) {
   if (operation?.state !== "running") return null;
   return (
-    <div className={styles.mutationUnavailable} role="status">
+    <AlertBanner variant="page" tone="info">
       A Management Operation is active. Changes are temporarily unavailable; browsing and refresh
       remain available.
-    </div>
+    </AlertBanner>
   );
 }

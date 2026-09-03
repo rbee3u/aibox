@@ -332,9 +332,9 @@ describe("TenantPage", () => {
     await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Tenant work?" });
     const confirmation = within(dialog).getByRole("textbox");
-    expect(within(dialog).getByRole("button", { name: "Delete Tenant" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Delete" })).toBeDisabled();
     await user.type(confirmation, "work");
-    await user.click(within(dialog).getByRole("button", { name: "Delete Tenant" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteTenants).toHaveBeenCalledWith(["work"]);
   });
   it("keeps surviving selections after a partial batch deletion failure", async () => {
@@ -360,7 +360,7 @@ describe("TenantPage", () => {
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Tenants" }));
     const dialog = screen.getByRole("dialog", { name: "Delete selected Managed Tenants?" });
-    await user.click(within(dialog).getByRole("button", { name: "Delete selected" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Deselect work" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Deselect extra" })).toHaveAttribute(

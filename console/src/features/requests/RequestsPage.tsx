@@ -179,7 +179,7 @@ export function RequestsPage(props: RequestsPageProps) {
               : `Delete ${dialog.ids.length} selected Request${dialog.ids.length === 1 ? "" : "s"}?`
           }
           message="Permanently deletes the selected raw Request and Response data."
-          confirmLabel="Delete permanently"
+          confirmLabel="Delete"
           onConfirm={() => void confirmDelete()}
           onCancel={cancelDialog}
           busy={deletionBusy}

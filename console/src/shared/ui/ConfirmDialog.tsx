@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, LoaderCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
@@ -19,6 +19,7 @@ interface ConfirmDialogProps {
   description?: ReactNode;
   confirmation?: string;
   confirmLabel: string;
+  busyLabel?: string;
   variant?: "danger" | "primary";
   onConfirm: () => void;
   onCancel: () => void;
@@ -32,6 +33,7 @@ export function ConfirmDialog({
   description,
   confirmation,
   confirmLabel,
+  busyLabel,
   variant = "danger",
   onConfirm,
   onCancel,
@@ -43,6 +45,7 @@ export function ConfirmDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const enabled = !confirmation || typed === confirmation;
+  const pendingLabel = busyLabel ?? (variant === "danger" ? "Deleting…" : "Applying…");
 
   return (
     <Dialog
@@ -97,17 +100,12 @@ export function ConfirmDialog({
             Cancel
           </ActionButton>
           <ActionButton
-            tone={variant === "danger" ? "danger" : "primary"}
-            className={variant === "danger" ? styles.dangerAction : undefined}
+            tone={variant === "danger" ? "dangerPrimary" : "primarySoft"}
             onClick={onConfirm}
             disabled={!enabled || busy}
           >
-            {busy ? (
-              <LoaderCircle className="spin" size={15} aria-hidden="true" />
-            ) : variant === "danger" ? (
-              <Trash2 size={15} aria-hidden="true" />
-            ) : null}
-            {busy ? (variant === "danger" ? "Deleting…" : `${confirmLabel}…`) : confirmLabel}
+            {busy && <LoaderCircle className="spin" size={15} aria-hidden="true" />}
+            {busy ? pendingLabel : confirmLabel}
           </ActionButton>
         </div>
       </section>

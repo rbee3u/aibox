@@ -1,4 +1,4 @@
-import { Download, LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, Download, LoaderCircle } from "lucide-react";
 
 import { canonicalComponentStatus, componentLabel } from "@/features/tenants/componentCatalog";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
@@ -6,6 +6,7 @@ import { ActionButton } from "@/shared/ui/ActionButton";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/tenants/TenantPage.module.css";
 
@@ -72,26 +73,45 @@ export function TenantDialogs({
               number.
             </p>
             {newName.length > 0 && !createNameValid && (
-              <div className={layout.alertBanner} role="alert">
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
                 Enter a valid lowercase DNS label.
-              </div>
+              </AlertBanner>
             )}
-            {createError && <div className={layout.alertBanner}>{createError}</div>}
+            {createError && (
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
+                {createError}
+              </AlertBanner>
+            )}
             <div className={styles.dialogActions}>
-              <ActionButton type="button" tone="ghost" onClick={closeCreateDialog} disabled={busy}>
+              <ActionButton
+                type="button"
+                tone="secondary"
+                onClick={closeCreateDialog}
+                disabled={busy}
+              >
                 Cancel
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primary"
+                tone="primarySoft"
                 disabled={!createNameValid || mutationBusy}
               >
                 {busy ? (
-                  <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  <>
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                    Creating…
+                  </>
                 ) : (
-                  <Plus size={14} />
+                  "Create"
                 )}
-                {busy ? "Creating…" : "Create"}
               </ActionButton>
             </div>
           </form>
@@ -102,7 +122,7 @@ export function TenantDialogs({
           title={`Delete Tenant ${deleteTarget.names[0]}?`}
           message="Permanently deletes Tenant Home, Sessions, Components state, and Named Configs."
           confirmation={deleteTarget.names[0]}
-          confirmLabel="Delete Tenant"
+          confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDeleteDialog}
           onConfirm={() => void deleteTenants()}
@@ -119,7 +139,7 @@ export function TenantDialogs({
               ))}
             </div>
           }
-          confirmLabel="Delete selected"
+          confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDeleteDialog}
           onConfirm={() => void deleteTenants()}
@@ -164,19 +184,27 @@ export function TenantDialogs({
                 : "Enter a stable version in X.Y.Z form."}
             </p>
             {specificVersionValidationError && (
-              <div className={layout.alertBanner} role="alert">
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
                 {specificVersionValidationError}
-              </div>
+              </AlertBanner>
             )}
             {specificVersionError && (
-              <div className={layout.alertBanner} role="alert">
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
                 {specificVersionError}
-              </div>
+              </AlertBanner>
             )}
             <div className={styles.dialogActions}>
               <ActionButton
                 type="button"
-                tone="ghost"
+                tone="secondary"
                 onClick={closeSpecificVersion}
                 disabled={mutationBusy}
               >
@@ -184,7 +212,7 @@ export function TenantDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primary"
+                tone="primarySoft"
                 disabled={!specificVersionValid || mutationBusy}
               >
                 {mutationBusy ? (
@@ -215,7 +243,8 @@ export function TenantDialogs({
             },
           ]}
           message="Deletes Component-owned state. Workspace environments and user-owned package, cache, credential, and config state are kept."
-          confirmLabel="Remove Component"
+          confirmLabel="Remove"
+          busyLabel="Removing…"
           busy={mutationBusy}
           onCancel={cancelComponentRemove}
           onConfirm={() => void removeComponent()}

@@ -2,6 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Tone } from "@/features/overview/viewTypes";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
+import { StatusBadge } from "@/shared/ui/StatusBadge";
 import styles from "@/features/overview/OverviewPage.module.css";
 
 interface FactProps {
@@ -21,7 +22,13 @@ export function Fact({ icon, label, value, detail, tone, onClick }: FactProps) {
         {icon}
         {label}
       </span>
-      <strong>{value}</strong>
+      {tone === "neutral" ? (
+        <strong>{value}</strong>
+      ) : (
+        <StatusBadge tone={tone} variant="inline" className={styles.factStatus}>
+          {value}
+        </StatusBadge>
+      )}
       <small title={detail}>{detail}</small>
     </>
   );
@@ -75,7 +82,9 @@ export function RuntimeStatus({ icon, label, value, detail, tone }: RuntimeStatu
       <span className={`${styles.statusIcon} ${styles[tone]}`}>{icon}</span>
       <div>
         <span>{label}</span>
-        <strong>{value}</strong>
+        <StatusBadge tone={tone} variant="inline" className={styles.runtimeStatusValue}>
+          {value}
+        </StatusBadge>
         <small title={detail}>{detail}</small>
       </div>
     </div>
@@ -86,7 +95,9 @@ export function RuntimeStatus({ icon, label, value, detail, tone }: RuntimeStatu
 export function ErrorBanner({ message, local = false }: { message: string; local?: boolean }) {
   return (
     <AlertBanner
-      className={local ? styles.localError : styles.errorBanner}
+      className={local ? styles.localError : undefined}
+      variant={local ? "inline" : "page"}
+      tone="danger"
       icon={<AlertTriangle size={16} />}
     >
       {message}

@@ -17,6 +17,7 @@ import { IssueIndicator } from "@/shared/ui/IssueIndicator";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
 
@@ -159,31 +160,41 @@ export function ConfigCatalogPane({
       </div>
       <div className={styles.configWarnings} aria-live="polite">
         {appliedName && !applyFeedback && (
-          <div className={styles.applicationNotice}>
-            <Check size={15} aria-hidden="true" />
-            <span>
-              Last applied: <strong>Named Config {appliedName}</strong>. Application is a one-time
-              projection to Current Config, not an Active Config.
-            </span>
-          </div>
+          <AlertBanner
+            className={styles.inlineNotice}
+            tone="success"
+            icon={<Check size={15} aria-hidden="true" />}
+          >
+            Last applied: <strong>Named Config {appliedName}</strong>. Application is a one-time
+            projection to Current Config, not an Active Config.
+          </AlertBanner>
         )}
         {applyFeedback && (
-          <div className={styles.applicationNotice} role="status">
-            <Check size={15} aria-hidden="true" />
-            <span>{applyFeedback}</span>
-          </div>
+          <AlertBanner
+            className={styles.inlineNotice}
+            tone="success"
+            icon={<Check size={15} aria-hidden="true" />}
+          >
+            {applyFeedback}
+          </AlertBanner>
         )}
         {data?.application.drift === "source-missing" && (
-          <div className={styles.inlineWarning}>
-            <AlertTriangle size={15} />
+          <AlertBanner
+            className={styles.inlineWarning}
+            tone="warning"
+            icon={<AlertTriangle size={15} aria-hidden="true" />}
+          >
             <span title={data.application.detail}>Last applied Named Config is missing.</span>
-          </div>
+          </AlertBanner>
         )}
         {data?.application.drift === "comparison-error" && data.application.detail && (
-          <div className={styles.inlineWarning}>
-            <AlertTriangle size={15} />
-            <span>{data.application.detail}</span>
-          </div>
+          <AlertBanner
+            className={styles.inlineWarning}
+            tone="warning"
+            icon={<AlertTriangle size={15} aria-hidden="true" />}
+          >
+            {data.application.detail}
+          </AlertBanner>
         )}
       </div>
       <div className={layout.list} aria-busy={loadingCatalog}>
@@ -213,7 +224,7 @@ export function ConfigCatalogPane({
                 agent === "codex" &&
                 data?.credential_propagation_available && (
                   <ActionButton
-                    tone="secondary"
+                    tone="primarySoft"
                     className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
                     aria-label="Propagate credentials"
                     disabled={mutationBusy}
@@ -227,13 +238,13 @@ export function ConfigCatalogPane({
           <div className={layout.divider}>
             <span>Named Configs</span>
             <ActionButton
+              tone="primarySoft"
               className={layout.addAction}
               aria-label="Create Named Config"
               disabled={mutationBusy || loadingCatalog || selectionMode}
               onClick={openCreateDialog}
             >
               <Plus size={15} aria-hidden="true" />
-              Create
             </ActionButton>
           </div>
           {data?.configs.map((entry) => {
@@ -295,7 +306,7 @@ export function ConfigCatalogPane({
                   <div className={layout.rowActions}>
                     {entry.state === "ready" && (
                       <ActionButton
-                        tone="secondary"
+                        tone="primarySoft"
                         className={styles.configRowPrimaryAction}
                         aria-label={`Apply Named Config ${entry.name} to Current Config`}
                         disabled={mutationBusy || (applied && data.application.drift === "clean")}
@@ -306,7 +317,7 @@ export function ConfigCatalogPane({
                     )}
                     {entry.state === "incomplete" && (
                       <ActionButton
-                        tone="secondary"
+                        tone="primarySoft"
                         className={styles.configRowPrimaryAction}
                         aria-label={`Repair Named Config ${entry.name}`}
                         disabled={mutationBusy}

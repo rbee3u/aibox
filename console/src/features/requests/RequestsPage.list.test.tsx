@@ -18,7 +18,79 @@ import {
 } from "@/features/requests/testHarness";
 import { deferred } from "@/test/deferred";
 
+const fileSystem = (
+  globalThis as typeof globalThis & {
+    process: {
+      getBuiltinModule(name: "fs"): {
+        readFileSync(path: string, encoding: "utf8"): string;
+      };
+    };
+  }
+).process.getBuiltinModule("fs");
+const requestListCss = fileSystem.readFileSync(
+  "src/features/requests/catalog/RequestList.module.css",
+  "utf8",
+);
+
 describe("Requests page list", () => {
+  it("keeps long targets shrinkable while reserving the status column", () => {
+    expect(requestListCss).toMatch(
+      /\.rowButton\s*\{[\s\S]*?grid-template-columns:\s*20px 45px minmax\(0, 1fr\) max-content;[\s\S]*?min-width:\s*0;/s,
+    );
+    expect(requestListCss).toMatch(
+      /\.target\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow:\s*hidden;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/s,
+    );
+    expect(requestListCss).toMatch(
+      /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-2\);[\s\S]*?white-space:\s*nowrap;/s,
+    );
+  });
+
+  it("preserves target prefixes, full URL titles, and status content for long URLs", async () => {
+    const longHost = `gateway.${"regional-".repeat(7)}example.test`;
+    const longPath = `/v1/${"organizations/".repeat(7)}responses`;
+    const longQuery = `?stream=true&session=${"session-token-".repeat(8)}&include=usage`;
+    const cases = [
+      {
+        id: "long-host-request",
+        url: `https://${longHost}/v1/responses?stream=true`,
+        label: `${longHost}/v1/responses`,
+      },
+      {
+        id: "long-path-request",
+        url: `https://api.example.test${longPath}`,
+        label: `api.example.test${longPath}`,
+      },
+      {
+        id: "long-query-request",
+        url: `https://api.example.test/v1/responses${longQuery}`,
+        label: "api.example.test/v1/responses",
+      },
+    ];
+    const longRequests = cases.map(({ id, url }) => ({
+      ...activeSummary,
+      id,
+      method: "POST",
+      incoming_uri: `/${url}`,
+      upstream_url: url,
+      status: 200,
+    }));
+
+    renderApp({ listRequests: vi.fn().mockResolvedValue(requestListFor(longRequests)) });
+    const panel = await screen.findByRole("complementary", { name: "Request list" });
+
+    for (const { url, label } of cases) {
+      const row = within(panel).getByRole("button", { name: `POST ${label}` });
+      const target = within(row).getByTitle(url);
+      expect(target).toHaveTextContent(label);
+      expect(target.textContent).not.toContain("stream=true");
+      expect(within(row).getByText("200")).toBeInTheDocument();
+      expect(within(row).getByText("Streaming")).toBeInTheDocument();
+      expect(row).toHaveAccessibleDescription(
+        expect.stringContaining("Duration 500ms; Started 2026-08-06 12:01:00"),
+      );
+    }
+  });
+
   it("renders concise Request summaries in the Console module", async () => {
     renderApp();
 

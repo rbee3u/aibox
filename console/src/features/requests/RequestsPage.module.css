@@ -102,7 +102,6 @@
   }
 
   .detailBack:hover {
-    color: var(--accent);
-    background: var(--accent-soft);
+    background: var(--surface-hover);
   }
 }

@@ -7,7 +7,7 @@
 }
 
 .inlineWarning {
-  composes: alertBanner from "@/shared/ui/layout/catalog.module.css";
+  margin: 8px 12px;
 }
 
 .sessionSelectionIndicator {
@@ -76,18 +76,25 @@
   content: "";
 }
 
-.sessionRow:hover,
-.sessionRow:focus-within {
-  background: var(--surface-row-hover);
+.sessionRow:hover {
+  background: var(--surface-hover);
 }
 
 .currentSessionRow,
 .currentSessionRow:hover,
-.currentSessionRow:focus-within,
+.currentSessionRow:focus-within {
+  background: var(--surface-selected);
+}
+
 .sessionRowSelected,
 .sessionRowSelected:hover,
 .sessionRowSelected:focus-within {
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
+}
+
+.currentSessionRow .sessionRowMain,
+.sessionRowSelected .sessionRowMain {
+  color: var(--accent);
 }
 
 .currentSessionRow::before {
@@ -119,7 +126,6 @@
 
 .sessionRowMain:hover:not(:disabled) {
   border-color: transparent;
-  color: var(--ink);
   background: transparent;
 }
 
@@ -142,7 +148,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--ink-secondary);
-  font-size: 11px;
+  font-size: var(--text-meta);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: normal;
@@ -155,7 +161,7 @@
   display: -webkit-box;
   overflow: hidden;
   font-size: var(--catalog-row-primary-size);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--catalog-row-primary-weight);
   line-height: var(--catalog-row-primary-line-height);
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -303,12 +309,13 @@
 
 .sessionTabs button:hover {
   border-color: transparent;
-  color: var(--accent);
-  background: transparent;
+  color: var(--muted);
+  background: var(--surface-hover);
 }
 
 .sessionTabActive {
   color: var(--accent) !important;
+  background: var(--surface-selected) !important;
 }
 
 .sessionTabActive::after {
@@ -408,12 +415,15 @@
 }
 
 .sessionConversationRail button:hover,
-.sessionConversationRail button:focus-visible,
-.sessionConversationMobileNav button:hover,
-.sessionConversationMobileNav button:focus-visible {
+.sessionConversationMobileNav button:hover {
   border-color: transparent;
+  color: var(--muted);
+  background: var(--surface-hover);
+}
+
+.sessionConversationNavActive {
   color: var(--accent);
-  background: transparent;
+  background: var(--surface-selected);
 }
 
 .sessionConversationNavDot {
@@ -480,8 +490,9 @@
 .sessionDetailsSection h3 {
   margin: 0 0 12px;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: var(--weight-bold);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
 }
 
 .sessionDetailsSectionHeading {
@@ -519,7 +530,7 @@
 .sessionDiagnosticsGrid dt {
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
 }
@@ -575,16 +586,6 @@
   margin-top: 12px;
 }
 
-.sessionDiagnosticWarnings p {
-  margin: 0;
-  border: 1px solid var(--warning-line);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  color: var(--warning);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-}
-
 .sessionConversationWarning {
   display: flex;
   align-items: center;
@@ -634,7 +635,7 @@
   align-self: flex-end;
   border: 1px solid var(--info-line);
   border-radius: var(--radius-md);
-  background: var(--accent-subtle);
+  background: var(--surface-inset);
   box-shadow: none;
 }
 .sessionMessage header,
@@ -685,7 +686,7 @@
   padding: 13px 14px;
   overflow: auto;
   color: var(--ink);
-  font: 13px / 1.65 var(--font-sans);
+  font: var(--text-sm) / 1.65 var(--font-sans);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -737,7 +738,7 @@
   margin-left: auto;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-meta);
 }
 .sessionActivity[open] summary,
 .sessionEvidence[open] summary,
@@ -877,11 +878,15 @@
     background: var(--surface);
   }
 
-  .sessionConversationMobileNav button:hover,
-  .sessionConversationMobileNav button:focus-visible,
+  .sessionConversationMobileNav button:hover {
+    border-color: var(--line-control-strong);
+    background: var(--surface-hover);
+  }
+
   .sessionConversationMobileNav .sessionConversationNavActive {
     border-color: var(--accent);
-    background: var(--accent-soft);
+    color: var(--accent);
+    background: var(--surface-selected);
   }
 
   .sessionConversationMobileNav .sessionConversationNavDot {
@@ -900,14 +905,14 @@
   .sessionConversationNavIndex {
     display: inline;
     color: var(--muted);
-    font: 11px / 1 var(--font-mono);
+    font: var(--text-meta) / 1 var(--font-mono);
   }
 
   .sessionConversationNavLabel {
     display: block;
     overflow: hidden;
     color: var(--ink-secondary);
-    font-size: 11px;
+    font-size: var(--text-meta);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

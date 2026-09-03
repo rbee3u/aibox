@@ -16,6 +16,7 @@ import { ActionButton } from "@/shared/ui/ActionButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { TextArea, TextInput } from "@/shared/ui/FormControls";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/configs/ConfigPage.module.css";
 
 interface ConfigFilePaneProps {
@@ -84,7 +85,7 @@ export function ConfigFilePane({
         </div>
         {isAuth && mode === "visual" && <span className={styles.authModeBadge}>{authMode}</span>}
         <ActionButton
-          tone="primary"
+          tone="primarySoft"
           disabled={controlsDisabled || !dirty || !canSave}
           onClick={() => void save()}
         >
@@ -95,13 +96,13 @@ export function ConfigFilePane({
         </ActionButton>
       </div>
       {snapshot.warnings && snapshot.warnings.length > 0 && (
-        <div className={styles.fileWarnings} role="status">
-          {snapshot.warnings.map((warning) => (
-            <span key={warning}>
-              <AlertTriangle size={14} /> {warning}
-            </span>
-          ))}
-        </div>
+        <AlertBanner
+          variant="strip"
+          tone="warning"
+          icon={<AlertTriangle size={14} aria-hidden="true" />}
+        >
+          {snapshot.warnings.join(" ")}
+        </AlertBanner>
       )}
       {mode === "visual" && !isAuth && visualOptions ? (
         <VisualConfigOptions
@@ -168,15 +169,23 @@ export function ConfigFilePane({
                 </div>
               )}
               {snapshot.auth.warnings.map((warning) => (
-                <div className={styles.inlineWarning} key={warning}>
-                  <AlertTriangle size={15} /> <span>{warning}</span>
-                </div>
+                <AlertBanner
+                  className={styles.inlineWarning}
+                  key={warning}
+                  tone="warning"
+                  icon={<AlertTriangle size={15} aria-hidden="true" />}
+                >
+                  {warning}
+                </AlertBanner>
               ))}
               {authMode === "api-key" && snapshot.auth.extra_fields && (
-                <div className={styles.inlineWarning}>
-                  <AlertTriangle size={15} />
-                  <span>Saving will replace extra native credential fields.</span>
-                </div>
+                <AlertBanner
+                  className={styles.inlineWarning}
+                  tone="warning"
+                  icon={<AlertTriangle size={15} aria-hidden="true" />}
+                >
+                  Saving will replace extra native credential fields.
+                </AlertBanner>
               )}
             </div>
           </section>

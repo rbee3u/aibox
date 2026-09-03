@@ -143,13 +143,13 @@ export function TenantCatalogPane({
             <div className={layout.divider}>
               <span>Managed Tenants</span>
               <ActionButton
+                tone="primarySoft"
                 className={layout.addAction}
                 aria-label="Create Managed Tenant"
                 disabled={mutationBusy || refreshing || selectionMode}
                 onClick={openCreateDialog}
               >
                 <Plus size={15} aria-hidden="true" />
-                Create
               </ActionButton>
             </div>
             {managedTenants.map((row) => {

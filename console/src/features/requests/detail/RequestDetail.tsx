@@ -26,6 +26,7 @@ import { BodyViewer } from "@/features/requests/detail/BodyViewer";
 import styles from "@/features/requests/detail/RequestDetail.module.css";
 import { RecordHeadlineStatus } from "@/features/requests/RequestStatus";
 import { assessmentPrimaryLabel } from "@/features/requests/statusPresentation";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 const TABS: Array<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
@@ -95,7 +96,7 @@ export function RequestDetail({
           assessment={detail.assessment}
         />
       </div>
-      <div className={styles.tabs} role="tablist" aria-label="Request data">
+      <SegmentedControl variant="tabs" role="tablist" aria-label="Request data">
         {TABS.map(({ value, label }, index) => (
           <button
             ref={(element) => {
@@ -108,14 +109,13 @@ export function RequestDetail({
             aria-controls={panelId}
             aria-selected={tab === value}
             tabIndex={tab === value ? 0 : -1}
-            className={tab === value ? styles.activeTab : ""}
             onClick={() => onTabChange(value)}
             onKeyDown={(event) => selectAdjacentTab(event, index)}
           >
             {label}
           </button>
         ))}
-      </div>
+      </SegmentedControl>
       <div
         id={panelId}
         className={styles.tabPanel}

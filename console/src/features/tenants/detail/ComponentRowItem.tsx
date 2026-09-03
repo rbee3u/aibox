@@ -3,19 +3,11 @@ import { createPortal } from "react-dom";
 import type { RefObject } from "react";
 import type { ComponentKind, ComponentRow } from "@/api/tenants";
 import { ComponentGlyph } from "@/features/tenants/detail/ComponentGlyph";
-import {
-  type ComponentBadgeTone,
-  type ComponentRowModel,
-} from "@/features/tenants/componentCatalog";
+import { type ComponentRowModel } from "@/features/tenants/componentCatalog";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { IconButton } from "@/shared/ui/IconButton";
-import layout from "@/shared/ui/layout/catalog.module.css";
+import { StatusBadge, type StatusTone, type StatusVariant } from "@/shared/ui/StatusBadge";
 import styles from "@/features/tenants/TenantPage.module.css";
-
-const BADGE_TONE_CLASS: Record<ComponentBadgeTone, string> = {
-  warn: layout.statusWarn,
-  error: layout.statusError,
-};
 
 interface ComponentRowItemProps {
   row: ComponentRow;
@@ -67,6 +59,16 @@ export function ComponentRowItem({
 }: ComponentRowItemProps) {
   const { label, presentation, latest, diagnostic, primaryAction } = model;
   const menuOpen = openMenu === row.kind;
+  const stateTone: StatusTone =
+    row.error || !row.status
+      ? "error"
+      : row.status === "installed"
+        ? "good"
+        : row.status === "not-installed"
+          ? "neutral"
+          : "warning";
+  const stateVariant: StatusVariant =
+    stateTone === "good" || stateTone === "neutral" ? "inline" : "badge";
 
   return (
     <div
@@ -90,15 +92,9 @@ export function ComponentRowItem({
             <>
               <div className={styles.componentState} aria-label={`${label} installed state`}>
                 <span className={styles.componentStateValue}>
-                  {presentation.stateBadge && presentation.badgeTone ? (
-                    <span
-                      className={`${BADGE_TONE_CLASS[presentation.badgeTone]} ${styles.componentStateBadge}`}
-                    >
-                      {presentation.stateBadge}
-                    </span>
-                  ) : (
-                    presentation.stateLabel
-                  )}
+                  <StatusBadge tone={stateTone} variant={stateVariant}>
+                    {presentation.stateBadge ?? presentation.stateLabel}
+                  </StatusBadge>
                   {row.version && (row.status === "installed" || row.status === "modified") && (
                     <strong>v{row.version}</strong>
                   )}
@@ -144,7 +140,7 @@ export function ComponentRowItem({
         ) : primaryAction && model.canSpecificVersion ? (
           <div className={styles.componentSplitAction}>
             <ActionButton
-              tone="secondary"
+              tone="primarySoft"
               className={styles.componentSplitPrimary}
               disabled={mutationBusy}
               onClick={onInstall}
@@ -158,7 +154,7 @@ export function ComponentRowItem({
             </ActionButton>
             <ActionButton
               ref={registerMenuButton}
-              tone="secondary"
+              tone="primarySoft"
               className={styles.componentSplitTrigger}
               aria-label={`${primaryAction} options for ${label}`}
               aria-controls={menuOpen ? `component-install-menu-${row.kind}` : undefined}
@@ -217,7 +213,7 @@ export function ComponentRowItem({
           </div>
         ) : primaryAction ? (
           <ActionButton
-            tone="secondary"
+            tone="primarySoft"
             className={styles.componentPrimaryAction}
             disabled={mutationBusy}
             onClick={onInstall}

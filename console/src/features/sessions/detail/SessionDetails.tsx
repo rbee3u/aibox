@@ -2,6 +2,7 @@ import type { SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import { SessionCopyValue } from "@/features/sessions/detail/SessionCopyValue";
 import { sessionListTenantLabel, type SourcedSession } from "@/features/sessions/sessionSource";
 import { compactDuration, formatByteSize, formatTimestamp } from "@/shared/lib/format";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/sessions/SessionPage.module.css";
 
 interface SessionDetailsProps {
@@ -141,13 +142,17 @@ export function SessionDetails({
           {warnings.length > 0 && (
             <div className={styles.sessionDiagnosticWarnings}>
               {warnings.map((warning) => (
-                <p key={warning}>{warning}</p>
+                <AlertBanner key={warning} tone="warning">
+                  {warning}
+                </AlertBanner>
               ))}
             </div>
           )}
           {partial && (
             <div className={styles.sessionDiagnosticWarnings}>
-              <p>Transcript detail did not finish loading. Displayed content may be incomplete.</p>
+              <AlertBanner tone="warning">
+                Transcript detail did not finish loading. Displayed content may be incomplete.
+              </AlertBanner>
             </div>
           )}
         </section>

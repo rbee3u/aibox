@@ -26,7 +26,7 @@ describe("ConfigPage", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete Named Config custom?" });
     expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent("Current Config is unchanged");
-    await user.click(within(dialog).getByRole("button", { name: "Delete Config" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteConfigs).toHaveBeenCalledWith({ kind: "managed", name: "default" }, "codex", [
       "custom",
     ]);
@@ -56,7 +56,11 @@ describe("ConfigPage", () => {
         revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
       });
       render(<ConfigPage api={api} />);
-      expect(await screen.findByText(label)).toBeInTheDocument();
+      const statusElement = (await screen.findByText(label)).closest("[data-status-variant]");
+      expect(statusElement).toHaveAttribute(
+        "data-status-variant",
+        drift === "clean" ? "inline" : "badge",
+      );
       const apply = screen.getByRole("button", {
         name: "Apply Named Config custom to Current Config",
       });
@@ -103,7 +107,7 @@ describe("ConfigPage", () => {
       name: "Apply custom to Current Config?",
     });
     const confirmation = within(dialog).getByRole("textbox");
-    const confirm = within(dialog).getByRole("button", { name: "Apply to Current Config" });
+    const confirm = within(dialog).getByRole("button", { name: "Apply" });
     expect(dialog.querySelector("dd")).toHaveTextContent("Host Tenant");
     expect(confirm).toBeDisabled();
     await user.type(confirmation, "Host Tenant");
@@ -143,7 +147,7 @@ describe("ConfigPage", () => {
     await user.click(
       within(screen.getByRole("dialog", { name: "Apply custom to Current Config?" })).getByRole(
         "button",
-        { name: "Apply to Current Config" },
+        { name: "Apply" },
       ),
     );
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
@@ -337,7 +341,7 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Named Configs" }));
     const dialog = screen.getByRole("dialog", { name: "Delete selected Named Configs?" });
-    await user.click(within(dialog).getByRole("button", { name: "Delete selected" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "second Named Config could not be deleted",
     );

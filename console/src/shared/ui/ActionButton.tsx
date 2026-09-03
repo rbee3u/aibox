@@ -2,7 +2,8 @@ import type { ButtonHTMLAttributes } from "react";
 import { forwardRef } from "react";
 import styles from "@/shared/ui/ActionButton.module.css";
 
-export type ActionButtonTone = "primary" | "secondary" | "ghost" | "dangerQuiet" | "danger";
+export type ActionButtonTone =
+  "primarySoft" | "secondary" | "ghost" | "dangerQuiet" | "danger" | "dangerPrimary";
 
 export interface ActionButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   tone?: ActionButtonTone;

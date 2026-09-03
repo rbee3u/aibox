@@ -23,13 +23,13 @@
   text-align: left;
 }
 
-.selectionTrigger:hover:not(:disabled) {
+.selectionTrigger:hover:not(:disabled):not([aria-expanded="true"]) {
   border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
 }
 
-.selectionTrigger[aria-expanded="true"] {
+.selectionTrigger[aria-expanded="true"]:not(:disabled) {
   border-color: transparent;
   color: var(--accent);
   background: var(--surface-selected);
@@ -40,11 +40,13 @@
   color: var(--muted);
 }
 
-.selectionTrigger:hover:not(:disabled) .selectionTriggerIcon,
 .selectionTrigger[aria-expanded="true"] .selectionTriggerIcon,
-.selectionOption:hover .selectionOptionIcon,
-.selectionOption:has(input:checked) .selectionOptionIcon,
-.selectionOptionSelected .selectionOptionIcon {
+.selectionOptionSelected .selectionOptionIcon,
+.selectionOption:has(input:checked) .selectionOptionIcon {
+  color: var(--accent);
+}
+
+.selectionOption:has(input:checked) .selectionOptionIcon {
   color: var(--accent);
 }
 
@@ -140,18 +142,18 @@
 }
 
 .selectionOption:hover {
-  color: var(--accent);
-  background: var(--surface-row-hover);
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
 }
 
 .selectionOption:has(input:checked) {
   color: var(--accent);
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
 }
 
 .selectionOptionSelected {
   color: var(--accent);
-  background: var(--surface-row-hover);
+  background: var(--surface-selected);
 }
 
 .selectionOption:has(input:disabled) {

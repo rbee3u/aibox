@@ -7,7 +7,15 @@
 }
 
 .inlineWarning {
-  composes: alertBanner from "@/shared/ui/layout/catalog.module.css";
+  margin: 8px 12px;
+}
+
+.inlineNotice {
+  margin: 8px;
+}
+
+.dialogAlert {
+  margin-top: 12px;
 }
 
 .planList {
@@ -35,34 +43,6 @@
   color: var(--muted);
 }
 
-.segmented {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.segmented button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-color: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-}
-
-.segmented button:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
-}
-
-.segmented button[aria-pressed="true"] {
-  border-color: transparent;
-  color: var(--accent);
-  background: var(--surface-selected);
-}
-
 .configCatalog {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -85,25 +65,6 @@
   margin: 8px;
 }
 
-.applicationNotice {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 8px;
-  border: 1px solid var(--info-line);
-  border-radius: var(--radius-sm);
-  padding: 8px 9px;
-  color: var(--ink-secondary);
-  background: var(--accent-subtle);
-  font-size: var(--text-xs);
-  line-height: 1.4;
-}
-
-.applicationNotice svg {
-  flex: 0 0 auto;
-  color: var(--success);
-}
-
 .configRowText {
   display: flex;
   min-width: 0;
@@ -123,7 +84,7 @@
   min-width: 0;
   overflow: hidden;
   font-size: var(--catalog-row-primary-size);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--catalog-row-primary-weight);
   line-height: var(--catalog-row-primary-line-height);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -181,7 +142,7 @@
   margin: 0;
   padding: 0 24px;
   overflow: hidden;
-  font: var(--weight-semibold) var(--text-xs) / 1.5 var(--font-mono);
+  font: var(--weight-semibold) var(--text-meta) / var(--line-height-meta) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -273,22 +234,6 @@
   flex-direction: column;
 }
 
-.fileWarnings {
-  display: grid;
-  gap: 4px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--warning-line);
-  color: var(--warning);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-}
-
-.fileWarnings span {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
 .authVisualBody {
   display: grid;
   gap: 12px;
@@ -306,7 +251,7 @@
   gap: 7px;
   margin: 14px 14px 0;
   color: var(--success);
-  font-size: 13px;
+  font-size: var(--text-xs);
 }
 
 .authVisualBody .dialogActions,
@@ -442,8 +387,9 @@
 
 .visualGroup h3 {
   margin: 0;
-  font-size: 13px;
-  font-weight: var(--weight-bold);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
 }
 
 .visualFieldList {
@@ -489,7 +435,7 @@
 
 .requiredMarker {
   color: var(--danger);
-  font-size: 15px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
@@ -682,7 +628,9 @@
   justify-content: space-between;
   margin: 0;
   color: var(--ink-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
 }
 
 .propagationGroups .planList {

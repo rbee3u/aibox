@@ -151,7 +151,7 @@ describe("SessionPage", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
     expect(dialog).toHaveTextContent("Tenant default Codex (1)");
     expect(dialog).toHaveTextContent("Tenant work Codex (1)");
-    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteSessions).toHaveBeenCalledTimes(1);
     act(() => defaultDeletion.resolve({ deleted: 1 }));
     await waitFor(() => expect(deleteSessions).toHaveBeenCalledTimes(2));

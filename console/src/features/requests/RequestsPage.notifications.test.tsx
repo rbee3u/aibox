@@ -107,7 +107,7 @@ describe("Requests page failure notifications", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await flushEffects();
 
     expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([

@@ -5,14 +5,12 @@
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-inset: #f4f6f9;
-  /* Chrome hover (resources, Overview); intermediate between row wash and control float. */
-  --surface-hover: #f1f0ff;
-  /* Control float (action hover/open, segmented pressed); deeper than list selection. */
+  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
+  --surface-hover: #eef1f5;
+  /* Accent-owned open, pressed, and selected controls. */
   --surface-selected: #eceaff;
-  /* Catalog/sidebar/menu list wash: row hover and selected share this; mark selection with bar/check. */
-  --surface-row-hover: var(--accent-subtle);
-  /* Quiet action resting fill: readable on near-white shell, quieter than accent-soft alone. */
-  --control-rest: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
+  /* Quiet neutral resting fill with no selected or Primary semantics. */
+  --control-rest: #f4f6f9;
   --line: #dce1e8;
   --line-soft: #e9edf2;
   --line-strong: #c5ccd6;
@@ -25,8 +23,9 @@
   --control-disabled-ink: color-mix(in srgb, var(--muted) 84%, var(--surface));
   --control-disabled-surface: color-mix(in srgb, var(--surface-inset) 88%, var(--surface));
   --control-disabled-line: var(--line-control);
-  --control-disabled-primary-ink: color-mix(in srgb, var(--accent) 45%, var(--muted));
-  --control-disabled-primary-surface: color-mix(in srgb, var(--accent-soft) 74%, var(--surface));
+  /* Checked disabled controls retain a neutral checked mark. */
+  --control-disabled-primary-ink: var(--control-disabled-ink);
+  --control-disabled-primary-surface: var(--control-disabled-surface);
   --ink: #18202c;
   --ink-secondary: #465264;
   --muted: #657187;
@@ -37,18 +36,27 @@
   --accent-subtle: #f8f7ff;
   /* Text on solid --accent (Light: white; Dark: deep ink on bright accent). */
   --accent-contrast: #ffffff;
+  --action-danger: #ba2f38;
+  --action-danger-strong: #96232b;
+  --action-danger-contrast: #ffffff;
+  /* Repeated or entry-point actions use a purple outline at rest. */
+  --action-primary-soft-ink: var(--accent-strong);
+  --action-primary-soft-surface: transparent;
+  --action-primary-soft-line: color-mix(in srgb, var(--accent) 48%, var(--line-control));
+  --action-primary-soft-hover-ink: var(--accent-strong);
+  --action-primary-soft-hover-surface: var(--accent-soft);
+  --action-primary-soft-hover-line: var(--accent);
   --focus: #7771f3;
   --danger: #ba2f38;
   --danger-strong: #96232b;
   --danger-soft: #fff0f1;
   --danger-line: #efc7ca;
+  --control-disabled-danger-ink: var(--control-disabled-ink);
+  --control-disabled-danger-surface: var(--control-disabled-surface);
   /* Destructive action resting fill: softer than danger-soft alone. */
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #0d7a55;
   --success-soft: #e8f7f1;
-  --component-update-action: #0f766e;
-  --component-update-action-hover: #115e59;
-  --component-update-action-ink: #ffffff;
   --warning: #92500d;
   --warning-soft: #fff6e8;
   --warning-line: #ead2a8;
@@ -62,6 +70,10 @@
   --syntax-string: #39752d;
   --syntax-number: #9c4d11;
   --syntax-boolean: #7950a7;
+  --viz-request: #6f8fb8;
+  --viz-wait: #d99b45;
+  --viz-model: #7a70d8;
+  --viz-finalize: #8b929d;
   --shadow-sm: 0 1px 2px rgb(18 28 45 / 0.06);
   --shadow-md: 0 10px 28px rgb(18 28 45 / 0.13);
   --radius-sm: 5px;
@@ -84,6 +96,21 @@
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
+  /* Role-based type hierarchy: page > panel/detail > section/row > metadata. */
+  --text-page-title: 18px;
+  --text-panel-title: var(--text-md);
+  --text-section-title: var(--text-sm);
+  --text-row-title: var(--text-sm);
+  --text-meta: var(--text-xs);
+  --line-height-page-title: var(--line-height-md);
+  --line-height-panel-title: var(--line-height-md);
+  --line-height-section-title: var(--line-height-sm);
+  --line-height-row-title: var(--line-height-sm);
+  --line-height-meta: var(--line-height-xs);
+  --weight-page-title: var(--weight-bold);
+  --weight-panel-title: var(--weight-semibold);
+  --weight-section-title: var(--weight-semibold);
+  --weight-row-title: var(--weight-semibold);
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --control-sm: 32px;
@@ -112,10 +139,11 @@
   --catalog-row-roomy-padding: 6px 8px 6px 9px;
   --catalog-row-leading-gap: 9px;
   --catalog-row-accent-inset: 7px;
-  --catalog-row-primary-size: 14px;
-  --catalog-row-primary-line-height: var(--line-height-sm);
-  --catalog-row-secondary-size: 12px;
-  --catalog-row-secondary-line-height: var(--line-height-xs);
+  --catalog-row-primary-size: var(--text-row-title);
+  --catalog-row-primary-line-height: var(--line-height-row-title);
+  --catalog-row-primary-weight: var(--weight-row-title);
+  --catalog-row-secondary-size: var(--text-meta);
+  --catalog-row-secondary-line-height: var(--line-height-meta);
   /* Tenant/Agent filters: independent controls with catalog toolbar rhythm. */
   --catalog-filter-control-max-width: 112px;
   --catalog-toolbar-filters-gap: 8px;
@@ -147,14 +175,12 @@
   --surface: #191e28;
   --surface-raised: #1d2330;
   --surface-inset: #151a23;
-  /* Chrome hover (resources, Overview); intermediate between row wash and control float. */
-  --surface-hover: #25253e;
-  /* Control float (action hover/open, segmented pressed); deeper than list selection. */
+  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
+  --surface-hover: #272f3d;
+  /* Accent-owned open, pressed, and selected controls. */
   --surface-selected: #292845;
-  /* Catalog/sidebar/menu list wash: row hover and selected share this; mark selection with bar/check. */
-  --surface-row-hover: #1f1e32;
-  /* Quiet action resting fill: deeper than row wash so chips float on hovered/selected rows. */
-  --control-rest: #242338;
+  /* Quiet neutral resting fill with no selected or Primary semantics. */
+  --control-rest: #222833;
   --line: #303744;
   --line-soft: #272e3a;
   --line-strong: #465061;
@@ -167,17 +193,25 @@
   --accent-soft: #292744;
   --accent-subtle: #211f35;
   --accent-contrast: #141820;
+  --action-danger: #ff858c;
+  --action-danger-strong: #ffabb0;
+  --action-danger-contrast: #2b1013;
+  --action-primary-soft-ink: var(--accent);
+  --action-primary-soft-surface: transparent;
+  --action-primary-soft-line: color-mix(in srgb, var(--accent) 58%, var(--line-control));
+  --action-primary-soft-hover-ink: var(--accent);
+  --action-primary-soft-hover-surface: var(--accent-soft);
+  --action-primary-soft-hover-line: var(--accent);
   --focus: #aaa6ff;
   --danger: #ff858c;
   --danger-strong: #ffabb0;
   --danger-soft: #3a2027;
   --danger-line: #6a343e;
+  --control-disabled-danger-ink: var(--control-disabled-ink);
+  --control-disabled-danger-surface: var(--control-disabled-surface);
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #5bd4a4;
   --success-soft: #19372f;
-  --component-update-action: #5bd4a4;
-  --component-update-action-hover: #75e0b5;
-  --component-update-action-ink: #10221b;
   --warning: #f1b262;
   --warning-soft: #382b1d;
   --warning-line: #655036;
@@ -191,6 +225,10 @@
   --syntax-string: #9bd783;
   --syntax-number: #f0b66f;
   --syntax-boolean: #d2a1ff;
+  --viz-request: #6f8fb8;
+  --viz-wait: #d99b45;
+  --viz-model: #9b96ff;
+  --viz-finalize: #8b929d;
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.25);
   --shadow-md: 0 14px 36px rgb(0 0 0 / 0.34);
 }
@@ -270,7 +308,7 @@ select {
 button:hover:not(:disabled),
 select:hover:not(:disabled) {
   border-color: var(--line-control-strong);
-  background: var(--surface-inset);
+  background: var(--surface-hover);
 }
 
 button:disabled,

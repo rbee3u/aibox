@@ -1,0 +1,107 @@
+.root {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.root > button {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.filled {
+  box-sizing: border-box;
+  height: var(--control-compact);
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+.filled > button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-color: transparent;
+  border-radius: calc(var(--radius-sm) - 1px);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+}
+
+.filled > button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.filled > button[aria-pressed="true"],
+.filled > button[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--surface-selected);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.filled > button:disabled {
+  color: var(--control-disabled-ink);
+  box-shadow: none;
+}
+
+.tabs {
+  gap: 3px;
+  margin: 0;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line-structural);
+  background: var(--bg-shell);
+}
+
+.tabs > button {
+  min-height: var(--toolbar-height-compact);
+  border: 0;
+  border-radius: 0;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tabs > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.tabs > button[aria-selected="true"] {
+  background: var(--surface-selected);
+  color: var(--accent);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.tabs > button[aria-selected="true"]:hover:not(:disabled) {
+  background: var(--surface-selected);
+  color: var(--accent);
+}
+
+@container (max-width: 520px) {
+  .tabs {
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+
+  .tabs > button {
+    flex: 0 0 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root > button {
+    transition-duration: 0.01ms;
+  }
+}

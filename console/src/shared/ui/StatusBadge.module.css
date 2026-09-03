@@ -1,0 +1,82 @@
+.root {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-xs);
+  white-space: nowrap;
+}
+
+.inline {
+  min-height: var(--line-height-xs);
+}
+
+.badge {
+  min-height: var(--status-height);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 2px 6px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.good {
+  color: var(--success);
+}
+
+.good.badge {
+  border-color: color-mix(in srgb, var(--success) 24%, transparent);
+  background: var(--success-soft);
+}
+
+.neutral {
+  color: var(--muted);
+}
+
+.neutral.badge {
+  border-color: var(--line-content);
+  background: var(--surface-inset);
+}
+
+.warning {
+  color: var(--warning);
+}
+
+.active {
+  color: var(--accent);
+}
+
+.warning.badge {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+}
+
+.active.badge {
+  border-color: var(--info-line);
+  background: var(--accent-soft);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.error.badge {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}

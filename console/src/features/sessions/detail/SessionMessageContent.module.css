@@ -3,7 +3,7 @@
   margin: 0;
   padding: 10px 12px 12px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -44,17 +44,17 @@
 .markdown h4 {
   margin: 18px 0 8px;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-sm);
   font-weight: var(--weight-bold);
   line-height: 1.35;
 }
 
 .markdown h1 {
-  font-size: 17px;
+  font-size: var(--text-panel-title);
 }
 
 .markdown h2 {
-  font-size: 15px;
+  font-size: var(--text-section-title);
 }
 
 .markdown blockquote {
@@ -65,11 +65,11 @@
 
 .markdown :not(pre) > code {
   border: 1px solid var(--line-content);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 4px;
   color: var(--code-text);
   background: var(--surface-inset);
-  font: 12px / 1.4 var(--font-mono);
+  font: var(--text-xs) / 1.4 var(--font-mono);
 }
 
 .markdown a {
@@ -119,7 +119,7 @@
   padding: 0 8px 0 10px;
   border-bottom: 1px solid var(--line-content);
   color: var(--muted);
-  font: var(--weight-semibold) 11px / 1 var(--font-mono);
+  font: var(--weight-semibold) var(--text-meta) / 1 var(--font-mono);
   text-transform: lowercase;
 }
 
@@ -134,11 +134,10 @@
   background: transparent;
 }
 
-.copyCode:hover,
-.copyCode:focus-visible {
-  border-color: var(--line-control);
-  color: var(--accent);
-  background: var(--surface);
+.copyCode:hover {
+  border-color: var(--line-control-strong);
+  color: var(--muted);
+  background: var(--surface-hover);
 }
 
 .codeBlock pre {
@@ -146,7 +145,7 @@
   overflow-x: auto;
   padding: 12px 14px;
   color: var(--code-text);
-  font: 12px / 1.6 var(--font-mono);
+  font: var(--text-xs) / 1.6 var(--font-mono);
   white-space: pre;
 }
 

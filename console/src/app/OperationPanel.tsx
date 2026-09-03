@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { Operation, OperationApi } from "@/api/operations";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import { messageOf } from "@/shared/lib/errors";
 import styles from "@/app/OperationPanel.module.css";
 
@@ -98,16 +99,20 @@ function OperationPanelContent({
       {expanded && (
         <>
           {operation.first_sequence > 0 && (
-            <div className={styles.operationGap} role="status">
+            <AlertBanner variant="strip" tone="warning" className={styles.operationGap}>
               Earlier log output was truncated; showing entries from #{operation.first_sequence}.
-            </div>
+            </AlertBanner>
           )}
           <pre>
             {operation.logs.map((entry) => entry.message).join("\n") ||
               operation.result ||
               "Connected · waiting for output"}
           </pre>
-          {panelError && <div className={styles.operationError}>{panelError}</div>}
+          {panelError && (
+            <AlertBanner variant="strip" tone="danger" className={styles.operationError}>
+              {panelError}
+            </AlertBanner>
+          )}
           <footer>
             <span>
               {operation.state !== "running"

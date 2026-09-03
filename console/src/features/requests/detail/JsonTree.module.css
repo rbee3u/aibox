@@ -16,7 +16,7 @@
 
 .jsonNode {
   min-width: max-content;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 

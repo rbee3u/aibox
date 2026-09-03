@@ -36,9 +36,9 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: var(--weight-semibold);
-  line-height: 1.5;
+  font-size: var(--text-row-title);
+  font-weight: var(--weight-row-title);
+  line-height: var(--line-height-row-title);
 }
 .url strong {
   min-width: 0;
@@ -51,30 +51,6 @@
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-regular);
-}
-.tabs {
-  display: flex;
-  gap: 3px;
-  margin: 0;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--line-structural);
-  background: var(--bg-shell);
-}
-.tabs button {
-  border: 0;
-  border-radius: 0;
-  min-height: var(--toolbar-height-compact);
-  padding: 6px 8px;
-  background: transparent;
-  color: var(--muted);
-}
-.tabs button:hover {
-  background: transparent;
-  color: var(--accent);
-}
-.activeTab {
-  color: var(--accent) !important;
-  box-shadow: inset 0 -2px var(--accent);
 }
 .tabPanel {
   min-width: 0;
@@ -107,13 +83,6 @@
   .headline {
     justify-content: flex-start;
   }
-  .tabs {
-    padding: 0 12px;
-    overflow-x: auto;
-  }
-  .tabs button {
-    flex: 0 0 auto;
-  }
   .tabPanel {
     padding: 14px 14px 26px;
   }
@@ -123,11 +92,17 @@
   gap: 18px;
 }
 .summary h2,
-.sectionTitle h2,
+.sectionTitle h2 {
+  margin: 0;
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
+}
 .noResponse h2 {
   margin: 0;
-  font-size: 13px;
-  font-weight: var(--weight-bold);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
 }
 .modelSummary {
   padding: 0 0 14px;
@@ -156,7 +131,7 @@
 }
 .modelValue {
   color: var(--ink);
-  font-size: 17px;
+  font-size: var(--text-panel-title);
   font-weight: var(--weight-bold);
   line-height: 1.35;
 }
@@ -164,7 +139,7 @@
   color: var(--muted);
 }
 .modelEffort {
-  font-size: 13px;
+  font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   line-height: 1.35;
 }
@@ -173,11 +148,11 @@
   flex: 0 0 auto;
   min-height: 22px;
   align-items: center;
-  border: 1px solid var(--info-line);
+  border: 1px solid var(--line-content);
   border-radius: var(--radius-pill);
   padding: 2px 6px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--surface-inset);
+  color: var(--ink-secondary);
   font: var(--weight-bold) var(--text-xs) / 1 var(--font-mono);
 }
 .sessionMeta {
@@ -218,11 +193,10 @@
   background: transparent;
   color: var(--muted);
 }
-.copySession:hover:not(:disabled),
-.copySession:focus-visible {
-  border-color: var(--line-control);
-  background: var(--surface);
-  color: var(--accent);
+.copySession:hover:not(:disabled) {
+  border-color: var(--line-control-strong);
+  background: var(--surface-hover);
+  color: var(--muted);
 }
 .metricGrid {
   display: grid;
@@ -321,16 +295,16 @@
   border-radius: var(--radius-pill);
 }
 .toneRequest {
-  background: #6f8fb8;
+  background: var(--viz-request);
 }
 .toneWait {
-  background: #d99b45;
+  background: var(--viz-wait);
 }
 .toneModel {
-  background: var(--accent);
+  background: var(--viz-model);
 }
 .toneFinalize {
-  background: #8b929d;
+  background: var(--viz-finalize);
 }
 .timelinePartial {
   background-image: repeating-linear-gradient(
@@ -428,7 +402,7 @@
 }
 .tokenInputPrimary dd {
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-xs);
   font-weight: var(--weight-bold);
   line-height: 1.35;
 }
@@ -468,7 +442,7 @@
 }
 .tokenTotal dd {
   color: var(--ink-secondary);
-  font-size: 13px;
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
@@ -503,7 +477,7 @@
   width: 54%;
   margin-top: 10px;
   border: 1px solid var(--line-content);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 6px 7px;
   background: var(--surface-inset);
 }
@@ -543,8 +517,9 @@
   gap: 6px;
   margin: 0 0 6px;
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-meta);
   font-weight: var(--weight-bold);
+  line-height: var(--line-height-meta);
 }
 .diagnosticGroup h3 span {
   display: inline-grid;
@@ -554,7 +529,7 @@
   border: 1px solid var(--line-content);
   border-radius: var(--radius-pill);
   background: var(--surface-inset);
-  font-size: var(--text-xs);
+  font-size: var(--text-meta);
 }
 .diagnosticList {
   display: grid;

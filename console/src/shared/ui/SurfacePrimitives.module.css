@@ -22,25 +22,61 @@
 .sectionHeader h3 {
   margin: 0;
   color: var(--ink);
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  line-height: var(--line-height-md);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
 }
 
 .alert {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  border-color: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
   color: var(--ink-secondary);
   background: var(--surface-inset);
   font-size: var(--text-xs);
   line-height: var(--line-height-xs);
 }
 
+.inline {
+  min-height: 34px;
+}
+
+.page {
+  position: sticky;
+  z-index: var(--layer-inline-banner);
+  top: 0;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 1px solid;
+  border-left: 0;
+  border-radius: 0;
+  padding: 9px var(--space-4);
+}
+
+.strip {
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
 .alert svg {
   flex: 0 0 auto;
 }
+
+.content {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .warning {
   border-color: var(--warning-line);
   color: var(--warning);
@@ -55,4 +91,16 @@
   border-color: color-mix(in srgb, var(--success) 28%, var(--line));
   color: var(--success);
   background: var(--success-soft);
+}
+
+.info {
+  border-color: var(--info-line);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.neutral {
+  border-color: var(--line);
+  color: var(--ink-secondary);
+  background: var(--surface-inset);
 }

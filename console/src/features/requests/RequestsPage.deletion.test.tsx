@@ -172,7 +172,7 @@ describe("Requests page selection and deletion", () => {
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
     expect(screen.getByRole("dialog", { name: "Delete this Request?" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
     const deleting = screen.getByRole("button", {
       name: "Deleting POST api.example.test/v1/responses",
     });
@@ -223,7 +223,7 @@ describe("Requests page selection and deletion", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(screen.getByRole("button", { name: "Refresh Requests" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();

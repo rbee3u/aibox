@@ -42,9 +42,9 @@
 
 .sectionHeading h2 {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  line-height: var(--line-height-md);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
   letter-spacing: 0;
 }
 
@@ -93,10 +93,16 @@ button.fact:hover {
 
 .fact strong {
   overflow: hidden;
-  font-size: 17px;
+  font-size: var(--text-panel-title);
   font-weight: var(--weight-bold);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.factStatus {
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-bold);
+  line-height: 1.35;
 }
 
 .fact small {
@@ -128,7 +134,9 @@ button.fact:hover {
 }
 .attentionPanel h3 {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
 }
 .healthySummary {
   margin: 0;
@@ -280,7 +288,12 @@ button.fact:hover {
 }
 
 .runtimeStatus strong {
-  font-size: 15px;
+  font-size: var(--text-sm);
+}
+
+.runtimeStatusValue {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
 }
 
 .imageMetadata {
@@ -337,14 +350,6 @@ button.fact:hover {
   white-space: nowrap;
 }
 
-.runtimeNotice,
-.errorBanner,
-.localError {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
 .runtimeNotice {
   margin-top: 14px;
   color: var(--warning);
@@ -355,16 +360,6 @@ button.fact:hover {
   margin: 10px 0 0;
   color: var(--muted);
   font-size: var(--text-xs);
-}
-
-.errorBanner {
-  position: sticky;
-  z-index: var(--layer-dropdown);
-  top: 0;
-  padding: 9px 16px;
-  border-bottom: 1px solid var(--danger-line);
-  color: var(--danger);
-  background: var(--danger-soft);
 }
 
 .topologySection {
@@ -421,11 +416,6 @@ button.fact:hover {
 
 .localError {
   margin: 12px 16px;
-  padding: 9px 11px;
-  border: 1px solid var(--danger-line);
-  border-radius: var(--radius-sm);
-  color: var(--danger);
-  background: var(--danger-soft);
 }
 
 .treeLoading {
@@ -576,7 +566,7 @@ button.fact:hover {
 .entity .nodeSurface {
   padding: 6px 8px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: none;
 }
@@ -588,11 +578,14 @@ button.fact:hover {
   background: transparent;
 }
 
-.topologyNode:hover .nodeSurface,
-.topologyNode:focus .nodeSurface,
+.topologyNode:hover .nodeSurface {
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
+}
+
 .nodeActive .nodeSurface {
   color: var(--accent);
-  background: var(--surface-hover);
+  background: var(--surface-selected);
 }
 
 .topologyNode:focus-visible .nodeSurface,
@@ -746,8 +739,7 @@ button.fact:hover {
 }
 
 .disclosure:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--surface-hover);
 }
 
 .collapsedCount {
@@ -804,7 +796,7 @@ button.fact:hover {
   gap: 3px;
   padding: 9px 11px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--ink-secondary);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);

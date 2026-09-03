@@ -186,7 +186,7 @@ describe("TenantPage", () => {
     expect(within(dialog).getByText("default")).toBeInTheDocument();
     expect(within(dialog).getByText("Modified")).toBeInTheDocument();
     expect(mutateComponent).not.toHaveBeenCalled();
-    await user.click(within(dialog).getByRole("button", { name: "Remove Component" }));
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(mutateComponent).toHaveBeenCalledWith(
       { kind: "managed", name: "default" },
       "codex-statusline",

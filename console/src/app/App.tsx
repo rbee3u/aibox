@@ -1,4 +1,4 @@
-import { Box, Menu } from "lucide-react";
+import { AlertTriangle, Box, Menu } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { connectControlApi, type ConnectedControlApi } from "@/api/connect";
 import { OperationPanel } from "@/app/OperationPanel";
@@ -18,6 +18,7 @@ import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import { readPreference, storePreference } from "@/shared/lib/preferences";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { IconButton } from "@/shared/ui/IconButton";
+import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/app/App.module.css";
 
 const SIDEBAR_COLLAPSED_KEY = "aibox-console-sidebar-collapsed";
@@ -171,9 +172,13 @@ export function App() {
         </header>
         <main className={styles.content}>
           {startupError && (
-            <div className={styles.startupError} role="alert">
+            <AlertBanner
+              className={styles.startupError}
+              tone="danger"
+              icon={<AlertTriangle size={16} aria-hidden="true" />}
+            >
               {startupError}
-            </div>
+            </AlertBanner>
           )}
           {!api && !startupError && (
             <div className={styles.boot}>

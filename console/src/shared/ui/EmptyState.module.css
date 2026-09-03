@@ -23,7 +23,7 @@
 
 .list .icon {
   margin-bottom: 3px;
-  color: var(--faint);
+  color: var(--accent);
 }
 
 .list strong {
@@ -58,9 +58,9 @@
 .detail h2 {
   margin: 0 0 4px;
   color: var(--ink);
-  font-size: 18px;
-  font-weight: var(--weight-semibold);
-  line-height: var(--line-height-lg);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
 }
 
 .detail p {

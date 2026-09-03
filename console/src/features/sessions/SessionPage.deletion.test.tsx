@@ -45,7 +45,7 @@ describe("SessionPage", () => {
       "Permanently deletes its Transcript from Tenant default Codex.",
     );
     expect(detailSignal?.aborted).toBe(false);
-    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(detailSignal?.aborted).toBe(true);
     expect(
       screen.getByRole("button", {
@@ -107,7 +107,7 @@ describe("SessionPage", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
     expect(dialog).toHaveTextContent("Sources: Tenant default Codex (2)");
     rows = [thirdSession];
-    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
       expect(deleteSessions).toHaveBeenCalledWith({ kind: "managed", name: "default" }, "codex", [
         firstSession.id,
@@ -132,7 +132,7 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("second Transcript could not be deleted");
     expect(within(alert).queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();

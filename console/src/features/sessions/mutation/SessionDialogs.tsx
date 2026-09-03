@@ -30,7 +30,7 @@ export function SessionDialogs({
         <ConfirmDialog
           title={`Delete Session ${singleDeleteTarget.display_id}?`}
           message={`Permanently deletes its Transcript from ${visibleSessionSource(singleDeleteTarget.source)}.`}
-          confirmLabel="Delete permanently"
+          confirmLabel="Delete"
           busy={deletion?.kind === "record" || operation?.state === "running"}
           onCancel={() => {
             if (deletion?.kind !== "record") closeSingleDelete();
@@ -44,7 +44,7 @@ export function SessionDialogs({
           message={`Permanently deletes the selected Transcripts. Sources: ${dialogSources
             .map(({ count, source }) => `${visibleSessionSource(source)} (${count})`)
             .join("; ")}.`}
-          confirmLabel="Delete permanently"
+          confirmLabel="Delete"
           busy={batchBusy || operation?.state === "running"}
           onCancel={() => {
             if (!batchBusy) closeBatchDelete();
