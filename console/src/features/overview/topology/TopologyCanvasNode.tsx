@@ -1,7 +1,6 @@
-import { Info, Minus, Plus } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { Minus, Plus } from "lucide-react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import {
-  targetHref,
   type SessionLoad,
   type TopologyLayoutNode,
   type TopologyNode,
@@ -11,7 +10,6 @@ import type { Tone } from "@/features/overview/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
-import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import styles from "@/features/overview/OverviewPage.module.css";
 
 const ComponentGroupIcon = resourceIcons.components;
@@ -23,47 +21,32 @@ const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
 const ServiceIcon = resourceIcons.service;
 const SessionsModuleIcon = moduleIcons.sessions;
-const SessionIcon = resourceIcons.session;
 
 interface TopologyCanvasNodeProps {
   layoutNode: TopologyLayoutNode;
   active: boolean;
   traced: boolean;
-  query: string;
-  matched: boolean;
-  contextual: boolean;
   forcedOpen: boolean;
-  detailOpen: boolean;
   load?: SessionLoad;
-  canvasWidth: number;
-  canvasHeight: number;
   registerNode: (id: string, element: HTMLDivElement | null) => void;
   onFocus: (id: string) => void;
+  onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>, node: TopologyNode) => void;
   onToggle: (node: TopologyNode) => void;
-  onNavigate: ConsoleNavigate;
-  onDetail: (id: string) => void;
-  onCloseDetail: () => void;
   onRefreshSession: (node: TopologyNode) => void;
 }
 export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
   const { layoutNode } = props;
   const { node } = layoutNode;
-  const canInspect = Boolean(node.title);
-  const dimmed = Boolean(props.query) && !props.matched && !props.contextual;
-  const popoverAbove = layoutNode.y + layoutNode.height + 112 > props.canvasHeight;
-  const popoverEnd = layoutNode.x + layoutNode.width + 250 > props.canvasWidth;
   const content = (
     <>
       <span className={styles.nodeIcon} data-tree-icon={node.icon}>
         {treeIcon(node.icon)}
       </span>
       <span className={styles.nodeCopy}>
-        <strong>
-          <Highlighted value={node.label} query={props.query} />
-        </strong>
-        {node.detail && <small>{node.detail}</small>}
+        <strong>{node.label}</strong>
+        {node.detail && <small title={node.tooltip ?? node.detail}>{node.detail}</small>}
       </span>
       <StatusMark tone={node.tone} />
     </>
@@ -71,7 +54,7 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
   return (
     <div
       ref={(element) => props.registerNode(node.id, element)}
-      className={`${styles.topologyNode} ${styles[layoutNode.kind]} ${styles[node.tone]} ${props.active ? styles.nodeActive : ""} ${props.traced ? styles.nodeTraced : ""} ${props.matched ? styles.nodeMatched : ""} ${dimmed ? styles.nodeDimmed : ""}`}
+      className={`${styles.topologyNode} ${styles[layoutNode.kind]} ${styles[node.tone]} ${props.active ? styles.nodeActive : ""} ${props.traced ? styles.nodeTraced : ""}`}
       style={{
         left: layoutNode.x,
         top: layoutNode.y,
@@ -79,6 +62,7 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
         height: layoutNode.height,
       }}
       role="treeitem"
+      aria-label={node.detail ? `${node.label} ${node.detail}` : node.label}
       aria-level={layoutNode.depth + 1}
       aria-posinset={layoutNode.position}
       aria-setsize={layoutNode.setSize}
@@ -89,61 +73,27 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
       onMouseEnter={() => props.onHover(node.id)}
       onMouseLeave={() => props.onHover(null)}
       onFocus={(event) => event.target === event.currentTarget && props.onFocus(node.id)}
+      onClick={() => props.onSelect(node.id)}
       onKeyDown={(event) => props.onKeyDown(event, node)}
     >
       {node.parentId && <span className={styles.inputPort} aria-hidden="true" />}
-      {node.target ? (
-        <a
-          className={styles.nodeSurface}
-          href={targetHref(node.target)}
-          tabIndex={-1}
-          onClick={(event) => {
-            event.preventDefault();
-            props.onNavigate(node.target!.module, node.target!.query);
-          }}
-        >
-          {content}
-        </a>
-      ) : (
-        <div className={styles.nodeSurface}>{content}</div>
-      )}
-      {canInspect && (
-        <button
-          type="button"
-          className={styles.detailButton}
-          aria-label={`Show details for ${node.label}`}
-          aria-expanded={props.detailOpen}
-          data-topology-detail
-          onMouseEnter={() => !props.detailOpen && props.onDetail(node.id)}
-          onMouseLeave={(event) => {
-            if (document.activeElement !== event.currentTarget) props.onCloseDetail();
-          }}
-          onFocus={() => !props.detailOpen && props.onDetail(node.id)}
-          onBlur={props.onCloseDetail}
-          onClick={() => props.onDetail(node.id)}
-        >
-          <Info size={12} />
-        </button>
-      )}
-      {node.sessionRequest && props.load && props.load.state !== "loading" && (
+      <div className={styles.nodeSurface}>{content}</div>
+      {node.sessionRequest && (
         <RefreshButton
           type="button"
           className={styles.topologySessionRefresh}
           label={`Refresh ${node.label} summary`}
           iconOnly
           iconSize={12}
-          onClick={() => props.onRefreshSession(node)}
+          tabIndex={-1}
+          busy={props.load?.state === "loading"}
+          disabled={props.load?.state === "loading"}
+          onMouseDown={keepTreeitemFocus}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onRefreshSession(node);
+          }}
         />
-      )}
-      {props.detailOpen && node.title && (
-        <div
-          className={`${styles.nodePopover} ${popoverAbove ? styles.popoverAbove : ""} ${popoverEnd ? styles.popoverEnd : ""}`}
-          role="tooltip"
-          data-topology-detail
-        >
-          <strong>{node.label}</strong>
-          <span>{node.title}</span>
-        </div>
       )}
       {layoutNode.branch && node.id !== "service" ? (
         <button
@@ -154,7 +104,9 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
           aria-expanded={layoutNode.open}
           disabled={props.forcedOpen}
           title={props.forcedOpen ? "Clear the active filter to collapse this branch" : undefined}
-          onClick={() => {
+          onMouseDown={keepTreeitemFocus}
+          onClick={(event) => {
+            event.stopPropagation();
             props.onFocus(node.id);
             props.onToggle(node);
           }}
@@ -170,6 +122,11 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
     </div>
   );
 }
+function keepTreeitemFocus(event: MouseEvent<HTMLElement>) {
+  event.preventDefault();
+  event.currentTarget.closest<HTMLElement>("[role='treeitem']")?.focus({ preventScroll: true });
+}
+
 function StatusMark({ tone }: { tone: Tone }) {
   const label = statusLabel(tone);
   return (
@@ -187,18 +144,6 @@ function statusLabel(tone: Tone): string {
     case "neutral":
       return "Neutral";
   }
-}
-function Highlighted({ value, query }: { value: string; query: string }) {
-  if (!query) return value;
-  const index = value.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
-  if (index < 0) return value;
-  return (
-    <>
-      {value.slice(0, index)}
-      <mark>{value.slice(index, index + query.length)}</mark>
-      {value.slice(index + query.length)}
-    </>
-  );
 }
 function treeIcon(icon: TreeIcon): ReactNode {
   switch (icon) {
@@ -220,8 +165,6 @@ function treeIcon(icon: TreeIcon): ReactNode {
       return <NamedConfigIcon size={15} />;
     case "sessions":
       return <SessionsModuleIcon size={15} />;
-    case "session-summary":
-      return <SessionIcon size={14} />;
     case "components":
       return <ComponentGroupIcon size={15} />;
     case "component":

@@ -6,7 +6,7 @@ import {
   configIssuePresentation,
   configWarningPresentation,
 } from "@/features/configs/configCatalog";
-import { configTenantSelectionValue } from "@/features/configs/route";
+import { configTenantSelectionValue, namedConfigName } from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
@@ -250,7 +250,7 @@ export function ConfigCatalogPane({
           {data?.configs.map((entry) => {
             const applied = entry.name === appliedName;
             const selectedForDeletion = selectedKeys.has(entry.name);
-            const selectedForInspection = !selection.current && selection.config === entry.name;
+            const selectedForInspection = namedConfigName(selection) === entry.name;
             const issue = configIssuePresentation(entry) ?? configWarningPresentation(entry);
             const issueDescriptionId = issue
               ? configIssueDescriptionId(tenant, agent, entry.name)

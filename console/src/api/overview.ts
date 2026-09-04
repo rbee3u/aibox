@@ -2,6 +2,8 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
   OverviewResponse,
   TopologyAgent,
+  TopologyComponents,
+  TopologyNamedConfigs,
   TopologyResponse,
   TopologyTenant,
 } from "@/api/generated/wire";
@@ -20,7 +22,7 @@ import type { TenantSelection } from "@/domain/tenant";
  */
 export type OverviewData = OverviewResponse;
 export type TopologyData = TopologyResponse;
-export type { TopologyAgent, TopologyTenant };
+export type { TopologyAgent, TopologyComponents, TopologyNamedConfigs, TopologyTenant };
 
 export interface OverviewApi {
   loadOverview(signal?: AbortSignal): Promise<OverviewData>;

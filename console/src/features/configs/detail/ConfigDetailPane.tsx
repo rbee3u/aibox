@@ -2,7 +2,11 @@ import { AlertTriangle, ChevronLeft, Save } from "lucide-react";
 
 import type { ConfigApi } from "@/api/configs";
 import { ConfigFilePane } from "@/features/configs/detail/ConfigFilePane";
-import { configTenantSelectionValue } from "@/features/configs/route";
+import {
+  configTenantSelectionValue,
+  isNamedCatalog,
+  namedConfigName,
+} from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { ActionButton } from "@/shared/ui/ActionButton";
@@ -14,6 +18,7 @@ import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
 
 const ManagedTenantIcon = resourceIcons.managedTenant;
+const NamedConfigIcon = resourceIcons.namedConfig;
 export function ConfigDetailPane({
   api,
   catalog,
@@ -62,6 +67,13 @@ export function ConfigDetailPane({
           icon={<ManagedTenantIcon size={26} aria-hidden="true" />}
           title="Managed Tenant not found"
           description="The selected Managed Tenant does not exist."
+        />
+      ) : isNamedCatalog(selection) && data ? (
+        <EmptyState
+          variant="detail"
+          icon={<NamedConfigIcon size={26} aria-hidden="true" />}
+          title="Named Configs"
+          description="Select Current Config or a Named Config to inspect its files."
         />
       ) : data ? (
         <>
@@ -155,7 +167,7 @@ export function ConfigDetailPane({
                   className={`${styles.configFileSection} ${file === name ? styles.configFileSectionFocused : ""}`}
                 >
                   <ConfigFilePane
-                    key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${selection.config}`}:${name}`}
+                    key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${namedConfigName(selection)}`}:${name}`}
                     api={api}
                     tenant={tenant}
                     agent={agent}

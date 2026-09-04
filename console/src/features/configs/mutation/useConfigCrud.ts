@@ -6,6 +6,7 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
 import {
   configLocation,
+  namedConfigName,
   type ConfigApplyTarget,
   type ConfigDeleteTarget,
   type ConfigSelection,
@@ -137,10 +138,11 @@ export function useConfigCrud({
     if (operationRunning || !deleteTarget || deleteTarget.names.length === 0) return;
     const requestedNames = deleteTarget.names;
     const wasSelectionMode = selectionMode;
+    const inspectedName = namedConfigName(selection);
     onBusyChange(true);
     try {
       await api.deleteConfigs(tenant, agent, requestedNames);
-      const deletedSelected = !selection.current && requestedNames.includes(selection.config ?? "");
+      const deletedSelected = inspectedName !== null && requestedNames.includes(inspectedName);
       setDeleteTarget(null);
       onSelectionReset();
       if (deletedSelected) {
@@ -156,10 +158,7 @@ export function useConfigCrud({
           refreshed.configs.some((entry) => entry.name === name),
         );
         onSelectionRecovery(new Set(remaining), wasSelectionMode);
-        if (
-          !selection.current &&
-          !refreshed.configs.some((entry) => entry.name === selection.config)
-        ) {
+        if (inspectedName && !refreshed.configs.some((entry) => entry.name === inspectedName)) {
           onLocationChange(configLocation(tenant, agent, null), true);
         }
       }

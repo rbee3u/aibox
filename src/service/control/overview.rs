@@ -1,6 +1,8 @@
 //! Overview and Topology Control API read projections.
 
-use super::{ComponentRow, ControlResult, TenantRow, component_rows_from, json_response};
+use super::{
+    ComponentRow, ComponentStatusWire, ControlResult, TenantRow, component_rows_from, json_response,
+};
 use crate::agent::AgentKind;
 use crate::config;
 use crate::service::coordination::{
@@ -36,6 +38,7 @@ pub(crate) struct OverviewResponse {
     runtime_image: RuntimeImageOverview,
     managed_tenants: usize,
     host_available: bool,
+    host_home: String,
 }
 
 #[derive(Serialize)]
@@ -142,6 +145,7 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
         runtime_image,
         managed_tenants: snapshot.managed_tenants,
         host_available: snapshot.host_available,
+        host_home: snapshot.host_home,
     }
 }
 
@@ -187,7 +191,8 @@ pub(crate) struct TopologyCurrentConfig {
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct TopologyNamedConfigs {
-    entries: Vec<config::ConfigCatalogEntry>,
+    count: usize,
+    attention: Vec<config::ConfigCatalogEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     error: Option<String>,
@@ -196,7 +201,9 @@ pub(crate) struct TopologyNamedConfigs {
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct TopologyComponents {
-    entries: Vec<ComponentRow>,
+    total: usize,
+    installed: usize,
+    attention: Vec<ComponentRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     error: Option<String>,
@@ -241,12 +248,38 @@ fn topology_tenant(snapshot: TopologyTenantSnapshot) -> TopologyTenant {
         row,
         agents: agents.into_iter().map(topology_agent).collect(),
         components: match components {
-            Ok(inspections) => TopologyComponents {
-                entries: component_rows_from(inspections),
-                error: None,
-            },
+            Ok(inspections) => {
+                let rows = component_rows_from(inspections);
+                let total = rows.len();
+                let installed = rows
+                    .iter()
+                    .filter(|row| component_counts_as_installed(row.status))
+                    .count();
+                let attention = rows
+                    .into_iter()
+                    .filter(|row| {
+                        row.error.is_some()
+                            || matches!(
+                                row.status,
+                                Some(
+                                    ComponentStatusWire::Modified
+                                        | ComponentStatusWire::Incomplete
+                                        | ComponentStatusWire::Unmanaged
+                                )
+                            )
+                    })
+                    .collect();
+                TopologyComponents {
+                    total,
+                    installed,
+                    attention,
+                    error: None,
+                }
+            }
             Err(error) => TopologyComponents {
-                entries: Vec::new(),
+                total: 0,
+                installed: 0,
+                attention: Vec::new(),
                 error: Some(error),
             },
         },
@@ -271,14 +304,35 @@ fn topology_agent(snapshot: TopologyAgentSnapshot) -> TopologyAgent {
         },
         named_configs: match snapshot.named_configs {
             Ok(entries) => TopologyNamedConfigs {
-                entries,
+                count: entries.len(),
+                attention: entries
+                    .into_iter()
+                    .filter(config::ConfigCatalogEntry::needs_attention)
+                    .collect(),
                 error: None,
             },
             Err(error) => TopologyNamedConfigs {
-                entries: Vec::new(),
+                count: 0,
+                attention: Vec::new(),
                 error: Some(error),
             },
         },
         application: snapshot.application,
     }
 }
+
+/// Present Components, matching the Tenants catalog count.
+///
+/// `modified` is installed-but-dirty: the Component is there, and attention
+/// already carries the dirty signal. Counting only exact `installed` made
+/// Overview report fewer installed Components than Tenants for the same Tenant.
+fn component_counts_as_installed(status: Option<ComponentStatusWire>) -> bool {
+    matches!(
+        status,
+        Some(ComponentStatusWire::Installed | ComponentStatusWire::Modified)
+    )
+}
+
+#[cfg(test)]
+#[path = "overview_tests.rs"]
+mod tests;

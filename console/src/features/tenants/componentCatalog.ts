@@ -71,13 +71,6 @@ export function tenantSelection(row: TenantRow): TenantSelection {
   return row.kind === "host" ? { kind: "host" } : { kind: "managed", name: row.name };
 }
 
-export function abbreviateTenantHome(path: string, hostHome: string | null): string {
-  if (!hostHome) return path;
-  if (path === hostHome) return "~";
-  const prefix = hostHome.endsWith("/") ? hostHome : `${hostHome}/`;
-  return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
-}
-
 /**
  * Compares two exact `X.Y.Z` versions, or reports `null` when either side is
  * not a comparable stable release. The installer stays responsible for whether

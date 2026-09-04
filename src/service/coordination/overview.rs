@@ -34,6 +34,7 @@ pub(crate) struct OverviewSnapshot {
     pub(crate) image_reference: String,
     pub(crate) managed_tenants: usize,
     pub(crate) host_available: bool,
+    pub(crate) host_home: String,
 }
 
 /// One Tenant row of the Topology view, before wire projection.
@@ -80,6 +81,7 @@ impl OverviewCoordinator {
                 image_reference: image.to_string(),
                 managed_tenants: tenants.len(),
                 host_available,
+                host_home: host_home.display().to_string(),
             })
         })
         .await

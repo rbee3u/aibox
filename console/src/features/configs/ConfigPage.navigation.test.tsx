@@ -98,4 +98,69 @@ describe("ConfigPage", () => {
     );
     expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
   });
+
+  it("opens the Named Configs catalog without inspecting Current Config", async () => {
+    window.history.replaceState(null, "", "/_aibox/ui/configs?tenant=host&agent=codex&named=1");
+    const catalog = {
+      configs: [
+        { name: "ag-github", state: "ready" },
+        { name: "freebie", state: "ready" },
+      ],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, revealConfigFile } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => {
+        const owner = target.current ? "current" : target.config;
+        return Promise.resolve(configFile(target.file, `${owner}:${target.file}`));
+      },
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    expect(await screen.findByRole("button", { name: "ag-github" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Current Config" })).not.toHaveAttribute(
+      "aria-pressed",
+    );
+    expect(screen.getByRole("heading", { name: "Named Configs" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Select Current Config or a Named Config to inspect its files."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
+    expect(revealConfigFile).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "ag-github" }));
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "ag-github:config.toml",
+    );
+    expect(window.location.search).toContain("config=ag-github");
+    expect(window.location.search).not.toContain("named=1");
+    expect(revealConfigFile).toHaveBeenCalled();
+  });
+
+  it("keeps a Named Configs catalog route when the catalog is empty", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&named=1",
+    );
+    const catalog = {
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, revealConfigFile } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+    });
+    render(<ConfigPage api={api} />);
+    expect(await screen.findByText("No Named Configs found.")).toBeInTheDocument();
+    expect(window.location.search).toBe("?tenant=managed%3Adefault&agent=codex&named=1");
+    expect(screen.getByRole("button", { name: "Current Config" })).not.toHaveAttribute(
+      "aria-pressed",
+    );
+    expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
+    expect(revealConfigFile).not.toHaveBeenCalled();
+  });
 });

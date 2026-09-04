@@ -13,38 +13,30 @@ import {
 import type { Operation } from "@/api/operations";
 import type { OverviewApi, OverviewData, TopologyData } from "@/api/overview";
 import {
+  attentionPanelKind,
   buildDisabledReason,
   buildTopologyTree,
-  collectBranchIds,
   collectVisibleNodes,
   defaultExpansion,
-  emptyFilteredRoot,
-  filterByAttention,
   firstComponentAttentionTarget,
   firstConfigAttentionTarget,
-  searchTopology,
   structuralIds,
   summarizeTopology,
   type AttentionItem,
+  type AttentionPanelKind,
   type SessionLoad,
   type SessionRequest,
   type TopologyHealth,
   type TopologyMetrics,
   type TopologyNode,
-  type TopologySearchResult,
 } from "@/features/overview/topology/topologyModel";
-import {
-  useTopologyInteraction,
-  type TopologyZoomMode,
-} from "@/features/overview/topology/useTopologyInteraction";
+import { useTopologyInteraction } from "@/features/overview/topology/useTopologyInteraction";
 import { useOverviewData } from "@/features/overview/useOverviewData";
 import { messageOf } from "@/shared/lib/errors";
-import type { ConsoleNavigate } from "@/shared/lib/navigation";
 
 interface ControllerOptions {
   api: OverviewApi;
   operation: Operation | null;
-  onNavigate: ConsoleNavigate;
   onOperation: (operation: Operation) => void;
 }
 
@@ -72,52 +64,38 @@ export interface OverviewViewModel {
     expandAll: () => void;
     expanded: Set<string>;
     filteredTree: TopologyNode | null;
-    fitTopology: () => void;
     forcedExpanded: Set<string>;
     loadSessionSummary: (id: string, request: SessionRequest, force?: boolean) => Promise<void>;
     loadTopology: (visibleRefresh?: boolean) => Promise<void>;
     metrics: TopologyMetrics | null;
     navigateTree: (event: KeyboardEvent<HTMLDivElement>, node: TopologyNode) => void;
     pageRef: RefObject<HTMLDivElement | null>;
-    query: string;
     registerNode: (id: string, element: HTMLDivElement | null) => void;
     renderedActiveNode: string;
     resetZoom: () => void;
     sessionLoads: Record<string, SessionLoad>;
     setActiveNode: Dispatch<SetStateAction<string>>;
-    setQuery: Dispatch<SetStateAction<string>>;
     toggleNode: (node: TopologyNode) => void;
     topology: TopologyData | null;
     topologyError: string | null;
     topologyRefreshing: boolean;
-    topologySearch: TopologySearchResult;
     treeRef: RefObject<HTMLElement | null>;
     updateMetrics: (next: TopologyMetrics) => void;
     zoom: number;
     zoomIn: () => void;
-    zoomMode: TopologyZoomMode;
     zoomOut: () => void;
   };
   attention: {
     attentionItems: AttentionItem[];
-    attentionOnly: boolean;
     health: TopologyHealth | null;
-    revealAttention: () => void;
-    toggleAttention: () => void;
+    panel: AttentionPanelKind;
   };
 }
 
-export function useOverviewController({
-  api,
-  operation,
-  onNavigate,
-  onOperation,
-}: ControllerOptions) {
+export function useOverviewController({ api, operation, onOperation }: ControllerOptions) {
   const [buildPosting, setBuildPosting] = useState(false);
   const [ownedBuild, setOwnedBuild] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [query, setQuery] = useState("");
-  const [attentionOnly, setAttentionOnly] = useState(false);
   const [sessionLoads, setSessionLoads] = useState<Record<string, SessionLoad>>({});
   const sessionRequests = useRef(new Map<string, AbortController>());
   const initializedTopology = useRef(false);
@@ -178,36 +156,15 @@ export function useOverviewController({
     },
     [api, sessionLoads],
   );
+  const hostHome =
+    overview?.host_home ?? topology?.tenants.find((tenant) => tenant.kind === "host")?.home ?? null;
   const tree = useMemo(
-    () => (topology ? buildTopologyTree(topology, sessionLoads) : null),
-    [sessionLoads, topology],
+    () => (topology ? buildTopologyTree(topology, sessionLoads, hostHome) : null),
+    [hostHome, sessionLoads, topology],
   );
   const health = useMemo(() => (topology ? summarizeTopology(topology) : null), [topology]);
-  const attentionTree = useMemo(() => {
-    if (!tree) return null;
-    if (!attentionOnly) return tree;
-    return filterByAttention(tree) ?? emptyFilteredRoot(tree, "No resources need attention");
-  }, [attentionOnly, tree]);
-  const topologySearch = useMemo(
-    () => searchTopology(attentionTree, query.trim()),
-    [attentionTree, query],
-  );
-  const filteredTree = useMemo(() => {
-    if (!attentionTree) return null;
-    if (!query.trim() || topologySearch.matches.size > 0) return attentionTree;
-    return emptyFilteredRoot(
-      attentionTree,
-      attentionOnly ? "No matching resources need attention" : "No resources match this filter",
-    );
-  }, [attentionOnly, attentionTree, query, topologySearch.matches.size]);
-  const forcedExpanded = useMemo(() => {
-    const result = new Set<string>();
-    if (attentionOnly && filteredTree) collectBranchIds(filteredTree, result);
-    if (query.trim()) {
-      for (const id of topologySearch.context) result.add(id);
-    }
-    return result;
-  }, [attentionOnly, filteredTree, query, topologySearch.context]);
+  const filteredTree = tree;
+  const forcedExpanded = useMemo(() => new Set<string>(), []);
   const visibleNodes = useMemo(
     () => (filteredTree ? collectVisibleNodes(filteredTree, expanded, forcedExpanded) : []),
     [expanded, filteredTree, forcedExpanded],
@@ -215,11 +172,7 @@ export function useOverviewController({
   const topologyInteraction = useTopologyInteraction({
     expanded,
     filteredTree,
-    firstMatch: topologySearch.firstMatch,
     forcedExpanded,
-    onLoadSessionSummary: (id, request) => void loadSessionSummary(id, request),
-    onNavigate,
-    query,
     setExpanded,
     topology,
     visibleNodes,
@@ -272,6 +225,11 @@ export function useOverviewController({
       items.push({ label: "Resource inspection", detail: topologyError, tone: "error" });
     return items;
   }, [health, overview, overviewError, topology, topologyError]);
+  const panel = attentionPanelKind({
+    itemCount: attentionItems.length,
+    overviewSettled: (overview !== null || overviewError !== null) && !overviewRefreshing,
+    topologySettled: (topology !== null || topologyError !== null) && !topologyRefreshing,
+  });
 
   async function build(force: boolean) {
     setBuildPosting(true);
@@ -303,41 +261,31 @@ export function useOverviewController({
       expandAll: topologyInteraction.expandAll,
       expanded,
       filteredTree,
-      fitTopology: topologyInteraction.fit,
       forcedExpanded,
       loadSessionSummary,
       loadTopology,
       metrics: topologyInteraction.metrics,
       navigateTree: topologyInteraction.navigateTree,
       pageRef: topologyInteraction.pageRef,
-      query,
       registerNode: topologyInteraction.registerNode,
       renderedActiveNode: topologyInteraction.activeNode,
       resetZoom: topologyInteraction.resetZoom,
       sessionLoads,
       setActiveNode: topologyInteraction.setActiveNode,
-      setQuery,
       toggleNode: topologyInteraction.toggleNode,
       topology,
       topologyError,
       topologyRefreshing,
-      topologySearch,
       treeRef: topologyInteraction.treeRef,
       updateMetrics: topologyInteraction.updateMetrics,
       zoom: topologyInteraction.zoom,
       zoomIn: topologyInteraction.zoomIn,
-      zoomMode: topologyInteraction.zoomMode,
       zoomOut: topologyInteraction.zoomOut,
     },
     attention: {
       attentionItems,
-      attentionOnly,
       health,
-      revealAttention: () => {
-        setAttentionOnly(true);
-        window.requestAnimationFrame(topologyInteraction.reveal);
-      },
-      toggleAttention: () => setAttentionOnly((value) => !value),
+      panel,
     },
   };
   return viewModel;

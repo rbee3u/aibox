@@ -1,9 +1,9 @@
 import { Check, ListChecks, Plus, Trash2 } from "lucide-react";
 
-import { abbreviateTenantHome } from "@/features/tenants/componentCatalog";
 import { tenantLocation, tenantSelectionValueOf } from "@/features/tenants/route";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { ActionButton } from "@/shared/ui/ActionButton";

@@ -224,7 +224,11 @@ Required, omitted, sensitive, enum, and provider fields follow that supplied
 model rather than frontend-maintained lists. The editor tracks drafts and
 results per file, and ordered saves do not imply rollback. Dirty guards cover
 every navigation path. Apply, Last Application, and Drift copy describe a
-one-shot projection, never an Active Config. Follow the authoritative
+one-shot projection, never an Active Config. Overview Named Configs opens
+Configs with `named=1`: the Named Configs catalog for that Tenant and Coding
+Agent, without selecting Current Config or opening the editor. `current=1`
+inspects Current Config; `config=<name>` inspects a Named Config. Absent both,
+Configs still defaults to Current Config. Follow the authoritative
 [Config semantics](configs.md).
 
 ### Sessions

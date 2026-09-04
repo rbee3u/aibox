@@ -14,14 +14,11 @@ import {
   clampZoom,
   fitTopologyZoom,
   structuralIds,
-  type SessionRequest,
   type TopologyMetrics,
   type TopologyNode,
 } from "@/features/overview/topology/topologyModel";
-import type { ConsoleNavigate } from "@/shared/lib/navigation";
 
 const ZOOM_STEP = 0.1;
-const MOBILE_CANVAS_WIDTH = 760;
 
 interface TopologyAnchorSnapshot {
   id: string;
@@ -34,11 +31,7 @@ export type TopologyZoomMode = "initial" | "fit" | "manual";
 interface TopologyInteractionOptions {
   expanded: Set<string>;
   filteredTree: TopologyNode | null;
-  firstMatch: string | null;
   forcedExpanded: Set<string>;
-  onLoadSessionSummary: (id: string, request: SessionRequest) => void;
-  onNavigate: ConsoleNavigate;
-  query: string;
   setExpanded: Dispatch<SetStateAction<Set<string>>>;
   topology: TopologyData | null;
   visibleNodes: Array<{ node: TopologyNode; parentId: string | null }>;
@@ -47,11 +40,7 @@ interface TopologyInteractionOptions {
 export function useTopologyInteraction({
   expanded,
   filteredTree,
-  firstMatch,
   forcedExpanded,
-  onLoadSessionSummary,
-  onNavigate,
-  query,
   setExpanded,
   topology,
   visibleNodes,
@@ -97,27 +86,11 @@ export function useTopologyInteraction({
 
   useEffect(() => {
     if (!metrics || zoomMode === "manual") return;
-    if (zoomMode === "initial" && metrics.viewportWidth <= MOBILE_CANVAS_WIDTH) {
-      // Narrow first render intentionally stays at 100% instead of entering Fit mode.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setZoom(1);
-      setZoomMode("manual");
-      return;
-    }
+    // Fit the initial topology once its measured width is available.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setZoom(fitTopologyZoom(metrics.layoutWidth, metrics.viewportWidth));
     if (zoomMode === "initial") setZoomMode("fit");
   }, [metrics, zoomMode]);
-
-  useEffect(() => {
-    if (!query.trim() || !firstMatch) return;
-    const frame = window.requestAnimationFrame(() => {
-      scrollTopologyElement(nodeRefs.current.get(firstMatch), {
-        block: "nearest",
-        inline: "center",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [firstMatch, query, visibleNodes, zoom]);
 
   function captureExpansionAnchor(id: string) {
     const before = nodeRefs.current.get(id)?.getBoundingClientRect();
@@ -125,15 +98,13 @@ export function useTopologyInteraction({
   }
 
   function toggleNode(node: TopologyNode) {
-    if (node.children.length === 0 && !node.sessionRequest) return;
-    const opening = !expanded.has(node.id);
+    if (node.children.length === 0) return;
     captureExpansionAnchor(node.id);
     setExpanded((current) => {
       const next = new Set(current);
       if (!next.delete(node.id)) next.add(node.id);
       return next;
     });
-    if (opening && node.sessionRequest) onLoadSessionSummary(node.id, node.sessionRequest);
   }
 
   function replaceExpansion(next: Set<string>) {
@@ -155,7 +126,7 @@ export function useTopologyInteraction({
     if (!current) return;
     let destination: string | null = null;
     const open = node.id === "service" || expanded.has(node.id) || forcedExpanded.has(node.id);
-    const branch = node.children.length > 0 || Boolean(node.sessionRequest);
+    const branch = node.children.length > 0;
     switch (event.key) {
       case "ArrowDown":
         destination = visibleNodes[index + 1]?.node.id ?? null;
@@ -185,8 +156,10 @@ export function useTopologyInteraction({
         if (node.id !== "service" && branch) toggleNode(node);
         break;
       case "Enter":
-        if (node.target) onNavigate(node.target.module, node.target.query);
-        else if (node.id !== "service" && branch) toggleNode(node);
+        if (node.target) {
+          setActiveNode(node.id);
+          // Overview owns selection so keyboard and pointer activation share one toggle path.
+        } else if (node.id !== "service" && branch) toggleNode(node);
         break;
       default:
         return;
@@ -204,11 +177,6 @@ export function useTopologyInteraction({
     activeNode: renderedActiveNode,
     collapseAll: () => replaceExpansion(new Set()),
     expandAll: () => topology && replaceExpansion(structuralIds(topology)),
-    fit: () => {
-      if (!metrics) return;
-      setZoomMode("fit");
-      setZoom(fitTopologyZoom(metrics.layoutWidth, metrics.viewportWidth));
-    },
     metrics,
     navigateTree,
     pageRef,
@@ -224,7 +192,6 @@ export function useTopologyInteraction({
     updateMetrics,
     zoom,
     zoomIn: () => changeZoom(zoom + ZOOM_STEP),
-    zoomMode,
     zoomOut: () => changeZoom(zoom - ZOOM_STEP),
   };
 }

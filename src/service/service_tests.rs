@@ -405,6 +405,12 @@ async fn management_routes_require_loopback_and_reserve_the_aibox_namespace() {
         serde_json::from_slice(&overview.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(overview_body.get("requests").is_none());
     assert!(overview_body.get("service").is_some());
+    assert!(
+        overview_body["host_home"]
+            .as_str()
+            .is_some_and(|home| home.ends_with("host-home")),
+        "{overview_body}"
+    );
 
     let bootstrap = app
         .oneshot(request(

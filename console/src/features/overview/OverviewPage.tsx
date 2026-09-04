@@ -1,18 +1,16 @@
 import {
   AlertTriangle,
   Box,
-  ChevronsDownUp,
-  ChevronsUpDown,
   HardDrive,
   LoaderCircle,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Minus,
   Network,
   Plus,
-  Scan,
-  Search,
   Server,
-  ShieldAlert,
 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Operation } from "@/api/operations";
 import type { OverviewApi } from "@/api/overview";
@@ -20,7 +18,10 @@ import { ErrorBanner, Fact, Metadata } from "@/features/overview/components/Over
 import { RuntimeSection } from "@/features/overview/components/RuntimeSection";
 import { TopologyCanvas } from "@/features/overview/topology/TopologyCanvas";
 import {
+  attentionCountLabel,
   attentionValue,
+  collectVisibleNodes,
+  findTopologyNode,
   formatDuration,
   healthTone,
   MAX_ZOOM,
@@ -28,8 +29,8 @@ import {
 } from "@/features/overview/topology/topologyModel";
 import { useOverviewController } from "@/features/overview/useOverviewController";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
+import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
-import { TextInput } from "@/shared/ui/FormControls";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SectionHeader } from "@/shared/ui/SurfacePrimitives";
@@ -48,6 +49,7 @@ interface OverviewPageProps {
 }
 
 export function OverviewPage(props: OverviewPageProps) {
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const { attention, service, topology: tree } = useOverviewController(props);
   const {
     build,
@@ -59,7 +61,7 @@ export function OverviewPage(props: OverviewPageProps) {
     overviewError,
     overviewRefreshing,
   } = service;
-  const { attentionItems, attentionOnly, health, revealAttention, toggleAttention } = attention;
+  const { attentionItems, health, panel } = attention;
   // The group is aliased because it holds a `topology` of its own: the tree data
   // sits inside the tree concern alongside the viewport state that renders it.
   const {
@@ -67,33 +69,57 @@ export function OverviewPage(props: OverviewPageProps) {
     expandAll,
     expanded,
     filteredTree,
-    fitTopology,
     forcedExpanded,
     loadSessionSummary,
     loadTopology,
     metrics,
     navigateTree,
     pageRef,
-    query,
     registerNode,
     renderedActiveNode,
     resetZoom,
     sessionLoads,
     setActiveNode,
-    setQuery,
     toggleNode,
     topology,
     topologyError,
     topologyRefreshing,
-    topologySearch,
     treeRef,
     updateMetrics,
     zoom,
     zoomIn,
-    zoomMode,
     zoomOut,
   } = tree;
   const { onNavigate, operation } = props;
+  const selectedNode = useMemo(
+    () => findTopologyNode(filteredTree, selectedNodeId ?? ""),
+    [filteredTree, selectedNodeId],
+  );
+  useEffect(() => {
+    if (!selectedNodeId || !filteredTree) return;
+    const visibleIds = new Set(
+      collectVisibleNodes(filteredTree, expanded, forcedExpanded).map(({ node }) => node.id),
+    );
+    if (visibleIds.has(selectedNodeId)) return;
+    let ancestor = findTopologyNode(filteredTree, selectedNodeId)?.parentId ?? null;
+    while (ancestor && !visibleIds.has(ancestor)) {
+      ancestor = findTopologyNode(filteredTree, ancestor)?.parentId ?? null;
+    }
+    // Selection must follow the tree when a collapse or refresh hides its node.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedNodeId(ancestor);
+    setActiveNode(ancestor ?? filteredTree.id);
+  }, [expanded, filteredTree, forcedExpanded, selectedNodeId, setActiveNode]);
+  const selectNode = (id: string) => {
+    if (selectedNodeId === id) {
+      setSelectedNodeId(null);
+      return;
+    }
+    setActiveNode(id);
+    setSelectedNodeId(id);
+    const node = findTopologyNode(filteredTree, id);
+    if (node?.sessionRequest) void loadSessionSummary(id, node.sessionRequest);
+  };
 
   return (
     <div ref={pageRef} className={styles.page} data-overview-scroll data-scroll-axis="vertical">
@@ -155,7 +181,6 @@ export function OverviewPage(props: OverviewPageProps) {
                 : (topologyError ?? "Inspecting topology")
             }
             tone={healthTone(health?.configAttention, health?.configErrors, topologyError)}
-            onClick={health?.configAttention ? revealAttention : undefined}
           />
           <Fact
             icon={<ComponentGroupIcon size={18} />}
@@ -173,7 +198,6 @@ export function OverviewPage(props: OverviewPageProps) {
                 : (topologyError ?? "Inspecting topology")
             }
             tone={healthTone(health?.componentAttention, health?.componentErrors, topologyError)}
-            onClick={health?.componentAttention ? revealAttention : undefined}
           />
         </div>
         <section className={styles.attentionPanel} aria-labelledby="attention-title">
@@ -181,8 +205,15 @@ export function OverviewPage(props: OverviewPageProps) {
             <span>Attention summary</span>
             <h3 id="attention-title">Needs attention</h3>
           </div>
-          {attentionItems.length === 0 ? (
-            <p className={styles.healthySummary}>No warnings or errors are currently reported.</p>
+          {panel === "pending" ? (
+            <p className={styles.attentionPending} role="status">
+              <LoaderCircle className="spin" size={15} aria-hidden="true" /> Inspecting service and
+              topology
+            </p>
+          ) : panel === "healthy" ? (
+            <p className={styles.healthySummary} role="status">
+              No warnings or errors are currently reported.
+            </p>
           ) : (
             <div className={styles.attentionList}>
               {attentionItems.map((item) => (
@@ -218,75 +249,49 @@ export function OverviewPage(props: OverviewPageProps) {
           <Metadata
             icon={<HardDrive size={14} />}
             label="AIBox Root"
-            value={overview?.service.aibox_root ?? "—"}
+            value={
+              overview ? abbreviateTenantHome(overview.service.aibox_root, overview.host_home) : "—"
+            }
+            title={overview?.service.aibox_root ?? "—"}
             mono
             wide
           />
         </div>
       </section>
 
+      <RuntimeSection
+        overview={overview}
+        operation={operation}
+        buildDisabled={buildDisabled}
+        buildUnavailableReason={buildUnavailableReason}
+        onBuild={(force) => void build(force)}
+      />
+
       <section ref={treeRef} className={styles.topologySection} aria-labelledby="topology-title">
-        <div className={styles.topologyHeading}>
-          <SectionHeader
-            className={styles.sectionHeading}
-            eyebrow="Persistent identities"
-            title="Resource topology"
-            id="topology-title"
-          />
-          <span>
-            {topology
-              ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.some((tenant) => tenant.kind === "host") ? "Host Tenant" : "No Host Tenant"}`
-              : "Loading topology"}
-          </span>
-        </div>
-        <>
-          <div className={styles.topologyToolbar} data-overview-toolbar>
-            <label className={styles.searchField}>
-              <Search size={15} aria-hidden="true" />
-              <span className="srOnly">Filter topology</span>
-              <TextInput
-                type="search"
-                placeholder="Filter resources"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
-            {query.trim() && (
-              <span className={styles.matchCount} aria-live="polite">
-                {topologySearch.matches.size} matched
-              </span>
-            )}
+        <div className={styles.topologyToolbar} data-overview-toolbar>
+          <div className={styles.topologyTitleBlock}>
+            <h2 id="topology-title">Resource topology</h2>
+            <span>
+              {topology
+                ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.filter((tenant) => tenant.kind === "host").length} Host · ${health ? attentionCountLabel(health.configAttention + health.componentAttention) : "… need attention"}`
+                : "Loading topology"}
+            </span>
+          </div>
+          <div className={styles.topologyActions}>
             <button
               type="button"
-              className={attentionOnly ? styles.filterActive : undefined}
-              aria-pressed={attentionOnly}
-              onClick={toggleAttention}
+              onClick={() => {
+                collapseAll();
+                setSelectedNodeId(null);
+                setActiveNode("service");
+              }}
+              disabled={!topology}
             >
-              <ShieldAlert size={15} /> Needs attention
+              <ChevronsDownUp size={15} aria-hidden="true" /> Collapse all
             </button>
-            <IconButton
-              label="Expand topology (Session summaries remain on demand)"
-              disabled={!topology}
-              onClick={expandAll}
-            >
-              <ChevronsUpDown size={16} />
-            </IconButton>
-            <IconButton
-              label="Collapse all Tenant branches"
-              disabled={!topology}
-              onClick={collapseAll}
-            >
-              <ChevronsDownUp size={16} />
-            </IconButton>
-            <RefreshButton
-              label="Refresh topology"
-              busyLabel="Refreshing topology"
-              busy={topologyRefreshing}
-              iconOnly
-              iconSize={16}
-              disabled={topologyRefreshing}
-              onClick={() => void loadTopology(true)}
-            />
+            <button type="button" onClick={expandAll} disabled={!topology}>
+              <ChevronsUpDown size={15} aria-hidden="true" /> Expand all
+            </button>
             <div className={styles.zoomControls} aria-label="Topology zoom controls">
               <IconButton
                 label="Zoom out"
@@ -307,16 +312,19 @@ export function OverviewPage(props: OverviewPageProps) {
               <IconButton label="Zoom in" disabled={!metrics || zoom >= MAX_ZOOM} onClick={zoomIn}>
                 <Plus size={15} />
               </IconButton>
-              <IconButton
-                label="Fit topology to width"
-                disabled={!metrics}
-                aria-pressed={zoomMode === "fit"}
-                onClick={fitTopology}
-              >
-                <Scan size={15} />
-              </IconButton>
             </div>
+            <RefreshButton
+              label="Refresh topology"
+              busyLabel="Refreshing topology"
+              busy={topologyRefreshing}
+              disabled={topologyRefreshing}
+              onClick={() => void loadTopology(true)}
+            >
+              Refresh
+            </RefreshButton>
           </div>
+        </div>
+        <>
           {topologyError && (
             <ErrorBanner message={`Topology unavailable: ${topologyError}`} local />
           )}
@@ -326,36 +334,34 @@ export function OverviewPage(props: OverviewPageProps) {
             </div>
           )}
           {filteredTree && (
-            <TopologyCanvas
-              root={filteredTree}
-              expanded={expanded}
-              forcedExpanded={forcedExpanded}
-              activeNode={renderedActiveNode}
-              query={query.trim()}
-              search={topologySearch}
-              zoom={zoom}
-              sessionLoads={sessionLoads}
-              onMetricsChange={updateMetrics}
-              registerNode={registerNode}
-              onFocus={setActiveNode}
-              onKeyDown={navigateTree}
-              onToggle={toggleNode}
-              onNavigate={onNavigate}
-              onRefreshSession={(node) =>
-                node.sessionRequest && void loadSessionSummary(node.id, node.sessionRequest, true)
-              }
-            />
+            <div className={styles.topologyWorkspace}>
+              <TopologyCanvas
+                root={filteredTree}
+                expanded={expanded}
+                forcedExpanded={forcedExpanded}
+                activeNode={renderedActiveNode}
+                selectedNode={selectedNode}
+                zoom={zoom}
+                sessionLoads={sessionLoads}
+                onMetricsChange={updateMetrics}
+                registerNode={registerNode}
+                onFocus={setActiveNode}
+                onSelect={selectNode}
+                onCloseInspector={() => setSelectedNodeId(null)}
+                onNavigate={onNavigate}
+                onKeyDown={(event, node) => {
+                  if (event.key === "Enter") selectNode(node.id);
+                  navigateTree(event, node);
+                }}
+                onToggle={toggleNode}
+                onRefreshSession={(node) =>
+                  node.sessionRequest && void loadSessionSummary(node.id, node.sessionRequest, true)
+                }
+              />
+            </div>
           )}
         </>
       </section>
-
-      <RuntimeSection
-        overview={overview}
-        operation={operation}
-        buildDisabled={buildDisabled}
-        buildUnavailableReason={buildUnavailableReason}
-        onBuild={(force) => void build(force)}
-      />
     </div>
   );
 }

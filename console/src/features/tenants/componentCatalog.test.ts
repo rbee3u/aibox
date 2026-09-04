@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ComponentLatestSnapshot, ComponentRow } from "@/api/tenants";
 import {
-  abbreviateTenantHome,
   canonicalComponentStatus,
   compareStableVersions,
   componentProgressLabel,
@@ -143,16 +142,5 @@ describe("component row labels", () => {
     expect(hasComponentAttention(row({ status: "incomplete" }), null)).toBe(true);
     expect(hasComponentAttention(row(), snapshot("24.2.0"))).toBe(true);
     expect(hasComponentAttention(row(), snapshot("24.1.0"))).toBe(false);
-  });
-});
-
-describe("tenant home abbreviation", () => {
-  it("shortens a path inside the Host Home", () => {
-    expect(abbreviateTenantHome("/home/test/.aibox/tenants/work", "/home/test")).toBe(
-      "~/.aibox/tenants/work",
-    );
-    expect(abbreviateTenantHome("/home/test", "/home/test")).toBe("~");
-    expect(abbreviateTenantHome("/var/lib/aibox", "/home/test")).toBe("/var/lib/aibox");
-    expect(abbreviateTenantHome("/var/lib/aibox", null)).toBe("/var/lib/aibox");
   });
 });

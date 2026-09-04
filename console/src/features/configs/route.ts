@@ -12,10 +12,17 @@ export type ConfigSelection =
   | {
       current: true;
       config?: never;
+      namedCatalog?: never;
     }
   | {
       current: false;
       config: string;
+      namedCatalog?: never;
+    }
+  | {
+      current: false;
+      namedCatalog: true;
+      config?: never;
     };
 export type ConfigDeleteTarget = {
   names: string[];
@@ -32,6 +39,14 @@ export function configTenantSelectionValue(tenant: TenantSelection): TenantSelec
 export function tenantSelectionFromConfigValue(key: TenantSelectionValue): TenantSelection {
   return tenantSelectionFromValue(key);
 }
+export function isNamedCatalog(
+  selection: ConfigSelection,
+): selection is { current: false; namedCatalog: true } {
+  return selection.namedCatalog === true;
+}
+export function namedConfigName(selection: ConfigSelection): string | null {
+  return selection.config ?? null;
+}
 export interface ConfigRouteState {
   tenant: TenantSelection;
   agent: CodingAgentKind;
@@ -45,13 +60,16 @@ export function readConfigRoute(search: string): ConfigRouteState {
   const agent = query.get("agent") === "claude" ? "claude" : "codex";
   const config = query.get("config");
   const current = query.get("current") === "1";
-  const detailOpen = current || (config !== null && DNS_LABEL_PATTERN.test(config));
+  const namedCatalog = query.get("named") === "1";
+  const namedConfig = !current && config && DNS_LABEL_PATTERN.test(config) ? config : null;
+  const detailOpen = current || namedConfig !== null;
   return {
     tenant: tenantSelectionFromConfigValue(tenantSelectionValue),
     agent,
-    selection:
-      !current && config && DNS_LABEL_PATTERN.test(config)
-        ? { current: false, config }
+    selection: namedConfig
+      ? { current: false, config: namedConfig }
+      : namedCatalog && !current
+        ? { current: false, namedCatalog: true }
         : { current: true },
     file: detailOpen ? query.get("file") : null,
     detailOpen,
@@ -67,7 +85,8 @@ export function configLocation(
   query.set("tenant", configTenantSelectionValue(tenant));
   query.set("agent", agent);
   if (selection?.current) query.set("current", "1");
+  else if (selection && isNamedCatalog(selection)) query.set("named", "1");
   else if (selection) query.set("config", selection.config);
-  if (selection && file) query.set("file", file);
+  if (selection && file && !isNamedCatalog(selection)) query.set("file", file);
   return query;
 }

@@ -12,7 +12,7 @@ import type {
 import { allSelected } from "@/features/common/catalogSelection";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 import { hostTenant, managedTenants } from "@/features/common/tenantOptions";
-import { abbreviateTenantHome, type ComponentGroup } from "@/features/tenants/componentCatalog";
+import type { ComponentGroup } from "@/features/tenants/componentCatalog";
 import {
   fallbackTenantSelectionValue,
   tenantSelectionValueOf,
@@ -33,6 +33,7 @@ import {
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import { messageOf } from "@/shared/lib/errors";
+import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import {
   DNS_LABEL_PATTERN,

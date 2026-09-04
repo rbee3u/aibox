@@ -23,8 +23,8 @@ mod routes;
 mod sessions;
 mod tenants;
 
-pub(crate) use components::ComponentRow;
 use components::component_rows_from;
+pub(crate) use components::{ComponentRow, ComponentStatusWire};
 use response::content;
 pub(crate) use tenants::TenantRow;
 

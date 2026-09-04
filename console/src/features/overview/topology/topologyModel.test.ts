@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   clampZoom,
+  buildTopologyTree,
   componentNode,
-  filterByAttention,
+  defaultExpansion,
   firstComponentAttentionTarget,
   layoutTopology,
-  searchTopology,
+  structuralIds,
   visibleTopology,
   type TopologyNode,
 } from "@/features/overview/topology/topologyModel";
@@ -38,7 +39,7 @@ const tree: TopologyNode = {
           id: "tenant:managed:default/components",
           parentId: "tenant:managed:default",
           label: "Components",
-          detail: "1/2 installed",
+          detail: "1/2 installed · 1 needs attention",
           icon: "components",
           tone: "warning",
           children: [],
@@ -58,23 +59,45 @@ describe("overview topology algorithms", () => {
     expect(clampZoom(input)).toBe(expected);
   });
 
-  it.each([
-    ["host", ["tenant:host"], ["service"]],
-    ["installed", ["tenant:managed:default/components"], ["service", "tenant:managed:default"]],
-    ["missing", [], []],
-  ])("searches %s and retains its ancestor context", (query, matches, context) => {
-    const result = searchTopology(tree, query);
-    expect([...result.matches]).toEqual(matches);
-    expect([...result.context]).toEqual(context);
-    expect(result.firstMatch).toBe(matches[0] ?? null);
-  });
-
-  it("filters healthy leaves while retaining attention ancestors", () => {
-    const filtered = filterByAttention(tree);
-    expect(filtered?.children.map((node) => node.id)).toEqual(["tenant:managed:default"]);
-    expect(filtered?.children[0].children.map((node) => node.id)).toEqual([
-      "tenant:managed:default/components",
-    ]);
+  it("only opens the protected default Tenant, falling back to Host", () => {
+    const data = {
+      tenants: [
+        {
+          kind: "managed",
+          name: "studio",
+          display_name: "studio",
+          home: "/tmp/studio",
+          exists: true,
+          agents: [],
+          components: { total: 0, installed: 0, attention: [] },
+        },
+        {
+          kind: "managed",
+          name: "default",
+          display_name: "default",
+          home: "/tmp/default",
+          exists: true,
+          agents: [],
+          components: { total: 0, installed: 0, attention: [] },
+        },
+      ],
+    } satisfies TopologyData;
+    expect([...defaultExpansion(data)]).toEqual(["tenant:managed:default"]);
+    expect([
+      ...defaultExpansion({
+        tenants: [
+          {
+            kind: "host",
+            name: null,
+            display_name: "Host Tenant",
+            home: "/Users/example",
+            exists: true,
+            agents: [],
+            components: { total: 0, installed: 0, attention: [] },
+          },
+        ],
+      }),
+    ]).toEqual(["tenant:host"]);
   });
 
   it("lays out only expanded branches with stable parent-child edges", () => {
@@ -95,15 +118,24 @@ describe("overview topology algorithms", () => {
   });
 
   it("navigates Component nodes and attention to the Tenant only", () => {
-    const node = componentNode("tenant:managed:default", { kind: "managed", name: "default" }, [
+    const node = componentNode(
+      "tenant:managed:default",
+      { kind: "managed", name: "default" },
       {
-        kind: "python",
-        supports_version: true,
-        status: "modified",
-        version: "3.14.7",
-        error: null,
+        total: 1,
+        installed: 0,
+        attention: [
+          {
+            kind: "python",
+            supports_version: true,
+            status: "modified",
+            version: "3.14.7",
+            error: null,
+          },
+        ],
       },
-    ]);
+    );
+    expect(node.detail).toBe("0/1 installed · 1 needs attention");
     expect(node.children[0].target?.query?.toString()).toBe("tenant=managed%3Adefault");
     expect(node.children[0].target?.query?.has("component")).toBe(false);
 
@@ -117,7 +149,9 @@ describe("overview topology algorithms", () => {
           exists: true,
           agents: [],
           components: {
-            entries: [
+            total: 1,
+            installed: 0,
+            attention: [
               {
                 kind: "python",
                 supports_version: true,
@@ -134,5 +168,88 @@ describe("overview topology algorithms", () => {
     expect(target.module).toBe("tenants");
     expect(target.query?.toString()).toBe("tenant=managed%3Adefault");
     expect(target.query?.has("component")).toBe(false);
+  });
+
+  it("keeps Sessions as terminal metrics and expands structural containers only", () => {
+    const data = {
+      tenants: [
+        {
+          kind: "managed",
+          name: "default",
+          display_name: "default",
+          home: "/tmp/default",
+          exists: true,
+          agents: [
+            {
+              agent: "codex",
+              current_config: { present_files: 1, expected_files: 1 },
+              named_configs: { count: 2, attention: [] },
+              application: { last_application: null, drift: "clean" },
+            },
+          ],
+          components: { total: 2, installed: 1, attention: [] },
+        },
+      ],
+    } satisfies TopologyData;
+    const built = buildTopologyTree(data, {}, null);
+    const agent = built.children[0].children[0];
+    const sessions = agent.children.find((node) => node.label === "Sessions");
+    expect(sessions?.children).toEqual([]);
+    const named = agent.children.find((node) => node.label === "Named Configs");
+    expect(named?.target?.query?.toString()).toBe("tenant=managed%3Adefault&agent=codex&named=1");
+    const current = agent.children.find((node) => node.label === "Current Config");
+    expect(current?.target?.query?.toString()).toBe(
+      "tenant=managed%3Adefault&agent=codex&current=1",
+    );
+    expect([...structuralIds(data)]).toEqual([
+      "tenant:managed:default",
+      "tenant:managed:default/agent:codex",
+      "tenant:managed:default/agent:codex/named-configs",
+      "tenant:managed:default/components",
+    ]);
+  });
+
+  it("abbreviates Tenant homes when the Host Home is known", () => {
+    const data = {
+      tenants: [
+        {
+          kind: "host",
+          name: null,
+          display_name: "Host Tenant",
+          home: "/home/test",
+          exists: true,
+          agents: [],
+          components: { total: 0, installed: 0, attention: [] },
+        },
+        {
+          kind: "managed",
+          name: "default",
+          display_name: "default",
+          home: "/home/test/.aibox/tenants/default",
+          exists: true,
+          agents: [],
+          components: { total: 0, installed: 0, attention: [] },
+        },
+      ],
+    } satisfies TopologyData;
+    const built = buildTopologyTree(data, {}, "/home/test");
+    const host = built.children.find((node) => node.id === "tenant:host");
+    const managed = built.children.find((node) => node.id === "tenant:managed:default");
+    expect(host).toMatchObject({
+      detail: "~",
+      tooltip: "/home/test",
+    });
+    expect(host?.title).toBeUndefined();
+    expect(managed).toMatchObject({
+      detail: "~/.aibox/tenants/default",
+      tooltip: "/home/test/.aibox/tenants/default",
+    });
+    expect(managed?.title).toBeUndefined();
+    const unresolved = buildTopologyTree(data, {}, null).children[0];
+    expect(unresolved).toMatchObject({
+      detail: "/home/test",
+      tooltip: "/home/test",
+    });
+    expect(unresolved.title).toBeUndefined();
   });
 });

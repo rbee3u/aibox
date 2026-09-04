@@ -52,16 +52,24 @@ interface MetadataProps {
   icon: ReactNode;
   label: string;
   value: string;
+  title?: string;
   mono?: boolean;
   wide?: boolean;
 }
 
-export function Metadata({ icon, label, value, mono = false, wide = false }: MetadataProps) {
+export function Metadata({
+  icon,
+  label,
+  value,
+  title = value,
+  mono = false,
+  wide = false,
+}: MetadataProps) {
   return (
     <div className={`${styles.metadata} ${wide ? styles.metadataWide : ""}`}>
       {icon}
       <span>{label}</span>
-      <code className={mono ? styles.mono : undefined} title={value}>
+      <code className={mono ? styles.mono : undefined} title={title}>
         {value}
       </code>
     </div>

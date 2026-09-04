@@ -42,7 +42,7 @@ export function clampZoom(value: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 10) / 10));
 }
 export function fitTopologyZoom(canvasWidth: number, viewportWidth: number): number {
-  return clampZoom((viewportWidth - 32) / canvasWidth);
+  return Math.min(1, clampZoom((viewportWidth - 32) / canvasWidth));
 }
 export function visibleTopology(
   node: TopologyNode,
@@ -52,7 +52,7 @@ export function visibleTopology(
   position = 1,
   setSize = 1,
 ): VisibleTopologyNode {
-  const branch = node.children.length > 0 || Boolean(node.sessionRequest);
+  const branch = node.children.length > 0;
   const open = node.id === "service" || expanded.has(node.id) || forcedExpanded.has(node.id);
   const children = open
     ? node.children.map((child, index) =>
@@ -155,9 +155,8 @@ export function layoutTopology(root: VisibleTopologyNode, availableWidth: number
       },
     ];
   });
-  const contentWidth = nextX - levelGap + PADDING_X;
   return {
-    width: Math.max(availableWidth, contentWidth),
+    width: Math.max(availableWidth, nextX - levelGap + PADDING_X),
     height: Math.max(420, rootHeight + PADDING_Y * 2),
     nodes,
     edges,
@@ -171,7 +170,7 @@ export function topologyNodeSize(icon: TreeIcon): {
   if (["service", "host", "tenant", "codex", "claude"].includes(icon)) {
     return { width: 184, height: 58, kind: "entity" };
   }
-  if (["config", "session-summary", "component"].includes(icon)) {
+  if (["config", "component"].includes(icon)) {
     return { width: 160, height: 38, kind: "leaf" };
   }
   return { width: 168, height: 46, kind: "group" };

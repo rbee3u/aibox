@@ -1,10 +1,16 @@
 import type { CodingAgentKind } from "@/domain/codingAgent";
-import type { TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
+import type {
+  TopologyAgent,
+  TopologyComponents,
+  TopologyData,
+  TopologyTenant,
+} from "@/api/overview";
 import type { SessionSummaryData } from "@/api/sessions";
 import type { ComponentRow } from "@/api/tenants";
 import { tenantSelectionValue, type TenantSelection } from "@/domain/tenant";
 import type { ModuleId } from "@/shared/lib/navigation";
 import { capitalize, formatTimestamp } from "@/shared/lib/format";
+import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import type { Tone } from "@/features/overview/viewTypes";
 
 export type TreeIcon =
@@ -17,7 +23,6 @@ export type TreeIcon =
   | "configs"
   | "config"
   | "sessions"
-  | "session-summary"
   | "components"
   | "component";
 export interface NavigationTarget {
@@ -40,6 +45,7 @@ export interface TopologyNode {
   label: string;
   detail?: string;
   title?: string;
+  tooltip?: string;
   icon: TreeIcon;
   tone: Tone;
   target?: NavigationTarget;
@@ -62,8 +68,11 @@ export function sessionAnnouncement(loads: Record<string, SessionLoad>): string 
 export function buildTopologyTree(
   data: TopologyData,
   sessions: Record<string, SessionLoad>,
+  hostHome: string | null,
 ): TopologyNode {
-  const tenants = orderTenants(data.tenants).map((tenant) => tenantNode(tenant, sessions));
+  const tenants = orderTenants(data.tenants).map((tenant) =>
+    tenantNode(tenant, sessions, hostHome),
+  );
   return {
     id: "service",
     parentId: null,
@@ -77,6 +86,7 @@ export function buildTopologyTree(
 export function tenantNode(
   row: TopologyTenant,
   sessions: Record<string, SessionLoad>,
+  hostHome: string | null,
 ): TopologyNode {
   const id = tenantId(row);
   const tenant = tenantSelection(row);
@@ -84,14 +94,14 @@ export function tenantNode(
     .map((agent) => row.agents.find((entry) => entry.agent === agent))
     .filter((agent): agent is TopologyAgent => Boolean(agent))
     .map((agent) => agentNode(id, tenant, agent, sessions));
-  const components = componentNode(id, tenant, row.components.entries, row.components.error);
+  const components = componentNode(id, tenant, row.components);
   const children = [...agents, components];
   return {
     id,
     parentId: "service",
     label: row.display_name,
-    detail: row.home,
-    title: row.home,
+    detail: abbreviateTenantHome(row.home, hostHome),
+    tooltip: row.home,
     icon: row.kind === "host" ? "host" : "tenant",
     tone: row.exists ? maxTone(children.map((child) => child.tone)) : "warning",
     target: { module: "tenants", query: tenantLocation(tenant) },
@@ -123,7 +133,7 @@ export function agentNode(
     children: [],
   };
   const namedId = `${id}/named-configs`;
-  const namedChildren = agent.named_configs.entries.map((entry) => {
+  const namedChildren = agent.named_configs.attention.map((entry) => {
     const params = tenantLocation(tenant);
     params.set("agent", agent.agent);
     params.set("config", entry.name);
@@ -145,19 +155,17 @@ export function agentNode(
       children: [],
     };
   });
-  const namedParams = tenantLocation(tenant);
-  namedParams.set("agent", agent.agent);
   const named: TopologyNode = {
     id: namedId,
     parentId: id,
     label: "Named Configs",
     detail: agent.named_configs.error
       ? "Catalog inspection failed"
-      : `${namedChildren.length} Configs`,
+      : `${agent.named_configs.count} Configs${namedChildren.length ? ` · ${attentionCountLabel(namedChildren.length)}` : ""}`,
     title: agent.named_configs.error,
     icon: "configs",
     tone: agent.named_configs.error ? "error" : maxTone(namedChildren.map((node) => node.tone)),
-    target: { module: "configs", query: namedParams },
+    target: { module: "configs", query: namedCatalogLocation(tenant, agent.agent) },
     children: namedChildren,
   };
   const sessionId = `${id}/sessions`;
@@ -165,9 +173,6 @@ export function agentNode(
   const sessionParams = new URLSearchParams();
   sessionParams.append("tenant", tenantSelectionValue(tenant));
   sessionParams.append("agent", agent.agent);
-  const sessionChildren: TopologyNode[] = sessionLoad
-    ? [sessionSummaryNode(sessionId, sessionLoad)]
-    : [];
   const sessionTone =
     sessionLoad?.state === "error" || sessionLoad?.data?.partial ? "warning" : "neutral";
   const sessionNode: TopologyNode = {
@@ -180,7 +185,7 @@ export function agentNode(
     tone: sessionTone,
     target: { module: "sessions", query: sessionParams },
     sessionRequest: { tenant, agent: agent.agent },
-    children: sessionChildren,
+    children: [],
   };
   const children = [current, named, sessionNode];
   const driftTone = configDriftTone(agent.application.drift);
@@ -201,12 +206,10 @@ export function agentNode(
 export function componentNode(
   tenantIdValue: string,
   tenant: TenantSelection,
-  entries: ComponentRow[],
-  error?: string,
+  summary: TopologyComponents,
 ): TopologyNode {
   const id = `${tenantIdValue}/components`;
-  const visible = entries.filter((entry) => entry.status !== "not-installed" || entry.error);
-  const children = visible.map((entry) => {
+  const children = summary.attention.map((entry) => {
     return {
       id: `${id}/${entry.kind}`,
       parentId: id,
@@ -219,53 +222,19 @@ export function componentNode(
       children: [],
     };
   });
-  const installed = entries.filter((entry) => entry.status === "installed").length;
   const params = tenantLocation(tenant);
   return {
     id,
     parentId: tenantIdValue,
     label: "Components",
-    detail: error ? "Catalog inspection failed" : `${installed}/${entries.length} installed`,
-    title: error,
+    detail: summary.error
+      ? "Catalog inspection failed"
+      : `${summary.installed}/${summary.total} installed${children.length ? ` · ${attentionCountLabel(children.length)}` : ""}`,
+    title: summary.error,
     icon: "components",
-    tone: error ? "error" : maxTone(children.map((child) => child.tone)),
+    tone: summary.error ? "error" : maxTone(children.map((child) => child.tone)),
     target: { module: "tenants", query: params },
     children,
-  };
-}
-export function sessionSummaryNode(parentId: string, load: SessionLoad): TopologyNode {
-  if (load.state === "loading") {
-    return {
-      id: `${parentId}/summary`,
-      parentId,
-      label: "Discovering Transcripts",
-      icon: "session-summary",
-      tone: "neutral",
-      children: [],
-    };
-  }
-  if (load.state === "error") {
-    return {
-      id: `${parentId}/summary`,
-      parentId,
-      label: "Session summary unavailable",
-      detail: load.error,
-      title: load.error,
-      icon: "session-summary",
-      tone: "error",
-      children: [],
-    };
-  }
-  const data = load.data!;
-  return {
-    id: `${parentId}/summary`,
-    parentId,
-    label: `${data.count} ${data.count === 1 ? "Session" : "Sessions"}`,
-    detail: data.partial ? `${data.warnings.length} traversal warnings` : "Discovery complete",
-    title: data.warnings.join("\n") || undefined,
-    icon: "session-summary",
-    tone: data.partial ? "warning" : "good",
-    children: [],
   };
 }
 export function orderTenants(tenants: TopologyTenant[]): TopologyTenant[] {
@@ -288,6 +257,15 @@ export function tenantSelection(tenant: TopologyTenant): TenantSelection {
 }
 export function tenantLocation(tenant: TenantSelection): URLSearchParams {
   return new URLSearchParams({ tenant: tenantSelectionValue(tenant) });
+}
+export function namedCatalogLocation(
+  tenant: TenantSelection,
+  agent: CodingAgentKind,
+): URLSearchParams {
+  const query = tenantLocation(tenant);
+  query.set("agent", agent);
+  query.set("named", "1");
+  return query;
 }
 export function maxTone(tones: Tone[]): Tone {
   if (tones.includes("error")) return "error";
@@ -323,4 +301,43 @@ export function sessionLoadDetail(load?: SessionLoad): string {
   if (load.state === "loading") return "Discovering Transcripts";
   if (load.state === "error") return "Summary unavailable";
   return `${load.data!.count} Sessions${load.data!.partial ? " · Partial" : ""}`;
+}
+
+export function findTopologyNode(root: TopologyNode | null, id: string): TopologyNode | null {
+  if (!root) return null;
+  if (root.id === id) return root;
+  for (const child of root.children) {
+    const match = findTopologyNode(child, id);
+    if (match) return match;
+  }
+  return null;
+}
+
+export function structuralIds(data: TopologyData): Set<string> {
+  const ids = new Set<string>();
+  for (const tenant of data.tenants) {
+    const base = tenantId(tenant);
+    ids.add(base);
+    for (const agent of tenant.agents) {
+      const agentId = `${base}/agent:${agent.agent}`;
+      ids.add(agentId);
+      ids.add(`${agentId}/named-configs`);
+    }
+    ids.add(`${base}/components`);
+  }
+  return ids;
+}
+
+export function attentionCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "needs" : "need"} attention`;
+}
+
+export function defaultExpansion(data: TopologyData): Set<string> {
+  const defaultTenant = data.tenants.find(
+    (tenant) => tenant.kind === "managed" && tenant.name === "default",
+  );
+  const fallback = defaultTenant ?? data.tenants.find((tenant) => tenant.kind === "host");
+  if (!fallback) return new Set();
+  const base = tenantId(fallback);
+  return new Set([base, ...fallback.agents.map((agent) => `${base}/agent:${agent.agent}`)]);
 }

@@ -33,6 +33,15 @@ pub(crate) struct ConfigCatalogEntry {
     pub(crate) warnings: Vec<String>,
 }
 
+impl ConfigCatalogEntry {
+    pub(crate) fn needs_attention(&self) -> bool {
+        matches!(
+            self.state,
+            ConfigCatalogState::Incomplete | ConfigCatalogState::Invalid
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct CurrentConfigInspection {
     pub(crate) present_files: usize,

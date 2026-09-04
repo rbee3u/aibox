@@ -34,6 +34,33 @@ describe("Configs route codec", () => {
     expect(readConfigRoute("?current=1&config=review").selection).toEqual({ current: true });
   });
 
+  it("opens the Named Configs catalog without selecting Current Config", () => {
+    expect(readConfigRoute("?tenant=host&agent=codex&named=1")).toEqual({
+      tenant: { kind: "host" },
+      agent: "codex",
+      selection: { current: false, namedCatalog: true },
+      file: null,
+      detailOpen: false,
+    });
+  });
+
+  it("lets an inspectable Config win over named=1", () => {
+    expect(readConfigRoute("?named=1&current=1").selection).toEqual({ current: true });
+    expect(readConfigRoute("?named=1&config=review").selection).toEqual({
+      current: false,
+      config: "review",
+    });
+    expect(readConfigRoute("?named=1&config=Review").selection).toEqual({
+      current: false,
+      namedCatalog: true,
+    });
+  });
+
+  it("ignores a file on the Named Configs catalog", () => {
+    expect(readConfigRoute("?named=1&file=config.toml").file).toBeNull();
+    expect(readConfigRoute("?named=1&file=config.toml").detailOpen).toBe(false);
+  });
+
   it("ignores a file without an open detail", () => {
     expect(readConfigRoute("?file=config.toml").file).toBeNull();
   });
@@ -62,8 +89,29 @@ describe("Configs route codec", () => {
     expect(configLocation({ kind: "host" }, "codex", null, "config.toml").has("file")).toBe(false);
   });
 
+  it("writes the Named Configs catalog without a file", () => {
+    expect(
+      configLocation({ kind: "host" }, "codex", { current: false, namedCatalog: true }).toString(),
+    ).toBe("tenant=host&agent=codex&named=1");
+    expect(
+      configLocation(
+        { kind: "host" },
+        "codex",
+        { current: false, namedCatalog: true },
+        "config.toml",
+      ).has("file"),
+    ).toBe(false);
+  });
+
   it("round-trips a complete selection", () => {
     const search = "?tenant=managed%3Awork&agent=claude&config=review&file=settings.json";
+    const route = readConfigRoute(search);
+    const query = configLocation(route.tenant, route.agent, route.selection, route.file);
+    expect(`?${query.toString()}`).toBe(search);
+  });
+
+  it("round-trips the Named Configs catalog", () => {
+    const search = "?tenant=host&agent=codex&named=1";
     const route = readConfigRoute(search);
     const query = configLocation(route.tenant, route.agent, route.selection, route.file);
     expect(`?${query.toString()}`).toBe(search);

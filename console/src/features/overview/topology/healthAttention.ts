@@ -1,6 +1,12 @@
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
-import { orderTenants, type NavigationTarget } from "@/features/overview/topology/coreTree";
+import {
+  attentionCountLabel,
+  namedCatalogLocation,
+  orderTenants,
+  tenantSelection,
+  type NavigationTarget,
+} from "@/features/overview/topology/coreTree";
 import type { Tone } from "@/features/overview/viewTypes";
 
 export interface TopologyHealth {
@@ -35,11 +41,16 @@ export function firstConfigAttentionTarget(data: TopologyData): NavigationTarget
       ) {
         return configAttentionTarget(tenant, agent);
       }
-      const entry = agent.named_configs.entries.find(
+      const entry = agent.named_configs.attention.find(
         (candidate) => candidate.state === "incomplete" || candidate.state === "invalid",
       );
       if (entry) return configAttentionTarget(tenant, agent, entry.name);
-      if (agent.named_configs.error) return configAttentionTarget(tenant, agent);
+      if (agent.named_configs.error) {
+        return {
+          module: "configs",
+          query: namedCatalogLocation(tenantSelection(tenant), agent.agent),
+        };
+      }
     }
   }
   return { module: "configs" };
@@ -48,7 +59,7 @@ export function firstComponentAttentionTarget(data: TopologyData): NavigationTar
   for (const tenant of orderTenants(data.tenants)) {
     const query = new URLSearchParams();
     query.set("tenant", attentionTenant(tenant));
-    const hasAttention = tenant.components.entries.some(
+    const hasAttention = tenant.components.attention.some(
       (candidate) =>
         candidate.error || ["modified", "incomplete", "unmanaged"].includes(candidate.status ?? ""),
     );
@@ -67,7 +78,7 @@ export function summarizeTopology(data: TopologyData): TopologyHealth {
   };
   for (const tenant of data.tenants) {
     for (const agent of tenant.agents) {
-      summary.configTotal += agent.named_configs.entries.length;
+      summary.configTotal += agent.named_configs.count;
       if (agent.current_config.error) {
         summary.configAttention += 1;
         summary.configErrors += 1;
@@ -80,7 +91,7 @@ export function summarizeTopology(data: TopologyData): TopologyHealth {
         summary.configAttention += 1;
         summary.configErrors += 1;
       }
-      for (const entry of agent.named_configs.entries) {
+      for (const entry of agent.named_configs.attention) {
         if (entry.state === "incomplete" || entry.state === "invalid") summary.configAttention += 1;
         if (entry.state === "invalid") summary.configErrors += 1;
       }
@@ -89,8 +100,8 @@ export function summarizeTopology(data: TopologyData): TopologyHealth {
       summary.componentAttention += 1;
       summary.componentErrors += 1;
     }
-    for (const entry of tenant.components.entries) {
-      if (entry.status === "installed") summary.componentInstalled += 1;
+    summary.componentInstalled += tenant.components.installed;
+    for (const entry of tenant.components.attention) {
       if (entry.error || ["modified", "incomplete", "unmanaged"].includes(entry.status ?? "")) {
         summary.componentAttention += 1;
       }
@@ -100,7 +111,24 @@ export function summarizeTopology(data: TopologyData): TopologyHealth {
   return summary;
 }
 export function attentionValue(value: number): string {
-  return value === 0 ? "Healthy" : `${value} need attention`;
+  return value === 0 ? "Healthy" : attentionCountLabel(value);
+}
+
+export type AttentionPanelKind = "items" | "pending" | "healthy";
+
+/**
+ * The healthy empty copy is a positive claim. It may appear only after both
+ * Overview and topology have settled (data or error). Known items render as
+ * soon as they exist, including while the other source is still loading.
+ */
+export function attentionPanelKind(input: {
+  itemCount: number;
+  overviewSettled: boolean;
+  topologySettled: boolean;
+}): AttentionPanelKind {
+  if (input.itemCount > 0) return "items";
+  if (!input.overviewSettled || !input.topologySettled) return "pending";
+  return "healthy";
 }
 export function healthTone(attention?: number, errors?: number, loadError?: string | null): Tone {
   if (loadError || errors) return "error";

@@ -14,7 +14,7 @@ import {
   requestProxyRoute,
   splitRequestProxyValue,
 } from "@/features/configs/configCatalog";
-import type { ConfigSelection } from "@/features/configs/route";
+import { namedConfigName, type ConfigSelection } from "@/features/configs/route";
 
 export interface ConfigFileSnapshotModel {
   editor: string;
@@ -34,7 +34,7 @@ export function configFileTarget(
     tenant,
     agent,
     current: selection.current,
-    config: selection.current ? null : selection.config,
+    config: namedConfigName(selection),
     file,
   };
 }

@@ -27,6 +27,7 @@ const overview = {
   },
   managed_tenants: 1,
   host_available: true,
+  host_home: "/home/test",
 } satisfies OverviewData;
 
 const topology = { tenants: [] } satisfies TopologyData;

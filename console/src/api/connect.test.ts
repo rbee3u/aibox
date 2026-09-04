@@ -253,11 +253,11 @@ describe("Control API endpoints", () => {
                   // The Service omits an absent `error` and `detail` rather than
                   // sending null, which is what the wire types now declare.
                   current_config: { present_files: 0, expected_files: 2 },
-                  named_configs: { entries: [] },
+                  named_configs: { count: 0, attention: [] },
                   application: { last_application: null, drift: "untracked" },
                 },
               ],
-              components: { entries: [] },
+              components: { total: 0, installed: 0, attention: [] },
             },
           ],
         }),
@@ -279,10 +279,10 @@ describe("Control API endpoints", () => {
           agents: [
             expect.objectContaining({
               current_config: { present_files: 0, expected_files: 2 },
-              named_configs: { entries: [] },
+              named_configs: { count: 0, attention: [] },
             }),
           ],
-          components: { entries: [] },
+          components: { total: 0, installed: 0, attention: [] },
         }),
       ],
     });

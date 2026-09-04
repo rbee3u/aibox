@@ -25,6 +25,7 @@ import { configWorkflowReducer, initialConfigWorkflow } from "@/features/configs
 import {
   configLocation,
   configTenantSelectionValue,
+  namedConfigName,
   readConfigRoute,
   tenantSelectionFromConfigValue,
   type ConfigApplyTarget,
@@ -193,7 +194,8 @@ export function useConfigController({
   );
   const onCatalogLoaded = useCallback(
     (data: ConfigListData) => {
-      if (!selection.current && !data.configs.some((entry) => entry.name === selection.config)) {
+      const inspectedName = namedConfigName(selection);
+      if (inspectedName && !data.configs.some((entry) => entry.name === inspectedName)) {
         onLocationChange(configLocation(tenant, agent, null), true);
       } else if (route.file && !data.files.includes(route.file)) {
         onLocationChange(
@@ -234,7 +236,7 @@ export function useConfigController({
     detailBackButtonRef,
     detailOpen,
     route.file,
-    selection.current ? "current" : selection.config,
+    selection.current ? "current" : (namedConfigName(selection) ?? "named-catalog"),
   );
   useEffect(() => {
     if (!managedTenantMissing || !detailOpen) return;
@@ -244,12 +246,19 @@ export function useConfigController({
   const tenantOptions = useMemo(() => tenantSelectionOptions(tenants), [tenants]);
   const agentOptions = useMemo(() => agentSelectionOptions(CODING_AGENTS), []);
   const configTenantLabel = tenantSelectionLabel(tenants, tenant);
+  const inspectedName = namedConfigName(selection);
   const configSelectionLabel = selection.current
     ? "Current Config"
-    : `Named Config ${selection.config}`;
+    : inspectedName
+      ? `Named Config ${inspectedName}`
+      : "Named Configs";
   const currentSelection = selection.current;
   const selectedTenantSelectionValue = configTenantSelectionValue(tenant);
-  const selectedConfigKey = selection.current ? "current" : `named:${selection.config}`;
+  const selectedConfigKey = selection.current
+    ? "current"
+    : inspectedName
+      ? `named:${inspectedName}`
+      : "named-catalog";
   const configFiles = catalog?.files ?? [];
   const file =
     route.file && configFiles.includes(route.file) ? route.file : (configFiles[0] ?? null);
@@ -303,7 +312,9 @@ export function useConfigController({
   const panes = useElementRegistry<HTMLDivElement>();
   function closeConfigDetail() {
     requestEditorAction(() => {
-      focusAfterDetailClose.current = selection.current ? "current" : selection.config;
+      focusAfterDetailClose.current = selection.current
+        ? "current"
+        : (namedConfigName(selection) ?? "named-catalog");
       onLocationChange(configLocation(tenant, agent, null));
     });
   }
