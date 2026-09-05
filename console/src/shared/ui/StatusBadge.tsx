@@ -20,7 +20,7 @@ export function StatusBadge({
   tone,
   children,
   variant,
-  dot = variant === "inline",
+  dot = true,
   wrapLabel = true,
   className,
   title,

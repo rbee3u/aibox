@@ -5,6 +5,8 @@ import {
   configIssueDescriptionId,
   configIssuePresentation,
   configWarningPresentation,
+  lastAppliedDescriptionId,
+  lastAppliedMeta,
 } from "@/features/configs/configCatalog";
 import { configTenantSelectionValue, namedConfigName } from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
@@ -159,16 +161,6 @@ export function ConfigCatalogPane({
         )}
       </div>
       <div className={styles.configWarnings} aria-live="polite">
-        {appliedName && !applyFeedback && (
-          <AlertBanner
-            className={styles.inlineNotice}
-            tone="success"
-            icon={<Check size={15} aria-hidden="true" />}
-          >
-            Last applied: <strong>Named Config {appliedName}</strong>. Application is a one-time
-            projection to Current Config, not an Active Config.
-          </AlertBanner>
-        )}
         {applyFeedback && (
           <AlertBanner
             className={styles.inlineNotice}
@@ -209,6 +201,7 @@ export function ConfigCatalogPane({
                 type="button"
                 className={styles.configRowMain}
                 aria-label={selectionMode ? "Current Config cannot be selected" : "Current Config"}
+                aria-describedby={appliedName ? lastAppliedDescriptionId : undefined}
                 aria-pressed={!selectionMode && selection.current ? true : undefined}
                 disabled={busy || loadingCatalog || (selectionMode ? true : false)}
                 onClick={() => void openCurrent()}
@@ -216,6 +209,11 @@ export function ConfigCatalogPane({
                 <CurrentConfigIcon size={16} data-icon="current-config" />
                 <span className={styles.configRowText}>
                   <strong>Current Config</strong>
+                  {appliedName && (
+                    <small id={lastAppliedDescriptionId} className={styles.configRowMeta}>
+                      {lastAppliedMeta(appliedName, data?.application.drift)}
+                    </small>
+                  )}
                 </span>
                 {selectionMode && <span className={layout.protectedBadge}>Protected</span>}
               </button>
@@ -224,7 +222,7 @@ export function ConfigCatalogPane({
                 agent === "codex" &&
                 data?.credential_propagation_available && (
                   <ActionButton
-                    tone="primarySoft"
+                    tone="ghost"
                     className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
                     aria-label="Propagate credentials"
                     disabled={mutationBusy}
@@ -238,7 +236,7 @@ export function ConfigCatalogPane({
           <div className={layout.divider}>
             <span>Named Configs</span>
             <ActionButton
-              tone="primarySoft"
+              tone="ghost"
               className={layout.addAction}
               aria-label="Create Named Config"
               disabled={mutationBusy || loadingCatalog || selectionMode}

@@ -2,6 +2,7 @@ import type { Bootstrap, TenantRow } from "@/api/core";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
   ApplicationStatus,
+  ConfigDrift,
   AuthPropagationPreviewResponse,
   AuthPropagationReport,
   ConfigCatalogEntry,
@@ -20,7 +21,13 @@ import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
-export type { ApplicationStatus, ConfigCatalogEntry, LastApplication, PropagationOutcome };
+export type {
+  ApplicationStatus,
+  ConfigCatalogEntry,
+  ConfigDrift,
+  LastApplication,
+  PropagationOutcome,
+};
 
 export type ConfigListData = GeneratedConfigListResponse;
 

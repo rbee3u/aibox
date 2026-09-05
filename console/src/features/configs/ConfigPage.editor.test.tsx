@@ -49,6 +49,8 @@ describe("ConfigPage", () => {
       "aria-pressed",
       "true",
     );
+    expect(screen.getByRole("heading", { name: "Named Config team" })).toBeInTheDocument();
+    expect(screen.getByText("Host risk")).toBeInTheDocument();
     const token = screen.getByLabelText("Anthropic auth token", { selector: "input" });
     expect(token).toHaveAttribute("type", "password");
     expect(screen.queryByText("env.ANTHROPIC_AUTH_TOKEN")).not.toBeInTheDocument();
@@ -57,10 +59,8 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Show Anthropic auth token" }));
     expect(token).toHaveAttribute("type", "text");
     await user.click(screen.getByRole("checkbox", { name: "Include Default Haiku model" }));
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Skip dangerous mode prompt value" }),
-      "__default",
-    );
+    await user.click(screen.getByRole("combobox", { name: "Skip dangerous mode prompt value" }));
+    await user.click(screen.getByRole("option", { name: "Default" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(saveConfigFile).toHaveBeenCalled());
@@ -148,17 +148,28 @@ describe("ConfigPage", () => {
       revealConfigFile: () => Promise.resolve(configFile("config.toml", "", visual)),
     });
     render(<ConfigPage api={api} />);
+    const user = userEvent.setup();
     const approval = await screen.findByRole("combobox", { name: "Approval policy value" });
-    expect(approval).toHaveValue("future-policy");
+    expect(screen.getByRole("heading", { name: "Named Config team" })).toBeInTheDocument();
     expect(
-      within(approval).getByRole("option", { name: "Unsupported: future-policy" }),
+      screen.getByText(
+        "Native content may contain credentials and is displayed without redaction.",
+      ),
+    ).toBeInTheDocument();
+    expect(approval).toHaveTextContent("Unsupported: future-policy");
+    await user.click(approval);
+    const approvalList = screen.getByRole("listbox", { name: "Approval policy single selection" });
+    expect(
+      within(approvalList).getByRole("option", { name: "Unsupported: future-policy" }),
     ).toBeTruthy();
-    expect(within(approval).queryByRole("option", { name: "Custom" })).toBeNull();
-    expect(within(approval).queryByRole("option", { name: "Select a value" })).toBeNull();
+    expect(within(approvalList).queryByRole("option", { name: "Custom" })).toBeNull();
+    expect(within(approvalList).queryByRole("option", { name: "Select a value" })).toBeNull();
     expect(screen.queryByText("approval_policy")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
     const reasoning = screen.getByRole("combobox", { name: "Model reasoning effort value" });
-    expect(reasoning).toHaveValue("__default");
-    expect(within(reasoning).getByRole("option", { name: "Default" })).toBeTruthy();
+    expect(reasoning).toHaveTextContent("Default");
+    await user.click(reasoning);
+    expect(screen.getByRole("option", { name: "Default" })).toBeTruthy();
     screen.getByRole("button", { name: "Help for Approval policy" }).focus();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Controls when Codex pauses before executing commands.",
@@ -340,7 +351,12 @@ describe("ConfigPage", () => {
     render(<ConfigPage api={api} />);
     const name = await screen.findByText("custom");
     const drift = screen.getByText("Dirty");
+    const current = screen.getByRole("button", { name: "Current Config" });
     expect(screen.queryByText("Applied")).not.toBeInTheDocument();
+    expect(screen.queryByText(/not an Active Config/)).not.toBeInTheDocument();
+    expect(current).toHaveAccessibleDescription("Last applied custom · differs");
+    expect(within(current).getByText("Last applied custom · differs")).toBeInTheDocument();
+    expect(within(current).queryByText("Dirty")).not.toBeInTheDocument();
     expect(drift.parentElement).toBe(name.parentElement);
     expect(name.compareDocumentPosition(drift) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const agentIcon = screen
@@ -349,9 +365,7 @@ describe("ConfigPage", () => {
     expect(agentIcon).toBeInTheDocument();
     expect(agentIcon?.style.getPropertyValue("--brand-icon-size")).toBe("14px");
     expect(screen.queryByRole("button", { name: "Propagate credentials" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Current Config" })).toContainElement(
-      document.querySelector('[data-icon="current-config"]'),
-    );
+    expect(current).toContainElement(document.querySelector('[data-icon="current-config"]'));
     expect(screen.queryByText("Native Config")).not.toBeInTheDocument();
     expect(within(screen.getByRole("button", { name: "custom" })).queryByRole("img")).toBeNull();
     const warningMarker = screen.getByRole("img", {
@@ -394,12 +408,12 @@ describe("ConfigPage", () => {
       "current content",
     );
     expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Config editing context")).toHaveTextContent(
-      "TenantdefaultCoding AgentCodexConfigCurrent ConfigFileconfig.toml",
-    );
-    const fileContext = screen.getByTitle("config.toml + auth.json");
-    expect(fileContext).toHaveTextContent("config.toml + auth.json");
-    expect(fileContext).toHaveAttribute("title", "config.toml + auth.json");
+    expect(screen.getByRole("heading", { name: "Current Config" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Native content may contain credentials and is displayed without redaction.",
+      ),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select Configs" }));
     const protectedCurrent = screen.getByRole("button", {
       name: "Current Config cannot be selected",

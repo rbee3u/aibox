@@ -29,20 +29,24 @@ export function Fact({ icon, label, value, detail, tone, onClick }: FactProps) {
           {value}
         </StatusBadge>
       )}
-      <small title={detail}>{detail}</small>
     </>
   );
   return onClick ? (
     <button
       type="button"
-      className={`${styles.fact} ${styles[tone]}`}
+      className={`${styles.statusItem} ${styles.fact} ${styles[tone]}`}
       data-overview-fact
+      title={detail}
       onClick={onClick}
     >
       {content}
     </button>
   ) : (
-    <div className={`${styles.fact} ${styles[tone]}`} data-overview-fact>
+    <div
+      className={`${styles.statusItem} ${styles.fact} ${styles[tone]}`}
+      data-overview-fact
+      title={detail}
+    >
       {content}
     </div>
   );
@@ -66,7 +70,7 @@ export function Metadata({
   wide = false,
 }: MetadataProps) {
   return (
-    <div className={`${styles.metadata} ${wide ? styles.metadataWide : ""}`}>
+    <div className={`${styles.metadata} ${wide ? styles.metadataWide : ""}`} data-overview-meta>
       {icon}
       <span>{label}</span>
       <code className={mono ? styles.mono : undefined} title={title}>
@@ -86,15 +90,12 @@ interface RuntimeStatusProps {
 
 export function RuntimeStatus({ icon, label, value, detail, tone }: RuntimeStatusProps) {
   return (
-    <div className={styles.runtimeStatus}>
+    <div className={`${styles.statusItem} ${styles.runtimeStatus}`} title={detail}>
       <span className={`${styles.statusIcon} ${styles[tone]}`}>{icon}</span>
-      <div>
-        <span>{label}</span>
-        <StatusBadge tone={tone} variant="inline" className={styles.runtimeStatusValue}>
-          {value}
-        </StatusBadge>
-        <small title={detail}>{detail}</small>
-      </div>
+      <span className={styles.factLabel}>{label}</span>
+      <StatusBadge tone={tone} variant="inline" className={styles.runtimeStatusValue}>
+        {value}
+      </StatusBadge>
     </div>
   );
 }

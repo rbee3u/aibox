@@ -57,6 +57,16 @@ export function ConfigDetailPane({
   } = editor;
   const { setError } = feedback;
   const { mutationBusy, saveAll } = mutations;
+  const hostRisk = tenant.kind === "host";
+  const showUnredactedWarning = selection.current || agent === "codex" || editorMode === "raw";
+  const editorNotice = [
+    hostRisk ? "Host risk" : null,
+    showUnredactedWarning
+      ? "Native content may contain credentials and is displayed without redaction."
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   return (
     <section className={layout.detailPane}>
       {loadingTenants || loadingCatalog ? (
@@ -86,13 +96,14 @@ export function ConfigDetailPane({
               <ChevronLeft size={17} />
             </IconButton>
             <div className={styles.configContextStack}>
+              <h2 ref={detailHeadingRef} tabIndex={-1}>
+                {configSelectionLabel}
+              </h2>
+              {editorNotice ? <p className={styles.editorNotice}>{editorNotice}</p> : null}
               <div className={styles.contextFacts} aria-label="Config editing context">
                 <span>
                   <small>Tenant</small>
-                  <strong>
-                    {configTenantLabel}
-                    {tenant.kind === "host" && <em>Host risk</em>}
-                  </strong>
+                  <strong>{configTenantLabel}</strong>
                 </span>
                 <span>
                   <small>Coding Agent</small>
@@ -112,16 +123,6 @@ export function ConfigDetailPane({
                   </strong>
                 </span>
               </div>
-              {(selection.current || agent === "codex" || editorMode === "raw") && (
-                <span className={styles.sensitiveContext}>
-                  Native content may contain credentials and is displayed without redaction.
-                </span>
-              )}
-              <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {agent === "codex" && !selection.current
-                  ? "Codex configuration"
-                  : (file ?? "Configuration")}
-              </h2>
             </div>
           </div>
           <div className={styles.configFilePanel}>

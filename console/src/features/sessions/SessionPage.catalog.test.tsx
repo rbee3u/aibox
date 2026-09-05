@@ -51,7 +51,8 @@ describe("SessionPage", () => {
     );
     expect(within(session).getByText("First prompt", { selector: "strong" })).toBeInTheDocument();
     const metadata = session.querySelector("small");
-    expect(metadata).toHaveTextContent("default Codex");
+    expect(metadata).toHaveTextContent("2026-08-17 17:00:00");
+    expect(metadata).not.toHaveTextContent("default Codex");
     const sessionTime = within(metadata!).getByText("2026-08-17 17:00:00");
     expect(sessionTime.tagName).toBe("TIME");
     expect(sessionTime).toHaveAttribute("datetime", firstSession.start_ts);
@@ -101,6 +102,41 @@ describe("SessionPage", () => {
       );
     }
   });
+  it("promotes human catalog copy over skill paths and review boilerplate", async () => {
+    const { api } = fakeApi({
+      sessions: () =>
+        list([
+          {
+            ...firstSession,
+            title:
+              "[$improve-unit-tests](/Users/rbee3u/.agents/skills/code-craft-skills/improve-unit-tests/SKILL.md)",
+            latest_message: "已完善 SSE 观察上限相关单元测试",
+          },
+          {
+            ...secondSession,
+            title: "The following is the Codex agent history whose request action you must review",
+            latest_message: '{"risk_level":"low","outcome":"allow"}',
+          },
+        ]),
+    });
+    render(<SessionPage api={api} />);
+    const skill = await screen.findByRole("button", {
+      name: "已完善 SSE 观察上限相关单元测试, Tenant default · Codex",
+    });
+    expect(
+      within(skill).getByText("已完善 SSE 观察上限相关单元测试", { selector: "strong" }),
+    ).toBeInTheDocument();
+    expect(within(skill).getByText("improve-unit-tests")).toBeInTheDocument();
+    const review = screen.getByRole("button", {
+      name: "Codex request review, Tenant default · Codex",
+    });
+    expect(
+      within(review).getByText("Codex request review", { selector: "strong" }),
+    ).toBeInTheDocument();
+    expect(within(review).queryByText("No readable conversation content")).not.toBeInTheDocument();
+    expect(screen.queryByText(/The following is the Codex agent history/)).not.toBeInTheDocument();
+  });
+
   it("keeps a complete long Session title in the two-line summary", async () => {
     const title =
       "A deliberately long Session title that remains available after its visual two-line clamp";
@@ -166,6 +202,11 @@ describe("SessionPage", () => {
       name: "Coding Agent: 2 Coding Agents",
     });
     expect(multipleAgentTrigger).toHaveTextContent("2 Coding Agents");
+    expect(
+      screen
+        .getByRole("button", { name: "First prompt, Tenant default · Codex" })
+        .querySelector("small"),
+    ).toHaveTextContent("default Codex");
     await user.click(multipleAgentTrigger);
     menu = screen.getByRole("dialog", { name: "Coding Agent" });
     expect(within(menu).getByRole("checkbox", { name: "Codex" })).toBeChecked();

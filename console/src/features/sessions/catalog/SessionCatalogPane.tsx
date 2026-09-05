@@ -178,6 +178,7 @@ export function SessionCatalogPane({
             deletionBusy={deletionBusy}
             loadingList={loadingList}
             unsafeView={unsafeView}
+            showSource={selectedTenants.size > 1 || selectedAgents.size > 1}
             onOpen={() => void openSession(row)}
             onToggle={() => toggleSession(row.key)}
             onDelete={() => openSingleDelete(row)}

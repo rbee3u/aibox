@@ -61,6 +61,12 @@ export function componentLabel(kind: ComponentKind): string {
   return COMPONENT_LABELS[kind];
 }
 
+/** Accepts a Tenants `component=` query value, or ignores an unknown kind. */
+export function parseComponentKind(value: string | null | undefined): ComponentKind | null {
+  if (!value) return null;
+  return value in COMPONENT_LABELS ? (value as ComponentKind) : null;
+}
+
 export function isStatuslineComponent(
   kind: ComponentKind,
 ): kind is "codex-statusline" | "claude-statusline" {

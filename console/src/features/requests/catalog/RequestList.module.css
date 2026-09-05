@@ -95,26 +95,13 @@
     box-shadow var(--transition-fast);
 }
 
-.request::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
-  transition: background-color var(--transition-fast);
-}
-
 .request:hover {
   background: var(--surface-hover);
 }
 
 .current {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
   background: var(--surface-selected);
-}
-
-.current::before {
-  background: var(--accent);
 }
 
 .request.current:hover,
@@ -142,14 +129,14 @@
 
 .request.current .rowButton,
 .request.selected .rowButton {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .request.current .requestIcon,
 .request.selected .requestIcon,
 .request.current .targetHost,
 .request.selected .targetHost {
-  color: var(--accent);
+  color: var(--ink-secondary);
 }
 
 .rowButton {
@@ -245,6 +232,13 @@
   font-size: var(--catalog-row-secondary-size);
   font-weight: var(--weight-regular);
   line-height: var(--catalog-row-secondary-line-height);
+}
+
+.catalogIssueSlot {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
 }
 
 .modelMetadata,

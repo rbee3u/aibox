@@ -15,10 +15,11 @@ import { compactDuration, formatTimestamp } from "@/shared/lib/format";
 import { requestUrl } from "@/features/requests/requestFormat";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/requests/catalog/RequestList.module.css";
-import { RequestStatus } from "@/features/requests/RequestStatus";
+import { RequestCatalogIssue, RequestStatus } from "@/features/requests/RequestStatus";
 import {
   assessmentIssueText,
   assessmentPresentation,
+  catalogAssessmentPresentation,
 } from "@/features/requests/statusPresentation";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
@@ -298,6 +299,11 @@ export function RequestList({
             const timestampValue = request.ended_at ?? request.started_at;
             const timestamp = formatTimestamp(timestampValue);
             const issue = assessmentPresentation(request.assessment);
+            const catalogIssue = catalogAssessmentPresentation(
+              request.assessment,
+              request.status,
+              request.state,
+            );
             const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
@@ -356,10 +362,22 @@ export function RequestList({
                       assessment={request.assessment}
                     />
                   </span>
-                  <span className={styles.metadata}>
-                    <span className={styles.modelMetadata} title={modelDescription}>
-                      {compactModel}
-                    </span>
+                  <span
+                    className={styles.metadata}
+                    title={catalogIssue ? modelDescription : undefined}
+                  >
+                    {catalogIssue ? (
+                      <span className={styles.catalogIssueSlot}>
+                        <RequestCatalogIssue issue={catalogIssue} />
+                        <span id={metadataDescriptionId} className="srOnly">
+                          {metadataDescription}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className={styles.modelMetadata} title={modelDescription}>
+                        {compactModel}
+                      </span>
+                    )}
                     <span className={styles.timingMetadata}>
                       <span className={styles.timing} title={timingDescription}>
                         {firstToken} / {totalDuration}
@@ -372,9 +390,11 @@ export function RequestList({
                         {timestamp}
                       </time>
                     </span>
-                    <span id={metadataDescriptionId} className="srOnly">
-                      {metadataDescription}
-                    </span>
+                    {!catalogIssue && (
+                      <span id={metadataDescriptionId} className="srOnly">
+                        {metadataDescription}
+                      </span>
+                    )}
                   </span>
                   {selectionMode && (
                     <span className={styles.selectionIndicator} aria-hidden="true">

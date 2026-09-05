@@ -1,6 +1,6 @@
 import { ArrowUp, ChevronDown, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 import { createPortal } from "react-dom";
-import type { RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ComponentKind, ComponentRow } from "@/api/tenants";
 import { ComponentGlyph } from "@/features/tenants/detail/ComponentGlyph";
 import { type ComponentRowModel } from "@/features/tenants/componentCatalog";
@@ -30,6 +30,7 @@ interface ComponentRowItemProps {
   onToggleMenu: (anchor: HTMLButtonElement) => void;
   registerMenuButton: (element: HTMLButtonElement | null) => void;
   registerMenuItem: (element: HTMLButtonElement | null) => void;
+  highlighted?: boolean;
 }
 
 /**
@@ -56,8 +57,17 @@ export function ComponentRowItem({
   onToggleMenu,
   registerMenuButton,
   registerMenuItem,
+  highlighted = false,
 }: ComponentRowItemProps) {
   const { label, presentation, latest, diagnostic, primaryAction } = model;
+  const rowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!highlighted) return;
+    const node = rowRef.current;
+    if (!node || typeof node.scrollIntoView !== "function") return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    node.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+  }, [highlighted]);
   const menuOpen = openMenu === row.kind;
   const stateTone: StatusTone =
     row.error || !row.status
@@ -72,8 +82,10 @@ export function ComponentRowItem({
 
   return (
     <div
+      ref={rowRef}
       className={`${styles.componentRow} ${progressLabel ? styles.componentRowBusy : ""}`}
       role="listitem"
+      data-attention={highlighted ? "true" : undefined}
     >
       <span className={styles.componentIconTile} data-component-icon={row.kind}>
         <ComponentGlyph kind={row.kind} />

@@ -89,10 +89,11 @@ describe("ConfirmDialog", () => {
       />,
     );
 
-    const input = screen.getByRole("textbox");
+    const input = screen.getByRole("textbox", { name: "Type work to confirm" });
     const confirm = screen.getByRole("button", { name: "Delete" });
     expect(input).toHaveFocus();
     expect(confirm).toBeDisabled();
+    expect(input.closest("label")).toBeNull();
 
     fireEvent.change(input, { target: { value: "work" } });
     expect(confirm).toBeEnabled();
@@ -114,8 +115,9 @@ describe("ConfirmDialog", () => {
     );
 
     const phrase = screen.getByRole("button", { name: "Copy work" });
-    const input = screen.getByRole("textbox");
+    const input = screen.getByRole("textbox", { name: "Type work to confirm" });
     const confirm = screen.getByRole("button", { name: "Delete" });
+    expect(input.labels?.[0]?.contains(phrase)).toBe(false);
 
     await act(async () => {
       fireEvent.click(phrase);
@@ -156,7 +158,7 @@ describe("ConfirmDialog", () => {
     expect(within(dialog).getByText("Codex")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Present fields replace; omitted fixed fields are removed.");
     expect(within(dialog).getByRole("button", { name: "Apply" })).toHaveClass(
-      actionButtonStyles.primarySoft,
+      actionButtonStyles.primary,
     );
 
     const facts = dialog.querySelector("dl");
@@ -165,6 +167,7 @@ describe("ConfirmDialog", () => {
     );
     expect(facts).not.toBeNull();
     expect(facts!.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getComputedStyle(within(dialog).getByText("Tenant")).textTransform).toBe("none");
   });
 
   it("uses an explicit busy label for domain-specific actions", () => {

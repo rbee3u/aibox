@@ -66,10 +66,22 @@
 }
 
 .configRowText {
-  display: flex;
+  display: grid;
   min-width: 0;
   flex: 1;
   align-items: center;
+  gap: 2px;
+}
+
+.configRowMeta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--catalog-row-secondary-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--catalog-row-secondary-line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .configRowTitle {
@@ -126,7 +138,7 @@
 .configEditorHeader {
   display: flex;
   min-height: 46px;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
@@ -134,15 +146,17 @@
 
 .configEditorHeader > [data-icon-button]:first-child {
   display: none;
+  margin-top: 8px;
   margin-left: 8px;
 }
 
 .configEditorHeader h2 {
   min-width: 0;
   margin: 0;
-  padding: 0 24px;
   overflow: hidden;
-  font: var(--weight-semibold) var(--text-meta) / var(--line-height-meta) var(--font-mono);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -474,8 +488,7 @@
   white-space: nowrap;
 }
 
-.visualTextControl input,
-.visualField select {
+.visualTextControl input {
   width: 100%;
   min-width: 0;
   min-height: 32px;
@@ -485,6 +498,12 @@
   color: var(--ink);
   background: var(--surface);
   font-size: var(--text-xs);
+}
+
+.visualFieldSelect {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .visualTextControl [data-icon-button] {
@@ -547,15 +566,11 @@
   min-width: 0;
   flex: 1;
   gap: 4px;
+  padding: 10px 24px;
 }
 
 .contextFacts {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(90px, auto));
-  align-items: center;
-  gap: 6px 18px;
-  padding: 7px 24px 2px;
+  display: none;
 }
 
 .contextFacts > span {
@@ -582,22 +597,12 @@
 }
 
 .contextFile {
+  color: var(--code-muted);
   font-family: var(--font-mono);
 }
 
-.contextFacts em {
-  flex: 0 0 auto;
-  border: 1px solid var(--warning-line);
-  border-radius: var(--radius-pill);
-  padding: 2px 6px;
-  color: var(--warning);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-  font-style: normal;
-}
-
-.sensitiveContext {
-  padding: 0 24px 3px;
+.editorNotice {
+  margin: 0;
   color: var(--warning);
   font-size: var(--text-xs);
 }
@@ -638,10 +643,6 @@
 }
 
 @media (max-width: 760px) {
-  .configEditorHeader {
-    align-items: flex-start;
-  }
-
   .contextFile {
     overflow: visible;
     text-overflow: clip;
@@ -650,8 +651,12 @@
   }
 
   .contextFacts {
+    display: grid;
+    min-width: 0;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding-right: 10px;
+    align-items: start;
+    gap: 6px 18px;
+    padding-top: 4px;
   }
 
   .editorTools {

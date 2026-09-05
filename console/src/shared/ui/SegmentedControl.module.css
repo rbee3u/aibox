@@ -47,7 +47,7 @@
 .filled > button[aria-pressed="true"]:hover:not(:disabled) {
   border-color: transparent;
   background: var(--surface-selected);
-  color: var(--accent);
+  color: var(--ink);
   box-shadow: none;
 }
 
@@ -80,13 +80,13 @@
 
 .tabs > button[aria-selected="true"] {
   background: var(--surface-selected);
-  color: var(--accent);
-  box-shadow: inset 0 -2px var(--accent);
+  color: var(--ink);
+  box-shadow: none;
 }
 
 .tabs > button[aria-selected="true"]:hover:not(:disabled) {
   background: var(--surface-selected);
-  color: var(--accent);
+  color: var(--ink);
 }
 
 @container (max-width: 520px) {

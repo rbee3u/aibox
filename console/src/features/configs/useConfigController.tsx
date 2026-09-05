@@ -48,8 +48,11 @@ interface ControllerOptions {
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onCancelLeave?: () => void;
+  onContinueLeave?: () => void | Promise<void>;
   onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
+  pendingLeave?: boolean;
 }
 
 export interface ConfigViewModel {
@@ -120,6 +123,7 @@ export interface ConfigViewModel {
     closePropagation: () => void;
     createError: string | null;
     createHelpId: string;
+    createNameTaken: boolean;
     createNameValid: boolean;
     createOpen: boolean;
     createTitleId: string;
@@ -165,7 +169,10 @@ export function useConfigController({
   operation,
   search,
   onDirtyChange,
+  onCancelLeave,
+  onContinueLeave,
   onLocationChange,
+  pendingLeave,
 }: ControllerOptions): ConfigViewModel {
   const route = useMemo(() => readConfigRoute(search), [search]);
   const { agent, detailOpen, selection, tenant } = route;
@@ -283,6 +290,11 @@ export function useConfigController({
     `${selectedTenantSelectionValue}:${agent}`,
     onDirtyChange,
     setError,
+    {
+      pending: pendingLeave,
+      onCancel: onCancelLeave,
+      onContinue: onContinueLeave,
+    },
   );
   const crud = useConfigCrud({
     agent,
@@ -436,6 +448,7 @@ export function useConfigController({
     }
   }
   const createNameValid = DNS_LABEL_PATTERN.test(crud.dialogs.newName);
+  const createNameTaken = (catalog?.configs ?? []).some((row) => row.name === crud.dialogs.newName);
   return {
     catalog: {
       agent,
@@ -495,6 +508,7 @@ export function useConfigController({
       ...propagation.dialogs,
       cancelPending,
       createHelpId,
+      createNameTaken,
       createNameValid,
       createTitleId,
       discardAndRunPendingAction,

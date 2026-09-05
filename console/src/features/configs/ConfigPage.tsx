@@ -13,8 +13,11 @@ interface PageProps {
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onCancelLeave?: () => void;
+  onContinueLeave?: () => void | Promise<void>;
   onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
+  pendingLeave?: boolean;
 }
 
 export function ConfigPage(props: PageProps) {

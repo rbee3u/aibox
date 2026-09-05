@@ -1,28 +1,27 @@
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, Circle, X } from "lucide-react";
-import type { TopologyNode } from "@/features/overview/topology/coreTree";
+import { inspectorFacts, type TopologyNode } from "@/features/overview/topology/coreTree";
 import styles from "@/features/overview/OverviewPage.module.css";
 
 export function TopologyInspector({
   node,
   onClose,
   onNavigate,
-  style,
 }: {
   node: TopologyNode;
   onClose: () => void;
   onNavigate: ConsoleNavigate;
-  style?: { top: number; left: number };
 }) {
   const children = node.children;
+  const facts = inspectorFacts(node);
   const tone = node.tone;
 
   return (
     <aside
       className={styles.topologyInspector}
+      role="complementary"
       aria-label={`${node.label} details`}
       data-topology-popover
-      style={style}
     >
       <div className={styles.inspectorHeader}>
         <div>
@@ -47,9 +46,18 @@ export function TopologyInspector({
           <AlertTriangle size={16} />
         )}
         <span>{statusLabel(tone)}</span>
-        {node.detail && <small title={node.tooltip ?? node.detail}>{node.detail}</small>}
       </div>
       {node.title && <p className={styles.inspectorEvidence}>{node.title}</p>}
+      {facts.length > 0 && (
+        <div className={styles.inspectorList}>
+          {facts.map((fact) => (
+            <div className={styles.inspectorRow} key={fact.label}>
+              <span>{fact.label}</span>
+              <small title={fact.value}>{fact.value}</small>
+            </div>
+          ))}
+        </div>
+      )}
       {children.length > 0 && (
         <div className={styles.inspectorSection}>
           <div className={styles.inspectorSectionHeading}>

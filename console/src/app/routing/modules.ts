@@ -7,31 +7,15 @@ export const CONSOLE_BASE_PATH = "/_aibox/ui";
 export interface ConsoleModule {
   id: ModuleId;
   label: string;
-  detail: string;
   icon: LucideIcon;
 }
 
 export const consoleModules: readonly ConsoleModule[] = [
-  { id: "overview", label: "Overview", detail: "Service and topology", icon: moduleIcons.overview },
-  { id: "tenants", label: "Tenants", detail: "Tenant Components", icon: moduleIcons.tenants },
-  {
-    id: "configs",
-    label: "Configs",
-    detail: "Current and Named Configs",
-    icon: moduleIcons.configs,
-  },
-  {
-    id: "sessions",
-    label: "Sessions",
-    detail: "Coding Agent transcripts",
-    icon: moduleIcons.sessions,
-  },
-  {
-    id: "requests",
-    label: "Requests",
-    detail: "Request diagnostics",
-    icon: moduleIcons.requests,
-  },
+  { id: "overview", label: "Overview", icon: moduleIcons.overview },
+  { id: "tenants", label: "Tenants", icon: moduleIcons.tenants },
+  { id: "configs", label: "Configs", icon: moduleIcons.configs },
+  { id: "sessions", label: "Sessions", icon: moduleIcons.sessions },
+  { id: "requests", label: "Requests", icon: moduleIcons.requests },
 ];
 
 export const DEFAULT_MODULE: ModuleId = "overview";

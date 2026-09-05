@@ -1,4 +1,9 @@
-import type { ConfigCatalogEntry, ConfigCustomProvider, PropagationOutcome } from "@/api/configs";
+import type {
+  ConfigCatalogEntry,
+  ConfigCustomProvider,
+  ConfigDrift,
+  PropagationOutcome,
+} from "@/api/configs";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
 import { configTenantSelectionValue } from "@/features/configs/route";
@@ -46,6 +51,13 @@ export function configIssueDescriptionId(
   name: string,
 ): string {
   return `config-issue-${configTenantSelectionValue(tenant).replace(":", "-")}-${agent}-${name}`;
+}
+
+export const lastAppliedDescriptionId = "config-last-applied";
+
+export function lastAppliedMeta(applied: string, drift?: ConfigDrift): string {
+  const base = `Last applied ${applied}`;
+  return drift === "dirty" ? `${base} · differs` : base;
 }
 export function propagationGroup(
   status: PropagationOutcome["status"],

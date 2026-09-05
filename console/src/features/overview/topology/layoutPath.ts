@@ -171,7 +171,7 @@ export function topologyNodeSize(icon: TreeIcon): {
     return { width: 184, height: 58, kind: "entity" };
   }
   if (["config", "component"].includes(icon)) {
-    return { width: 160, height: 38, kind: "leaf" };
+    return { width: 184, height: 38, kind: "leaf" };
   }
   return { width: 168, height: 46, kind: "group" };
 }

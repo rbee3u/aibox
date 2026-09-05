@@ -1,10 +1,17 @@
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
+import type { ComponentKind } from "@/api/tenants";
 import {
   attentionCountLabel,
+  componentLabel,
+  healthyDefaultExpansion,
   namedCatalogLocation,
   orderTenants,
+  tenantComponentLocation,
+  tenantId,
+  tenantLocation,
   tenantSelection,
+  type AttentionItem,
   type NavigationTarget,
 } from "@/features/overview/topology/coreTree";
 import type { Tone } from "@/features/overview/viewTypes";
@@ -32,40 +39,183 @@ export function configAttentionTarget(
   else query.set("current", "1");
   return { module: "configs", query };
 }
-export function firstConfigAttentionTarget(data: TopologyData): NavigationTarget {
+export interface AttentionTarget {
+  target: NavigationTarget;
+  subject: string;
+}
+
+function agentTitle(agent: TopologyAgent): string {
+  return agent.agent === "codex" ? "Codex" : "Claude";
+}
+
+function attentionScope(tenant: TopologyTenant, agent?: TopologyAgent): string {
+  return agent ? `${tenant.display_name} · ${agentTitle(agent)}` : tenant.display_name;
+}
+
+export function attentionTargetDetail(subject: string, total: number): string {
+  return total > 1 ? `${subject} · +${total - 1} more` : subject;
+}
+
+type NamedAttentionState = "incomplete" | "invalid";
+
+type ConfigAttentionHit =
+  | { tenant: TopologyTenant; agent: TopologyAgent; kind: "current" }
+  | {
+      tenant: TopologyTenant;
+      agent: TopologyAgent;
+      kind: "named";
+      name: string;
+      state: NamedAttentionState;
+    }
+  | { tenant: TopologyTenant; agent: TopologyAgent; kind: "catalog" };
+
+function currentConfigReason(agent: TopologyAgent): string {
+  if (agent.current_config.error) return "Current Config inspection failed";
+  if (agent.application.drift === "dirty") return "Current Config is dirty";
+  if (agent.application.drift === "source-missing") return "Current Config source is missing";
+  if (agent.application.drift === "comparison-error") return "Current Config comparison failed";
+  return "Current Config";
+}
+
+function namedConfigReason(name: string, state: NamedAttentionState): string {
+  return state === "invalid" ? `${name} is invalid` : `${name} is incomplete`;
+}
+
+function firstConfigAttentionHit(data: TopologyData): ConfigAttentionHit | null {
   for (const tenant of orderTenants(data.tenants)) {
     for (const agent of tenant.agents) {
       if (
         agent.current_config.error ||
         ["dirty", "source-missing", "comparison-error"].includes(agent.application.drift)
       ) {
-        return configAttentionTarget(tenant, agent);
+        return { tenant, agent, kind: "current" };
       }
       const entry = agent.named_configs.attention.find(
         (candidate) => candidate.state === "incomplete" || candidate.state === "invalid",
       );
-      if (entry) return configAttentionTarget(tenant, agent, entry.name);
-      if (agent.named_configs.error) {
-        return {
-          module: "configs",
-          query: namedCatalogLocation(tenantSelection(tenant), agent.agent),
-        };
+      if (entry && (entry.state === "incomplete" || entry.state === "invalid")) {
+        return { tenant, agent, kind: "named", name: entry.name, state: entry.state };
       }
+      if (agent.named_configs.error) return { tenant, agent, kind: "catalog" };
     }
   }
-  return { module: "configs" };
+  return null;
 }
-export function firstComponentAttentionTarget(data: TopologyData): NavigationTarget {
+
+export function firstConfigAttention(data: TopologyData): AttentionTarget {
+  const hit = firstConfigAttentionHit(data);
+  if (!hit) return { target: { module: "configs" }, subject: "Named Configs" };
+  const scope = attentionScope(hit.tenant, hit.agent);
+  if (hit.kind === "named") {
+    return {
+      target: configAttentionTarget(hit.tenant, hit.agent, hit.name),
+      subject: `${scope} · ${namedConfigReason(hit.name, hit.state)}`,
+    };
+  }
+  if (hit.kind === "catalog") {
+    return {
+      target: {
+        module: "configs",
+        query: namedCatalogLocation(tenantSelection(hit.tenant), hit.agent.agent),
+      },
+      subject: `${scope} · Named Configs inspection failed`,
+    };
+  }
+  return {
+    target: configAttentionTarget(hit.tenant, hit.agent),
+    subject: `${scope} · ${currentConfigReason(hit.agent)}`,
+  };
+}
+
+export function firstConfigAttentionTarget(data: TopologyData): NavigationTarget {
+  return firstConfigAttention(data).target;
+}
+
+export function configAttentionItem(data: TopologyData, health: TopologyHealth): AttentionItem {
+  const { target, subject } = firstConfigAttention(data);
+  return {
+    label: "Configs",
+    detail: attentionTargetDetail(subject, health.configAttention),
+    tone: health.configErrors ? "error" : "warning",
+    target,
+  };
+}
+
+function componentAttentionReason(input: {
+  kind: ComponentKind | null;
+  status?: string | null;
+  error?: string | null;
+}): string {
+  if (!input.kind) return "Components inspection failed";
+  const label = componentLabel(input.kind);
+  if (input.error) return `${label} inspection failed`;
+  if (input.status === "modified") return `${label} is modified`;
+  if (input.status === "incomplete") return `${label} is incomplete`;
+  if (input.status === "unmanaged") return `${label} is unmanaged`;
+  return label;
+}
+
+function firstComponentAttentionHit(data: TopologyData): {
+  tenant: TopologyTenant;
+  kind: ComponentKind | null;
+  status?: string | null;
+  error?: string | null;
+} | null {
   for (const tenant of orderTenants(data.tenants)) {
-    const query = new URLSearchParams();
-    query.set("tenant", attentionTenant(tenant));
-    const hasAttention = tenant.components.attention.some(
+    const entry = tenant.components.attention.find(
       (candidate) =>
         candidate.error || ["modified", "incomplete", "unmanaged"].includes(candidate.status ?? ""),
     );
-    if (hasAttention || tenant.components.error) return { module: "tenants", query };
+    if (entry) {
+      return { tenant, kind: entry.kind, status: entry.status, error: entry.error };
+    }
+    if (tenant.components.error) return { tenant, kind: null, error: tenant.components.error };
   }
-  return { module: "tenants" };
+  return null;
+}
+
+export function firstComponentAttention(data: TopologyData): AttentionTarget {
+  const hit = firstComponentAttentionHit(data);
+  if (!hit) return { target: { module: "tenants" }, subject: "Components" };
+  const tenant = tenantSelection(hit.tenant);
+  const query = hit.kind ? tenantComponentLocation(tenant, hit.kind) : tenantLocation(tenant);
+  return {
+    target: { module: "tenants", query },
+    subject: `${attentionScope(hit.tenant)} · ${componentAttentionReason(hit)}`,
+  };
+}
+
+export function defaultExpansion(data: TopologyData): Set<string> {
+  const health = summarizeTopology(data);
+  if (health.configAttention) {
+    const hit = firstConfigAttentionHit(data);
+    if (hit) {
+      const base = tenantId(hit.tenant);
+      return new Set([base, `${base}/agent:${hit.agent.agent}`]);
+    }
+  }
+  if (health.componentAttention) {
+    const hit = firstComponentAttentionHit(data);
+    if (hit) {
+      const base = tenantId(hit.tenant);
+      return new Set([base, `${base}/components`]);
+    }
+  }
+  return healthyDefaultExpansion(data);
+}
+
+export function firstComponentAttentionTarget(data: TopologyData): NavigationTarget {
+  return firstComponentAttention(data).target;
+}
+
+export function componentAttentionItem(data: TopologyData, health: TopologyHealth): AttentionItem {
+  const { target, subject } = firstComponentAttention(data);
+  return {
+    label: "Components",
+    detail: attentionTargetDetail(subject, health.componentAttention),
+    tone: health.componentErrors ? "error" : "warning",
+    target,
+  };
 }
 export function summarizeTopology(data: TopologyData): TopologyHealth {
   const summary: TopologyHealth = {

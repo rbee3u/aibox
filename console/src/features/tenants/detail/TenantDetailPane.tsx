@@ -24,6 +24,7 @@ export function TenantDetailPane({
 }) {
   const {
     attentionComponentCount,
+    attentionKind,
     checkingLatest,
     checkForUpdates,
     componentActionProgress,
@@ -107,45 +108,38 @@ export function TenantDetailPane({
                   </div>
                 </div>
               </div>
-              <div className={styles.componentHeaderMeta} aria-label="Component summary">
-                {componentCatalogLoading ? (
-                  <span className={styles.componentHeaderLoading}>Loading…</span>
-                ) : (
-                  <>
-                    <span className={styles.componentInstalledSummary}>
-                      <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
-                    </span>
-                    {attentionComponentCount > 0 && (
-                      <span className={styles.componentSummaryAttention}>
-                        {attentionComponentCount}{" "}
-                        {attentionComponentCount === 1 ? "issue" : "issues"}
-                      </span>
-                    )}
-                  </>
-                )}
-                <div className={styles.componentCheckStatus}>
-                  {latestSnapshot ? (
-                    <time
-                      dateTime={latestSnapshot.checked_at}
-                      title={new Date(latestSnapshot.checked_at).toLocaleString()}
-                    >
-                      Checked {relativeTimeLabel(latestSnapshot.checked_at)}
-                    </time>
+              <div className={styles.componentHeaderMeta}>
+                <div className={styles.componentSummary} aria-label="Component summary">
+                  {componentCatalogLoading ? (
+                    <span className={styles.componentHeaderLoading}>Loading…</span>
                   ) : (
-                    <span>Not checked</span>
+                    <>
+                      <span className={styles.componentInstalledSummary}>
+                        <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
+                      </span>
+                      {attentionComponentCount > 0 && (
+                        <span className={styles.componentSummaryAttention}>
+                          {attentionComponentCount}{" "}
+                          {attentionComponentCount === 1 ? "issue" : "issues"}
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
                 <RefreshButton
                   className={styles.componentCheckButton}
                   tone="ghost"
-                  label="Check for updates"
+                  iconOnly
+                  label={
+                    latestSnapshot
+                      ? `Check for updates, checked ${relativeTimeLabel(latestSnapshot.checked_at)}`
+                      : "Check for updates"
+                  }
                   busy={checkingLatest}
                   busyLabel="Checking for updates"
                   disabled={checkingLatest}
                   onClick={() => void checkForUpdates()}
-                >
-                  Check for updates
-                </RefreshButton>
+                />
               </div>
             </div>
           </div>
@@ -181,6 +175,7 @@ export function TenantDetailPane({
                               row={row}
                               model={model}
                               expanded={isComponentExpanded(row.kind)}
+                              highlighted={attentionKind === row.kind}
                               progressLabel={rowProgress}
                               busy={busy}
                               mutationBusy={mutationBusy}

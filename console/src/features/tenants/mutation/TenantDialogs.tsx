@@ -26,6 +26,7 @@ export function TenantDialogs({
     closeCreateDialog,
     createError,
     createHelpId,
+    createNameTaken,
     createNameValid,
     createOpen,
     createTitleId,
@@ -53,7 +54,7 @@ export function TenantDialogs({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !mutationBusy) void createTenant();
+              if (createNameValid && !createNameTaken && !mutationBusy) void createTenant();
             }}
           >
             <h2 id={createTitleId}>Create Managed Tenant</h2>
@@ -64,7 +65,7 @@ export function TenantDialogs({
                 aria-label="Tenant name"
                 value={newName}
                 onChange={(event) => changeNewName(event.target.value)}
-                aria-invalid={newName.length > 0 && !createNameValid}
+                aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
                 aria-describedby={createHelpId}
               />
             </label>
@@ -79,6 +80,15 @@ export function TenantDialogs({
                 icon={<AlertTriangle size={15} aria-hidden="true" />}
               >
                 Enter a valid lowercase DNS label.
+              </AlertBanner>
+            )}
+            {createNameValid && createNameTaken && (
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
+                Managed Tenant {newName} already exists.
               </AlertBanner>
             )}
             {createError && (
@@ -101,8 +111,8 @@ export function TenantDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
-                disabled={!createNameValid || mutationBusy}
+                tone="primary"
+                disabled={!createNameValid || createNameTaken || mutationBusy}
               >
                 {busy ? (
                   <>
@@ -212,7 +222,7 @@ export function TenantDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
+                tone="primary"
                 disabled={!specificVersionValid || mutationBusy}
               >
                 {mutationBusy ? (

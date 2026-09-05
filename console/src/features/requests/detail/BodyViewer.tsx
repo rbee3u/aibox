@@ -9,19 +9,24 @@ import {
   decodeUtf8,
   eventAbsoluteTime,
   eventRelativeTime,
+  groupSseEventsWithoutPreview,
   isEncodedContentCoding,
   isJsonMediaType,
   isSseResponse,
   parseJson,
   parseSse,
-  sseEventTypes,
+  presentSseEvent,
   shouldDeferPretty,
+  shouldPinSseListToBottom,
+  sseEventRunLabel,
   stringifyJson,
   type ContentCoding,
   type ParsedSseEvent,
+  type PresentedSseEvent,
+  type SseListEntry,
 } from "@/features/requests/detail/bodyPresentation";
 import type { BodyViewMemory } from "@/features/requests/detail/bodyViewMemory";
-import type { BodyKind, EventTimingIndex, RequestDetail } from "@/api/requests";
+import type { BodyKind, EventTimingEntry, EventTimingIndex, RequestDetail } from "@/api/requests";
 import type { BodyLoadStatus, DecodedBodyState } from "@/features/requests/viewTypes";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { concatChunks, formatByteSize, hex } from "@/shared/lib/format";
@@ -119,6 +124,7 @@ export function BodyViewer({
   } else if (resolvedMode === "pretty" && parsedEvents) {
     bodyContent = (
       <SseEventList
+        requestId={detail.request.id}
         events={parsedEvents.events}
         partial={parsedEvents.hasPartialTail}
         active={detail.state === "active"}
@@ -221,9 +227,9 @@ export function BodyViewer({
           </button>
         </div>
       </div>
-      <AlertBanner className={styles.bodyNotice} tone="warning" role="note">
+      <p className={styles.sensitiveContext}>
         Raw Body data may contain sensitive values and is displayed without redaction.
-      </AlertBanner>
+      </p>
       {bodyContent}
     </>
   );
@@ -273,6 +279,7 @@ function SourceView({
 }
 
 function SseEventList({
+  requestId,
   events,
   partial,
   active,
@@ -281,6 +288,7 @@ function SseEventList({
   memory,
   onMemoryChange,
 }: {
+  requestId: string;
   events: ParsedSseEvent[];
   partial: boolean;
   active: boolean;
@@ -296,19 +304,22 @@ function SseEventList({
     () => new Map((timings?.events ?? []).map((timing) => [timing.sequence, timing])),
     [timings],
   );
-  const presentedEvents = useMemo(
-    () =>
-      events.map((event) => {
-        const parsed = parseJson(event.data);
-        return { event, parsed, types: sseEventTypes(event, parsed) };
-      }),
-    [events],
+  const presentedEvents = useMemo(() => events.map(presentSseEvent), [events]);
+  const listEntries = useMemo(
+    () => groupSseEventsWithoutPreview(presentedEvents),
+    [presentedEvents],
   );
 
   useLayoutEffect(() => {
+    followBottom.current = true;
+  }, [requestId]);
+
+  useLayoutEffect(() => {
     const list = listRef.current;
-    if (list && followBottom.current) list.scrollTop = list.scrollHeight;
-  }, [events.length]);
+    if (list && shouldPinSseListToBottom(active, followBottom.current)) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [active, events.length, requestId]);
 
   function copyEvent(event: ParsedSseEvent, parsed: ReturnType<typeof parseJson>) {
     const content = parsed.ok ? stringifyJson(parsed.value, true) : event.data;
@@ -333,88 +344,31 @@ function SseEventList({
             element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
         }}
       >
-        {presentedEvents.map(({ event, parsed, types }) => {
-          const open = memory.expandedEvents.has(event.sequence);
-          const timing = timingBySequence.get(event.sequence);
-          return (
-            <article role="listitem" className={styles.eventCard} key={event.sequence}>
-              <div className={styles.eventHeader}>
-                <button
-                  type="button"
-                  className={styles.eventToggle}
-                  aria-expanded={open}
-                  onClick={() =>
-                    onMemoryChange({
-                      ...memory,
-                      expandedEvents: toggleSet(memory.expandedEvents, event.sequence),
-                    })
-                  }
-                >
-                  {open ? (
-                    <ChevronDown size={15} aria-hidden="true" />
-                  ) : (
-                    <ChevronRight size={15} aria-hidden="true" />
-                  )}
-                  <span className={styles.eventSequence}>#{event.sequence + 1}</span>
-                  <strong>{types.primary}</strong>
-                  {types.secondary && (
-                    <span className={styles.eventSecondary}>{types.secondary}</span>
-                  )}
-                </button>
-                <span
-                  className={styles.eventTime}
-                  title={timing ? eventAbsoluteTime(observedAt, timing.completed_at_ns) : undefined}
-                >
-                  {timing ? eventRelativeTime(timing.completed_at_ns) : "Time unavailable"}
-                </span>
-                <button
-                  type="button"
-                  className={styles.eventCopy}
-                  onClick={() => copyEvent(event, parsed)}
-                  aria-label={
-                    copiedEvent === event.sequence ? "SSE Event data copied" : "Copy SSE Event data"
-                  }
-                  title={
-                    copiedEvent === event.sequence ? "SSE Event data copied" : "Copy SSE Event data"
-                  }
-                >
-                  {copiedEvent === event.sequence ? (
-                    <Check size={14} aria-hidden="true" />
-                  ) : (
-                    <Clipboard size={14} aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-              {open && (
-                <div className={styles.eventBody}>
-                  {parsed.ok ? (
-                    <JsonTree
-                      compact
-                      value={parsed.value}
-                      pathPrefix={`$event/${event.sequence}`}
-                      expanded={memory.expandedNodes}
-                      expandedStrings={memory.expandedStrings}
-                      onToggle={(path) =>
-                        onMemoryChange({
-                          ...memory,
-                          expandedNodes: toggleSet(memory.expandedNodes, path),
-                        })
-                      }
-                      onToggleString={(path) =>
-                        onMemoryChange({
-                          ...memory,
-                          expandedStrings: toggleSet(memory.expandedStrings, path),
-                        })
-                      }
-                    />
-                  ) : (
-                    <pre>{event.data || "(empty data)"}</pre>
-                  )}
-                </div>
-              )}
-            </article>
-          );
-        })}
+        {listEntries.map((entry) =>
+          entry.kind === "event" ? (
+            <SseEventCard
+              key={entry.item.event.sequence}
+              presented={entry.item}
+              observedAt={observedAt}
+              timing={timingBySequence.get(entry.item.event.sequence)}
+              copied={copiedEvent === entry.item.event.sequence}
+              memory={memory}
+              onMemoryChange={onMemoryChange}
+              onCopy={() => copyEvent(entry.item.event, entry.item.parsed)}
+            />
+          ) : (
+            <SseEventRun
+              key={`run-${entry.items[0].event.sequence}`}
+              entry={entry}
+              observedAt={observedAt}
+              timingBySequence={timingBySequence}
+              copiedEvent={copiedEvent}
+              memory={memory}
+              onMemoryChange={onMemoryChange}
+              onCopy={copyEvent}
+            />
+          ),
+        )}
         {events.length === 0 && <p className={styles.emptyEvents}>No complete SSE Events yet.</p>}
         {partial && (
           <p className={styles.partialEvent}>
@@ -423,6 +377,175 @@ function SseEventList({
         )}
       </div>
     </div>
+  );
+}
+
+function SseEventRun({
+  entry,
+  observedAt,
+  timingBySequence,
+  copiedEvent,
+  memory,
+  onMemoryChange,
+  onCopy,
+}: {
+  entry: Extract<SseListEntry, { kind: "run" }>;
+  observedAt: string;
+  timingBySequence: Map<number, EventTimingEntry>;
+  copiedEvent: number | null;
+  memory: BodyViewMemory;
+  onMemoryChange: (memory: BodyViewMemory) => void;
+  onCopy: (event: ParsedSseEvent, parsed: PresentedSseEvent["parsed"]) => void;
+}) {
+  const runKey = entry.items[0].event.sequence;
+  const open = memory.expandedEventRuns.has(runKey);
+  const label = sseEventRunLabel(entry);
+  const first = entry.items[0].event.sequence + 1;
+  const last = entry.items[entry.items.length - 1].event.sequence + 1;
+
+  return (
+    <article role="listitem" className={styles.eventCard}>
+      <div className={styles.eventHeader}>
+        <button
+          type="button"
+          className={styles.eventToggle}
+          aria-expanded={open}
+          aria-label={`${entry.items.length} ${entry.type} events, #${first} to #${last}`}
+          onClick={() =>
+            onMemoryChange({
+              ...memory,
+              expandedEventRuns: toggleSet(memory.expandedEventRuns, runKey),
+            })
+          }
+        >
+          <span className={styles.eventToggleLead}>
+            {open ? (
+              <ChevronDown size={15} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={15} aria-hidden="true" />
+            )}
+            <strong className={styles.eventRunLabel}>{label}</strong>
+          </span>
+        </button>
+      </div>
+      {open && (
+        <div
+          role="list"
+          className={styles.eventRunList}
+          aria-label={`${entry.type} events #${first} to #${last}`}
+        >
+          {entry.items.map((item) => (
+            <SseEventCard
+              key={item.event.sequence}
+              presented={item}
+              observedAt={observedAt}
+              timing={timingBySequence.get(item.event.sequence)}
+              copied={copiedEvent === item.event.sequence}
+              memory={memory}
+              onMemoryChange={onMemoryChange}
+              onCopy={() => onCopy(item.event, item.parsed)}
+            />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function SseEventCard({
+  presented,
+  observedAt,
+  timing,
+  copied,
+  memory,
+  onMemoryChange,
+  onCopy,
+}: {
+  presented: PresentedSseEvent;
+  observedAt: string;
+  timing: EventTimingEntry | undefined;
+  copied: boolean;
+  memory: BodyViewMemory;
+  onMemoryChange: (memory: BodyViewMemory) => void;
+  onCopy: () => void;
+}) {
+  const { event, parsed, types, preview } = presented;
+  const open = memory.expandedEvents.has(event.sequence);
+
+  return (
+    <article role="listitem" className={styles.eventCard}>
+      <div className={styles.eventHeader}>
+        <button
+          type="button"
+          className={styles.eventToggle}
+          aria-expanded={open}
+          onClick={() =>
+            onMemoryChange({
+              ...memory,
+              expandedEvents: toggleSet(memory.expandedEvents, event.sequence),
+            })
+          }
+        >
+          <span className={styles.eventToggleLead}>
+            {open ? (
+              <ChevronDown size={15} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={15} aria-hidden="true" />
+            )}
+            <span className={styles.eventSequence}>#{event.sequence + 1}</span>
+            <strong>{types.primary}</strong>
+            {types.secondary && <span className={styles.eventSecondary}>{types.secondary}</span>}
+          </span>
+          {preview && <span className={styles.eventPreview}>{preview}</span>}
+        </button>
+        <span
+          className={styles.eventTime}
+          title={timing ? eventAbsoluteTime(observedAt, timing.completed_at_ns) : undefined}
+        >
+          {timing ? eventRelativeTime(timing.completed_at_ns) : "Time unavailable"}
+        </span>
+        <button
+          type="button"
+          className={styles.eventCopy}
+          onClick={onCopy}
+          aria-label={copied ? "SSE Event data copied" : "Copy SSE Event data"}
+          title={copied ? "SSE Event data copied" : "Copy SSE Event data"}
+        >
+          {copied ? (
+            <Check size={14} aria-hidden="true" />
+          ) : (
+            <Clipboard size={14} aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      {open && (
+        <div className={styles.eventBody}>
+          {parsed.ok ? (
+            <JsonTree
+              compact
+              value={parsed.value}
+              pathPrefix={`$event/${event.sequence}`}
+              expanded={memory.expandedNodes}
+              expandedStrings={memory.expandedStrings}
+              onToggle={(path) =>
+                onMemoryChange({
+                  ...memory,
+                  expandedNodes: toggleSet(memory.expandedNodes, path),
+                })
+              }
+              onToggleString={(path) =>
+                onMemoryChange({
+                  ...memory,
+                  expandedStrings: toggleSet(memory.expandedStrings, path),
+                })
+              }
+            />
+          ) : (
+            <pre>{event.data || "(empty data)"}</pre>
+          )}
+        </div>
+      )}
+    </article>
   );
 }
 

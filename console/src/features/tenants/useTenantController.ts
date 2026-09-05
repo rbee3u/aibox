@@ -12,7 +12,7 @@ import type {
 import { allSelected } from "@/features/common/catalogSelection";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 import { hostTenant, managedTenants } from "@/features/common/tenantOptions";
-import type { ComponentGroup } from "@/features/tenants/componentCatalog";
+import { parseComponentKind, type ComponentGroup } from "@/features/tenants/componentCatalog";
 import {
   fallbackTenantSelectionValue,
   tenantSelectionValueOf,
@@ -102,6 +102,7 @@ export interface TenantViewModel {
       install: boolean,
       requestedVersion?: string | null,
     ) => Promise<boolean>;
+    attentionKind: ComponentKind | null;
     openComponentMenu: (kind: ComponentKind, anchor: HTMLElement, width: number) => void;
     openMenu: ComponentKind | null;
     openSpecificVersion: (row: ComponentRow, mode: ComponentSpecificVersionTarget["mode"]) => void;
@@ -128,6 +129,7 @@ export interface TenantViewModel {
     componentRemoveTarget: ComponentRemoveTarget | null;
     createError: string | null;
     createHelpId: string;
+    createNameTaken: boolean;
     createNameValid: boolean;
     createOpen: boolean;
     createTitleId: string;
@@ -177,6 +179,15 @@ export function useTenantController({
   } = workflow;
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [componentAttention, setComponentAttention] = useState<{
+    tenant: TenantSelectionValue;
+    kind: ComponentKind;
+  } | null>(() => {
+    const query = new URLSearchParams(search);
+    const kind = parseComponentKind(query.get("component"));
+    const tenant = parseTenantSelectionValue(query.get("tenant"));
+    return kind && tenant ? { tenant, kind } : null;
+  });
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const tenantRows = useElementRegistry<HTMLButtonElement, TenantSelectionValue>();
   const createTitleId = useId();
@@ -201,6 +212,7 @@ export function useTenantController({
   const allSelectable = allSelected(selectableKeys, selectedKeys);
   const selectedCount = selectedKeys.size;
   const createNameValid = DNS_LABEL_PATTERN.test(newName);
+  const createNameTaken = tenants.some((row) => row.kind === "managed" && row.name === newName);
   const busy = mutationPhase !== "idle";
   const combinedBusy = busy || componentActions.busy;
   const mutationBusy =
@@ -213,14 +225,55 @@ export function useTenantController({
   const tenantKindLabel = selected?.kind === "host" ? "Host Tenant" : "Managed Tenant";
   useEffect(() => {
     const query = new URLSearchParams(search);
-    if (query.has("component") && normalizedComponentSearch.current !== search) {
-      query.delete("component");
-      normalizedComponentSearch.current = search;
-      onLocationChange(query, true);
-    } else if (!query.has("component")) {
+    if (!query.has("component")) {
       normalizedComponentSearch.current = null;
+      return;
     }
-  }, [onLocationChange, search]);
+    if (normalizedComponentSearch.current === search) return;
+    const kind = parseComponentKind(query.get("component"));
+    const tenant = parseTenantSelectionValue(query.get("tenant"));
+    if (kind && tenant) {
+      // Keep the kind after the query is dropped so the row can highlight once.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setComponentAttention({ tenant, kind });
+      if (!selected || componentActions.components.componentCatalogLoading) return;
+    }
+    query.delete("component");
+    normalizedComponentSearch.current = search;
+    onLocationChange(query, true);
+  }, [componentActions.components.componentCatalogLoading, onLocationChange, search, selected]);
+  useEffect(() => {
+    if (componentAttention && selectedKey !== componentAttention.tenant) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setComponentAttention(null);
+    }
+  }, [componentAttention, selectedKey]);
+  const attentionRowReady =
+    componentAttention !== null &&
+    selected !== null &&
+    !componentActions.components.componentCatalogLoading &&
+    selectedKey === componentAttention.tenant &&
+    componentActions.components.componentGroups.some((group) =>
+      group.rows.some((row) => row.kind === componentAttention.kind),
+    );
+  useEffect(() => {
+    if (!componentAttention) return;
+    if (!selected || selectedKey !== componentAttention.tenant) return;
+    if (componentActions.components.componentCatalogLoading) return;
+    if (!attentionRowReady) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setComponentAttention(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setComponentAttention(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [
+    attentionRowReady,
+    componentAttention,
+    componentActions.components.componentCatalogLoading,
+    selected,
+    selectedKey,
+  ]);
   useNarrowDetailFocus(detailHeadingRef, detailOpen && selectedKey !== null, selectedKey);
   useEffect(() => {
     if (loadingTenants) return;
@@ -253,7 +306,7 @@ export function useTenantController({
   }
 
   async function createTenant() {
-    if (!createNameValid) return;
+    if (!createNameValid || createNameTaken) return;
     dispatchWorkflow({ type: "create_started" });
     try {
       await api.createTenant(newName);
@@ -352,6 +405,10 @@ export function useTenantController({
     },
     components: {
       ...componentActions.components,
+      attentionKind:
+        componentAttention && selectedKey === componentAttention.tenant
+          ? componentAttention.kind
+          : null,
       loadComponents: componentActions.loadComponents,
       componentActionProgress: componentActions.componentActionProgress,
     },
@@ -366,6 +423,7 @@ export function useTenantController({
       ...componentActions.dialogs,
       createError,
       createHelpId,
+      createNameTaken,
       createNameValid,
       createOpen,
       createTitleId,

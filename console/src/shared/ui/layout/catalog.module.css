@@ -190,8 +190,9 @@
 }
 
 .filterControl {
+  min-width: 0;
   max-width: var(--catalog-filter-control-max-width);
-  flex: 1 1 0;
+  flex: 1 1 auto;
 }
 
 /* Layout hooks for ActionButton tones in catalog toolbars. */
@@ -277,17 +278,18 @@
   background: var(--surface);
 }
 
-.row::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
-}
-
 .row:hover {
   background: var(--surface-hover);
+}
+
+.inspectedMarker::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
 }
 
 .rowInspected,
@@ -296,28 +298,30 @@
   background: var(--surface-selected);
 }
 
+.rowInspected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
 .rowSelected,
 .rowSelected:hover,
 .rowSelected:focus-within {
   background: var(--surface-selected);
 }
 
-.rowInspected::before {
-  background: var(--accent);
-}
-
 .rowInspected .rowMain,
 .rowSelected .rowMain {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .rowSelectable,
 .rowProtected {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.rowSelectable.rowInspected::before {
-  background: transparent;
 }
 
 .rowProtected {

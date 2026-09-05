@@ -4,6 +4,7 @@ import {
   comparableProvider,
   configIssuePresentation,
   configWarningPresentation,
+  lastAppliedMeta,
   propagationDetail,
   propagationGroup,
   proxyValueIsValid,
@@ -14,6 +15,17 @@ import {
 function entry(overrides: Partial<ConfigCatalogEntry> = {}): ConfigCatalogEntry {
   return { name: "review", state: "ready", ...overrides };
 }
+
+describe("Last Application metadata", () => {
+  it("names the recorded source without calling it Active", () => {
+    expect(lastAppliedMeta("openai")).toBe("Last applied openai");
+    expect(lastAppliedMeta("openai", "clean")).toBe("Last applied openai");
+  });
+
+  it("says the Current Config differs without a Dirty badge", () => {
+    expect(lastAppliedMeta("openai", "dirty")).toBe("Last applied openai · differs");
+  });
+});
 
 describe("Named Config issue presentation", () => {
   it("stays silent for a ready Config without warnings", () => {

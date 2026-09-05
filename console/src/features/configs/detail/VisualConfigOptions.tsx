@@ -8,8 +8,9 @@ import {
   splitRequestProxyValue,
 } from "@/features/configs/configCatalog";
 import { IconButton } from "@/shared/ui/IconButton";
-import { NativeSelect, TextInput, Toggle } from "@/shared/ui/FormControls";
+import { TextInput, Toggle } from "@/shared/ui/FormControls";
 import { HelpTooltip } from "@/shared/ui/IssueIndicator";
+import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import styles from "@/features/configs/ConfigPage.module.css";
 
 export function VisualOptionLabel({
@@ -123,52 +124,56 @@ export function VisualConfigOptions({
                   </div>
                   <div className={styles.visualFieldControl}>
                     {field.value_kind === "bool" ? (
-                      <NativeSelect
+                      <VisualFieldSelect
                         id={fieldId}
-                        aria-label={`${field.label} value`}
+                        label={field.label}
                         required={required}
-                        aria-required={required}
                         value={!included ? "__default" : String(Boolean(value))}
-                        onChange={(event) => {
-                          if (event.target.value === "__default") {
+                        options={[
+                          ...(!required ? [{ value: "__default", label: "Default" }] : []),
+                          { value: "true", label: "Enabled" },
+                          { value: "false", label: "Disabled" },
+                        ]}
+                        onSelect={(next) => {
+                          if (next === "__default") {
                             onChange(field.path, { included: false, value: undefined });
                             return;
                           }
                           onChange(field.path, {
                             included: true,
-                            value: event.target.value === "true",
+                            value: next === "true",
                           });
                         }}
-                      >
-                        {!required && <option value="__default">Default</option>}
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </NativeSelect>
+                      />
                     ) : hasEnumValues ? (
-                      <NativeSelect
+                      <VisualFieldSelect
                         id={fieldId}
-                        aria-label={`${field.label} value`}
+                        label={field.label}
                         required={required}
-                        aria-required={required}
                         value={!included ? "__default" : String(value)}
-                        onChange={(event) => {
-                          if (event.target.value === "__default") {
+                        options={[
+                          ...(!required ? [{ value: "__default", label: "Default" }] : []),
+                          ...(unsupportedValue !== null
+                            ? [
+                                {
+                                  value: unsupportedValue,
+                                  label: `Unsupported: ${unsupportedValue}`,
+                                },
+                              ]
+                            : []),
+                          ...field.enum_values.map((enumValue) => ({
+                            value: enumValue,
+                            label: enumValue,
+                          })),
+                        ]}
+                        onSelect={(next) => {
+                          if (next === "__default") {
                             onChange(field.path, { included: false, value: undefined });
                             return;
                           }
-                          onChange(field.path, { included: true, value: event.target.value });
+                          onChange(field.path, { included: true, value: next });
                         }}
-                      >
-                        {!required && <option value="__default">Default</option>}
-                        {unsupportedValue !== null && (
-                          <option value={unsupportedValue}>Unsupported: {unsupportedValue}</option>
-                        )}
-                        {field.enum_values.map((enumValue) => (
-                          <option key={enumValue} value={enumValue}>
-                            {enumValue}
-                          </option>
-                        ))}
-                      </NativeSelect>
+                      />
                     ) : (
                       <div className={styles.visualTextControl}>
                         <TextInput
@@ -360,5 +365,39 @@ export function VisualConfigOptions({
         </section>
       )}
     </div>
+  );
+}
+
+function VisualFieldSelect({
+  id,
+  label,
+  required,
+  value,
+  options,
+  onSelect,
+}: {
+  id: string;
+  label: string;
+  required: boolean;
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <SelectionMenu
+      className={styles.visualFieldSelect}
+      variant="field"
+      id={id}
+      required={required}
+      disabled={false}
+      label={label}
+      pluralLabel="values"
+      selected={new Set([value])}
+      options={options}
+      onCommit={(values) => {
+        const next = [...values][0];
+        if (next !== undefined) onSelect(next);
+      }}
+    />
   );
 }

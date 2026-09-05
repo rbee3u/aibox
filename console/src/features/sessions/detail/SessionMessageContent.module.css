@@ -12,6 +12,51 @@
   white-space: pre-wrap;
 }
 
+.skillLabel {
+  display: inline-block;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--code-text);
+  background: var(--surface-inset);
+  font: var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.plainRest {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.assessmentFacts {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.assessmentRationale {
+  margin-top: 6px;
+}
+
+.reviewDump {
+  margin-top: 8px;
+  border-top: 1px solid var(--line-content);
+  padding-top: 6px;
+}
+
+.reviewDump > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.reviewDump pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--ink-secondary);
+  font: var(--text-xs) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
 .markdown > :first-child {
   margin-top: 0;
 }

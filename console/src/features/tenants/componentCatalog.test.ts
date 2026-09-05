@@ -7,6 +7,7 @@ import {
   componentRowModel,
   hasComponentAttention,
   latestInfoFor,
+  parseComponentKind,
 } from "@/features/tenants/componentCatalog";
 
 function row(overrides: Partial<ComponentRow> = {}): ComponentRow {
@@ -122,6 +123,15 @@ describe("component row model", () => {
     expect(
       componentRowModel(row({ status: "modified", supports_version: false }), null).primaryAction,
     ).toBe("Update");
+  });
+});
+
+describe("parseComponentKind", () => {
+  it("accepts known kinds and ignores everything else", () => {
+    expect(parseComponentKind("claude-statusline")).toBe("claude-statusline");
+    expect(parseComponentKind("rust")).toBe("rust");
+    expect(parseComponentKind("nope")).toBeNull();
+    expect(parseComponentKind(null)).toBeNull();
   });
 });
 

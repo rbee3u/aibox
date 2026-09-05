@@ -75,7 +75,8 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(screen.getByText(/· 1s · 2 messages · 0 tools/)).toBeInTheDocument();
+    expect(screen.getByText(/· 2 messages · 0 tools/)).toBeInTheDocument();
+    expect(screen.queryByText(/· 1s ·/)).not.toBeInTheDocument();
     const userMessage = (await screen.findAllByRole("article")).find((article) =>
       article.textContent?.includes("Please inspect this."),
     );
@@ -84,13 +85,222 @@ describe("SessionPage", () => {
     const agentHeading = screen.getByRole("heading", { name: "Done" });
     expect(agentHeading).toBeInTheDocument();
     expect(agentHeading.closest("article")?.className).not.toContain("undefined");
-    expect(screen.getByText("2 items · response_item, world_state")).toBeInTheDocument();
+    const activitySummary = screen.getByText("Transcript activity");
+    const activityGroup = activitySummary.closest("details");
+    const collapsedSummary = activitySummary.closest("summary");
+    expect(collapsedSummary).toHaveTextContent("2 items");
+    expect(collapsedSummary).not.toHaveTextContent("response_item");
+    expect(collapsedSummary).not.toHaveTextContent("world_state");
+    expect(activityGroup?.querySelector("summary svg")).toBeNull();
+    expect(
+      screen.queryByText("Some transcript events could not be interpreted."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Transcript warning")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText("Unsupported")).toBeInTheDocument();
+    expect(
+      screen.queryByText("encountered 2 unsupported Transcript Entry projection(s)"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Observed span")).toBeInTheDocument();
+    expect(screen.getByText("Session ID")).toBeInTheDocument();
+    expect(screen.queryByText("Tenant")).not.toBeInTheDocument();
+    expect(screen.queryByText("Coding Agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Started")).not.toBeInTheDocument();
+    expect(screen.getByTitle("First to last Transcript event")).toHaveTextContent("1s");
+  });
+  it("labels tool-bearing groups as tools and shows the command on the row", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "exec",
+        status: "started",
+        summary: '{"cmd":"git status --porcelain"}',
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 3,
+        timestamp: firstSession.start_ts,
+        native_type: "event_msg",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "token",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1-done"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Tool result",
+        status: "completed",
+        summary: "Script completed",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 1200,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.getByText("1 tool")).toBeInTheDocument();
+    expect(screen.getByText("exec · 1 event")).toBeInTheDocument();
+    expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
+    await user.click(screen.getByText("1 tool"));
+    expect(screen.getByText(/exec · git status --porcelain/)).toBeInTheDocument();
+    expect(screen.queryByText("Script completed")).not.toBeInTheDocument();
+  });
+  it("keeps Conversation alarms for malformed Transcript records", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "malformed",
+        role: null,
+        content_types: [],
+        status: "malformed",
+        preview: "broken line",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
+          malformed_count: 1,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        ["line 2: malformed JSONL (invalid)"],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
     expect(
       screen.getByText("Some transcript events could not be interpreted."),
     ).toBeInTheDocument();
+    expect(screen.getByText("Transcript warning")).toBeInTheDocument();
+    expect(screen.getByLabelText("Transcript diagnostics")).toBeInTheDocument();
+    expect(screen.getByLabelText("Activity has diagnostics")).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Session views" })).getByRole("button", {
+        name: /Details/,
+      }),
+    );
+    expect(screen.getByText("Malformed")).toBeInTheDocument();
+    expect(screen.getByText("line 2: malformed JSONL (invalid)")).toBeInTheDocument();
+  });
+  it("keeps leading evidence-only groups off Conversation and on Details", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onEvidence({
+        entry_id: "leading-1",
+        line: 1,
+        timestamp: firstSession.start_ts,
+        native_type: "session_meta",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "session meta",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "between-1",
+        line: 3,
+        timestamp: firstSession.start_ts,
+        native_type: "event_msg",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "token",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.getByRole("article")).toHaveTextContent("Please inspect this.");
+    const activity = screen.getByText("Transcript activity");
+    expect(activity.closest("summary")).toHaveTextContent("1 item");
+    expect(screen.queryByText("session_meta")).not.toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Session views" })).getByRole("button", {
+        name: /Details/,
+      }),
+    );
+    expect(screen.getByText("Transcript entries")).toBeInTheDocument();
+    expect(screen.getByText("Unsupported")).toBeInTheDocument();
+    expect(screen.getByText("Transcript entries").closest("div")).toHaveTextContent("3");
   });
   it("collapses Transcript activity when refreshing Session detail", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
       handlers.onEvidence({
         entry_id: "evidence-1",
         line: 2,
@@ -106,9 +316,9 @@ describe("SessionPage", () => {
           start_ts: firstSession.start_ts,
           last_event_ts: firstSession.start_ts,
           observed_duration_ms: 0,
-          message_count: 0,
+          message_count: 1,
           tool_count: 0,
-          entry_count: 1,
+          entry_count: 2,
           malformed_count: 0,
           unsupported_count: 1,
           hidden_internal_count: 0,

@@ -1,9 +1,4 @@
-import type {
-  InputHTMLAttributes,
-  ReactNode,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
-} from "react";
+import type { InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { forwardRef } from "react";
 import styles from "@/shared/ui/FormControls.module.css";
 
@@ -41,8 +36,4 @@ export function Toggle({
       {children}
     </label>
   );
-}
-
-export function NativeSelect({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...props} className={`${styles.control} ${className ?? ""}`} />;
 }

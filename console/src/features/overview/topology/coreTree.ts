@@ -39,6 +39,10 @@ export interface SessionRequest {
   tenant: TenantSelection;
   agent: CodingAgentKind;
 }
+export interface InspectorFact {
+  label: string;
+  value: string;
+}
 export interface TopologyNode {
   id: string;
   parentId: string | null;
@@ -46,6 +50,7 @@ export interface TopologyNode {
   detail?: string;
   title?: string;
   tooltip?: string;
+  facts?: InspectorFact[];
   icon: TreeIcon;
   tone: Tone;
   target?: NavigationTarget;
@@ -102,6 +107,7 @@ export function tenantNode(
     label: row.display_name,
     detail: abbreviateTenantHome(row.home, hostHome),
     tooltip: row.home,
+    facts: tenantFacts(row),
     icon: row.kind === "host" ? "host" : "tenant",
     tone: row.exists ? maxTone(children.map((child) => child.tone)) : "warning",
     target: { module: "tenants", query: tenantLocation(tenant) },
@@ -118,17 +124,15 @@ export function agentNode(
   const configParams = tenantLocation(tenant);
   configParams.set("agent", agent.agent);
   configParams.set("current", "1");
-  const currentTone: Tone = agent.current_config.error ? "error" : "neutral";
   const current: TopologyNode = {
     id: `${id}/current`,
     parentId: id,
     label: "Current Config",
-    detail: agent.current_config.error
-      ? "Inspection failed"
-      : `${agent.current_config.present_files}/${agent.current_config.expected_files} files present`,
-    title: agent.current_config.error,
+    detail: currentConfigDetail(agent),
+    title: currentConfigTitle(agent),
+    facts: currentConfigFacts(agent),
     icon: "current",
-    tone: currentTone,
+    tone: currentConfigTone(agent),
     target: { module: "configs", query: configParams },
     children: [],
   };
@@ -138,11 +142,13 @@ export function agentNode(
     params.set("agent", agent.agent);
     params.set("config", entry.name);
     const last = agent.application.last_application?.applied === entry.name;
+    const detail = `${capitalize(entry.state)}${last ? ` · Last applied ${formatTimestamp(agent.application.last_application!.applied_at)}` : ""}`;
     return {
       id: `${namedId}/${entry.name}`,
       parentId: namedId,
       label: entry.name,
-      detail: `${capitalize(entry.state)}${last ? ` · Last applied ${formatTimestamp(agent.application.last_application!.applied_at)}` : ""}`,
+      detail,
+      tooltip: last ? detail : undefined,
       title: entry.detail,
       icon: "config" as const,
       tone:
@@ -161,8 +167,9 @@ export function agentNode(
     label: "Named Configs",
     detail: agent.named_configs.error
       ? "Catalog inspection failed"
-      : `${agent.named_configs.count} Configs${namedChildren.length ? ` · ${attentionCountLabel(namedChildren.length)}` : ""}`,
+      : `${agent.named_configs.count} Configs`,
     title: agent.named_configs.error,
+    facts: namedConfigFacts(agent),
     icon: "configs",
     tone: agent.named_configs.error ? "error" : maxTone(namedChildren.map((node) => node.tone)),
     target: { module: "configs", query: namedCatalogLocation(tenant, agent.agent) },
@@ -180,7 +187,9 @@ export function agentNode(
     parentId: id,
     label: "Sessions",
     detail: sessionLoadDetail(sessionLoad),
+    tooltip: sessionLoadTooltip(sessionLoad),
     title: sessionLoad?.error ?? sessionLoad?.data?.warnings.join("\n"),
+    facts: sessionFacts(sessionLoad),
     icon: "sessions",
     tone: sessionTone,
     target: { module: "sessions", query: sessionParams },
@@ -189,14 +198,14 @@ export function agentNode(
   };
   const children = [current, named, sessionNode];
   const driftTone = configDriftTone(agent.application.drift);
-  const last = agent.application.last_application;
-  const drift = humanDrift(agent.application.drift);
   return {
     id,
     parentId: tenantIdValue,
     label: agent.agent === "codex" ? "Codex" : "Claude",
-    detail: last ? `Last applied ${last.applied} · ${drift}` : `Config Drift ${drift}`,
+    detail: agentCardDetail(agent),
+    tooltip: agentCardTooltip(agent),
     title: agent.application.detail,
+    facts: agentFacts(agent),
     icon: agent.agent,
     tone: maxTone([driftTone, ...children.map((child) => child.tone)]),
     target: { module: "configs", query: configParams },
@@ -218,7 +227,7 @@ export function componentNode(
       title: entry.error ?? undefined,
       icon: "component" as const,
       tone: componentTone(entry),
-      target: { module: "tenants" as const, query: tenantLocation(tenant) },
+      target: { module: "tenants" as const, query: tenantComponentLocation(tenant, entry.kind) },
       children: [],
     };
   });
@@ -229,7 +238,7 @@ export function componentNode(
     label: "Components",
     detail: summary.error
       ? "Catalog inspection failed"
-      : `${summary.installed}/${summary.total} installed${children.length ? ` · ${attentionCountLabel(children.length)}` : ""}`,
+      : `${summary.installed}/${summary.total} installed`,
     title: summary.error,
     icon: "components",
     tone: summary.error ? "error" : maxTone(children.map((child) => child.tone)),
@@ -258,6 +267,14 @@ export function tenantSelection(tenant: TopologyTenant): TenantSelection {
 export function tenantLocation(tenant: TenantSelection): URLSearchParams {
   return new URLSearchParams({ tenant: tenantSelectionValue(tenant) });
 }
+export function tenantComponentLocation(
+  tenant: TenantSelection,
+  kind: ComponentRow["kind"],
+): URLSearchParams {
+  const query = tenantLocation(tenant);
+  query.set("component", kind);
+  return query;
+}
 export function namedCatalogLocation(
   tenant: TenantSelection,
   agent: CodingAgentKind,
@@ -282,6 +299,71 @@ export function configDriftTone(drift: string): Tone {
 export function humanDrift(drift: string): string {
   return drift.split("-").map(capitalize).join(" ");
 }
+export function currentConfigTone(agent: TopologyAgent): Tone {
+  if (agent.current_config.error) return "error";
+  const driftTone = configDriftTone(agent.application.drift);
+  return driftTone === "warning" || driftTone === "error" ? driftTone : "neutral";
+}
+export function currentConfigDetail(agent: TopologyAgent): string {
+  if (agent.current_config.error) return "Inspection failed";
+  if (currentConfigTone(agent) !== "neutral") return humanDrift(agent.application.drift);
+  return `${agent.current_config.present_files}/${agent.current_config.expected_files} files present`;
+}
+export function currentConfigTitle(agent: TopologyAgent): string | undefined {
+  if (agent.current_config.error) return agent.current_config.error;
+  if (currentConfigTone(agent) !== "neutral") return agent.application.detail;
+  return undefined;
+}
+export function lastAppliedFact(agent: TopologyAgent): InspectorFact | undefined {
+  const last = agent.application.last_application;
+  if (!last) return undefined;
+  return { label: "Last applied", value: `${last.applied} · ${formatTimestamp(last.applied_at)}` };
+}
+export function currentConfigFacts(agent: TopologyAgent): InspectorFact[] {
+  const facts = collectFacts(lastAppliedFact(agent));
+  if (agent.current_config.error) return facts;
+  const files = `${agent.current_config.present_files}/${agent.current_config.expected_files} present`;
+  if (
+    currentConfigDetail(agent) !==
+    `${agent.current_config.present_files}/${agent.current_config.expected_files} files present`
+  ) {
+    facts.push({ label: "Files", value: files });
+  }
+  return facts;
+}
+export function agentFacts(agent: TopologyAgent): InspectorFact[] {
+  return collectFacts(lastAppliedFact(agent));
+}
+export function namedConfigFacts(agent: TopologyAgent): InspectorFact[] {
+  if (agent.named_configs.error) return [];
+  if (agent.named_configs.count > 0 && agent.named_configs.attention.length === 0) {
+    return [{ label: "Attention", value: "None need attention" }];
+  }
+  return [];
+}
+export function sessionFacts(load?: SessionLoad): InspectorFact[] {
+  if (!load) return [{ label: "Summary", value: "Load on demand" }];
+  if (load.state === "loading") return [{ label: "Summary", value: "Discovering Transcripts" }];
+  if (load.state === "loaded") return [{ label: "Summary", value: sessionLoadDetail(load) }];
+  return [];
+}
+export function inspectorFacts(node: TopologyNode): InspectorFact[] {
+  if (node.facts && node.facts.length > 0) return node.facts;
+  if (!node.detail) return [];
+  return [{ label: inspectorFallbackLabel(node.icon), value: node.detail }];
+}
+export function inspectorFallbackLabel(icon: TreeIcon): string {
+  if (icon === "sessions") return "Summary";
+  if (icon === "service") return "Tenants";
+  if (icon === "host" || icon === "tenant") return "Home";
+  return "Status";
+}
+export function tenantFacts(row: TopologyTenant): InspectorFact[] {
+  return [{ label: "Home", value: row.home }];
+}
+function collectFacts(...entries: Array<InspectorFact | undefined>): InspectorFact[] {
+  return entries.filter((entry): entry is InspectorFact => Boolean(entry));
+}
 export function componentTone(entry: ComponentRow): Tone {
   if (entry.error) return "error";
   if (["modified", "incomplete", "unmanaged"].includes(entry.status ?? "")) return "warning";
@@ -296,11 +378,41 @@ export function componentDetail(entry: ComponentRow): string {
   const status = entry.status ? capitalize(entry.status) : "Unknown";
   return entry.version ? `${status} · ${entry.version}` : status;
 }
+export function agentCardDetail(agent: TopologyAgent): string {
+  const last = agent.application.last_application;
+  const drift = humanDrift(agent.application.drift);
+  return last ? `${last.applied} · ${drift}` : drift;
+}
+
+export function agentCardTooltip(agent: TopologyAgent): string {
+  const last = agent.application.last_application;
+  const drift = humanDrift(agent.application.drift);
+  return last ? `Last applied ${last.applied} · ${drift}` : `Config Drift ${drift}`;
+}
+
 export function sessionLoadDetail(load?: SessionLoad): string {
+  if (!load) return "Load count";
+  if (load.state === "loading") return "Discovering";
+  if (load.state === "error") return "Unavailable";
+  return `${load.data!.count} Sessions${load.data!.partial ? " · Partial" : ""}`;
+}
+
+export function sessionLoadTooltip(load?: SessionLoad): string | undefined {
   if (!load) return "Load count on demand";
   if (load.state === "loading") return "Discovering Transcripts";
-  if (load.state === "error") return "Summary unavailable";
-  return `${load.data!.count} Sessions${load.data!.partial ? " · Partial" : ""}`;
+  if (load.state === "error") return load.error ?? "Session summary unavailable";
+  return undefined;
+}
+
+/** Full text for hover and keyboard focus when the card line is shortened or truncated. */
+export function topologyNodeDisclosure(node: TopologyNode): string | undefined {
+  if (node.tooltip) {
+    return node.title && node.title !== node.tooltip
+      ? `${node.tooltip}\n${node.title}`
+      : node.tooltip;
+  }
+  if (node.title && node.title !== node.detail) return node.title;
+  return undefined;
 }
 
 export function findTopologyNode(root: TopologyNode | null, id: string): TopologyNode | null {
@@ -332,7 +444,7 @@ export function attentionCountLabel(count: number): string {
   return `${count} ${count === 1 ? "needs" : "need"} attention`;
 }
 
-export function defaultExpansion(data: TopologyData): Set<string> {
+export function healthyDefaultExpansion(data: TopologyData): Set<string> {
   const defaultTenant = data.tenants.find(
     (tenant) => tenant.kind === "managed" && tenant.name === "default",
   );

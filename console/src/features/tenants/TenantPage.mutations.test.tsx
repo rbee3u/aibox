@@ -24,7 +24,8 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
 
     const row = await screen.findByRole("listitem");
-    expect(screen.getByText("Not checked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeInTheDocument();
+    expect(screen.queryByText("Not checked")).not.toBeInTheDocument();
     expect(within(row).queryByLabelText("Python latest release")).toBeNull();
     expect(row).not.toHaveTextContent("—");
     const options = screen.getByRole("button", {

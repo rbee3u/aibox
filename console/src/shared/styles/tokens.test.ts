@@ -20,6 +20,9 @@ const themeTokens = [
   "surface-hover",
   "surface-selected",
   "control-rest",
+  "action-primary-ink",
+  "action-primary-surface",
+  "action-primary-hover-surface",
   "action-primary-soft-ink",
   "action-primary-soft-surface",
   "action-primary-soft-line",
@@ -46,6 +49,7 @@ const themeTokens = [
   "danger-line",
   "success",
   "success-soft",
+  "success-line",
   "warning",
   "warning-soft",
   "warning-line",
@@ -65,6 +69,7 @@ const themeTokens = [
   "viz-finalize",
   "shadow-sm",
   "shadow-md",
+  "shadow-lg",
 ] as const;
 
 describe("Console CSS theme tokens", () => {
@@ -118,6 +123,12 @@ describe("Console CSS theme tokens", () => {
           resolveToken(tokens, "action-primary-soft-hover-surface"),
         ),
       ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(
+          resolveToken(tokens, "action-primary-ink"),
+          resolveToken(tokens, "action-primary-surface"),
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
     }
   });
 
@@ -162,18 +173,20 @@ describe("Console CSS theme tokens", () => {
   });
 
   it("keeps the catalog Tenant/Agent filter toolbar rhythm centralized", () => {
-    expect(light.get("catalog-filter-control-max-width")).toBe("112px");
+    expect(light.get("catalog-filter-control-max-width")).toBe("168px");
     expect(light.get("catalog-toolbar-filters-gap")).toBe("8px");
     expect(light.get("catalog-toolbar-cluster-gap")).toBe("14px");
   });
 
-  it("keeps neutral hover distinct from accent-owned selection in both themes", () => {
+  it("keeps neutral hover distinct from selected chrome in both themes", () => {
     expect(light.get("surface-hover")).toBe("#eef1f5");
-    expect(light.get("surface-selected")).toBe("#eceaff");
+    expect(light.get("surface-selected")).toBe("#e8edf3");
     expect(dark.get("surface-hover")).toBe("#272f3d");
-    expect(dark.get("surface-selected")).toBe("#292845");
+    expect(dark.get("surface-selected")).toBe("#232a36");
     expect(light.get("surface-hover")).not.toBe(light.get("surface-selected"));
     expect(dark.get("surface-hover")).not.toBe(dark.get("surface-selected"));
+    expect(light.get("surface-selected")).not.toBe("#eceaff");
+    expect(dark.get("surface-selected")).not.toBe("#292845");
   });
 
   it("keeps disabled Primary neutral instead of resembling accent selection", () => {
@@ -181,10 +194,17 @@ describe("Console CSS theme tokens", () => {
     expect(light.get("control-disabled-primary-surface")).toBe("var(--control-disabled-surface)");
   });
 
+  it("keeps overlay elevation stronger than resting chrome in both themes", () => {
+    expect(light.get("shadow-lg")).toBe("0 18px 48px rgb(18 28 45 / 0.16)");
+    expect(dark.get("shadow-lg")).toBe("0 20px 52px rgb(0 0 0 / 0.38)");
+    expect(light.get("shadow-lg")).not.toBe(light.get("shadow-md"));
+    expect(dark.get("shadow-lg")).not.toBe(dark.get("shadow-md"));
+  });
+
   it("keeps hover, control rest, and accent selection roles distinct", () => {
     expect(light.get("control-rest")).toBe("#f4f6f9");
     expect(dark.get("control-rest")).toBe("#222833");
-    expect(dark.get("surface-selected")).toBe("#292845");
+    expect(dark.get("surface-selected")).toBe("#232a36");
     for (const tokens of [light, dark]) {
       expect(tokens.get("surface-hover")).not.toBe(tokens.get("control-rest"));
       expect(tokens.get("surface-hover")).not.toBe(tokens.get("surface-selected"));

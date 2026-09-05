@@ -67,17 +67,12 @@
   background: var(--surface);
 }
 
-.sessionRow::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
-}
-
 .sessionRow:hover {
   background: var(--surface-hover);
+}
+
+.currentSessionRow {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
 }
 
 .currentSessionRow,
@@ -94,19 +89,11 @@
 
 .currentSessionRow .sessionRowMain,
 .sessionRowSelected .sessionRowMain {
-  color: var(--accent);
-}
-
-.currentSessionRow::before {
-  background: var(--accent);
+  color: var(--ink);
 }
 
 .sessionSelectionRow {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.sessionSelectionRow.currentSessionRow::before {
-  background: transparent;
 }
 
 .sessionRowMain {
@@ -178,14 +165,15 @@
 }
 
 .sessionRowMetadata {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  display: flex;
+  min-width: 0;
   align-items: center;
-  column-gap: 9px;
+  gap: 9px;
 }
 
-.sessionRowMetadata > span,
-.sessionRowMetadata time {
+.sessionRowMetadata > span {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -193,9 +181,13 @@
 }
 
 .sessionRowMetadata time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sessionRowWarning {
@@ -314,7 +306,7 @@
 }
 
 .sessionTabActive {
-  color: var(--accent) !important;
+  color: var(--ink) !important;
   background: var(--surface-selected) !important;
 }
 
@@ -325,7 +317,7 @@
   left: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
-  background: var(--accent);
+  background: transparent;
   content: "";
 }
 
@@ -422,7 +414,7 @@
 }
 
 .sessionConversationNavActive {
-  color: var(--accent);
+  color: var(--ink);
   background: var(--surface-selected);
 }
 
@@ -447,9 +439,9 @@
 .sessionConversationNavActive .sessionConversationNavDot {
   width: 16px;
   height: 16px;
-  border-color: var(--accent);
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  box-shadow: none;
 }
 
 .sessionConversationNavActive .sessionConversationNavDot span {
@@ -532,7 +524,6 @@
   color: var(--muted);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
 }
 
 .sessionDetailsGrid dd,
@@ -547,6 +538,7 @@
 .sessionDetailsGrid dd time,
 .sessionDetailsGrid dd > code,
 .sessionDiagnosticsGrid dd {
+  color: var(--code-muted);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -723,14 +715,21 @@
   gap: 6px;
 }
 
-.sessionActivityGroup > summary span:first-of-type svg:last-child {
+.sessionActivityGroup > summary span:first-of-type svg[aria-label="Activity has diagnostics"] {
   color: var(--warning);
 }
 .sessionActivity summary span:first-of-type,
 .sessionEvidence summary span:first-of-type,
 .sessionActivityGroup summary span:first-of-type {
+  min-width: 0;
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
+}
+
+.sessionActivity summary span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sessionActivity summary span:nth-of-type(2),
 .sessionEvidence summary span:nth-of-type(2),
@@ -884,8 +883,8 @@
   }
 
   .sessionConversationMobileNav .sessionConversationNavActive {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--line);
+    color: var(--ink);
     background: var(--surface-selected);
   }
 

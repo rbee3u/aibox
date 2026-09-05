@@ -4,7 +4,11 @@ import type { ConversationMessage, SessionApi } from "@/api/sessions";
 import { SessionActivityGroup } from "@/features/sessions/detail/SessionActivityGroup";
 import { SessionConversationNav } from "@/features/sessions/detail/SessionConversationNav";
 import { SessionMessageContent } from "@/features/sessions/detail/SessionMessageContent";
-import { sessionItemKey, type SessionTimelineItem } from "@/features/sessions/detail/sessionDetail";
+import {
+  conversationReadingTimeline,
+  sessionItemKey,
+  type SessionTimelineItem,
+} from "@/features/sessions/detail/sessionDetail";
 import { compactMessageTimestamp, messageAnchorId } from "@/features/sessions/detail/sessionFormat";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { formatTimestamp } from "@/shared/lib/format";
@@ -24,7 +28,7 @@ interface SessionConversationProps {
   /** Anchor the navigator marks as current. */
   activeUserMessage: string | null;
   loading: boolean;
-  warnings: string[];
+  needsAttention: boolean;
   snapshot?: string;
   /** Changes whenever the Session reloads, collapsing activity disclosures. */
   revision: number;
@@ -45,7 +49,7 @@ export function SessionConversation({
   userMessages,
   activeUserMessage,
   loading,
-  warnings,
+  needsAttention,
   snapshot,
   revision,
   showJumpLatest,
@@ -56,6 +60,7 @@ export function SessionConversation({
   onJumpLatest,
   onViewDiagnostics,
 }: SessionConversationProps) {
+  const readingTimeline = conversationReadingTimeline(timeline);
   return (
     <div className={styles.sessionConversationLayout}>
       <SessionConversationNav
@@ -72,7 +77,7 @@ export function SessionConversation({
         />
         <div ref={scrollRef} className={styles.sessionConversationScroll} onScroll={onScroll}>
           <div key={revision} className={styles.sessionConversationContent}>
-            {warnings.length > 0 && (
+            {needsAttention && (
               <button
                 type="button"
                 className={styles.sessionConversationWarning}
@@ -83,7 +88,7 @@ export function SessionConversation({
                 <span>View Details</span>
               </button>
             )}
-            {timeline.map((item) => {
+            {readingTimeline.map((item) => {
               if (item.kind === "message") {
                 const label = item.value.role === "user" ? "You" : session.source.agentLabel;
                 const timestamp = compactMessageTimestamp(item.value.timestamp, session.start_ts);
@@ -123,13 +128,13 @@ export function SessionConversation({
               );
             })}
             {loading && <Loading />}
-            {!loading && timeline.length === 0 && (
+            {!loading && readingTimeline.length === 0 && (
               <EmptyState
                 className={styles.promptEmptyState}
                 variant="detail"
                 icon={<SessionIcon size={26} aria-hidden="true" />}
                 title="No readable conversation"
-                description="This Transcript contains no supported user or Coding Agent messages. Transcript events remain available below when present."
+                description="This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details."
               />
             )}
           </div>

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
 import { ConfigPage, configApi } from "@/features/configs/testHarness";
@@ -162,5 +162,43 @@ describe("ConfigPage", () => {
     );
     expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
     expect(revealConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("uses Unsaved changes when the shell asks to leave a dirty editor", async () => {
+    const catalog = {
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, saveConfigFile } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "current content")),
+      saveConfigFile: (target, input) =>
+        Promise.resolve({
+          ...configFile(target.file, "saved"),
+          content_base64: input.contentBase64,
+        }),
+    });
+    const onCancelLeave = vi.fn();
+    const onContinueLeave = vi.fn();
+    const user = userEvent.setup();
+    const view = render(<ConfigPage api={api} />);
+    const editor = await screen.findByRole("textbox", { name: "config.toml content" });
+    await user.type(editor, "changed");
+    view.rerender(
+      <ConfigPage
+        api={api}
+        pendingLeave
+        onCancelLeave={onCancelLeave}
+        onContinueLeave={onContinueLeave}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
+    expect(dialog).toHaveTextContent("Save changes to config.toml before continuing?");
+    await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
+    await waitFor(() => expect(saveConfigFile).toHaveBeenCalled());
+    expect(onContinueLeave).toHaveBeenCalled();
+    expect(onCancelLeave).not.toHaveBeenCalled();
   });
 });

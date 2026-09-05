@@ -5,15 +5,15 @@
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-inset: #f4f6f9;
-  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
+  /* Neutral hover for chrome and actions; selection stays a quiet gray step. */
   --surface-hover: #eef1f5;
-  /* Accent-owned open, pressed, and selected controls. */
-  --surface-selected: #eceaff;
+  /* Neutral open, pressed, and selected controls. */
+  --surface-selected: #e8edf3;
   /* Quiet neutral resting fill with no selected or Primary semantics. */
   --control-rest: #f4f6f9;
-  --line: #dce1e8;
-  --line-soft: #e9edf2;
-  --line-strong: #c5ccd6;
+  --line: #e8edf2;
+  --line-soft: #f1f5f9;
+  --line-strong: #e2e8f0;
   /* Boundary roles: structure and controls stay clear; repeated content divisions recede. */
   --line-structural: var(--line);
   --line-content: color-mix(in srgb, var(--line-soft) 78%, transparent);
@@ -30,52 +30,58 @@
   --ink-secondary: #465264;
   --muted: #657187;
   --faint: #59667a;
-  --accent: #5b55e7;
-  --accent-strong: #4943cb;
-  --accent-soft: #efeeff;
-  --accent-subtle: #f8f7ff;
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-subtle: #f5f7ff;
   /* Text on solid --accent (Light: white; Dark: deep ink on bright accent). */
   --accent-contrast: #ffffff;
-  --action-danger: #ba2f38;
-  --action-danger-strong: #96232b;
+  --action-danger: #b91c1c;
+  --action-danger-strong: #991b1b;
   --action-danger-contrast: #ffffff;
-  /* Repeated or entry-point actions use a purple outline at rest. */
+  /* Solid Primary: filled indigo with a quiet hover deepen. */
+  --action-primary-ink: var(--accent-contrast);
+  --action-primary-surface: var(--accent);
+  --action-primary-hover-surface: var(--accent-strong);
+  /* Repeated or row-level actions use an indigo outline at rest. */
   --action-primary-soft-ink: var(--accent-strong);
   --action-primary-soft-surface: transparent;
   --action-primary-soft-line: color-mix(in srgb, var(--accent) 48%, var(--line-control));
   --action-primary-soft-hover-ink: var(--accent-strong);
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
-  --focus: #7771f3;
-  --danger: #ba2f38;
-  --danger-strong: #96232b;
-  --danger-soft: #fff0f1;
-  --danger-line: #efc7ca;
+  --focus: #6366f1;
+  --danger: #b91c1c;
+  --danger-strong: #991b1b;
+  --danger-soft: #fef2f2;
+  --danger-line: #fecaca;
   --control-disabled-danger-ink: var(--control-disabled-ink);
   --control-disabled-danger-surface: var(--control-disabled-surface);
   /* Destructive action resting fill: softer than danger-soft alone. */
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
-  --success: #0d7a55;
-  --success-soft: #e8f7f1;
-  --warning: #92500d;
-  --warning-soft: #fff6e8;
-  --warning-line: #ead2a8;
-  --info-line: #d5d2ff;
+  --success: #047857;
+  --success-soft: #ecfdf5;
+  --success-line: #a7f3d0;
+  --warning: #b45309;
+  --warning-soft: #fffbeb;
+  --warning-line: #fde68a;
+  --info-line: #c7d2fe;
   --code-bg: #f6f7fa;
-  --code-border: #d9dfe7;
+  --code-border: #e2e8f0;
   --code-text: #253042;
-  --code-muted: #6d788b;
+  --code-muted: #64748b;
   --code-guide: #d5dbe4;
   --syntax-key: #285ea8;
   --syntax-string: #39752d;
   --syntax-number: #9c4d11;
-  --syntax-boolean: #7950a7;
+  --syntax-boolean: #3658c7;
   --viz-request: #6f8fb8;
   --viz-wait: #d99b45;
-  --viz-model: #7a70d8;
+  --viz-model: #6366f1;
   --viz-finalize: #8b929d;
-  --shadow-sm: 0 1px 2px rgb(18 28 45 / 0.06);
-  --shadow-md: 0 10px 28px rgb(18 28 45 / 0.13);
+  --shadow-sm: 0 1px 2px rgb(18 28 45 / 0.05);
+  --shadow-md: 0 8px 24px rgb(18 28 45 / 0.08);
+  --shadow-lg: 0 18px 48px rgb(18 28 45 / 0.16);
   --radius-sm: 5px;
   --radius-md: 6px;
   --radius-lg: 6px;
@@ -127,7 +133,7 @@
   --row-height: 46px;
   --row-height-roomy: 54px;
   --status-height: 23px;
-  --radius-pill: 4px;
+  --radius-pill: 999px;
   --space-6: 24px;
   --space-7: 32px;
   --catalog-panel-width: clamp(360px, 31vw, 460px);
@@ -135,17 +141,16 @@
   --catalog-toolbar-padding: 5px 10px 5px 14px;
   --catalog-divider-min-height: 38px;
   --catalog-divider-padding: 5px 7px 5px 14px;
-  --catalog-row-padding: 4px 8px 4px 9px;
-  --catalog-row-roomy-padding: 6px 8px 6px 9px;
+  --catalog-row-padding: var(--space-2);
+  --catalog-row-roomy-padding: var(--space-2);
   --catalog-row-leading-gap: 9px;
-  --catalog-row-accent-inset: 7px;
   --catalog-row-primary-size: var(--text-row-title);
   --catalog-row-primary-line-height: var(--line-height-row-title);
   --catalog-row-primary-weight: var(--weight-row-title);
   --catalog-row-secondary-size: var(--text-meta);
   --catalog-row-secondary-line-height: var(--line-height-meta);
-  /* Tenant/Agent filters: independent controls with catalog toolbar rhythm. */
-  --catalog-filter-control-max-width: 112px;
+  /* Tenant/Agent filters share leftover toolbar width; cap long names. */
+  --catalog-filter-control-max-width: 168px;
   --catalog-toolbar-filters-gap: 8px;
   --catalog-toolbar-cluster-gap: 14px;
   /*
@@ -175,34 +180,37 @@
   --surface: #191e28;
   --surface-raised: #1d2330;
   --surface-inset: #151a23;
-  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
+  /* Neutral hover for chrome and actions; selection stays a quiet gray step. */
   --surface-hover: #272f3d;
-  /* Accent-owned open, pressed, and selected controls. */
-  --surface-selected: #292845;
+  /* Neutral open, pressed, and selected controls. */
+  --surface-selected: #232a36;
   /* Quiet neutral resting fill with no selected or Primary semantics. */
   --control-rest: #222833;
-  --line: #303744;
-  --line-soft: #272e3a;
-  --line-strong: #465061;
+  --line: #2c3440;
+  --line-soft: #242b36;
+  --line-strong: #3a4352;
   --ink: #e7ebf2;
   --ink-secondary: #bdc5d2;
   --muted: #9ba6b7;
   --faint: #aab4c3;
-  --accent: #9b96ff;
-  --accent-strong: #8580ee;
-  --accent-soft: #292744;
-  --accent-subtle: #211f35;
+  --accent: #818cf8;
+  --accent-strong: #a5b4fc;
+  --accent-soft: #222840;
+  --accent-subtle: #1c2133;
   --accent-contrast: #141820;
   --action-danger: #ff858c;
   --action-danger-strong: #ffabb0;
   --action-danger-contrast: #2b1013;
+  --action-primary-ink: var(--accent-contrast);
+  --action-primary-surface: var(--accent);
+  --action-primary-hover-surface: var(--accent-strong);
   --action-primary-soft-ink: var(--accent);
   --action-primary-soft-surface: transparent;
   --action-primary-soft-line: color-mix(in srgb, var(--accent) 58%, var(--line-control));
   --action-primary-soft-hover-ink: var(--accent);
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
-  --focus: #aaa6ff;
+  --focus: #818cf8;
   --danger: #ff858c;
   --danger-strong: #ffabb0;
   --danger-soft: #3a2027;
@@ -212,25 +220,27 @@
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #5bd4a4;
   --success-soft: #19372f;
+  --success-line: #2d5a48;
   --warning: #f1b262;
   --warning-soft: #382b1d;
   --warning-line: #655036;
-  --info-line: #4a4778;
+  --info-line: #3d4a7c;
   --code-bg: #11151d;
-  --code-border: #313947;
+  --code-border: #2c3440;
   --code-text: #d9e0eb;
-  --code-muted: #919daf;
+  --code-muted: #94a3b8;
   --code-guide: #333c4a;
   --syntax-key: #93bdff;
   --syntax-string: #9bd783;
   --syntax-number: #f0b66f;
-  --syntax-boolean: #d2a1ff;
+  --syntax-boolean: #a5b4fc;
   --viz-request: #6f8fb8;
   --viz-wait: #d99b45;
-  --viz-model: #9b96ff;
+  --viz-model: #818cf8;
   --viz-finalize: #8b929d;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.25);
-  --shadow-md: 0 14px 36px rgb(0 0 0 / 0.34);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.18);
+  --shadow-md: 0 10px 28px rgb(0 0 0 / 0.22);
+  --shadow-lg: 0 20px 52px rgb(0 0 0 / 0.38);
 }
 
 * {

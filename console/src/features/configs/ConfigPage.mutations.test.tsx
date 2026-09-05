@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
 import { ConfigPage, configApi } from "@/features/configs/testHarness";
+import actionStyles from "@/shared/ui/ActionButton.module.css";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -203,6 +204,8 @@ describe("ConfigPage", () => {
     const propagate = await screen.findByRole("button", { name: "Propagate credentials" });
     expect(propagate).toHaveTextContent(/^Propagate credentials$/);
     expect(propagate.querySelector("svg")).not.toBeInTheDocument();
+    expect(propagate).toHaveClass(actionStyles.ghost);
+    expect(propagate).not.toHaveClass(actionStyles.primarySoft);
     await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
     expect(
       screen.queryByRole("button", { name: "Select multiple Coding Agents" }),
@@ -294,7 +297,10 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await user.click(await screen.findByRole("button", { name: "Create Named Config" }));
+    const create = await screen.findByRole("button", { name: "Create Named Config" });
+    expect(create).toHaveClass(actionStyles.ghost);
+    expect(create).not.toHaveClass(actionStyles.primary);
+    await user.click(create);
     const dialog = screen.getByRole("dialog", { name: "Create Named Config" });
     const input = within(dialog).getByRole("textbox", { name: "Named Config name" });
     await user.type(input, "Bad Name");
@@ -314,6 +320,31 @@ describe("ConfigPage", () => {
       "true",
     );
     expect(screen.queryByRole("dialog", { name: "Create Named Config" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply Named Config new-config to Current Config" }),
+    ).toHaveClass(actionStyles.primarySoft);
+  });
+  it("keeps Create disabled when the Named Config name already exists", async () => {
+    const { api, createConfig } = configApi({
+      listConfigs: () =>
+        Promise.resolve({
+          configs: [{ name: "custom", state: "ready" }],
+          files: ["config.toml", "auth.json"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: false,
+        } satisfies ConfigListData),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Named Config" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Named Config" });
+    const input = within(dialog).getByRole("textbox", { name: "Named Config name" });
+    await user.type(input, "custom");
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+    expect(dialog).toHaveTextContent("Named Config custom already exists.");
+    await user.keyboard("{Enter}");
+    expect(createConfig).not.toHaveBeenCalled();
   });
   it("reconciles surviving selections after a non-transactional batch deletion failure", async () => {
     let configs: ConfigListData["configs"] = [

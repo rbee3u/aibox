@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationMessage, SessionDetailStats, ToolActivity } from "@/api/sessions";
 import {
+  activitySummary,
+  appendActivityItem,
+  conversationReadingTimeline,
   emptySessionDetail,
+  isRoutineProjectionWarning,
   sessionDetailReducer,
+  transcriptAttentionWarnings,
+  transcriptNeedsAttention,
+  type SessionActivityItem,
   type SessionDetailAction,
   type SessionDetailState,
 } from "@/features/sessions/detail/sessionDetail";
+import { toolActivityHeadline } from "@/features/sessions/detail/sessionFormat";
 
 const message: ConversationMessage = {
   entry_ids: ["message-1"],
@@ -34,6 +42,169 @@ const stats: SessionDetailStats = {
   file_size: 128,
   snapshot: "128:1",
 };
+
+function evidence(status: string, nativeType = "response_item"): SessionActivityItem {
+  return {
+    kind: "evidence",
+    value: {
+      entry_id: `evidence-${status}`,
+      line: 1,
+      timestamp: message.timestamp,
+      native_type: nativeType,
+      role: null,
+      content_types: [],
+      status,
+      preview: status,
+    },
+  };
+}
+
+describe("Conversation attention", () => {
+  it("treats only malformed evidence and failed tools as issues", () => {
+    expect(
+      activitySummary([evidence("filtered"), evidence("unsupported"), evidence("hidden_internal")])
+        .hasIssue,
+    ).toBe(false);
+    expect(activitySummary([evidence("malformed")]).hasIssue).toBe(true);
+    expect(activitySummary([{ kind: "tool", value: { ...tool, status: "failed" } }]).hasIssue).toBe(
+      true,
+    );
+    expect(activitySummary([{ kind: "tool", value: tool }]).hasIssue).toBe(false);
+  });
+
+  it("labels tool-bearing groups as tools and keeps evidence-only groups as quiet Transcript activity", () => {
+    expect(
+      activitySummary([evidence("filtered"), evidence("unsupported", "world_state")]),
+    ).toMatchObject({
+      title: "Transcript activity",
+      detail: "2 items",
+      labels: [],
+    });
+    expect(
+      activitySummary([
+        { kind: "tool", value: { ...tool, name: "exec", summary: '{"cmd":"git status"}' } },
+        evidence("filtered"),
+        evidence("hidden_internal"),
+      ]),
+    ).toMatchObject({
+      title: "1 tool",
+      detail: "exec · 2 events",
+    });
+    expect(activitySummary([{ kind: "tool", value: { ...tool, name: "exec" } }])).toMatchObject({
+      title: "1 tool",
+      detail: "exec",
+    });
+  });
+
+  it("keeps the started Tool Activity summary when the result arrives", () => {
+    const started: SessionActivityItem = {
+      kind: "tool",
+      value: { ...tool, status: "started", summary: '{"cmd":"git status"}' },
+    };
+    const completed: SessionActivityItem = {
+      kind: "tool",
+      value: {
+        ...tool,
+        entry_ids: ["tool-1-done"],
+        status: "completed",
+        summary: "Script completed",
+      },
+    };
+    const timeline = appendActivityItem(appendActivityItem([], started), completed);
+    expect(timeline[0]).toMatchObject({
+      kind: "activity",
+      value: [{ kind: "tool", value: { status: "completed", summary: '{"cmd":"git status"}' } }],
+    });
+  });
+
+  it("promotes the first readable tool input onto the collapsed row", () => {
+    expect(toolActivityHeadline('{"cmd":"git status --porcelain"}')).toBe("git status --porcelain");
+    expect(toolActivityHeadline('"ls -la src"')).toBe("ls -la src");
+    expect(toolActivityHeadline("Read Console source")).toBe("Read Console source");
+    expect(toolActivityHeadline("")).toBeNull();
+  });
+
+  it("keeps unsupported projection notes out of attention chrome", () => {
+    expect(
+      isRoutineProjectionWarning("encountered 1 unsupported Transcript Entry projection(s)"),
+    ).toBe(true);
+    expect(
+      transcriptAttentionWarnings([
+        "encountered 2 unsupported Transcript Entry projection(s)",
+        "line 2: malformed JSONL (invalid)",
+        "skipped 1 malformed JSONL record(s)",
+      ]),
+    ).toEqual(["line 2: malformed JSONL (invalid)", "skipped 1 malformed JSONL record(s)"]);
+  });
+
+  it("keeps leading evidence-only groups off the Conversation reading stream", () => {
+    const leading = {
+      kind: "activity" as const,
+      value: [evidence("filtered"), evidence("unsupported")],
+    };
+    const tools = {
+      kind: "activity" as const,
+      value: [{ kind: "tool" as const, value: tool }],
+    };
+    const trailing = { kind: "activity" as const, value: [evidence("hidden_internal")] };
+    expect(
+      conversationReadingTimeline([leading, { kind: "message", value: message }, trailing]),
+    ).toEqual([{ kind: "message", value: message }, trailing]);
+    expect(conversationReadingTimeline([leading])).toEqual([]);
+    expect(conversationReadingTimeline([tools, { kind: "message", value: message }])).toEqual([
+      tools,
+      { kind: "message", value: message },
+    ]);
+  });
+
+  it("does not alarm a complete Transcript with routine unsupported projections", () => {
+    expect(
+      transcriptNeedsAttention({
+        partial: false,
+        malformedCount: 0,
+        listWarningCount: 0,
+        timeline: [{ kind: "activity", value: [evidence("unsupported"), evidence("filtered")] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("alarms when reading is impaired", () => {
+    expect(
+      transcriptNeedsAttention({
+        partial: true,
+        malformedCount: 0,
+        listWarningCount: 0,
+        timeline: [],
+      }),
+    ).toBe(true);
+    expect(
+      transcriptNeedsAttention({
+        partial: false,
+        malformedCount: 1,
+        listWarningCount: 0,
+        timeline: [],
+      }),
+    ).toBe(true);
+    expect(
+      transcriptNeedsAttention({
+        partial: false,
+        malformedCount: 0,
+        listWarningCount: 1,
+        timeline: [],
+      }),
+    ).toBe(true);
+    expect(
+      transcriptNeedsAttention({
+        partial: false,
+        malformedCount: 0,
+        listWarningCount: 0,
+        timeline: [
+          { kind: "activity", value: [{ kind: "tool", value: { ...tool, status: "incomplete" } }] },
+        ],
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("Session detail reducer", () => {
   it.each([

@@ -8,6 +8,8 @@
 
 .detailPane {
   composes: detailPane from "@/shared/ui/layout/catalog.module.css";
+  /* Narrow hide lives on the shared pane; do not re-set display. */
+  container-type: inline-size;
 }
 
 .dialogActions {
@@ -55,23 +57,11 @@
 .tenantPath {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
+  color: var(--code-muted);
   font: var(--weight-regular) var(--catalog-row-secondary-size) /
     var(--catalog-row-secondary-line-height) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.detailPane {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.detailPane {
-  container-type: inline-size;
 }
 .detailHeader {
   min-height: 54px;
@@ -166,10 +156,17 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   color: var(--muted);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.componentSummary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
 }
 
 .componentInstalledSummary strong {
@@ -180,26 +177,6 @@
 .componentSummaryAttention {
   color: var(--warning);
   font-weight: var(--weight-semibold);
-}
-
-.componentCheckStatus {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-
-.componentCheckStatus::before {
-  margin-right: 12px;
-  color: var(--line-strong);
-  content: "·";
-}
-
-.componentCheckStatus time,
-.componentCheckStatus span {
-  overflow: hidden;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .componentCheckButton:disabled {
@@ -288,6 +265,11 @@
   background: var(--accent-subtle);
 }
 
+.componentRow[data-attention="true"] {
+  background: var(--warning-soft);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
 .componentContent {
   display: grid;
   grid-area: content;
@@ -358,7 +340,7 @@
 
 .componentStateValue strong,
 .componentReleaseValue strong {
-  color: var(--ink);
+  color: var(--code-muted);
   font-family: var(--font-mono);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
@@ -435,7 +417,7 @@
   border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .componentMoreMenu button {
@@ -582,10 +564,6 @@
 @container (max-width: 620px) {
   .tenantDetailHeader {
     padding: 0 16px;
-  }
-
-  .componentCheckStatus {
-    display: none;
   }
 
   .componentCatalogContent {

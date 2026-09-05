@@ -67,7 +67,6 @@
   color: var(--muted);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
 }
 
 .facts dd {
@@ -104,41 +103,47 @@
 }
 
 .confirmationPrompt {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.confirmationPrompt label {
   min-width: 0;
 }
 
-.confirmationPhrase {
-  display: inline-flex;
+.confirmationName {
+  display: inline;
   max-width: 100%;
-  align-items: center;
-  gap: 4px;
-  margin: 0;
-  border: none;
   border-radius: var(--radius-sm);
   padding: 1px 6px;
   color: var(--code-text);
-  font: inherit;
-  line-height: inherit;
-  vertical-align: baseline;
+  font-family: var(--font-mono);
+  font-size: inherit;
   background: var(--surface-inset);
+}
+
+.confirmationCopy {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  color: var(--muted);
+  background: transparent;
   cursor: pointer;
 }
 
-.confirmationPhrase code {
-  min-width: 0;
-  overflow: hidden;
-  color: inherit;
-  font-family: var(--font-mono);
-  font-size: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.confirmationCopy:hover {
+  color: var(--ink);
+  background: var(--surface-inset);
 }
 
-.confirmationPhrase:hover {
-  background: var(--code-bg);
-}
-
-.confirmationPhrase:focus-visible {
+.confirmationCopy:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

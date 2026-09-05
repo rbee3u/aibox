@@ -14,6 +14,11 @@
   font-weight: var(--weight-regular);
   box-shadow: none;
   white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .dangerPrimary {
@@ -27,6 +32,19 @@
   border-color: var(--action-danger-strong);
   color: var(--action-danger-strong);
   background: var(--danger-soft);
+}
+
+.primary {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-surface);
+  font-weight: var(--weight-medium);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-hover-surface);
 }
 
 .primarySoft {
@@ -103,6 +121,7 @@
   opacity: 1;
 }
 
+.primary:disabled,
 .primarySoft:disabled {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);

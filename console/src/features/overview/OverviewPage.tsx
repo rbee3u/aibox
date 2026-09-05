@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Box,
   HardDrive,
+  Image,
   LoaderCircle,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -14,16 +15,20 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { Operation } from "@/api/operations";
 import type { OverviewApi } from "@/api/overview";
-import { ErrorBanner, Fact, Metadata } from "@/features/overview/components/OverviewFacts";
-import { RuntimeSection } from "@/features/overview/components/RuntimeSection";
+import {
+  ErrorBanner,
+  Fact,
+  Metadata,
+  RuntimeStatus,
+} from "@/features/overview/components/OverviewFacts";
+import { imageTitle, imageTone } from "@/features/overview/components/runtimeImage";
+import { RuntimeNotices, RuntimeSection } from "@/features/overview/components/RuntimeSection";
+import { formatStatusSummary } from "@/features/overview/components/statusSummary";
 import { TopologyCanvas } from "@/features/overview/topology/TopologyCanvas";
 import {
-  attentionCountLabel,
-  attentionValue,
   collectVisibleNodes,
   findTopologyNode,
   formatDuration,
-  healthTone,
   MAX_ZOOM,
   MIN_ZOOM,
 } from "@/features/overview/topology/topologyModel";
@@ -31,13 +36,11 @@ import { useOverviewController } from "@/features/overview/useOverviewController
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
 import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
+import { capitalize } from "@/shared/lib/format";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
-import { SectionHeader } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/overview/OverviewPage.module.css";
 
-const ComponentGroupIcon = resourceIcons.components;
-const ConfigsModuleIcon = moduleIcons.configs;
 const HostTenantIcon = resourceIcons.hostTenant;
 const TenantsModuleIcon = moduleIcons.tenants;
 
@@ -61,7 +64,7 @@ export function OverviewPage(props: OverviewPageProps) {
     overviewError,
     overviewRefreshing,
   } = service;
-  const { attentionItems, health, panel } = attention;
+  const { attentionItems, panel } = attention;
   // The group is aliased because it holds a `topology` of its own: the tree data
   // sits inside the tree concern alongside the viewport state that renders it.
   const {
@@ -91,6 +94,10 @@ export function OverviewPage(props: OverviewPageProps) {
     zoomOut,
   } = tree;
   const { onNavigate, operation } = props;
+  const statusSummary = useMemo(
+    () => formatStatusSummary(overview, overviewError),
+    [overview, overviewError],
+  );
   const selectedNode = useMemo(
     () => findTopologyNode(filteredTree, selectedNodeId ?? ""),
     [filteredTree, selectedNodeId],
@@ -124,12 +131,84 @@ export function OverviewPage(props: OverviewPageProps) {
   return (
     <div ref={pageRef} className={styles.page} data-overview-scroll data-scroll-axis="vertical">
       {overviewError && <ErrorBanner message={overviewError} />}
-      <section className={styles.summarySection} aria-label="Service status">
-        <SectionHeader
-          className={styles.sectionHeading}
-          eyebrow="Operational status"
-          title="Key facts"
-          action={
+      <section className={styles.statusSection} aria-label="Service status">
+        <div className={styles.statusStrip}>
+          <p
+            className={styles.statusSummary}
+            title={statusSummary.detail}
+            data-overview-status-summary
+          >
+            {statusSummary.line}
+          </p>
+          <div className={styles.statusMain}>
+            <div className={styles.statusFacts} data-overview-status-facts>
+              <Fact
+                icon={<Server size={15} />}
+                label="Service"
+                value={overviewError ? "Unavailable" : overview ? "Running" : "Loading"}
+                detail={overviewError ?? (overview ? formatDuration(elapsedUptime) : "Connecting")}
+                tone={overviewError ? "error" : overview ? "good" : "neutral"}
+              />
+              <Fact
+                icon={<TenantsModuleIcon size={15} />}
+                label="Managed Tenants"
+                value={overview?.managed_tenants ?? "—"}
+                detail={overview ? "Runnable persistent identities" : "Loading"}
+                tone="neutral"
+                onClick={() => onNavigate("tenants")}
+              />
+              <Fact
+                icon={<HostTenantIcon size={15} />}
+                label="Host Tenant"
+                value={overview ? (overview.host_available ? "Available" : "Unavailable") : "—"}
+                detail="Console-only view of the Host Home"
+                tone={overview?.host_available === false ? "warning" : "neutral"}
+                onClick={() => onNavigate("tenants", new URLSearchParams("tenant=host"))}
+              />
+              <RuntimeStatus
+                icon={<Server size={15} />}
+                label="Docker"
+                value={capitalize(overview?.docker.status ?? "checking")}
+                detail={overview?.docker.error ?? "Docker CLI and daemon"}
+                tone={
+                  overview?.docker.status === "available" ? "good" : overview ? "error" : "neutral"
+                }
+              />
+              <RuntimeStatus
+                icon={<Image size={15} />}
+                label="Runtime Image"
+                value={capitalize(overview?.runtime_image.status ?? "checking")}
+                detail={imageTitle(overview?.runtime_image)}
+                tone={imageTone(overview?.runtime_image.status)}
+              />
+            </div>
+            <div className={styles.statusMeta} data-overview-status-meta>
+              <Metadata
+                icon={<Box size={14} />}
+                label="Version"
+                value={overview?.service.version ?? "—"}
+              />
+              <Metadata
+                icon={<Network size={14} />}
+                label="Listen"
+                value={overview?.service.listen ?? "—"}
+                mono
+              />
+              <Metadata
+                icon={<HardDrive size={14} />}
+                label="AIBox Root"
+                value={
+                  overview
+                    ? abbreviateTenantHome(overview.service.aibox_root, overview.host_home)
+                    : "—"
+                }
+                title={overview?.service.aibox_root ?? "—"}
+                mono
+                wide
+              />
+            </div>
+          </div>
+          <div className={styles.statusActions}>
             <RefreshButton
               label="Refresh status"
               busyLabel="Refreshing status"
@@ -139,72 +218,20 @@ export function OverviewPage(props: OverviewPageProps) {
             >
               Refresh
             </RefreshButton>
-          }
-        />
-        <div className={styles.factGrid}>
-          <Fact
-            icon={<Server size={18} />}
-            label="Service"
-            value={overviewError ? "Unavailable" : overview ? "Running" : "Loading"}
-            detail={overviewError ?? (overview ? formatDuration(elapsedUptime) : "Connecting")}
-            tone={overviewError ? "error" : overview ? "good" : "neutral"}
-          />
-          <Fact
-            icon={<TenantsModuleIcon size={18} />}
-            label="Managed Tenants"
-            value={overview?.managed_tenants ?? "—"}
-            detail={overview ? "Runnable persistent identities" : "Loading"}
-            tone="neutral"
-            onClick={() => onNavigate("tenants")}
-          />
-          <Fact
-            icon={<HostTenantIcon size={18} />}
-            label="Host Tenant"
-            value={overview ? (overview.host_available ? "Available" : "Unavailable") : "—"}
-            detail="Console-only view of the Host Home"
-            tone={overview?.host_available === false ? "warning" : "neutral"}
-            onClick={() => onNavigate("tenants", new URLSearchParams("tenant=host"))}
-          />
-          <Fact
-            icon={<ConfigsModuleIcon size={18} />}
-            label="Config health"
-            value={
-              health
-                ? attentionValue(health.configAttention)
-                : topologyError
-                  ? "Unknown"
-                  : "Loading"
-            }
-            detail={
-              health
-                ? `${health.configTotal} Named Configs`
-                : (topologyError ?? "Inspecting topology")
-            }
-            tone={healthTone(health?.configAttention, health?.configErrors, topologyError)}
-          />
-          <Fact
-            icon={<ComponentGroupIcon size={18} />}
-            label="Component health"
-            value={
-              health
-                ? attentionValue(health.componentAttention)
-                : topologyError
-                  ? "Unknown"
-                  : "Loading"
-            }
-            detail={
-              health
-                ? `${health.componentInstalled} installed`
-                : (topologyError ?? "Inspecting topology")
-            }
-            tone={healthTone(health?.componentAttention, health?.componentErrors, topologyError)}
-          />
-        </div>
-        <section className={styles.attentionPanel} aria-labelledby="attention-title">
-          <div>
-            <span>Attention summary</span>
-            <h3 id="attention-title">Needs attention</h3>
+            <RuntimeSection
+              overview={overview}
+              operation={operation}
+              buildDisabled={buildDisabled}
+              buildUnavailableReason={buildUnavailableReason}
+              onBuild={(force) => void build(force)}
+            />
           </div>
+        </div>
+        <RuntimeNotices overview={overview} buildUnavailableReason={buildUnavailableReason} />
+        <section className={styles.attentionPanel} aria-labelledby="attention-title">
+          <h2 id="attention-title" className="srOnly">
+            Needs attention
+          </h2>
           {panel === "pending" ? (
             <p className={styles.attentionPending} role="status">
               <LoaderCircle className="spin" size={15} aria-hidden="true" /> Inspecting service and
@@ -220,7 +247,8 @@ export function OverviewPage(props: OverviewPageProps) {
                 <button
                   type="button"
                   key={`${item.label}:${item.detail}`}
-                  className={styles[item.tone]}
+                  className={`${styles.attentionItem} ${styles[item.tone]}`}
+                  data-overview-attention
                   disabled={!item.target}
                   onClick={() => item.target && onNavigate(item.target.module, item.target.query)}
                 >
@@ -234,38 +262,7 @@ export function OverviewPage(props: OverviewPageProps) {
             </div>
           )}
         </section>
-        <div className={styles.metadataStrip}>
-          <Metadata
-            icon={<Box size={14} />}
-            label="Version"
-            value={overview?.service.version ?? "—"}
-          />
-          <Metadata
-            icon={<Network size={14} />}
-            label="Listen"
-            value={overview?.service.listen ?? "—"}
-            mono
-          />
-          <Metadata
-            icon={<HardDrive size={14} />}
-            label="AIBox Root"
-            value={
-              overview ? abbreviateTenantHome(overview.service.aibox_root, overview.host_home) : "—"
-            }
-            title={overview?.service.aibox_root ?? "—"}
-            mono
-            wide
-          />
-        </div>
       </section>
-
-      <RuntimeSection
-        overview={overview}
-        operation={operation}
-        buildDisabled={buildDisabled}
-        buildUnavailableReason={buildUnavailableReason}
-        onBuild={(force) => void build(force)}
-      />
 
       <section ref={treeRef} className={styles.topologySection} aria-labelledby="topology-title">
         <div className={styles.topologyToolbar} data-overview-toolbar>
@@ -273,13 +270,14 @@ export function OverviewPage(props: OverviewPageProps) {
             <h2 id="topology-title">Resource topology</h2>
             <span>
               {topology
-                ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.filter((tenant) => tenant.kind === "host").length} Host · ${health ? attentionCountLabel(health.configAttention + health.componentAttention) : "… need attention"}`
+                ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.filter((tenant) => tenant.kind === "host").length} Host`
                 : "Loading topology"}
             </span>
           </div>
           <div className={styles.topologyActions}>
             <button
               type="button"
+              aria-label="Collapse all"
               onClick={() => {
                 collapseAll();
                 setSelectedNodeId(null);
@@ -287,10 +285,12 @@ export function OverviewPage(props: OverviewPageProps) {
               }}
               disabled={!topology}
             >
-              <ChevronsDownUp size={15} aria-hidden="true" /> Collapse all
+              <ChevronsDownUp size={15} aria-hidden="true" />
+              <span className={styles.toolbarLabel}>Collapse all</span>
             </button>
-            <button type="button" onClick={expandAll} disabled={!topology}>
-              <ChevronsUpDown size={15} aria-hidden="true" /> Expand all
+            <button type="button" aria-label="Expand all" onClick={expandAll} disabled={!topology}>
+              <ChevronsUpDown size={15} aria-hidden="true" />
+              <span className={styles.toolbarLabel}>Expand all</span>
             </button>
             <div className={styles.zoomControls} aria-label="Topology zoom controls">
               <IconButton
@@ -320,7 +320,7 @@ export function OverviewPage(props: OverviewPageProps) {
               disabled={topologyRefreshing}
               onClick={() => void loadTopology(true)}
             >
-              Refresh
+              <span className={styles.toolbarLabel}>Refresh</span>
             </RefreshButton>
           </div>
         </div>

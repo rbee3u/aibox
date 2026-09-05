@@ -18,9 +18,16 @@ import {
   LARGE_PRETTY_BYTES,
   LONG_STRING_CHARACTERS,
   parseJson,
+  headerListSummary,
+  headerListToggleLabel,
+  groupSseEventsWithoutPreview,
   parseSse,
-  sseEventTypes,
+  presentSseEvent,
   shouldDeferPretty,
+  shouldPinSseListToBottom,
+  sseEventRunLabel,
+  sseEventTextPreview,
+  sseEventTypes,
   stringifyJson,
 } from "@/features/requests/detail/bodyPresentation";
 
@@ -63,6 +70,45 @@ describe("Body presentation", () => {
     ["missing response", activeDetail, false],
   ] as const)("recognizes SSE for %s", (_name, detail, expected) => {
     expect(isSseResponse(detail)).toBe(expected);
+  });
+
+  it.each([
+    [
+      "one content-type",
+      [header("content-type", "application/json")],
+      "1 header · application/json",
+    ],
+    [
+      "strips content-type parameters",
+      [header("Content-Type", "application/json; charset=utf-8")],
+      "1 header · application/json",
+    ],
+    [
+      "many headers with content-type",
+      [
+        header("authorization", "Bearer test"),
+        header("content-type", "text/event-stream"),
+        header("x-stainless-os", "MacOS"),
+      ],
+      "3 headers · text/event-stream",
+    ],
+    ["count only when content-type is missing", [header("accept", "*/*")], "1 header"],
+    [
+      "plural without content-type",
+      [header("accept", "*/*"), header("user-agent", "cli")],
+      "2 headers",
+    ],
+  ] as const)("summarizes Headers for %s", (_name, headers, expected) => {
+    expect(headerListSummary([...headers])).toBe(expected);
+  });
+
+  it("names the Headers toggle with the request or response side", () => {
+    expect(headerListToggleLabel("request", [header("content-type", "application/json")])).toBe(
+      "Request headers: 1 header · application/json",
+    );
+    expect(
+      headerListToggleLabel("response", [header("accept", "*/*"), header("server", "nginx")]),
+    ).toBe("Response headers: 2 headers");
   });
 
   it("classifies Content-Encoding and JSON media types case-insensitively", () => {
@@ -153,6 +199,76 @@ describe("Body presentation", () => {
       primary: "chat.completion.chunk",
       secondary: null,
     });
+  });
+
+  it("pins the SSE list to the newest Event only while the Request is active", () => {
+    expect(shouldPinSseListToBottom(true, true)).toBe(true);
+    expect(shouldPinSseListToBottom(true, false)).toBe(false);
+    expect(shouldPinSseListToBottom(false, true)).toBe(false);
+    expect(shouldPinSseListToBottom(false, false)).toBe(false);
+  });
+
+  it("collapses consecutive same-type Events that have no card preview", () => {
+    const source = [
+      'data: {"type":"message_start"}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"原诗"}}\n\n',
+      'data: {"type":"message_stop"}\n\n',
+    ].join("");
+    const presented = parseSse(source).events.map(presentSseEvent);
+    const grouped = groupSseEventsWithoutPreview(presented);
+    expect(grouped.map((entry) => entry.kind)).toEqual(["event", "run", "event", "event"]);
+    expect(grouped[1]).toMatchObject({ kind: "run", type: "content_block_delta" });
+    if (grouped[1].kind !== "run") throw new Error("expected a run");
+    expect(grouped[1].items).toHaveLength(3);
+    expect(sseEventRunLabel(grouped[1])).toBe("3 content_block_delta · #2–#4");
+    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("原诗");
+  });
+
+  it("collapses consecutive same-type Events whose card preview is only a short fragment", () => {
+    const source = [
+      'data: {"type":"response.created"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"可"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"将"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"好"}\n\n',
+      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n',
+    ].join("");
+    const presented = parseSse(source).events.map(presentSseEvent);
+    const grouped = groupSseEventsWithoutPreview(presented);
+    expect(grouped.map((entry) => entry.kind)).toEqual(["event", "run", "event"]);
+    expect(grouped[1]).toMatchObject({ kind: "run", type: "response.output_text.delta" });
+    if (grouped[1].kind !== "run") throw new Error("expected a run");
+    expect(grouped[1].items).toHaveLength(3);
+    expect(grouped[1].items.map((item) => item.preview)).toEqual(["可", "将", "好"]);
+    expect(sseEventRunLabel(grouped[1])).toBe("3 response.output_text.delta · #2–#4");
+    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("可将“好”改为“旧”");
+  });
+
+  it("previews text already on an SSE Event without joining other Events", () => {
+    const delta = parseJson('{"type":"response.output_text.delta","delta":"可将"}');
+    const done = parseJson(
+      '{"type":"response.output_text.done","text":"可将“好”改为“旧”：\\n\\n下一句"}',
+    );
+    const created = parseJson('{"type":"response.created"}');
+    const numeric = parseJson('{"type":"answer.delta","value":900719925474099312345}');
+    const chat = parseJson(
+      '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}',
+    );
+    const anthropic = parseJson(
+      '{"type":"content_block_delta","delta":{"type":"text_delta","text":"旧风景"}}',
+    );
+    expect(sseEventTextPreview(delta)).toBe("可将");
+    expect(sseEventTextPreview(done)).toBe("可将“好”改为“旧”： 下一句");
+    expect(sseEventTextPreview(created)).toBeNull();
+    expect(sseEventTextPreview(numeric)).toBeNull();
+    expect(sseEventTextPreview(parseJson("[DONE]"))).toBeNull();
+    expect(sseEventTextPreview(chat)).toBe("Hello");
+    expect(sseEventTextPreview(anthropic)).toBe("旧风景");
+    expect(sseEventTextPreview(parseJson(`{"text":"${"x".repeat(97)}"}`))).toBe(
+      `${"x".repeat(95)}…`,
+    );
   });
 
   it("ignores blocks without data and does not dispatch a newline-only partial event", () => {

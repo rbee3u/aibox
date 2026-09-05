@@ -26,7 +26,19 @@ describe("SelectionMenu visual states", () => {
       /\.selectionOption:hover\s*\{[^}]*color:\s*var\(--ink-secondary\)[^}]*background:\s*var\(--surface-hover\)/s,
     );
     expect(css).toMatch(
-      /\.selectionOption:has\(input:checked\)\s*\{[^}]*color:\s*var\(--accent\)[^}]*background:\s*var\(--surface-selected\)/s,
+      /\.selectionOption:has\(input:checked\)\s*\{[^}]*color:\s*var\(--ink\)[^}]*background:\s*var\(--surface-selected\)/s,
+    );
+  });
+
+  it("keeps overlay menus raised and field triggers on the form surface", () => {
+    expect(css).toMatch(
+      /\.selectionMenu\s*\{[^}]*background:\s*var\(--surface-raised\)[^}]*box-shadow:\s*var\(--shadow-lg\)/s,
+    );
+    expect(css).toMatch(
+      /\.selectionField \.selectionTrigger\s*\{[^}]*border-color:\s*var\(--line-control\)[^}]*background:\s*var\(--surface\)/s,
+    );
+    expect(css).toMatch(
+      /\.selectionField \.selectionTrigger:hover:not\(:disabled\):not\(\[aria-expanded="true"\]\)\s*\{[^}]*background:\s*var\(--surface-hover\)/s,
     );
   });
 });

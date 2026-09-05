@@ -16,7 +16,6 @@ import { TenantPage } from "@/features/tenants/TenantPage";
 import { messageOf } from "@/shared/lib/errors";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import { readPreference, storePreference } from "@/shared/lib/preferences";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { IconButton } from "@/shared/ui/IconButton";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/app/App.module.css";
@@ -129,10 +128,7 @@ export function App() {
                 }}
               >
                 <Icon size={18} data-icon={module.id} />
-                <span>
-                  <strong>{module.label}</strong>
-                  <small>{module.detail}</small>
-                </span>
+                <strong>{module.label}</strong>
               </a>
             );
           })}
@@ -165,10 +161,7 @@ export function App() {
           >
             <Menu size={18} />
           </IconButton>
-          <div className={styles.pageTitle}>
-            <h1>{activeModule.label}</h1>
-            <small>{activeModule.detail}</small>
-          </div>
+          <h1 className={styles.pageTitle}>{activeModule.label}</h1>
         </header>
         <main className={styles.content}>
           {startupError && (
@@ -209,7 +202,10 @@ export function App() {
               operation={operations.operation}
               search={route.search}
               onDirtyChange={recordDirty}
+              onCancelLeave={cancelPendingNavigation}
+              onContinueLeave={continuePendingNavigation}
               onLocationChange={locationChanges.configs}
+              pendingLeave={pendingNavigation !== null}
             />
           )}
           {api && active === "sessions" && (
@@ -237,16 +233,6 @@ export function App() {
           onOperation={operations.record}
           onDismiss={operations.dismiss}
           onExpandedChange={operations.setExpanded}
-        />
-      )}
-      {pendingNavigation && (
-        <ConfirmDialog
-          title="Discard unsaved Config changes?"
-          message="Unsaved Config changes will be lost if you continue."
-          confirmLabel="Discard and continue"
-          variant="primary"
-          onCancel={cancelPendingNavigation}
-          onConfirm={continuePendingNavigation}
         />
       )}
     </div>

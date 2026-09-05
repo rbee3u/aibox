@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { createPortal } from "react-dom";
 
 import {
   layoutTopology,
@@ -40,7 +39,6 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
   const previousZoom = useRef(props.zoom);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [popoverStyle, setPopoverStyle] = useState<{ top: number; left: number } | undefined>();
   const visibleRoot = useMemo(
     () => visibleTopology(props.root, props.expanded, props.forcedExpanded),
     [props.expanded, props.forcedExpanded, props.root],
@@ -51,60 +49,6 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
   );
   const tracedNode = hoveredNode ?? props.activeNode;
   const tracedPath = useMemo(() => topologyPath(props.root, tracedNode), [props.root, tracedNode]);
-  useEffect(() => {
-    if (!selectedNode) {
-      // The next layout pass removes the portal; clearing its stale position is external UI state.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPopoverStyle(undefined);
-      return;
-    }
-    const reposition = () => {
-      const element = [...document.querySelectorAll<HTMLElement>("[data-node-id]")].find(
-        (candidate) => candidate.dataset.nodeId === selectedNode.id,
-      );
-      if (!element) {
-        setPopoverStyle(undefined);
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      // JSDOM and detached layout probes report a zero rect; keep the popup
-      // renderable there while real off-screen nodes remain temporarily hidden.
-      const hasLayout = rect.width > 0 || rect.height > 0;
-      const inViewport =
-        !hasLayout ||
-        (rect.bottom > 0 &&
-          rect.top < window.innerHeight &&
-          rect.right > 0 &&
-          rect.left < window.innerWidth);
-      if (!inViewport) {
-        setPopoverStyle(undefined);
-        return;
-      }
-      const width = 300;
-      const height = 260;
-      const gap = 12;
-      const left =
-        rect.right + width + gap <= window.innerWidth ? rect.right + gap : rect.left - width - gap;
-      let top = rect.top + rect.height / 2 - height / 2;
-      if (top < 12 && rect.bottom + gap + height <= window.innerHeight) {
-        top = rect.bottom + gap;
-      } else if (top + height > window.innerHeight - 12 && rect.top - gap - height >= 12) {
-        top = rect.top - gap - height;
-      }
-      top = Math.max(12, Math.min(window.innerHeight - height - 12, top));
-      setPopoverStyle({ top, left: Math.max(12, left) });
-    };
-    reposition();
-    const viewport = viewportRef.current;
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
-    viewport?.addEventListener("scroll", reposition);
-    return () => {
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-      viewport?.removeEventListener("scroll", reposition);
-    };
-  }, [layout.nodes, props.zoom, selectedNode]);
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
@@ -169,7 +113,7 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
     };
   }, [onCloseInspector, selectedNode]);
   return (
-    <div className={styles.canvasShell}>
+    <div className={styles.canvasShell} data-inspector={selectedNode ? "open" : undefined}>
       <div
         ref={viewportRef}
         className={styles.topologyViewport}
@@ -213,6 +157,7 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
                   key={layoutNode.node.id}
                   layoutNode={layoutNode}
                   active={props.activeNode === layoutNode.node.id}
+                  selected={selectedNode?.id === layoutNode.node.id}
                   traced={tracedPath.has(layoutNode.node.id)}
                   forcedOpen={
                     props.forcedExpanded.has(layoutNode.node.id) &&
@@ -231,21 +176,17 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
             </div>
           </div>
         </div>
+        <span className="srOnly" aria-live="polite">
+          {sessionAnnouncement(props.sessionLoads)}
+        </span>
       </div>
-      {selectedNode &&
-        popoverStyle &&
-        createPortal(
-          <TopologyInspector
-            node={selectedNode}
-            onClose={onCloseInspector}
-            onNavigate={props.onNavigate}
-            style={popoverStyle}
-          />,
-          document.body,
-        )}
-      <span className="srOnly" aria-live="polite">
-        {sessionAnnouncement(props.sessionLoads)}
-      </span>
+      {selectedNode && (
+        <TopologyInspector
+          node={selectedNode}
+          onClose={onCloseInspector}
+          onNavigate={props.onNavigate}
+        />
+      )}
     </div>
   );
 }

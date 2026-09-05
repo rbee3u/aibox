@@ -3,9 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRow } from "@/api/tenants";
 import { TenantPage, tenantRows, tenantApi } from "@/features/tenants/testSupport";
+import actionButtonStyles from "@/shared/ui/ActionButton.module.css";
+import layout from "@/shared/ui/layout/catalog.module.css";
 import { activeOperation } from "@/test/operations";
 
 afterEach(() => {
+  vi.useRealTimers();
   window.history.replaceState(null, "", "/");
 });
 describe("TenantPage", () => {
@@ -33,7 +36,7 @@ describe("TenantPage", () => {
     expect(screen.getByRole("button", { name: "Create Managed Tenant" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Changes are temporarily unavailable");
   });
-  it("opens the Tenant from a historical Component URL and drops the Component selection", async () => {
+  it("highlights a Component from the URL, then drops the query without selecting the row", async () => {
     window.history.replaceState(
       null,
       "",
@@ -54,8 +57,10 @@ describe("TenantPage", () => {
     expect(await screen.findByRole("heading", { name: "Components" })).toBeInTheDocument();
     expect(screen.getByLabelText("Selected Tenant: work, Managed Tenant")).toBeInTheDocument();
     const rust = await screen.findByText("Rust");
+    const row = rust.closest('[role="listitem"]');
     expect(rust.closest("button")).toBeNull();
-    expect(rust.closest('[role="listitem"]')).not.toHaveAttribute("aria-pressed");
+    expect(row).not.toHaveAttribute("aria-pressed");
+    expect(row).toHaveAttribute("data-attention", "true");
     expect(window.location.search).toBe("?tenant=managed%3Awork");
     expect(screen.getByLabelText("Component summary")).toHaveTextContent("1/8 installed");
     expect(screen.queryByText("No issues")).not.toBeInTheDocument();
@@ -63,6 +68,28 @@ describe("TenantPage", () => {
       { kind: "managed", name: "work" },
       expect.any(AbortSignal),
     );
+  });
+  it("drops an unknown Component query without highlighting a row", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/tenants?tenant=managed%3Awork&component=nope",
+    );
+    const { api } = tenantApi({
+      components: [
+        {
+          kind: "rust",
+          supports_version: true,
+          status: "installed",
+          version: "1.89.0",
+          error: null,
+        },
+      ],
+    });
+    render(<TenantPage api={api} />);
+    const rust = await screen.findByText("Rust");
+    expect(rust.closest('[role="listitem"]')).not.toHaveAttribute("data-attention");
+    expect(window.location.search).toBe("?tenant=managed%3Awork");
   });
   it("groups a Managed Tenant catalog without treating missing optional Components as issues", async () => {
     const components = [
@@ -255,6 +282,18 @@ describe("TenantPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Select a Tenant")).not.toBeInTheDocument();
   });
+  it("opens the one-pane Tenant detail only when a Tenant is routed", async () => {
+    const { api } = tenantApi();
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await screen.findByText("Managed Tenants");
+    const catalog = screen.getByLabelText("Tenants");
+    expect(catalog.parentElement).not.toHaveClass(layout.showsDetail);
+
+    await user.click(screen.getByRole("button", { name: "default, Managed Tenant" }));
+    expect(catalog.parentElement).toHaveClass(layout.showsDetail);
+    expect(screen.getByRole("button", { name: "Back to Tenants" })).toBeInTheDocument();
+  });
   it("groups Host and Managed Tenants and shows home paths", async () => {
     const { api } = tenantApi();
     render(<TenantPage api={api} />);
@@ -311,7 +350,10 @@ describe("TenantPage", () => {
     });
     const user = userEvent.setup();
     render(<TenantPage api={api} />);
-    await user.click(await screen.findByRole("button", { name: "Create Managed Tenant" }));
+    const create = await screen.findByRole("button", { name: "Create Managed Tenant" });
+    expect(create).toHaveClass(actionButtonStyles.ghost);
+    expect(create).not.toHaveClass(actionButtonStyles.primary);
+    await user.click(create);
     const dialog = screen.getByRole("dialog", { name: "Create Managed Tenant" });
     const input = within(dialog).getByRole("textbox", { name: "Tenant name" });
     await user.type(input, "Bad_Name");
@@ -323,6 +365,19 @@ describe("TenantPage", () => {
     expect(
       await screen.findByLabelText("Selected Tenant: new-tenant, Managed Tenant"),
     ).toBeInTheDocument();
+  });
+  it("keeps Create disabled when the Managed Tenant name already exists", async () => {
+    const createTenant = vi.fn();
+    const { api } = tenantApi({ createTenant });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Managed Tenant" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Managed Tenant" });
+    const input = within(dialog).getByRole("textbox", { name: "Tenant name" });
+    await user.type(input, "work");
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+    expect(dialog).toHaveTextContent("Managed Tenant work already exists.");
+    expect(createTenant).not.toHaveBeenCalled();
   });
   it("requires the Managed Tenant name for single deletion", async () => {
     const deleteTenants = vi.fn().mockResolvedValue(undefined);

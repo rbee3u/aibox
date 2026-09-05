@@ -1,4 +1,4 @@
-import { Check, Clipboard, FileText } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Clipboard, FileText } from "lucide-react";
 import { useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import type {
@@ -8,7 +8,11 @@ import type {
   RequestDetail as RequestDetailData,
 } from "@/api/requests";
 import type { BodyLoadStatus, DecodedBodyState, DetailTab } from "@/features/requests/viewTypes";
-import { bodyHeaders } from "@/features/requests/detail/bodyPresentation";
+import {
+  bodyHeaders,
+  headerListSummary,
+  headerListToggleLabel,
+} from "@/features/requests/detail/bodyPresentation";
 import {
   createBodyViewMemory,
   type BodyViewMemory,
@@ -161,7 +165,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
   const stages = timingStages(detail);
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
   const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
-  const responseMode = mode === "stream" ? "Streaming" : mode === "normal" ? "Non-streaming" : null;
+  const responseMode = mode === "stream" ? "Stream" : mode === "normal" ? "Non-stream" : null;
   const diagnostics = detail.diagnostics;
   const hasDiagnostics = Object.values(diagnostics).some((entries) => entries.length > 0);
 
@@ -478,26 +482,50 @@ function MessageData({
   onDownload: () => void;
 }) {
   const headers = bodyHeaders(detail, kind);
+  const headersOpen = memory.headersExpanded;
+  const headerSummary = headerListSummary(headers);
 
   return (
     <div className={styles.messageData}>
       <div className={styles.sectionTitle}>
         <h2>
-          <FileText size={15} aria-hidden="true" /> Headers
+          {headers.length > 0 ? (
+            <button
+              type="button"
+              className={styles.headersToggle}
+              aria-expanded={headersOpen}
+              aria-label={headerListToggleLabel(kind, headers)}
+              onClick={() => onMemoryChange({ ...memory, headersExpanded: !headersOpen })}
+            >
+              {headersOpen ? (
+                <ChevronDown size={15} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={15} aria-hidden="true" />
+              )}
+              <FileText size={15} aria-hidden="true" /> Headers
+              <span>{headerSummary}</span>
+            </button>
+          ) : (
+            <>
+              <FileText size={15} aria-hidden="true" /> Headers
+            </>
+          )}
         </h2>
       </div>
       {headers.length > 0 ? (
-        <table className={styles.headers}>
-          <caption className="srOnly">{kind} headers</caption>
-          <tbody>
-            {headers.map((header, index) => (
-              <tr key={`${header.name}-${index}`}>
-                <td>{header.name}</td>
-                <td>{decodeHeader(header)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        headersOpen ? (
+          <table className={styles.headers}>
+            <caption className="srOnly">{kind} headers</caption>
+            <tbody>
+              {headers.map((header, index) => (
+                <tr key={`${header.name}-${index}`}>
+                  <td>{header.name}</td>
+                  <td>{decodeHeader(header)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null
       ) : (
         <p className={styles.empty}>No headers.</p>
       )}

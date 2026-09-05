@@ -14,6 +14,7 @@ describe("StatusBadge", () => {
     expect(badge).toHaveClass(styles.badge, styles.good);
     expect(badge).toHaveAttribute("data-status-tone", "good");
     expect(badge).toHaveAttribute("data-status-variant", "badge");
+    expect(badge.querySelector(`.${styles.dot}`)).toBeInTheDocument();
   });
 
   it("uses a dot for lightweight inline statuses", () => {

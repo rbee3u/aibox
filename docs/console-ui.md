@@ -159,7 +159,11 @@ complete. Shared primitives wrap ordinary native controls and layout; keep
 specialized domain interaction with its owning feature instead of introducing
 a general UI framework.
 
-The desktop shell uses a persistent, collapsible sidebar; narrow layouts use a
+The desktop shell uses a persistent, collapsible sidebar; orientation is the
+selected sidebar item, and the workspace has no repeating module title bar.
+External resource links sit in the sidebar footer as an icon row, not as
+module-sized destinations.
+Narrow layouts use a compact bar with the menu control and module name, plus a
 drawer and one-panel catalog/detail navigation. The same route identifies the
 active module and detail on both layouts. Invalid query values canonicalize to
 a safe default, and responsive changes must not create a second navigation
@@ -175,7 +179,10 @@ detail views retain an explicit back action.
 Batch selection is explicit and never interprets an empty selection as all.
 Select-page affects only the visible page; selection may span pages where
 supported. Destructive actions require confirmation and restore focus to the
-closest valid row, page, or initiating control.
+closest valid row, page, or initiating control. Confirm-dialog fact
+labels stay sentence case. Typed confirmation inputs keep an accessible
+name; the copy control stays outside that label. Create dialogs keep Create
+disabled when the typed name already appears in that catalog.
 
 Menus and split actions support keyboard navigation, Escape and outside-click
 dismissal, anchored positioning, and focus return. Avoid duplicate destructive
@@ -211,9 +218,60 @@ Proxy. User messages and raw evidence preserve plain text and line breaks.
 ### Overview and Tenants
 
 Overview owns Service health, Tenant topology, Runtime Image state, and
-actionable attention. Tenants combines its catalog with Component status and
-actions. Frontend comparisons may expose an Update action, but never invent
-installed state, desired versions, or automatic update behavior. Follow the
+actionable attention. The attention list is the only verbal “needs work”
+summary: it names the first target and why it needs work, then jumps
+there, without a visible section title. A healthy summary is one quiet
+line. Key facts, listen/root, and Runtime share one quiet status row.
+Health facts stay heavier than Version, listen, and Root.
+On narrow viewports that row collapses to a wrapping health summary so
+every health token stays visible; Version, listen, and Root stay on the
+summary title. Attention items wrap as a
+short list without filled chips. The topology toolbar keeps the title
+and iconifies collapse, expand, and refresh so it does not nest a
+horizontal scroll.
+Named Config and Component inventory counts stay in topology, not the
+status row. Build is primary only while the Runtime Image is missing or
+unknown; those states also keep Build without cache inline. When the
+image is Built, Build stays secondary and the cacheless rebuild moves
+into the Build overflow. Topology marks the same state spatially and does
+not repeat the page-level attention count. Agent cards show the
+last-applied name and drift without a Last applied or Config Drift
+prefix; Sessions say Load count until a summary is loaded. Shortened or
+truncated node copy is disclosed on the whole node for pointer hover and
+keyboard focus. Opening a node docks its details to the right of the
+topology workspace so the tree stays clickable; the hover disclosure
+closes. That pane stays pinned under the topology toolbar while the
+tree scrolls, so its facts and Open in action stay reachable.
+That pane shows facts the card shortened — last-applied time,
+file counts, full Tenant home, on-demand Session load. When those extra
+facts are absent it still names the card metric the click asked for
+(Session count, leaf status) so the pane is not an empty tone line.
+It does not shout an uppercase eyebrow or repeat Dirty when last-applied
+time and file counts are already listed. On narrow viewports that pane
+stacks under the canvas instead of overlaying it. Topology nodes share
+one quiet card chrome; identity
+nodes stay taller and bolder, catalog and leaf nodes stay shorter.
+Do not mix cards with underline rows. Collapsed branches keep a plus
+control and do not show a filled child-count badge. Topology Component
+and Named Config leaves use the same width as Tenant cards so their
+labels stay readable. Current Config leaves use Application Drift for dirty,
+source-missing, and comparison-error the same way Attention names them;
+healthy leaves keep the file-count detail. First expansion follows the first attention path; when nothing
+needs work it still opens the protected
+default Tenant. Overview Component attention and topology Component leaf
+nodes open Tenants with `tenant=<selection>` and `component=<kind>`. Tenants
+scrolls that row into view, highlights it once, then drops `component=` so
+the row stays a non-selectable list item. A Components group node, or a
+catalog-level Component error, still opens the Tenant only. Tenants
+combines its catalog with Component status and actions. The Component
+header keeps inventory and issue count as the only verbal summary.
+Check for updates is a quiet icon control; last-checked time is not a
+header fact. Catalog create is the same quiet tone as Refresh and Select,
+not a filled Primary. On narrow
+viewports the catalog and detail take turns filling the page; the
+detail pane stays hidden until a Tenant is opened. Frontend
+comparisons may expose an Update action, but never invent installed state,
+desired versions, or automatic update behavior. Follow the
 [Tenant Component contract](tenants.md#tenant-components).
 
 ### Configs
@@ -223,8 +281,22 @@ Config Option model; Raw remains available, and Current Config is Raw-only.
 Required, omitted, sensitive, enum, and provider fields follow that supplied
 model rather than frontend-maintained lists. The editor tracks drafts and
 results per file, and ordered saves do not imply rollback. Dirty guards cover
-every navigation path. Apply, Last Application, and Drift copy describe a
-one-shot projection, never an Active Config. Overview Named Configs opens
+every navigation path. In-app leaves, including the sidebar, use the same
+Unsaved changes dialog with Save and continue. History and unload stay on
+the native confirmation. Last Application is quiet Current Config metadata.
+When Config Drift is dirty, that line also says it differs, without a
+Dirty badge. Apply success feedback states the one-shot projection;
+Drift stays on the
+recorded Named Config. None of that copy describes an Active Config. The
+editor heading is the selected Config name. Host risk and the unredacted
+content warning share one quiet line. Tenant, Agent, Config, and File
+facts appear only on narrow viewports, when the catalog is hidden.
+Credential Propagation stays on the Host Codex Current Config row as a
+quiet control, not the same emphasis as Apply. Catalog create uses that
+same quiet tone; Apply stays the row action. Catalog Tenant and Coding
+Agent filters share leftover toolbar width so Host Tenant is not clipped;
+longer names still ellipsize.
+Overview Named Configs opens
 Configs with `named=1`: the Named Configs catalog for that Tenant and Coding
 Agent, without selecting Current Config or opening the editor. `current=1`
 inspects Current Config; `config=<name>` inspects a Named Config. Absent both,
@@ -236,33 +308,86 @@ Configs still defaults to Current Config. Follow the authoritative
 Session detail has shareable `conversation` and `details` tabs. Conversation
 keeps native order, safe Markdown for Agent text, plain-text user messages, and
 grouped Tool Activity and Transcript Evidence; reasoning remains hidden.
+A leading Codex skill file link `[$name](path)` displays as `$name` with the
+path on the title; the Conversation navigator uses the same label.
+A Codex request-review prompt collapses to the first embedded user line, or
+Review continuation; the full prompt stays in a disclosure. The navigator uses
+the same label. A whole-message approval JSON with outcome or risk_level
+shows those present fields and keeps the raw object in a disclosure.
+Groups that include tools are labeled as tools and show the tool input on the
+row; evidence-only groups stay Transcript activity, collapsed, without native
+type names or a tool icon. Evidence-only groups before the first message stay
+off the Conversation reading stream; their counts remain on Details.
+Routine filtered, hidden-internal, and unsupported projections stay in those
+groups without warning chrome. Header warning, Conversation banner, and the
+Details attention mark appear only when reading is impaired: malformed
+records, an incomplete stream, or failed Tool Activity. Details keeps
+unsupported and hidden-internal as quiet counts and does not banner the
+unsupported-projection warning.
 Streaming renders frames as they arrive, while manual refresh keeps old content
 until replacement succeeds. Missing-message, tool-only, evidence-only, and
-partial states remain explicit. Follow the [Session contract](tenants.md#sessions).
+partial states remain explicit. The Conversation header shows source, start
+time, and message/tool counts; the first-to-last event interval stays on Details
+as Observed span, not Duration. Details omits Tenant, Coding Agent, and start
+time already shown in that header; field labels stay sentence case. The catalog primary line prefers human-readable
+copy: it skips review boilerplate, JSON-only previews, and skill file paths,
+and demotes the native title or skill name to the secondary line. That
+secondary line stays plain text: it drops `**`, backticks,
+blockquote `>`, and a leading `- ` / `* ` list marker, and does not
+render GFM. A promoted
+latest message uses its first paragraph or first CJK sentence, not a
+collapsed severity list or trailing file path. When a
+single Tenant and Coding Agent are selected, catalog rows omit the source
+and keep the time. Codex request review rows do not show an empty-preview
+line. Single-session
+delete confirmation keeps `display_id` in the title and restates the catalog
+headline, source, and start time. Batch confirmation keeps the selected count
+and sources and does not enumerate ids. Follow the
+[Session contract](tenants.md#sessions).
 
 ### Requests
 
 Requests owns page, selection, detail, and tab URL state. Summary is the default
 tab; bodies load only for the visible body tab. Selection may span pages and
 keeps row context for focus after deletion. Active Requests are unselectable.
+Single-request delete confirmation restates method, target, status, time, and
+id from the catalog row. Batch confirmation keeps the selected count and does
+not enumerate ids.
 
 Rust supplies Request Assessment and normalized diagnostics. The browser does
 not reclassify outcomes or parse bodies to backfill model, usage, First Token,
 Session ID, or diagnostics. It presents HTTP status, Provider Error,
-proxy/transport findings, and warnings as independent evidence. Follow the
+proxy/transport findings, and warnings as independent evidence. The catalog
+row shows a short Assessment label (`Warning:` / `Error:` plus the finding
+kind) in place of the model on the secondary line; the model stays in the
+row title. The full diagnostic sentence stays on the detail record. The catalog
+row and the detail headline both omit an Assessment label when that primary
+only restates the HTTP status already shown. The Model summary shows protocol
+response mode as `Stream` or `Non-stream`; that label is not the live
+`Streaming` phase used on active catalog rows. Follow the
 [Request diagnostics contract](sandbox.md#diagnostics).
 
 Body views provide Raw download, decoded Source, and browser-only Pretty
 representations. Raw preserves application-visible bytes. Source owns the
-top-level Copy value. Pretty never changes or persists a Request. Lossless JSON
+top-level Copy value. Pretty never changes or persists a Request. Request and
+Response Headers start collapsed as a count and content-type summary;
+expanding reveals the table. Values stay unredacted. The
+no-redaction reminder is quiet metadata, not a warning Alert. Lossless JSON
 handling preserves large-number spelling and rejects duplicate keys. Invalid
 UTF-8, JSON, or supported content decoding falls back to Source or encoded hex
 without hiding Raw; large decoded bodies default to Source until Pretty is
 requested.
 
 SSE cards derive only complete events from decoded Source and keep partial
-tails visible. Optional timings join by sequence and degrade locally when
-missing or malformed. Content-encoded streams may be shown after complete
-decoding but do not invent raw-offset timing. Nanosecond offsets remain decimal
+tails visible. Completed records start at the first Event; only an active
+stream pins to the newest Event. Collapsed cards show text already present
+on that Event and do not assemble a reconstructed reply. Consecutive
+same-type Events without a useful card preview (missing, or only a short
+fragment) collapse into a summary row; empty and short-fragment runs stay
+separate so a later short text Event does not join a preview-less run.
+Expanding the row reveals those Events. Optional timings
+join by sequence and degrade locally when missing or malformed.
+Content-encoded streams may be shown after complete decoding but do not
+invent raw-offset timing. Nanosecond offsets remain decimal
 wire values and use `BigInt`; incomplete timing combines only measurable
 adjacent stages and never invents a duration.

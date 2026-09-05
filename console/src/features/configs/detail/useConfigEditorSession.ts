@@ -12,13 +12,22 @@ export function useConfigEditorSession(
   scopeKey: string,
   onDirtyChange: ((dirty: boolean) => void) | undefined,
   onError: (message: string | null) => void,
+  leave?: {
+    pending?: boolean;
+    onCancel?: () => void;
+    onContinue?: () => void | Promise<void>;
+  },
 ) {
   const controllers = useRef(new Map<string, ConfigFileController>());
   const revealRetries = useRef(new Map<string, () => void>());
+  const leaveArmed = useRef(false);
   const [fileStatuses, setFileStatuses] = useState<Record<string, ConfigFileStatus>>({});
   const [pendingAction, setPendingAction] = useState<ConfigPendingAction | null>(null);
   const editorDirty = Object.values(fileStatuses).some((status) => status.dirty);
   const dirtyFiles = files.filter((name) => fileStatuses[name]?.dirty);
+  const pendingLeave = leave?.pending === true;
+  const onCancelLeave = leave?.onCancel;
+  const onContinueLeave = leave?.onContinue;
 
   useEffect(() => onDirtyChange?.(editorDirty), [editorDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
@@ -113,7 +122,21 @@ export function useConfigEditorSession(
     await action();
   }, [pendingAction]);
 
-  const cancelPending = useCallback(() => setPendingAction(null), []);
+  useEffect(() => {
+    if (!pendingLeave || !onContinueLeave) {
+      leaveArmed.current = false;
+      return;
+    }
+    if (leaveArmed.current) return;
+    leaveArmed.current = true;
+    // Shell navigation is deferred until this editor session resolves it.
+    setPendingAction({ run: onContinueLeave });
+  }, [onContinueLeave, pendingLeave]);
+
+  const cancelPending = useCallback(() => {
+    setPendingAction(null);
+    if (pendingLeave) onCancelLeave?.();
+  }, [onCancelLeave, pendingLeave]);
 
   return {
     cancelPending,

@@ -27,6 +27,7 @@ export function ConfigDialogs({
     closePropagation,
     createError,
     createHelpId,
+    createNameTaken,
     createNameValid,
     createOpen,
     createTitleId,
@@ -83,7 +84,7 @@ export function ConfigDialogs({
                 Discard and continue
               </ActionButton>
               <ActionButton
-                tone="primarySoft"
+                tone="primary"
                 onClick={() => void savePending(saveOrder)}
                 disabled={mutationBusy || dirtyFiles.some((name) => !fileStatuses[name]?.canSave)}
               >
@@ -103,7 +104,7 @@ export function ConfigDialogs({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !mutationBusy) void createConfig(newName);
+              if (createNameValid && !createNameTaken && !mutationBusy) void createConfig(newName);
             }}
           >
             <h2 id={createTitleId}>Create Named Config</h2>
@@ -114,7 +115,7 @@ export function ConfigDialogs({
                 aria-label="Named Config name"
                 value={newName}
                 onChange={(event) => changeNewName(event.target.value)}
-                aria-invalid={newName.length > 0 && !createNameValid}
+                aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
                 aria-describedby={createHelpId}
               />
             </label>
@@ -129,6 +130,15 @@ export function ConfigDialogs({
                 icon={<AlertTriangle size={15} aria-hidden="true" />}
               >
                 Enter a valid lowercase DNS label.
+              </AlertBanner>
+            )}
+            {createNameValid && createNameTaken && (
+              <AlertBanner
+                className={styles.dialogAlert}
+                tone="danger"
+                icon={<AlertTriangle size={15} aria-hidden="true" />}
+              >
+                Named Config {newName} already exists.
               </AlertBanner>
             )}
             {createError && (
@@ -151,8 +161,8 @@ export function ConfigDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
-                disabled={!createNameValid || mutationBusy}
+                tone="primary"
+                disabled={!createNameValid || createNameTaken || mutationBusy}
               >
                 {busy ? (
                   <>
@@ -284,7 +294,7 @@ export function ConfigDialogs({
               </ActionButton>
               {preview && (
                 <ActionButton
-                  tone="primarySoft"
+                  tone="primary"
                   disabled={mutationBusy || preview.preview.updates === 0}
                   onClick={() => void executePropagation()}
                 >

@@ -4,6 +4,12 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { Children, isValidElement } from "react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import {
+  parseLeadingSkillLink,
+  parseReviewAssessment,
+  parseReviewPrompt,
+  type ReviewAssessmentDisplay,
+} from "@/features/sessions/sessionListCopy";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import styles from "@/features/sessions/detail/SessionMessageContent.module.css";
 
@@ -84,7 +90,62 @@ function MarkdownLink({ children, href, ...props }: MarkdownLinkProps) {
 }
 
 function PlainMessage({ text }: { text: string }) {
+  const skill = parseLeadingSkillLink(text);
+  if (skill) {
+    return (
+      <div className={styles.plainText}>
+        <code className={styles.skillLabel} title={skill.path}>
+          ${skill.name}
+        </code>
+        {skill.rest ? <pre className={styles.plainRest}>{skill.rest}</pre> : null}
+      </div>
+    );
+  }
+  const review = parseReviewPrompt(text);
+  if (review) {
+    return (
+      <div className={styles.plainText}>
+        <div>{review.headline}</div>
+        <details className={styles.reviewDump}>
+          <summary>Review prompt</summary>
+          <pre>{text}</pre>
+        </details>
+      </div>
+    );
+  }
   return <pre className={styles.plainText}>{text}</pre>;
+}
+
+function assessmentFacts(assessment: ReviewAssessmentDisplay): string {
+  return [
+    assessment.outcome,
+    assessment.riskLevel ? `risk ${assessment.riskLevel}` : null,
+    assessment.authorization ? `authorization ${assessment.authorization}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function AssessmentMessage({
+  text,
+  assessment,
+}: {
+  text: string;
+  assessment: ReviewAssessmentDisplay;
+}) {
+  const facts = assessmentFacts(assessment);
+  return (
+    <div className={styles.plainText}>
+      {facts ? <div className={styles.assessmentFacts}>{facts}</div> : null}
+      {assessment.rationale ? (
+        <div className={styles.assessmentRationale}>{assessment.rationale}</div>
+      ) : null}
+      <details className={styles.reviewDump}>
+        <summary>Assessment</summary>
+        <pre>{text}</pre>
+      </details>
+    </div>
+  );
 }
 
 function MarkdownMessage({ text }: { text: string }) {
@@ -106,7 +167,12 @@ function MarkdownMessage({ text }: { text: string }) {
 }
 
 export function SessionMessageContent({ role, text }: SessionMessageContentProps) {
-  return role === "assistant" ? <MarkdownMessage text={text} /> : <PlainMessage text={text} />;
+  if (role === "assistant") {
+    const assessment = parseReviewAssessment(text);
+    if (assessment) return <AssessmentMessage text={text} assessment={assessment} />;
+    return <MarkdownMessage text={text} />;
+  }
+  return <PlainMessage text={text} />;
 }
 
 export function SessionMessageRole({ children }: { children: ReactNode }) {

@@ -77,16 +77,15 @@ export function SidebarUtilities({
       <nav className={styles.resourceLinks} aria-label="Resources">
         {resources.map((resource) => (
           <a
-            className={styles.utilityItem}
+            className={styles.resourceLink}
             href={resource.href}
             key={resource.label}
             aria-label={resource.label}
             target="_blank"
             rel="noopener noreferrer"
-            title={collapsed ? resource.label : undefined}
+            title={resource.label}
           >
             <BrandIcon brand={resource.brand} size={17} />
-            <span className={styles.utilityLabel}>{resource.label}</span>
           </a>
         ))}
       </nav>

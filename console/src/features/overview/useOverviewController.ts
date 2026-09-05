@@ -17,9 +17,9 @@ import {
   buildDisabledReason,
   buildTopologyTree,
   collectVisibleNodes,
+  componentAttentionItem,
+  configAttentionItem,
   defaultExpansion,
-  firstComponentAttentionTarget,
-  firstConfigAttentionTarget,
   structuralIds,
   summarizeTopology,
   type AttentionItem,
@@ -207,20 +207,9 @@ export function useOverviewController({ api, operation, onOperation }: Controlle
         tone: "warning",
         target: { module: "tenants", query: new URLSearchParams("tenant=host") },
       });
-    if (health?.configAttention)
-      items.push({
-        label: "Configs",
-        detail: `${health.configAttention} Named Config${health.configAttention === 1 ? " needs" : "s need"} attention.`,
-        tone: health.configErrors ? "error" : "warning",
-        target: topology ? firstConfigAttentionTarget(topology) : { module: "configs" },
-      });
-    if (health?.componentAttention)
-      items.push({
-        label: "Components",
-        detail: `${health.componentAttention} Component${health.componentAttention === 1 ? " needs" : "s need"} attention.`,
-        tone: health.componentErrors ? "error" : "warning",
-        target: topology ? firstComponentAttentionTarget(topology) : { module: "tenants" },
-      });
+    if (topology && health?.configAttention) items.push(configAttentionItem(topology, health));
+    if (topology && health?.componentAttention)
+      items.push(componentAttentionItem(topology, health));
     if (topologyError)
       items.push({ label: "Resource inspection", detail: topologyError, tone: "error" });
     return items;

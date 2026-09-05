@@ -1,6 +1,7 @@
 import { Minus, Plus } from "lucide-react";
-import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
+import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
+  topologyNodeDisclosure,
   type SessionLoad,
   type TopologyLayoutNode,
   type TopologyNode,
@@ -9,8 +10,11 @@ import {
 import type { Tone } from "@/features/overview/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
+import { AnchoredTooltip } from "@/shared/ui/AnchoredTooltip";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/overview/OverviewPage.module.css";
+
+const NODE_TOOLTIP_DELAY_MS = 150;
 
 const ComponentGroupIcon = resourceIcons.components;
 const ComponentIcon = resourceIcons.component;
@@ -25,6 +29,7 @@ const SessionsModuleIcon = moduleIcons.sessions;
 interface TopologyCanvasNodeProps {
   layoutNode: TopologyLayoutNode;
   active: boolean;
+  selected: boolean;
   traced: boolean;
   forcedOpen: boolean;
   load?: SessionLoad;
@@ -39,6 +44,8 @@ interface TopologyCanvasNodeProps {
 export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
   const { layoutNode } = props;
   const { node } = layoutNode;
+  const descriptionId = useId();
+  const disclosure = topologyNodeDisclosure(node);
   const content = (
     <>
       <span className={styles.nodeIcon} data-tree-icon={node.icon}>
@@ -46,80 +53,118 @@ export function TopologyCanvasNode(props: TopologyCanvasNodeProps) {
       </span>
       <span className={styles.nodeCopy}>
         <strong>{node.label}</strong>
-        {node.detail && <small title={node.tooltip ?? node.detail}>{node.detail}</small>}
+        {node.detail && <small>{node.detail}</small>}
       </span>
       <StatusMark tone={node.tone} />
     </>
   );
   return (
-    <div
-      ref={(element) => props.registerNode(node.id, element)}
-      className={`${styles.topologyNode} ${styles[layoutNode.kind]} ${styles[node.tone]} ${props.active ? styles.nodeActive : ""} ${props.traced ? styles.nodeTraced : ""}`}
-      style={{
-        left: layoutNode.x,
-        top: layoutNode.y,
-        width: layoutNode.width,
-        height: layoutNode.height,
-      }}
-      role="treeitem"
-      aria-label={node.detail ? `${node.label} ${node.detail}` : node.label}
-      aria-level={layoutNode.depth + 1}
-      aria-posinset={layoutNode.position}
-      aria-setsize={layoutNode.setSize}
-      aria-expanded={layoutNode.branch ? layoutNode.open : undefined}
-      tabIndex={props.active ? 0 : -1}
-      data-node-id={node.id}
-      data-node-kind={layoutNode.kind}
-      onMouseEnter={() => props.onHover(node.id)}
-      onMouseLeave={() => props.onHover(null)}
-      onFocus={(event) => event.target === event.currentTarget && props.onFocus(node.id)}
-      onClick={() => props.onSelect(node.id)}
-      onKeyDown={(event) => props.onKeyDown(event, node)}
+    <AnchoredTooltip
+      disabled={!disclosure || props.selected}
+      openDelayMs={NODE_TOOLTIP_DELAY_MS}
+      className={styles.nodeTooltip}
+      positionKey={node.id}
+      content={disclosure}
     >
-      {node.parentId && <span className={styles.inputPort} aria-hidden="true" />}
-      <div className={styles.nodeSurface}>{content}</div>
-      {node.sessionRequest && (
-        <RefreshButton
-          type="button"
-          className={styles.topologySessionRefresh}
-          label={`Refresh ${node.label} summary`}
-          iconOnly
-          iconSize={12}
-          tabIndex={-1}
-          busy={props.load?.state === "loading"}
-          disabled={props.load?.state === "loading"}
-          onMouseDown={keepTreeitemFocus}
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onRefreshSession(node);
+      {(tooltip) => (
+        <div
+          ref={(element) => {
+            tooltip.triggerRef.current = element;
+            props.registerNode(node.id, element);
           }}
-        />
-      )}
-      {layoutNode.branch && node.id !== "service" ? (
-        <button
-          type="button"
-          className={styles.disclosure}
-          tabIndex={-1}
-          aria-label={`${layoutNode.open ? "Collapse" : "Expand"} ${node.label}`}
-          aria-expanded={layoutNode.open}
-          disabled={props.forcedOpen}
-          title={props.forcedOpen ? "Clear the active filter to collapse this branch" : undefined}
-          onMouseDown={keepTreeitemFocus}
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onFocus(node.id);
-            props.onToggle(node);
+          className={`${styles.topologyNode} ${styles[layoutNode.kind]} ${styles[node.tone]} ${props.active ? styles.nodeActive : ""} ${props.traced ? styles.nodeTraced : ""}`}
+          style={{
+            left: layoutNode.x,
+            top: layoutNode.y,
+            width: layoutNode.width,
+            height: layoutNode.height,
+          }}
+          role="treeitem"
+          aria-label={node.detail ? `${node.label} ${node.detail}` : node.label}
+          aria-describedby={disclosure ? descriptionId : undefined}
+          aria-level={layoutNode.depth + 1}
+          aria-posinset={layoutNode.position}
+          aria-setsize={layoutNode.setSize}
+          aria-expanded={layoutNode.branch ? layoutNode.open : undefined}
+          tabIndex={props.active ? 0 : -1}
+          data-node-id={node.id}
+          data-node-kind={layoutNode.kind}
+          onPointerEnter={(event) => {
+            tooltip.onPointerEnter(event);
+            props.onHover(node.id);
+          }}
+          onPointerLeave={(event) => {
+            tooltip.onPointerLeave(event);
+            props.onHover(null);
+          }}
+          onPointerDown={(event) => {
+            tooltip.close();
+            tooltip.onPointerDown(event);
+          }}
+          onFocus={(event) => {
+            if (event.target === event.currentTarget) props.onFocus(node.id);
+            if (disclosure && !props.selected && event.currentTarget.matches(":focus-visible")) {
+              tooltip.onFocus(event);
+            }
+          }}
+          onBlur={tooltip.onBlur}
+          onClick={() => props.onSelect(node.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") tooltip.close();
+            if (disclosure && !props.selected) tooltip.onKeyDown(event);
+            props.onKeyDown(event, node);
           }}
         >
-          {layoutNode.open ? <Minus size={13} /> : <Plus size={13} />}
-          {!layoutNode.open && node.children.length > 0 && (
-            <span className={styles.collapsedCount}>{node.children.length}</span>
+          {disclosure && (
+            <span id={descriptionId} className="srOnly">
+              {disclosure}
+            </span>
           )}
-        </button>
-      ) : layoutNode.branch ? (
-        <span className={styles.outputPort} aria-hidden="true" />
-      ) : null}
-    </div>
+          {node.parentId && <span className={styles.inputPort} aria-hidden="true" />}
+          <div className={styles.nodeSurface}>{content}</div>
+          {node.sessionRequest && (
+            <RefreshButton
+              type="button"
+              className={styles.topologySessionRefresh}
+              label={`Refresh ${node.label} summary`}
+              iconOnly
+              iconSize={12}
+              tabIndex={-1}
+              busy={props.load?.state === "loading"}
+              disabled={props.load?.state === "loading"}
+              onMouseDown={keepTreeitemFocus}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onRefreshSession(node);
+              }}
+            />
+          )}
+          {layoutNode.branch && node.id !== "service" ? (
+            <button
+              type="button"
+              className={styles.disclosure}
+              tabIndex={-1}
+              aria-label={`${layoutNode.open ? "Collapse" : "Expand"} ${node.label}`}
+              aria-expanded={layoutNode.open}
+              disabled={props.forcedOpen}
+              title={
+                props.forcedOpen ? "Clear the active filter to collapse this branch" : undefined
+              }
+              onMouseDown={keepTreeitemFocus}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onFocus(node.id);
+                props.onToggle(node);
+              }}
+            >
+              {layoutNode.open ? <Minus size={13} /> : <Plus size={13} />}
+            </button>
+          ) : layoutNode.branch ? (
+            <span className={styles.outputPort} aria-hidden="true" />
+          ) : null}
+        </div>
+      )}
+    </AnchoredTooltip>
   );
 }
 function keepTreeitemFocus(event: MouseEvent<HTMLElement>) {

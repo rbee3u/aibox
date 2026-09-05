@@ -143,7 +143,7 @@ export function TenantCatalogPane({
             <div className={layout.divider}>
               <span>Managed Tenants</span>
               <ActionButton
-                tone="primarySoft"
+                tone="ghost"
                 className={layout.addAction}
                 aria-label="Create Managed Tenant"
                 disabled={mutationBusy || refreshing || selectionMode}

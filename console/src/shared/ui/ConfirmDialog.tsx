@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, LoaderCircle } from "lucide-react";
+import { AlertTriangle, Check, Clipboard, LoaderCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
@@ -40,6 +40,7 @@ export function ConfirmDialog({
   busy = false,
 }: ConfirmDialogProps) {
   const titleId = useId();
+  const inputId = useId();
   const [typed, setTyped] = useState("");
   const [copied, copy] = useClipboardFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -73,34 +74,39 @@ export function ConfirmDialog({
         {message && <p className={styles.message}>{message}</p>}
         {description}
         {confirmation && (
-          <label className={styles.confirmation}>
-            <span className={styles.confirmationPrompt}>
-              Type{" "}
+          <div className={styles.confirmation}>
+            <div className={styles.confirmationPrompt}>
+              <label htmlFor={inputId}>
+                Type <code className={styles.confirmationName}>{confirmation}</code> to confirm
+              </label>
               <button
                 type="button"
-                className={styles.confirmationPhrase}
+                className={styles.confirmationCopy}
                 onClick={() => void copy(confirmation, true)}
                 aria-label={copied ? `Copied ${confirmation}` : `Copy ${confirmation}`}
                 title={copied ? "Copied" : "Click to copy"}
               >
-                <code>{confirmation}</code>
-                {copied ? <Check size={12} aria-hidden="true" /> : null}
-              </button>{" "}
-              to confirm
-            </span>
+                {copied ? (
+                  <Check size={12} aria-hidden="true" />
+                ) : (
+                  <Clipboard size={12} aria-hidden="true" />
+                )}
+              </button>
+            </div>
             <TextInput
+              id={inputId}
               ref={inputRef}
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
             />
-          </label>
+          </div>
         )}
         <div className={styles.actions}>
           <ActionButton ref={cancelRef} tone="secondary" onClick={onCancel} disabled={busy}>
             Cancel
           </ActionButton>
           <ActionButton
-            tone={variant === "danger" ? "dangerPrimary" : "primarySoft"}
+            tone={variant === "danger" ? "dangerPrimary" : "primary"}
             onClick={onConfirm}
             disabled={!enabled || busy}
           >

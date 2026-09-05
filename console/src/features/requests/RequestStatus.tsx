@@ -1,8 +1,9 @@
 import type { RequestAssessment, RequestState, ResponseMetadata } from "@/api/requests";
 import styles from "@/features/requests/RequestStatus.module.css";
-import { IssueIndicator, IssueTooltip } from "@/shared/ui/IssueIndicator";
+import { IssueTooltip } from "@/shared/ui/IssueIndicator";
 import { StatusBadge, type StatusTone } from "@/shared/ui/StatusBadge";
 import {
+  assessmentCatalogLabel,
   assessmentIssueText,
   requestHeadlinePresentation,
   requestStatusPresentation,
@@ -45,21 +46,24 @@ export function RequestStatus({ status, state, assessment }: RequestStatusProps)
           {presentation.phase}
         </StatusBadge>
       )}
-      {presentation.issue && <CompactIssue issue={presentation.issue} />}
     </span>
   );
 }
 
-function CompactIssue({ issue }: { issue: AssessmentPresentation }) {
+export function RequestCatalogIssue({ issue }: { issue: AssessmentPresentation }) {
   return (
-    <span className={styles.compactIssue}>
-      <IssueIndicator
-        tone={issue.tone}
-        label={issue.label}
-        message={issue.message}
-        ariaLabel={assessmentIssueText(issue)}
-      />
-    </span>
+    <IssueTooltip
+      tone={issue.tone}
+      label={issue.label}
+      message={issue.message}
+      className={`${styles.catalogIssue} ${
+        issue.tone === "warning" ? styles.catalogWarning : styles.catalogError
+      }`}
+      ariaLabel={assessmentIssueText(issue)}
+      interactive={false}
+    >
+      <span className={styles.catalogIssueText}>{assessmentCatalogLabel(issue)}</span>
+    </IssueTooltip>
   );
 }
 
@@ -97,6 +101,7 @@ export function RecordHeadlineStatus({ response, state, assessment }: RecordHead
             presentation.tag.tone === "warning" ? styles.warningTag : styles.errorTag
           }`}
         >
+          <span className={styles.dot} aria-hidden="true" />
           <span className={styles.tagLabel}>{presentation.tag.label}</span>
           {presentation.tag.additionalIssues > 0 && (
             <span className={styles.issueCount}>+{presentation.tag.additionalIssues}</span>
