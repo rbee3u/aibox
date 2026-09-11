@@ -1,36 +1,20 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type KeyboardEvent,
-  type RefObject,
-  type SetStateAction,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import type { Operation } from "@/api/operations";
 import type { OverviewApi, OverviewData, TopologyData } from "@/api/overview";
 import {
+  buildTopologyTree,
+  type AttentionItem,
+  type TopologyNode,
+} from "@/features/overview/resourceTree";
+import {
   attentionPanelKind,
   buildDisabledReason,
-  buildTopologyTree,
-  collectVisibleNodes,
-  defaultExpansion,
-  firstComponentAttentionTarget,
-  firstConfigAttentionTarget,
-  structuralIds,
-  summarizeTopology,
-  type AttentionItem,
-  type AttentionPanelKind,
-  type SessionLoad,
-  type SessionRequest,
-  type TopologyHealth,
-  type TopologyMetrics,
-  type TopologyNode,
-} from "@/features/overview/topology/topologyModel";
-import { useTopologyInteraction } from "@/features/overview/topology/useTopologyInteraction";
+  bySeverity,
+  topologyAttentions,
+} from "@/features/overview/topology/healthAttention";
+import { explainFailure } from "@/features/overview/failureCopy";
+import type { AttentionPanelKind } from "@/features/overview/viewTypes";
 import { useOverviewData } from "@/features/overview/useOverviewData";
 import { messageOf } from "@/shared/lib/errors";
 
@@ -40,15 +24,7 @@ interface ControllerOptions {
   onOperation: (operation: Operation) => void;
 }
 
-/**
- * What the Overview page reads, grouped by what the page is showing.
- *
- * Overview has neither a catalog nor a detail pane, so it groups by its own three
- * concerns rather than borrowing the other four pages' names: the Service and its
- * Runtime Image, the topology tree and its viewport, and the attention summary
- * derived from both.
- */
-export interface OverviewViewModel {
+interface OverviewViewModel {
   service: {
     build: (force: boolean) => Promise<void>;
     buildDisabled: boolean;
@@ -60,55 +36,28 @@ export interface OverviewViewModel {
     overviewRefreshing: boolean;
   };
   topology: {
-    collapseAll: () => void;
-    expandAll: () => void;
-    expanded: Set<string>;
-    filteredTree: TopologyNode | null;
-    forcedExpanded: Set<string>;
-    loadSessionSummary: (id: string, request: SessionRequest, force?: boolean) => Promise<void>;
-    loadTopology: (visibleRefresh?: boolean) => Promise<void>;
-    metrics: TopologyMetrics | null;
-    navigateTree: (event: KeyboardEvent<HTMLDivElement>, node: TopologyNode) => void;
     pageRef: RefObject<HTMLDivElement | null>;
-    registerNode: (id: string, element: HTMLDivElement | null) => void;
-    renderedActiveNode: string;
-    resetZoom: () => void;
-    sessionLoads: Record<string, SessionLoad>;
-    setActiveNode: Dispatch<SetStateAction<string>>;
-    toggleNode: (node: TopologyNode) => void;
+    tree: TopologyNode | null;
+    loadTopology: (visibleRefresh?: boolean) => Promise<void>;
     topology: TopologyData | null;
     topologyError: string | null;
     topologyRefreshing: boolean;
-    treeRef: RefObject<HTMLElement | null>;
-    updateMetrics: (next: TopologyMetrics) => void;
-    zoom: number;
-    zoomIn: () => void;
-    zoomOut: () => void;
   };
   attention: {
     attentionItems: AttentionItem[];
-    health: TopologyHealth | null;
     panel: AttentionPanelKind;
   };
 }
 
-export function useOverviewController({ api, operation, onOperation }: ControllerOptions) {
+export function useOverviewController({
+  api,
+  operation,
+  onOperation,
+}: ControllerOptions): OverviewViewModel {
   const [buildPosting, setBuildPosting] = useState(false);
-  const [ownedBuild, setOwnedBuild] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [sessionLoads, setSessionLoads] = useState<Record<string, SessionLoad>>({});
-  const sessionRequests = useRef(new Map<string, AbortController>());
-  const initializedTopology = useRef(false);
-  const onTopologyLoaded = useCallback((value: TopologyData) => {
-    const structural = structuralIds(value);
-    const firstLoad = !initializedTopology.current;
-    if (firstLoad) {
-      setExpanded(defaultExpansion(value));
-      initializedTopology.current = true;
-    } else {
-      setExpanded((current) => new Set([...current].filter((id) => structural.has(id))));
-    }
-  }, []);
+  const ownedBuild = useRef<string | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const {
     elapsedUptime,
     loadOverview,
@@ -116,115 +65,88 @@ export function useOverviewController({ api, operation, onOperation }: Controlle
     overview,
     overviewError,
     overviewRefreshing,
-    reportOverviewError,
     topology,
     topologyError,
     topologyRefreshing,
-  } = useOverviewData(api, onTopologyLoaded);
+  } = useOverviewData(api);
   useEffect(() => {
-    const pendingSessionRequests = sessionRequests.current;
-    return () => {
-      for (const controller of pendingSessionRequests.values()) controller.abort();
-    };
-  }, []);
-  useEffect(() => {
-    if (!ownedBuild || operation?.id !== ownedBuild || operation.state === "running") return;
-    setOwnedBuild(null);
+    if (
+      !ownedBuild.current ||
+      operation?.id !== ownedBuild.current ||
+      operation.state === "running"
+    )
+      return;
+    ownedBuild.current = null;
     void loadOverview();
-  }, [loadOverview, operation, ownedBuild]);
-  const loadSessionSummary = useCallback(
-    async (id: string, request: SessionRequest, force = false) => {
-      if (!force && sessionLoads[id]?.state === "loaded") return;
-      sessionRequests.current.get(id)?.abort();
-      const controller = new AbortController();
-      sessionRequests.current.set(id, controller);
-      setSessionLoads((current) => ({ ...current, [id]: { state: "loading" } }));
-      try {
-        const data = await api.loadSessionSummary(request.tenant, request.agent, controller.signal);
-        if (controller.signal.aborted || sessionRequests.current.get(id) !== controller) return;
-        setSessionLoads((current) => ({ ...current, [id]: { state: "loaded", data } }));
-      } catch (cause) {
-        if (!controller.signal.aborted) {
-          setSessionLoads((current) => ({
-            ...current,
-            [id]: { state: "error", error: messageOf(cause) },
-          }));
-        }
-      } finally {
-        if (sessionRequests.current.get(id) === controller) sessionRequests.current.delete(id);
-      }
-    },
-    [api, sessionLoads],
-  );
-  const hostHome =
-    overview?.host_home ?? topology?.tenants.find((tenant) => tenant.kind === "host")?.home ?? null;
-  const tree = useMemo(
-    () => (topology ? buildTopologyTree(topology, sessionLoads, hostHome) : null),
-    [hostHome, sessionLoads, topology],
-  );
-  const health = useMemo(() => (topology ? summarizeTopology(topology) : null), [topology]);
-  const filteredTree = tree;
-  const forcedExpanded = useMemo(() => new Set<string>(), []);
-  const visibleNodes = useMemo(
-    () => (filteredTree ? collectVisibleNodes(filteredTree, expanded, forcedExpanded) : []),
-    [expanded, filteredTree, forcedExpanded],
-  );
-  const topologyInteraction = useTopologyInteraction({
-    expanded,
-    filteredTree,
-    forcedExpanded,
-    setExpanded,
-    topology,
-    visibleNodes,
-  });
+  }, [loadOverview, operation]);
+  const tree = useMemo(() => (topology ? buildTopologyTree(topology) : null), [topology]);
   const operationRunning = operation?.state === "running";
-  const buildDisabled = buildPosting || operationRunning || overview?.docker.status !== "available";
+  const buildDisabled =
+    buildPosting ||
+    operationRunning ||
+    overview?.docker.status !== "available" ||
+    overviewError !== null;
   const buildUnavailableReason = buildPosting
     ? "Build request is being submitted."
     : buildDisabled
-      ? buildDisabledReason(overview, operation)
+      ? overviewError
+        ? "Refresh Service status before building."
+        : buildDisabledReason(overview, operation)
       : null;
   const attentionItems = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];
-    if (overviewError)
-      items.push({ label: "Service status", detail: overviewError, tone: "error" });
-    if (overview?.docker.status === "unavailable")
+    if (buildError)
       items.push({
-        label: "Docker",
-        detail: overview.docker.error ?? "Docker is unavailable.",
+        key: "build",
+        label: "Runtime Image build",
+        ...explainFailure("build", buildError),
         tone: "error",
       });
-    if (overview && overview.runtime_image.status !== "built")
+    if (overviewError)
       items.push({
+        key: "service",
+        label: "Service status",
+        ...explainFailure("service", overviewError),
+        tone: "error",
+        retry: "service",
+      });
+    if (!overviewError && overview?.docker.status === "unavailable")
+      items.push({
+        key: "docker",
+        label: "Docker",
+        ...explainFailure("docker", overview.docker.error),
+        tone: "error",
+      });
+    if (
+      !overviewError &&
+      overview?.docker.status === "available" &&
+      overview.runtime_image.status !== "built"
+    )
+      items.push({
+        key: "runtime-image",
         label: "Runtime Image",
         detail: overview.runtime_image.detail ?? "Build the Runtime Image before starting a Run.",
         tone: overview.runtime_image.status === "missing" ? "warning" : "error",
       });
     if (overview?.host_available === false)
       items.push({
+        key: "host-tenant",
         label: "Host Tenant",
         detail: "The Host Home is unavailable.",
         tone: "warning",
         target: { module: "tenants", query: new URLSearchParams("tenant=host") },
       });
-    if (health?.configAttention)
-      items.push({
-        label: "Configs",
-        detail: `${health.configAttention} Named Config${health.configAttention === 1 ? " needs" : "s need"} attention.`,
-        tone: health.configErrors ? "error" : "warning",
-        target: topology ? firstConfigAttentionTarget(topology) : { module: "configs" },
-      });
-    if (health?.componentAttention)
-      items.push({
-        label: "Components",
-        detail: `${health.componentAttention} Component${health.componentAttention === 1 ? " needs" : "s need"} attention.`,
-        tone: health.componentErrors ? "error" : "warning",
-        target: topology ? firstComponentAttentionTarget(topology) : { module: "tenants" },
-      });
+    if (topology) items.push(...topologyAttentions(topology));
     if (topologyError)
-      items.push({ label: "Resource inspection", detail: topologyError, tone: "error" });
-    return items;
-  }, [health, overview, overviewError, topology, topologyError]);
+      items.push({
+        key: "topology",
+        label: "Resource inspection",
+        ...explainFailure("topology", topologyError),
+        tone: "error",
+        retry: "topology",
+      });
+    return bySeverity(items);
+  }, [buildError, overview, overviewError, topology, topologyError]);
   const panel = attentionPanelKind({
     itemCount: attentionItems.length,
     overviewSettled: (overview !== null || overviewError !== null) && !overviewRefreshing,
@@ -233,19 +155,19 @@ export function useOverviewController({ api, operation, onOperation }: Controlle
 
   async function build(force: boolean) {
     setBuildPosting(true);
+    setBuildError(null);
     try {
       const value = await api.buildImage(force);
-      setOwnedBuild(value.id);
+      ownedBuild.current = value.id;
       onOperation(value);
-      reportOverviewError(null);
     } catch (cause) {
-      reportOverviewError(messageOf(cause));
+      setBuildError(messageOf(cause));
     } finally {
       setBuildPosting(false);
     }
   }
 
-  const viewModel: OverviewViewModel = {
+  const viewModel = {
     service: {
       build,
       buildDisabled,
@@ -257,34 +179,15 @@ export function useOverviewController({ api, operation, onOperation }: Controlle
       overviewRefreshing,
     },
     topology: {
-      collapseAll: topologyInteraction.collapseAll,
-      expandAll: topologyInteraction.expandAll,
-      expanded,
-      filteredTree,
-      forcedExpanded,
-      loadSessionSummary,
+      pageRef,
+      tree,
       loadTopology,
-      metrics: topologyInteraction.metrics,
-      navigateTree: topologyInteraction.navigateTree,
-      pageRef: topologyInteraction.pageRef,
-      registerNode: topologyInteraction.registerNode,
-      renderedActiveNode: topologyInteraction.activeNode,
-      resetZoom: topologyInteraction.resetZoom,
-      sessionLoads,
-      setActiveNode: topologyInteraction.setActiveNode,
-      toggleNode: topologyInteraction.toggleNode,
       topology,
       topologyError,
       topologyRefreshing,
-      treeRef: topologyInteraction.treeRef,
-      updateMetrics: topologyInteraction.updateMetrics,
-      zoom: topologyInteraction.zoom,
-      zoomIn: topologyInteraction.zoomIn,
-      zoomOut: topologyInteraction.zoomOut,
     },
     attention: {
       attentionItems,
-      health,
       panel,
     },
   };

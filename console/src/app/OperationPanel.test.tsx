@@ -68,7 +68,12 @@ describe("OperationPanel", () => {
     );
     expect(screen.getByText(/Earlier log output was truncated/)).toBeInTheDocument();
     expect(document.querySelector("pre")).toHaveTextContent(/Downloading\s+Installing/);
-    expect(screen.getByText("Terminal state")).toBeInTheDocument();
+    expect(screen.getByText("Finished")).toBeInTheDocument();
+    // The reason reads under the state that names it, not in the footer.
+    const result = screen.getByText("Docker exited with status 1");
+    expect(result.closest("footer")).toBeNull();
+    expect(result.closest("[role='status']")).not.toBeNull();
+    expect(document.querySelector("pre")).not.toHaveTextContent("Docker exited with status 1");
     expect(screen.getByRole("button", { name: "Collapse operation" })).toHaveAttribute(
       "aria-expanded",
       "true",
@@ -122,5 +127,85 @@ describe("OperationPanel", () => {
         "true",
       ),
     );
+  });
+  it("distinguishes the three terminal states by tone, mark, and reading", () => {
+    const api = { post: vi.fn(), get: vi.fn() };
+    // Failure and cancellation shared one stop-sign mark and one muted grey, so
+    // a failed install and a successful one were indistinguishable at a glance.
+    const cases = [
+      { state: "succeeded", tone: "good", label: "Succeeded", mark: "lucide-check" },
+      { state: "failed", tone: "error", label: "Failed", mark: "lucide-circle-x" },
+      { state: "cancelled", tone: "warning", label: "Cancelled", mark: "lucide-ban" },
+    ] as const;
+    const seen = new Set<string>();
+    for (const { state, tone, label, mark } of cases) {
+      const view = render(
+        <OperationPanel
+          api={api}
+          operation={{ ...runningOperation, state, ended_at: "2026-08-19T01:03:07Z" }}
+          onOperation={() => undefined}
+          onDismiss={() => undefined}
+        />,
+      );
+      const badge = screen.getByText(label);
+      expect(badge.closest("[data-status-tone]")).toHaveAttribute("data-status-tone", tone);
+      expect(document.querySelector(`header .${mark}`)).toBeInTheDocument();
+      seen.add(tone);
+      seen.add(mark);
+      view.unmount();
+    }
+    expect(seen.size).toBe(6);
+  });
+  it("reports how long a running Operation has taken, and how long a finished one took", () => {
+    const api = { post: vi.fn(), get: vi.fn() };
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse("2026-08-19T01:03:07Z"));
+      const view = render(
+        <OperationPanel
+          api={api}
+          operation={runningOperation}
+          onOperation={() => undefined}
+          onDismiss={() => undefined}
+        />,
+      );
+      // started_at is 01:00:00, so a multi-minute install can be told apart
+      // from one that has just stalled.
+      expect(screen.getByText("3m7s")).toBeInTheDocument();
+      view.unmount();
+      render(
+        <OperationPanel
+          api={api}
+          operation={{
+            ...runningOperation,
+            state: "succeeded",
+            ended_at: "2026-08-19T01:04:12Z",
+          }}
+          onOperation={() => undefined}
+          onDismiss={() => undefined}
+        />,
+      );
+      expect(screen.getByText("took 4m12s")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("reports the height it occupies so the shell can reserve it", () => {
+    const api = { post: vi.fn(), get: vi.fn() };
+    const heights: number[] = [];
+    // A fixed panel over an unpadded workspace put the last catalog row out of
+    // reach, with no scroll available to recover it.
+    const view = render(
+      <OperationPanel
+        api={api}
+        operation={runningOperation}
+        onOperation={() => undefined}
+        onDismiss={() => undefined}
+        onHeightChange={(height) => heights.push(height)}
+      />,
+    );
+    expect(heights.length).toBeGreaterThan(0);
+    view.unmount();
+    expect(heights[heights.length - 1]).toBe(0);
   });
 });

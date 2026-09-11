@@ -22,3 +22,9 @@ fn is_event_kind(value: &str) -> bool {
 pub(super) fn is_terminal_event_kind(value: &str) -> bool {
     value == "message_stop"
 }
+
+/// Claude puts live Token Usage on `message_start.message.usage` and
+/// `message_delta.usage`. Other events may repeat a stub `usage` object.
+pub(super) fn is_top_level_usage_kind(kind: &str, event_name: Option<&str>) -> bool {
+    kind == "message_delta" || event_name == Some("message_delta")
+}

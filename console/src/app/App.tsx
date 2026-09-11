@@ -1,8 +1,10 @@
-import { AlertTriangle, Box, Menu } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Box, Menu, X } from "lucide-react";
+import type { CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { connectControlApi, type ConnectedControlApi } from "@/api/connect";
 import { OperationPanel } from "@/app/OperationPanel";
-import { consoleModules, moduleById, modulePath } from "@/app/routing/modules";
+import { consoleModules, moduleById, moduleFromPath } from "@/app/routing/modules";
+import { modulePath } from "@/shared/lib/navigation";
 import { useConsoleRouter } from "@/app/routing/useConsoleRouter";
 import { SidebarUtilities } from "@/app/SidebarUtilities";
 import { usePersistentTheme } from "@/app/theme/usePersistentTheme";
@@ -10,20 +12,22 @@ import { useMobileNavigation } from "@/app/useMobileNavigation";
 import { useOperationFeed } from "@/app/useOperationFeed";
 import { ConfigPage } from "@/features/configs/ConfigPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
+import type { OverviewBrowsingState } from "@/features/overview/browsingState";
 import { RequestsPage } from "@/features/requests/RequestsPage";
 import { SessionPage } from "@/features/sessions/SessionPage";
 import { TenantPage } from "@/features/tenants/TenantPage";
 import { messageOf } from "@/shared/lib/errors";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import { readPreference, storePreference } from "@/shared/lib/preferences";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { IconButton } from "@/shared/ui/IconButton";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/app/App.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SIDEBAR_COLLAPSED_KEY = "aibox-console-sidebar-collapsed";
 
 export function App() {
+  const overviewBrowsing = useRef<OverviewBrowsingState | null>(null);
   const [api, setApi] = useState<ConnectedControlApi | null>(null);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(
@@ -50,6 +54,16 @@ export function App() {
     cancelPendingNavigation,
     acceptPendingNavigation,
   } = useConsoleRouter();
+  const active = route.module;
+  const activeModule = moduleById(active);
+  const mainRef = useRef<HTMLElement>(null);
+  const previousModuleRef = useRef(active);
+
+  useEffect(() => {
+    document.title = `${activeModule.label} · AIBox`;
+    if (previousModuleRef.current !== active) mainRef.current?.focus();
+    previousModuleRef.current = active;
+  }, [active, activeModule.label]);
 
   useEffect(() => {
     void connectControlApi()
@@ -72,23 +86,39 @@ export function App() {
       requestNavigation(modulePath(module, query));
       return;
     }
+    const changesModule = module !== active;
     commitLocation(module, query);
-    if (mobileLayout) closeNavigation();
+    if (mobileLayout) closeNavigation(!changesModule);
   };
 
   const continuePendingNavigation = useCallback(() => {
+    const pendingModule = pendingNavigation
+      ? moduleFromPath(new URL(pendingNavigation, window.location.href).pathname)
+      : active;
     if (!acceptPendingNavigation()) return;
-    if (mobileLayout) closeNavigation();
-  }, [acceptPendingNavigation, closeNavigation, mobileLayout]);
-
-  const active = route.module;
-  const activeModule = moduleById(active);
+    if (mobileLayout) closeNavigation(pendingModule === active);
+  }, [acceptPendingNavigation, active, closeNavigation, mobileLayout, pendingNavigation]);
 
   return (
     <div
       data-aibox-shell="true"
-      className={`${styles.app} ${collapsed ? styles.collapsed : ""} ${operations.visible && operations.expanded ? styles.operationExpanded : ""}`}
+      className={`${styles.app} ${collapsed ? styles.collapsed : ""}`}
+      style={
+        operations.visible
+          ? ({ "--console-operation-height": `${operations.height}px` } as CSSProperties)
+          : undefined
+      }
     >
+      <a
+        className={styles.skipLink}
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        Skip to main content
+      </a>
       <aside
         ref={sidebarRef}
         id="console-navigation"
@@ -98,12 +128,19 @@ export function App() {
       >
         <div className={styles.brand} title={collapsed ? "AIBox · Put AI in a Box" : undefined}>
           <span className={styles.mark}>
-            <Box size={23} strokeWidth={2.2} />
+            <Box size={iconSize.lg} />
           </span>
           <span className={styles.brandCopy}>
             <strong>AIBox</strong>
             <small>Put AI in a Box</small>
           </span>
+          <IconButton
+            className={styles.drawerCloseButton}
+            label="Close navigation"
+            onClick={() => closeNavigation()}
+          >
+            <X size={iconSize.md} aria-hidden="true" />
+          </IconButton>
         </div>
         <nav className={styles.moduleNav} aria-label="Modules">
           {consoleModules.map((module) => {
@@ -128,11 +165,8 @@ export function App() {
                   navigate(module.id);
                 }}
               >
-                <Icon size={18} data-icon={module.id} />
-                <span>
-                  <strong>{module.label}</strong>
-                  <small>{module.detail}</small>
-                </span>
+                <Icon size={iconSize.md} data-icon={module.id} />
+                <strong>{module.label}</strong>
               </a>
             );
           })}
@@ -146,10 +180,10 @@ export function App() {
         />
       </aside>
       {navigationOpen && (
-        <button
+        <div
           className={styles.scrim}
-          type="button"
-          aria-label="Close navigation"
+          data-navigation-scrim
+          aria-hidden="true"
           onClick={() => closeNavigation()}
         />
       )}
@@ -163,31 +197,37 @@ export function App() {
             aria-expanded={navigationOpen}
             onClick={() => setNavigationOpen(true)}
           >
-            <Menu size={18} />
+            <Menu size={iconSize.md} />
           </IconButton>
-          <div className={styles.pageTitle}>
-            <h1>{activeModule.label}</h1>
-            <small>{activeModule.detail}</small>
-          </div>
+          <h1 id="console-page-title" className={styles.pageTitle}>
+            {activeModule.label}
+          </h1>
         </header>
-        <main className={styles.content}>
+        <main
+          ref={mainRef}
+          id="main-content"
+          className={styles.content}
+          aria-labelledby="console-page-title"
+          tabIndex={-1}
+        >
           {startupError && (
             <AlertBanner
               className={styles.startupError}
               tone="danger"
-              icon={<AlertTriangle size={16} aria-hidden="true" />}
+              icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
             >
               {startupError}
             </AlertBanner>
           )}
           {!api && !startupError && (
             <div className={styles.boot}>
-              <Box size={28} />
+              <Box size={iconSize.xl} />
               <span>Connecting to AIBox Service</span>
             </div>
           )}
           {api && active === "overview" && (
             <OverviewPage
+              browsingMemory={overviewBrowsing}
               api={api.overview}
               operation={operations.operation}
               onNavigate={navigate}
@@ -209,7 +249,10 @@ export function App() {
               operation={operations.operation}
               search={route.search}
               onDirtyChange={recordDirty}
+              onCancelLeave={cancelPendingNavigation}
+              onContinueLeave={continuePendingNavigation}
               onLocationChange={locationChanges.configs}
+              pendingLeave={pendingNavigation !== null}
             />
           )}
           {api && active === "sessions" && (
@@ -236,17 +279,7 @@ export function App() {
           connection={operations.connection}
           onOperation={operations.record}
           onDismiss={operations.dismiss}
-          onExpandedChange={operations.setExpanded}
-        />
-      )}
-      {pendingNavigation && (
-        <ConfirmDialog
-          title="Discard unsaved Config changes?"
-          message="Unsaved Config changes will be lost if you continue."
-          confirmLabel="Discard and continue"
-          variant="primary"
-          onCancel={cancelPendingNavigation}
-          onConfirm={continuePendingNavigation}
+          onHeightChange={operations.setHeight}
         />
       )}
     </div>

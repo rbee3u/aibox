@@ -10,8 +10,40 @@
   box-shadow: none;
 }
 
+/*
+ * An icon control riding inside a line of text rather than sitting in its own
+ * slot: a copy affordance beside a value, where the default step would set the
+ * height of the line it sits in and break the rhythm of the rows around it.
+ */
+.sm {
+  width: var(--control-xs);
+  height: var(--control-xs);
+  min-width: var(--control-xs);
+  min-height: var(--control-xs);
+  flex-basis: var(--control-xs);
+}
+
+.tooltip {
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  color: var(--bg-canvas);
+  background: var(--ink);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The coarse-pointer floor is stated last, and inside this stylesheet, so it
+ * outranks both size steps by source order. A call site reaching for a smaller
+ * control therefore cannot take a touch target below the minimum with it: doing
+ * that from a feature stylesheet is how the Session copy control ended up at
+ * 24px on touch.
+ */
 @media (pointer: coarse) {
-  .button {
+  .button,
+  .button.sm {
     width: 44px;
     height: 44px;
     min-width: 44px;

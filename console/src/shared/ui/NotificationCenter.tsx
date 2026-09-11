@@ -5,6 +5,7 @@ import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 import styles from "@/shared/ui/NotificationCenter.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface NotificationCenterProps {
   notifications: NotificationItemData[];
@@ -109,7 +110,7 @@ function NotificationItem({ notification, paused, onAction, onDismiss }: Notific
       onFocusCapture={() => setInteracting(true)}
       onBlurCapture={handleBlur}
     >
-      <Icon className={styles.icon} size={17} aria-hidden="true" />
+      <Icon className={styles.icon} size={iconSize.md} aria-hidden="true" />
       <div className={styles.copy}>
         <strong>{notification.title}</strong>
         <span>{notification.message}</span>
@@ -120,7 +121,7 @@ function NotificationItem({ notification, paused, onAction, onDismiss }: Notific
         </RefreshButton>
       )}
       <IconButton className={styles.dismiss} label="Dismiss message" onClick={dismiss}>
-        <X size={15} aria-hidden="true" />
+        <X size={iconSize.xs} aria-hidden="true" />
       </IconButton>
     </article>
   );

@@ -4,14 +4,16 @@ import type { SessionApi } from "@/api/sessions";
 import { SessionConversation } from "@/features/sessions/detail/SessionConversation";
 import { SessionDetails } from "@/features/sessions/detail/SessionDetails";
 import { messageCountLabel, toolCountLabel } from "@/features/sessions/detail/sessionFormat";
+import { sessionListCopy } from "@/features/sessions/sessionListCopy";
 import { visibleSessionListSource } from "@/features/sessions/sessionSource";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
-import { compactDuration, formatTimestamp } from "@/shared/lib/format";
+import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
 
@@ -44,6 +46,7 @@ export function SessionDetailPane({
     showJumpLatest,
     timeline,
     transcriptHasDiagnostics,
+    transcriptNeedsAttention,
     transcriptIsPartial,
     updateSessionTab,
     userMessages,
@@ -54,18 +57,18 @@ export function SessionDetailPane({
         <>
           <header className={`${styles.detailHeader} ${styles.sessionDetailHeader}`}>
             <IconButton label="Back to Sessions" onClick={closeSessionInspection}>
-              <ChevronLeft size={17} />
+              <ChevronLeft size={iconSize.md} />
             </IconButton>
             <div className={styles.sessionDetailHeading}>
               <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {currentSession.title || "Untitled Session"}
+                {sessionListCopy(currentSession.title, currentSession.latest_message).headline}
               </h2>
               <span className={styles.sessionDetailSource}>
                 {visibleSessionListSource(currentSession.source)} ·{" "}
                 <time dateTime={currentSession.start_ts}>
                   {formatTimestamp(currentSession.start_ts)}
                 </time>{" "}
-                · {compactDuration(detailStats?.observed_duration_ms)} ·{" "}
+                ·{" "}
                 {messageCountLabel(detailStats?.message_count ?? currentSession.message_count ?? 0)}{" "}
                 · {toolCountLabel(detailStats?.tool_count ?? currentSession.tool_count ?? 0)}
               </span>
@@ -81,20 +84,22 @@ export function SessionDetailPane({
                   Partial transcript
                 </span>
               )}
-              {!loadingDetail && detailStats && sessionWarnings.length > 0 && (
+              {!loadingDetail && detailStats && transcriptNeedsAttention && (
                 <span className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}>
-                  <AlertTriangle size={13} aria-hidden="true" /> Transcript warning
+                  <AlertTriangle size={iconSize.xs} aria-hidden="true" /> Transcript warning
                 </span>
               )}
               <RefreshButton
                 label="Refresh Session detail"
                 busyLabel="Refreshing Session detail"
                 busy={loadingDetail}
-                iconOnly
+                compactOnNarrow
                 iconSize={15}
                 disabled={mutations.deletionBusy}
                 onClick={() => void openSession(currentSession, false, true)}
-              />
+              >
+                Refresh
+              </RefreshButton>
             </div>
           </header>
           <nav className={styles.sessionTabs} aria-label="Session views">
@@ -113,13 +118,13 @@ export function SessionDetailPane({
               onClick={() => updateSessionTab("details")}
             >
               Details
-              {transcriptHasDiagnostics && (
+              {transcriptNeedsAttention && (
                 <span
                   className={styles.sessionTabIssue}
                   aria-label="Transcript diagnostics"
                   title="Transcript diagnostics"
                 >
-                  <AlertTriangle size={11} aria-hidden="true" />
+                  <AlertTriangle size={iconSize.xs} aria-hidden="true" />
                 </span>
               )}
             </button>
@@ -142,7 +147,7 @@ export function SessionDetailPane({
               userMessages={userMessages}
               activeUserMessage={resolvedActiveUserMessage}
               loading={loadingDetail}
-              warnings={sessionWarnings}
+              needsAttention={transcriptNeedsAttention && !transcriptIsPartial}
               snapshot={detailStats?.snapshot}
               revision={detailRevision}
               showJumpLatest={showJumpLatest}
@@ -158,7 +163,7 @@ export function SessionDetailPane({
       ) : (
         <EmptyState
           variant="detail"
-          icon={<SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />}
+          icon={<SessionIcon size={iconSize.xl} data-icon="session-empty" aria-hidden="true" />}
           title="Select a Session"
           description="Choose a Session to inspect its conversation and Transcript."
         />

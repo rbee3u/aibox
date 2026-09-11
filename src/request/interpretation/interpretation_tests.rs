@@ -9,6 +9,28 @@ fn header(name: &str, value: &[u8]) -> RecordedHeader {
     }
 }
 
+fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
+    let mut input = bytes;
+    let mut output = Vec::new();
+    brotli::BrotliCompress(
+        &mut input,
+        &mut output,
+        &brotli::enc::BrotliEncoderParams::default(),
+    )
+    .unwrap();
+    output
+}
+
+fn deflate_encode(bytes: &[u8]) -> Vec<u8> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write as _;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
 #[test]
 fn body_content_coding_accepts_identity_and_one_case_insensitive_coding() {
     assert_eq!(
@@ -26,6 +48,14 @@ fn body_content_coding_accepts_identity_and_one_case_insensitive_coding() {
     assert_eq!(
         body_content_coding(&[header("content-encoding", b" GzIp ")]).unwrap(),
         BodyContentCoding::Gzip
+    );
+    assert_eq!(
+        body_content_coding(&[header("content-encoding", b" Deflate ")]).unwrap(),
+        BodyContentCoding::Deflate
+    );
+    assert_eq!(
+        body_content_coding(&[header("content-encoding", b" Br ")]).unwrap(),
+        BodyContentCoding::Brotli
     );
     let error = body_content_coding(&[header("content-encoding", b"identity, zstd")])
         .unwrap_err()
@@ -288,6 +318,35 @@ fn gzip_response_metadata_is_interpreted_after_the_recorded_body_is_complete() {
 }
 
 #[test]
+fn brotli_and_deflate_response_metadata_are_interpreted_after_the_recorded_body_is_complete() {
+    let json = br#"{"type":"message","model":"claude-compressed","usage":{"input_tokens":12,"output_tokens":4}}"#;
+    for (label, encoded, coding) in [
+        ("br", brotli_encode(json), "br"),
+        ("deflate", deflate_encode(json), "deflate"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let response_path = temp.path().join(format!("response.{label}"));
+        fs::write(&response_path, encoded).unwrap();
+        let headers = [header("content-encoding", coding.as_bytes())];
+        let mut observer = ProtocolObserver::new(Some("https://example.test/v1/messages"));
+        assert!(observer.observe_json_response(&response_path, 200, &headers, "20".to_string()));
+        let summary = observer.snapshot();
+        assert_eq!(
+            summary.model.effective.as_deref(),
+            Some("claude-compressed"),
+            "{label}"
+        );
+        assert_eq!(
+            summary.token_usage.unwrap().output_tokens,
+            Some(4),
+            "{label}"
+        );
+        assert!(summary.warnings.is_empty(), "{label}");
+        assert!(summary.response_terminal, "{label}");
+    }
+}
+
+#[test]
 fn chat_nonstream_body_infers_family_and_normalizes_usage() {
     let temp = tempfile::tempdir().unwrap();
     let response_path = temp.path().join("chat-response.json");
@@ -409,6 +468,46 @@ fn claude_usage_is_accumulated_until_message_stop() {
     let usage = observer.snapshot().token_usage.unwrap();
     assert_eq!(usage.total_input_tokens, Some(415));
     assert_eq!(usage.output_tokens, Some(13));
+}
+
+#[test]
+fn claude_ignores_stub_usage_on_events_that_do_not_carry_stream_usage() {
+    let mut observer = ProtocolObserver::new(Some("https://example.test/v1/messages"));
+    observer.observe_sse_event(
+        Some(b"message_start"),
+        br#"{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":2,"output_tokens":3,"cache_read_input_tokens":235890,"cache_creation_input_tokens":1039,"cache_creation":{"ephemeral_5m_input_tokens":1039,"ephemeral_1h_input_tokens":0}}},"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#,
+        "10".to_string(),
+    );
+    observer.observe_sse_event(
+        Some(b"content_block_delta"),
+        br#"{"type":"content_block_delta","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#,
+        "20".to_string(),
+    );
+    observer.observe_sse_event(
+        Some(b"message_delta"),
+        br#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":2,"output_tokens":374,"cache_creation_input_tokens":1039,"cache_read_input_tokens":235890,"cache_creation":{"ephemeral_5m_input_tokens":1039}}}"#,
+        "30".to_string(),
+    );
+    observer.observe_sse_event(
+        Some(b"message_stop"),
+        br#"{"type":"message_stop","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#,
+        "40".to_string(),
+    );
+
+    let summary = observer.snapshot();
+    let usage = summary.token_usage.unwrap();
+    assert_eq!(usage.base_input_tokens, Some(2));
+    assert_eq!(usage.cached_input_tokens, Some(235890));
+    assert_eq!(usage.cache_write_5m_tokens, Some(1039));
+    assert_eq!(usage.cache_write_1h_tokens, Some(0));
+    assert_eq!(usage.output_tokens, Some(374));
+    assert_eq!(usage.total_input_tokens, Some(236931));
+    assert!(
+        summary
+            .warnings
+            .iter()
+            .all(|warning| warning.kind != "cache_write_breakdown_inconsistent")
+    );
 }
 
 #[test]

@@ -1,0 +1,170 @@
+.table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.table th,
+.table td {
+  padding: 20px;
+  vertical-align: top;
+  font-weight: var(--weight-regular);
+  overflow-wrap: anywhere;
+}
+.table thead th {
+  padding-block: 12px;
+  color: var(--ink-secondary);
+  background: var(--surface-inset);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.table thead th:first-child {
+  border-top-left-radius: var(--radius-md);
+}
+.table thead th:last-child {
+  border-top-right-radius: var(--radius-md);
+}
+.table tbody tr + tr > * {
+  border-top: 1px solid var(--line-content);
+}
+.summary {
+  display: grid;
+  /*
+   * Three stacked links per Agent cell, the lower two underlined. At the 4px
+   * this carried while there were two, the underline of one link nearly met
+   * the next link's text and the three lines read as one paragraph.
+   */
+  gap: 8px;
+}
+.secondary {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+}
+.link {
+  display: inline-flex;
+  /*
+   * The label and its metadata wrap as two units, not as one shrinking line.
+   * Under `nowrap` neither child could move to a second line, so a narrow
+   * column shrank both below their content width and each broke *inside* its
+   * own phrase: the arrow stranded alone under "Current Config", and
+   * "ag-github" split across two lines. Every width from 1024 to 1420 did
+   * this, which is most of the laptops this Console runs on.
+   */
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 24px;
+  max-width: 100%;
+  /*
+   * Nearly every cell in this table navigates, so the accent would colour a
+   * third of the page and say nothing. The arrow and the underline carry the
+   * affordance; the accent is reserved for hover and for the module you are
+   * actually in.
+   */
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+}
+.link svg,
+.fact svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+/*
+ * A status fact shares the row's layout but none of its affordances: no
+ * pointer, no hover, no tab stop. It reads beside the action it explains.
+ */
+.fact {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 24px;
+  max-width: 100%;
+  line-height: 1.5;
+}
+.link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.primaryLink {
+  font-weight: var(--weight-medium);
+}
+.secondaryLink {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.warning {
+  color: var(--warning);
+  font-size: var(--text-xs);
+}
+.error {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+.mobileLabel {
+  display: none;
+}
+@media (max-width: 1000px) {
+  .table th,
+  .table td {
+    padding: 16px 12px;
+  }
+}
+@media (max-width: 760px) {
+  .table,
+  .table tbody {
+    display: block;
+  }
+  .table {
+    border: 0;
+  }
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .table tbody tr {
+    display: grid;
+    border: 1px solid var(--line-structural);
+    border-radius: var(--radius-md);
+    margin-bottom: 16px;
+  }
+  .table tbody th {
+    background: var(--surface-inset);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+  .table tbody tr + tr > * {
+    border-top: 0;
+  }
+  .table tbody td {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 12px;
+    padding-block: 12px;
+  }
+  .mobileLabel {
+    display: block;
+    color: var(--ink-secondary);
+    font-size: var(--text-xs);
+    line-height: 24px;
+  }
+}
+@media (pointer: coarse) {
+  .link {
+    min-height: 44px;
+    align-items: center;
+  }
+}

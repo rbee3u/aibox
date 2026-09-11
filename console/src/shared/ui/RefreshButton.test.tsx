@@ -28,14 +28,19 @@ describe("RefreshButton", () => {
     const button = screen.getByRole("button", { name: "Refreshing Requests" });
     expect(button).toHaveTextContent("Refresh");
     expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button.querySelector("svg")).toHaveClass("spin");
     expect(button).toBeDisabled();
   });
 
-  it("keeps icon-only refresh controls accessible without visible text", () => {
-    render(<RefreshButton label="Refresh operation" iconOnly />);
+  it("keeps responsive labels separate from contextual accessible names", () => {
+    render(
+      <RefreshButton label="Refresh operation" compactOnNarrow>
+        Refresh
+      </RefreshButton>,
+    );
 
     const button = screen.getByRole("button", { name: "Refresh operation" });
-    expect(button).not.toHaveTextContent("Refresh");
+    expect(button).toHaveTextContent(/^Refresh$/);
     expect(button).not.toHaveAttribute("title");
   });
 });

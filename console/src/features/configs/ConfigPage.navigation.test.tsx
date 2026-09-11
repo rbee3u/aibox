@@ -1,11 +1,13 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
-import { ConfigPage, configApi } from "@/features/configs/testHarness";
+import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
+import layout from "@/shared/ui/layout/catalog.module.css";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
 describe("ConfigPage", () => {
@@ -30,6 +32,7 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
+    await revealConfigFiles(user);
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     expect(editor).toHaveValue("current:config.toml");
     await user.clear(editor);
@@ -51,6 +54,7 @@ describe("ConfigPage", () => {
       expect.objectContaining({ current: true, file: "auth.json" }),
       expect.any(Object),
     );
+    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "other:config.toml",
     );
@@ -83,6 +87,7 @@ describe("ConfigPage", () => {
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "other" }));
+    await revealConfigFiles(user);
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     expect(editor).toHaveValue("other:config.toml");
     await user.clear(editor);
@@ -90,6 +95,7 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Current Config" }));
     const dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
     await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
+    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "current:config.toml",
     );
@@ -110,7 +116,7 @@ describe("ConfigPage", () => {
       application: { last_application: null, drift: "untracked" },
       credential_propagation_available: false,
     } satisfies ConfigListData;
-    const { api, revealConfigFile } = configApi({
+    const { api } = configApi({
       listConfigs: () => Promise.resolve(catalog),
       revealConfigFile: (target) => {
         const owner = target.current ? "current" : target.config;
@@ -128,14 +134,44 @@ describe("ConfigPage", () => {
       screen.getByText("Select Current Config or a Named Config to inspect its files."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
-    expect(revealConfigFile).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "ag-github" }));
+    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "ag-github:config.toml",
     );
     expect(window.location.search).toContain("config=ag-github");
     expect(window.location.search).not.toContain("named=1");
-    expect(revealConfigFile).toHaveBeenCalled();
+  });
+
+  it("does not mark Current Config as inspected on a one-pane catalog until it is opened", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
+    const catalog = {
+      configs: [{ name: "freebie", state: "ready" }],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) =>
+        Promise.resolve(configFile(target.file, `${target.current ? "current" : "named"}:file`)),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    const current = await screen.findByRole("button", { name: "Current Config" });
+    expect(current).not.toHaveAttribute("aria-pressed");
+    expect(current.closest("div")).not.toHaveClass(layout.rowInspected);
+
+    await user.click(current);
+    expect(current).toHaveAttribute("aria-pressed", "true");
+    expect(current.closest("div")).toHaveClass(layout.rowInspected);
   });
 
   it("keeps a Named Configs catalog route when the catalog is empty", async () => {
@@ -150,7 +186,7 @@ describe("ConfigPage", () => {
       application: { last_application: null, drift: "untracked" },
       credential_propagation_available: false,
     } satisfies ConfigListData;
-    const { api, revealConfigFile } = configApi({
+    const { api } = configApi({
       listConfigs: () => Promise.resolve(catalog),
       revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
     });
@@ -161,6 +197,44 @@ describe("ConfigPage", () => {
       "aria-pressed",
     );
     expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
-    expect(revealConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("uses Unsaved changes when the shell asks to leave a dirty editor", async () => {
+    const catalog = {
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, saveConfigFile } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "current content")),
+      saveConfigFile: (target, input) =>
+        Promise.resolve({
+          ...configFile(target.file, "saved"),
+          content_base64: input.contentBase64,
+        }),
+    });
+    const onCancelLeave = vi.fn();
+    const onContinueLeave = vi.fn();
+    const user = userEvent.setup();
+    const view = render(<ConfigPage api={api} />);
+    await revealConfigFiles(user);
+    const editor = await screen.findByRole("textbox", { name: "config.toml content" });
+    await user.type(editor, "changed");
+    view.rerender(
+      <ConfigPage
+        api={api}
+        pendingLeave
+        onCancelLeave={onCancelLeave}
+        onContinueLeave={onContinueLeave}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
+    expect(dialog).toHaveTextContent("Save changes to config.toml before continuing?");
+    await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
+    await waitFor(() => expect(saveConfigFile).toHaveBeenCalled());
+    expect(onContinueLeave).toHaveBeenCalled();
+    expect(onCancelLeave).not.toHaveBeenCalled();
   });
 });

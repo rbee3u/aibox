@@ -61,6 +61,12 @@ export function componentLabel(kind: ComponentKind): string {
   return COMPONENT_LABELS[kind];
 }
 
+/** Accepts a Tenants `component=` query value, or ignores an unknown kind. */
+export function parseComponentKind(value: string | null | undefined): ComponentKind | null {
+  if (!value) return null;
+  return value in COMPONENT_LABELS ? (value as ComponentKind) : null;
+}
+
 export function isStatuslineComponent(
   kind: ComponentKind,
 ): kind is "codex-statusline" | "claude-statusline" {
@@ -358,12 +364,39 @@ export function componentProgressLabel(row: ComponentRow, install: boolean): str
   return "Installing…";
 }
 
-export function hasComponentAttention(
+/**
+ * Names a failed Component mutation the way its progress label named the
+ * attempt, so a notice says which row failed and what it was doing.
+ */
+export function componentFailureTitle(row: ComponentRow, install: boolean): string {
+  const label = componentLabel(row.kind);
+  if (!install) return `Couldn’t remove ${label}`;
+  if (row.status === "incomplete") return `Couldn’t repair ${label}`;
+  if (row.status === "modified" && row.supports_version) return `Couldn’t restore ${label}`;
+  if (row.status === "modified" || row.status === "installed") return `Couldn’t update ${label}`;
+  return `Couldn’t install ${label}`;
+}
+
+/**
+ * Whether a Component is in a state the Tenant did not ask for.
+ *
+ * An available update is deliberately not one. Every Component with an upstream
+ * release is perpetually one version behind something, so counting that as a
+ * problem makes the resting state of a healthy Tenant look broken — and it
+ * disagreed with Overview, which reports only the Service's own
+ * `components.attention` for the same Tenant.
+ */
+export function hasComponentAttention(row: ComponentRow): boolean {
+  if (row.error || !row.status) return true;
+  return ["incomplete", "modified", "unmanaged"].includes(row.status);
+}
+
+/** Whether a newer release was observed for a Component that is otherwise fine. */
+export function hasComponentUpdate(
   row: ComponentRow,
   snapshot: ComponentLatestSnapshot | null,
 ): boolean {
-  if (row.error || !row.status) return true;
-  if (["incomplete", "modified", "unmanaged"].includes(row.status)) return true;
+  if (hasComponentAttention(row)) return false;
   return latestInfoFor(row, snapshot).updateAvailable;
 }
 

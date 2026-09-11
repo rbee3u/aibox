@@ -21,9 +21,10 @@ describe("ActionButton", () => {
     render(
       <>
         <ActionButton>Default</ActionButton>
+        <ActionButton tone="primary">Create</ActionButton>
         <ActionButton tone="primarySoft">Apply</ActionButton>
         <ActionButton tone="primarySoft">Create quietly</ActionButton>
-        <ActionButton tone="secondary">Create</ActionButton>
+        <ActionButton tone="secondary">Create secondary</ActionButton>
         <ActionButton tone="dangerQuiet">Remove inline</ActionButton>
         <ActionButton tone="danger">Delete</ActionButton>
         <ActionButton tone="dangerPrimary">Delete permanently</ActionButton>
@@ -32,9 +33,10 @@ describe("ActionButton", () => {
     );
 
     expect(screen.getByRole("button", { name: "Default" })).toHaveClass(styles.secondary);
+    expect(screen.getByRole("button", { name: "Create" })).toHaveClass(styles.primary);
     expect(screen.getByRole("button", { name: "Apply" })).toHaveClass(styles.primarySoft);
     expect(screen.getByRole("button", { name: "Create quietly" })).toHaveClass(styles.primarySoft);
-    expect(screen.getByRole("button", { name: "Create" })).toHaveClass(styles.secondary);
+    expect(screen.getByRole("button", { name: "Create secondary" })).toHaveClass(styles.secondary);
     expect(screen.getByRole("button", { name: "Remove inline" })).toHaveClass(styles.dangerQuiet);
     expect(screen.getByRole("button", { name: "Delete" })).toHaveClass(styles.danger);
     expect(screen.getByRole("button", { name: "Delete permanently" })).toHaveClass(
@@ -42,6 +44,7 @@ describe("ActionButton", () => {
     );
     expect(screen.getByRole("button", { name: "More" })).toHaveClass(styles.ghost);
     expect(screen.getByRole("button", { name: "Apply" })).toHaveAttribute("type", "button");
+    expect(styles.primary).not.toEqual(styles.primarySoft);
     expect(styles.primarySoft).not.toEqual(styles.secondary);
     expect(styles.secondary).not.toEqual(styles.ghost);
     expect(styles.ghost).not.toEqual(styles.dangerQuiet);
@@ -51,6 +54,12 @@ describe("ActionButton", () => {
   });
 
   it("keeps the quiet primary and danger variants visually distinct", () => {
+    expect(css).toMatch(
+      /\.primary\s*\{[^}]*color:\s*var\(--action-primary-ink\)[^}]*background:\s*var\(--action-primary-surface\)/s,
+    );
+    expect(css).toMatch(
+      /\.primary:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--action-primary-hover-surface\)/s,
+    );
     expect(css).toMatch(
       /\.primarySoft\s*\{[^}]*border-color:\s*var\(--action-primary-soft-line\)[^}]*color:\s*var\(--action-primary-soft-ink\)[^}]*background:\s*var\(--action-primary-soft-surface\)/s,
     );
@@ -78,7 +87,7 @@ describe("ActionButton", () => {
   it("keeps disabled variants identifiable without whole-control fading", () => {
     expect(css).toMatch(/\.button:disabled\s*\{[^}]*opacity:\s*1/s);
     expect(css).toMatch(
-      /\.primarySoft:disabled\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
+      /\.primary:disabled,\s*\.primarySoft:disabled\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
     );
     expect(css).toMatch(
       /\.dangerPrimary:disabled\s*\{[^}]*color:\s*var\(--control-disabled-danger-ink\)[^}]*background:\s*var\(--control-disabled-danger-surface\)/s,

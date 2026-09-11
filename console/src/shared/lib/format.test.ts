@@ -3,6 +3,7 @@ import {
   capitalize,
   compactDuration,
   concatChunks,
+  driftCatalogLabel,
   duration,
   formatByteSize,
   formatTimestamp,
@@ -65,6 +66,14 @@ describe("shared display formatting", () => {
     ] as const) {
       expect(formatByteSize(input), String(input)).toBe(expected);
     }
+  });
+
+  it("labels dirty Config Drift as Differs", () => {
+    expect(driftCatalogLabel("dirty")).toBe("Differs");
+    expect(driftCatalogLabel("source-missing")).toBe("Source missing");
+    expect(driftCatalogLabel("comparison-error")).toBe("Comparison error");
+    expect(driftCatalogLabel("clean")).toBe("Clean");
+    expect(driftCatalogLabel("untracked")).toBe("Untracked");
   });
 
   it("capitalizes a leading character and leaves an empty value alone", () => {

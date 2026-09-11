@@ -13,7 +13,10 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common/tenantOptions";
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
-import type { SessionTimelineItem } from "@/features/sessions/detail/sessionDetail";
+import {
+  transcriptNeedsAttention,
+  type SessionTimelineItem,
+} from "@/features/sessions/detail/sessionDetail";
 import {
   SESSION_AGENT_OPTIONS,
   sessionSource,
@@ -92,6 +95,7 @@ export interface SessionViewModel {
     showJumpLatest: boolean;
     timeline: SessionTimelineItem[];
     transcriptHasDiagnostics: boolean;
+    transcriptNeedsAttention: boolean;
     transcriptIsPartial: boolean;
     unsafeView: boolean;
     updateSessionTab: (next: SessionTab) => void;
@@ -421,6 +425,12 @@ export function useSessionController({
     (detailStats?.malformed_count ?? 0) > 0 ||
     (detailStats?.unsupported_count ?? 0) > 0 ||
     (detailStats?.hidden_internal_count ?? 0) > 0;
+  const transcriptNeedsAttentionFlag = transcriptNeedsAttention({
+    partial: transcriptIsPartial,
+    malformedCount: detailStats?.malformed_count ?? 0,
+    listWarningCount: currentSession?.warnings.length ?? 0,
+    timeline,
+  });
   const userMessages = useMemo(
     () =>
       timeline.flatMap((item) =>
@@ -481,6 +491,7 @@ export function useSessionController({
       showJumpLatest,
       timeline,
       transcriptHasDiagnostics,
+      transcriptNeedsAttention: transcriptNeedsAttentionFlag,
       transcriptIsPartial,
       unsafeView,
       updateSessionTab,

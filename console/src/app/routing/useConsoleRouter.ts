@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { consoleModules, moduleFromPath, modulePath } from "@/app/routing/modules";
+import { consoleModules, moduleFromPath } from "@/app/routing/modules";
+import { modulePath } from "@/shared/lib/navigation";
 import type { ModuleId, ModuleLocationChange } from "@/shared/lib/navigation";
 
 export interface RouteSnapshot {
@@ -25,8 +26,9 @@ function confirmDiscardedConfig(): boolean {
  * subscribes to browser history itself.
  *
  * A module holding unsaved edits can mark itself dirty; in-app navigation is
- * then deferred until the caller resolves `pendingNavigation`, while history and
- * unload navigation fall back to a native confirmation.
+ * then deferred until the caller resolves `pendingNavigation`. Configs uses the
+ * same Unsaved changes dialog as in-module leaves. History and unload
+ * navigation fall back to a native confirmation.
  */
 export function useConsoleRouter() {
   const [route, setRoute] = useState<RouteSnapshot>(currentRoute);

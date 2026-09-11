@@ -6,13 +6,14 @@
   border-color: var(--line-control-strong);
 }
 
-.control:active:not(:disabled) {
-  border-color: var(--accent);
-}
-
+/*
+ * A field has no press of its own: the pointer going down is what focuses it,
+ * and the ring says so a moment later. A second accent flash here would be the
+ * same event announced twice, in a colour reserved for lasting states.
+ */
 .control:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .control:disabled {
@@ -26,7 +27,8 @@
 .toggle {
   position: relative;
   display: inline-flex;
-  min-height: 20px;
+  min-width: 24px;
+  min-height: 24px;
   align-items: center;
   gap: 6px;
   cursor: pointer;
@@ -44,9 +46,11 @@
 
 .toggleMark {
   position: relative;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  flex: 0 0 24px;
   border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -60,10 +64,6 @@
   border-color: var(--line-control-strong);
 }
 
-.toggle:active input:not(:disabled) + .toggleMark {
-  border-color: var(--accent-strong);
-}
-
 .toggle input[aria-invalid="true"] + .toggleMark {
   border-color: var(--danger);
 }
@@ -75,10 +75,10 @@
 
 .toggle input:checked + .toggleMark::after {
   position: absolute;
-  top: 2px;
-  left: 5px;
-  width: 4px;
-  height: 8px;
+  top: 4px;
+  left: 8px;
+  width: 6px;
+  height: 12px;
   border: solid var(--accent-contrast);
   border-width: 0 2px 2px 0;
   content: "";
@@ -86,8 +86,8 @@
 }
 
 .toggle input:focus-visible + .toggleMark {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .toggle:has(input:disabled) {
@@ -117,12 +117,5 @@
 
   .toggle {
     min-height: 44px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .control,
-  .toggleMark {
-    transition-duration: 0.01ms;
   }
 }

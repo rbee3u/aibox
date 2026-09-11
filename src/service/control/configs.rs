@@ -396,3 +396,58 @@ fn linked_config_file_response(snapshot: config::ConfigFileSnapshot) -> LinkedCo
         content_base64: base64::engine::general_purpose::STANDARD.encode(snapshot.content),
     }
 }
+
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompareConfigsRequest {
+    tenant: String,
+    agent: AgentKind,
+    current: bool,
+    config: Option<String>,
+    files: Vec<CompareConfigDraft>,
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompareConfigDraft {
+    file: String,
+    revision: String,
+    original_base64: String,
+    content_base64: String,
+    visual_options: Option<Vec<VisualConfigOptionInput>>,
+    custom_provider: Option<CustomProviderInput>,
+    visual_auth: Option<config::VisualAuthInput>,
+}
+
+pub(super) async fn compare_configs(
+    State(state): State<ServiceState>,
+    Json(request): Json<CompareConfigsRequest>,
+) -> ControlResult {
+    let selection = TenantSelection::parse(&request.tenant)?;
+    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let drafts = request
+        .files
+        .into_iter()
+        .map(|draft| {
+            let original = decode_base64(&draft.original_base64)?;
+            let content = decode_base64(&draft.content_base64)?;
+            Ok(config::ConfigComparisonDraft {
+                file: config::ConfigFile::parse(request.agent, &draft.file)?,
+                revision: draft.revision,
+                original,
+                edit: config::ConfigEdit::from_wire(
+                    content,
+                    draft.custom_provider,
+                    draft.visual_options,
+                    draft.visual_auth,
+                )?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let comparison = ConfigCoordinator::new(state)
+        .compare(selection, request.agent, target, drafts)
+        .await?;
+    Ok(json_response(StatusCode::OK, &comparison))
+}

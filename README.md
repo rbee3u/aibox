@@ -16,14 +16,16 @@ Tenants.
 
 ## Quick Start
 
-AIBox supports Linux and macOS hosts with Docker. Building the Rust wrapper
-requires Rust 1.97 or newer; the Runtime Image supports Linux `amd64` and
-`arm64`.
+AIBox supports Linux and macOS hosts with Docker. Building from source requires
+Rust 1.97 or newer, Make, and Node/npm matching `console/package.json`.
+`make install` installs the locked frontend dependencies, builds the Console,
+and installs the CLI. The installed binary embeds the Console and needs no
+Node runtime. The Runtime Image supports Linux `amd64` and `arm64`.
 
 ```sh
 git clone https://github.com/rbee3u/aibox.git
 cd aibox
-cargo install --locked --path .
+make install
 aibox console
 ```
 
@@ -103,7 +105,8 @@ retention policy.
 
 Before changing behavior, read [AGENTS.md](AGENTS.md),
 [CONTEXT.md](CONTEXT.md), and the [ADR index](docs/adr/README.md). Install the
-locked Console dependencies once per environment, then run:
+locked Console dependencies once per environment and after dependency changes,
+then run:
 
 ```sh
 make console-ci

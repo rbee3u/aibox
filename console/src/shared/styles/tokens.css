@@ -1,19 +1,41 @@
 :root {
   color-scheme: light;
-  --bg-canvas: #f3f5f8;
-  --bg-shell: #fcfcfd;
+  /*
+   * Surface fill ladder, deepest first: canvas < shell < inset < surface.
+   * Chrome (sidebar, toolbars, detail headers, catalog panels) takes a real
+   * step away from the content it frames, so a region reads as a region
+   * without depending on a hairline to say so.
+   *
+   * A light theme cannot go brighter than its content plane, so elevation
+   * above the surface is carried by shadow instead of a lighter fill. That is
+   * why raised matches surface here while the dark theme gives it its own
+   * step, and why every shadow level below carries a contact layer.
+   */
+  --bg-canvas: #e5eaf1;
+  --bg-shell: #edf1f6;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --surface-inset: #f4f6f9;
-  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
-  --surface-hover: #eef1f5;
-  /* Accent-owned open, pressed, and selected controls. */
-  --surface-selected: #eceaff;
+  --surface-inset: #f4f7fa;
+  /*
+   * Neutral hover for chrome and actions; selection stays a quiet gray step.
+   * Both are ink overlays rather than fixed fills: one token has to darken a
+   * white row and a tinted toolbar by the same amount, which an opaque value
+   * cannot do once chrome and content no longer share a fill.
+   */
+  --surface-hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  /* Neutral open and selected controls. */
+  --surface-selected: color-mix(in srgb, var(--ink) 13%, transparent);
+  /*
+   * The moment a pointer is down, deeper than any resting state so a press
+   * reads on a selected row too. Only ink sits on it; a transient state is the
+   * wrong place to spend the accent.
+   */
+  --surface-pressed: color-mix(in srgb, var(--ink) 18%, transparent);
   /* Quiet neutral resting fill with no selected or Primary semantics. */
-  --control-rest: #f4f6f9;
-  --line: #dce1e8;
-  --line-soft: #e9edf2;
-  --line-strong: #c5ccd6;
+  --control-rest: #f4f7fa;
+  --line: #dde4ed;
+  --line-soft: #e6ebf2;
+  --line-strong: #ccd6e2;
   /* Boundary roles: structure and controls stay clear; repeated content divisions recede. */
   --line-structural: var(--line);
   --line-content: color-mix(in srgb, var(--line-soft) 78%, transparent);
@@ -26,68 +48,113 @@
   /* Checked disabled controls retain a neutral checked mark. */
   --control-disabled-primary-ink: var(--control-disabled-ink);
   --control-disabled-primary-surface: var(--control-disabled-surface);
+  /*
+   * Text prominence, loudest first. Each step is quieter than the one above
+   * it, so a role named faint can never outrank one named muted.
+   */
   --ink: #18202c;
   --ink-secondary: #465264;
-  --muted: #657187;
-  --faint: #59667a;
-  --accent: #5b55e7;
-  --accent-strong: #4943cb;
-  --accent-soft: #efeeff;
-  --accent-subtle: #f8f7ff;
+  --muted: #59667a;
+  --faint: #657187;
+  /*
+   * The accent answers "where am I" and "what am I engaging with" — the
+   * current module, a primary action, a hovered link, a focus ring. It does
+   * not mark every navigable thing; a table where most cells navigate would
+   * spend the whole budget saying nothing.
+   */
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-subtle: #f5f7ff;
   /* Text on solid --accent (Light: white; Dark: deep ink on bright accent). */
   --accent-contrast: #ffffff;
-  --action-danger: #ba2f38;
-  --action-danger-strong: #96232b;
+  --action-danger: #b91c1c;
+  --action-danger-strong: #991b1b;
   --action-danger-contrast: #ffffff;
-  /* Repeated or entry-point actions use a purple outline at rest. */
+  /* Solid Primary: filled indigo with a quiet hover deepen. */
+  --action-primary-ink: var(--accent-contrast);
+  --action-primary-surface: var(--accent);
+  --action-primary-hover-surface: var(--accent-strong);
+  /* Repeated or row-level actions use an indigo outline at rest. */
   --action-primary-soft-ink: var(--accent-strong);
   --action-primary-soft-surface: transparent;
   --action-primary-soft-line: color-mix(in srgb, var(--accent) 48%, var(--line-control));
   --action-primary-soft-hover-ink: var(--accent-strong);
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
-  --focus: #7771f3;
-  --danger: #ba2f38;
-  --danger-strong: #96232b;
-  --danger-soft: #fff0f1;
-  --danger-line: #efc7ca;
+  --focus: var(--accent);
+  /*
+   * One ring, one distance. The offset is a token because a ring that sits at
+   * a different remove on every control reads as a rendering accident rather
+   * than as the same signal.
+   */
+  --focus-ring: 2px solid var(--focus);
+  --focus-offset: 2px;
+  --danger: #b91c1c;
+  --danger-strong: #991b1b;
+  --danger-soft: #fef2f2;
+  --danger-line: #fecaca;
   --control-disabled-danger-ink: var(--control-disabled-ink);
   --control-disabled-danger-surface: var(--control-disabled-surface);
   /* Destructive action resting fill: softer than danger-soft alone. */
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
-  --success: #0d7a55;
-  --success-soft: #e8f7f1;
-  --warning: #92500d;
-  --warning-soft: #fff6e8;
-  --warning-line: #ead2a8;
-  --info-line: #d5d2ff;
+  --success: #047857;
+  --success-soft: #ecfdf5;
+  --success-line: #a7f3d0;
+  --warning: #b45309;
+  --warning-soft: #fffbeb;
+  --warning-line: #fde68a;
+  --info-line: #c7d2fe;
   --code-bg: #f6f7fa;
-  --code-border: #d9dfe7;
+  --code-border: #e2e8f0;
   --code-text: #253042;
-  --code-muted: #6d788b;
+  --code-muted: #64748b;
   --code-guide: #d5dbe4;
   --syntax-key: #285ea8;
   --syntax-string: #39752d;
   --syntax-number: #9c4d11;
-  --syntax-boolean: #7950a7;
+  --syntax-boolean: #3658c7;
   --viz-request: #6f8fb8;
   --viz-wait: #d99b45;
-  --viz-model: #7a70d8;
+  --viz-model: #6366f1;
   --viz-finalize: #8b929d;
-  --shadow-sm: 0 1px 2px rgb(18 28 45 / 0.06);
-  --shadow-md: 0 10px 28px rgb(18 28 45 / 0.13);
+  /*
+   * Two layers per level: a tight contact shadow that draws the edge of a
+   * white panel resting on white, plus a broad ambient one for distance.
+   * The contact layer is what carries elevation in this theme.
+   */
+  --shadow-sm: 0 1px 1px rgb(18 28 45 / 0.05), 0 1px 3px rgb(18 28 45 / 0.06);
+  --shadow-md: 0 1px 2px rgb(18 28 45 / 0.07), 0 10px 24px rgb(18 28 45 / 0.12);
+  --shadow-lg: 0 2px 4px rgb(18 28 45 / 0.08), 0 20px 48px rgb(18 28 45 / 0.22);
   --radius-sm: 5px;
   --radius-md: 6px;
   --radius-lg: 6px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
+  /*
+   * Spacing steps on a two-pixel base. The half steps are load-bearing: an
+   * icon and its label, or a dot and its status, read as one thing and come
+   * apart if forced up to a four-pixel jump.
+   */
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 6px;
+  --space-md: 8px;
+  --space-lg: 12px;
+  --space-xl: 16px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+  /*
+   * Spacing roles. A section title belongs to the content under it, so that
+   * gap stays several times tighter than the gap to the next section; the
+   * ratio is what makes a group read as a group. Both values are shared, so
+   * one distance cannot mean "these belong together" in one module and "a new
+   * group starts here" in another.
+   */
+  --space-section-title: var(--space-md);
+  --space-section: var(--space-2xl);
   --text-xs: 12px;
   --text-sm: 14px;
   --text-md: 16px;
-  --text-lg: 20px;
+  --text-lg: 18px;
   --line-height-xs: 18px;
   --line-height-sm: 20px;
   --line-height-md: 22px;
@@ -96,55 +163,75 @@
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
-  /* Role-based type hierarchy: page > panel/detail > section/row > metadata. */
-  --text-page-title: 18px;
-  --text-panel-title: var(--text-md);
-  --text-section-title: var(--text-sm);
+  /*
+   * Role-based type hierarchy: page > panel/detail > section/row > metadata.
+   * Every role takes a step from the scale above; none carries a raw size.
+   *
+   * A section title is a quiet label for the group below it, not a title over
+   * it: it stays smaller and dimmer than the rows it groups, so a row title
+   * remains the primary scanning target. Content headings inside Agent output
+   * have their own scale and do not borrow these roles.
+   *
+   * Page and panel titles share a size because they never compete on desktop,
+   * where the page title is only an accessible name. Bold stays reserved for
+   * the page title so the narrow top bar still outranks a panel below it.
+   */
+  --text-page-title: var(--text-lg);
+  --text-panel-title: var(--text-lg);
+  --text-section-title: var(--text-xs);
   --text-row-title: var(--text-sm);
   --text-meta: var(--text-xs);
   --line-height-page-title: var(--line-height-md);
   --line-height-panel-title: var(--line-height-md);
-  --line-height-section-title: var(--line-height-sm);
+  --line-height-section-title: var(--line-height-xs);
   --line-height-row-title: var(--line-height-sm);
   --line-height-meta: var(--line-height-xs);
   --weight-page-title: var(--weight-bold);
   --weight-panel-title: var(--weight-semibold);
   --weight-section-title: var(--weight-semibold);
   --weight-row-title: var(--weight-semibold);
+  --ink-section-title: var(--muted);
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* An icon control riding inside a line of text, not sitting in its own slot. */
+  --control-xs: 24px;
   --control-sm: 32px;
   --control-md: 36px;
   --control-compact: 30px;
   --control-padding-x: 12px;
   --control-gap: 8px;
-  --icon-xs: 14px;
-  --icon-sm: 16px;
-  --icon-md: 18px;
+  /*
+   * Content measures by role. Detail content is left-aligned and capped, so a
+   * wider viewport gains whitespace instead of spreading the same content
+   * thinner. Trailing metadata and row actions align to the measure edge; they
+   * never track the end of the available space. Code editors, JSON trees, and
+   * raw bodies stay unmeasured.
+   */
+  --measure-compact: 560px;
+  --measure-text: 720px;
+  --measure-data: 1040px;
   --pane-divider: 1px;
   --toolbar-height: 44px;
   --toolbar-height-compact: 40px;
   --row-height: 46px;
   --row-height-roomy: 54px;
   --status-height: 23px;
-  --radius-pill: 4px;
-  --space-6: 24px;
-  --space-7: 32px;
+  --radius-pill: 999px;
   --catalog-panel-width: clamp(360px, 31vw, 460px);
   --catalog-toolbar-min-height: var(--toolbar-height);
   --catalog-toolbar-padding: 5px 10px 5px 14px;
   --catalog-divider-min-height: 38px;
   --catalog-divider-padding: 5px 7px 5px 14px;
-  --catalog-row-padding: 4px 8px 4px 9px;
-  --catalog-row-roomy-padding: 6px 8px 6px 9px;
+  --catalog-row-padding: var(--space-md);
+  --catalog-row-roomy-padding: var(--space-md);
   --catalog-row-leading-gap: 9px;
-  --catalog-row-accent-inset: 7px;
   --catalog-row-primary-size: var(--text-row-title);
   --catalog-row-primary-line-height: var(--line-height-row-title);
   --catalog-row-primary-weight: var(--weight-row-title);
   --catalog-row-secondary-size: var(--text-meta);
   --catalog-row-secondary-line-height: var(--line-height-meta);
-  /* Tenant/Agent filters: independent controls with catalog toolbar rhythm. */
+  /* Filters share width with Refresh/Select actions; wrap before min-width. */
+  /* Tenant/Agent filters use the compact historical catalog width. */
   --catalog-filter-control-max-width: 112px;
   --catalog-toolbar-filters-gap: 8px;
   --catalog-toolbar-cluster-gap: 14px;
@@ -175,34 +262,55 @@
   --surface: #191e28;
   --surface-raised: #1d2330;
   --surface-inset: #151a23;
-  /* Neutral hover for chrome and actions; accent is reserved for committed state. */
-  --surface-hover: #272f3d;
-  /* Accent-owned open, pressed, and selected controls. */
-  --surface-selected: #292845;
+  /*
+   * Neutral hover for chrome and actions; selection stays a quiet gray step.
+   * The overlay runs lighter here than in the light theme because accent text
+   * on a selected row has to stay at AA, and every step of overlay pushes the
+   * fill toward the accent.
+   */
+  --surface-hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  /* Neutral open and selected controls. */
+  --surface-selected: color-mix(in srgb, var(--ink) 8%, transparent);
+  /*
+   * The moment a pointer is down. Selection is capped here by the accent-text
+   * floor, so the press has to reach past it on its own budget; only ink sits
+   * on a pressed surface, which leaves the room to do that.
+   */
+  --surface-pressed: color-mix(in srgb, var(--ink) 13%, transparent);
   /* Quiet neutral resting fill with no selected or Primary semantics. */
   --control-rest: #222833;
-  --line: #303744;
-  --line-soft: #272e3a;
-  --line-strong: #465061;
+  --line: #2c3440;
+  --line-soft: #242b36;
+  --line-strong: #3a4352;
   --ink: #e7ebf2;
   --ink-secondary: #bdc5d2;
-  --muted: #9ba6b7;
-  --faint: #aab4c3;
-  --accent: #9b96ff;
-  --accent-strong: #8580ee;
-  --accent-soft: #292744;
-  --accent-subtle: #211f35;
+  --muted: #aab4c3;
+  --faint: #9ba6b7;
+  --accent: #818cf8;
+  --accent-strong: #a5b4fc;
+  --accent-soft: #222840;
+  --accent-subtle: #1c2133;
   --accent-contrast: #141820;
   --action-danger: #ff858c;
   --action-danger-strong: #ffabb0;
   --action-danger-contrast: #2b1013;
+  --action-primary-ink: var(--accent-contrast);
+  --action-primary-surface: var(--accent);
+  --action-primary-hover-surface: var(--accent-strong);
   --action-primary-soft-ink: var(--accent);
   --action-primary-soft-surface: transparent;
   --action-primary-soft-line: color-mix(in srgb, var(--accent) 58%, var(--line-control));
   --action-primary-soft-hover-ink: var(--accent);
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
-  --focus: #aaa6ff;
+  --focus: var(--accent);
+  /*
+   * One ring, one distance. The offset is a token because a ring that sits at
+   * a different remove on every control reads as a rendering accident rather
+   * than as the same signal.
+   */
+  --focus-ring: 2px solid var(--focus);
+  --focus-offset: 2px;
   --danger: #ff858c;
   --danger-strong: #ffabb0;
   --danger-soft: #3a2027;
@@ -212,25 +320,27 @@
   --control-danger-rest: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
   --success: #5bd4a4;
   --success-soft: #19372f;
+  --success-line: #2d5a48;
   --warning: #f1b262;
   --warning-soft: #382b1d;
   --warning-line: #655036;
-  --info-line: #4a4778;
+  --info-line: #3d4a7c;
   --code-bg: #11151d;
-  --code-border: #313947;
+  --code-border: #2c3440;
   --code-text: #d9e0eb;
-  --code-muted: #919daf;
+  --code-muted: #94a3b8;
   --code-guide: #333c4a;
   --syntax-key: #93bdff;
   --syntax-string: #9bd783;
   --syntax-number: #f0b66f;
-  --syntax-boolean: #d2a1ff;
+  --syntax-boolean: #a5b4fc;
   --viz-request: #6f8fb8;
   --viz-wait: #d99b45;
-  --viz-model: #9b96ff;
+  --viz-model: #818cf8;
   --viz-finalize: #8b929d;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.25);
-  --shadow-md: 0 14px 36px rgb(0 0 0 / 0.34);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.18);
+  --shadow-md: 0 10px 28px rgb(0 0 0 / 0.22);
+  --shadow-lg: 0 20px 52px rgb(0 0 0 / 0.38);
 }
 
 * {
@@ -284,6 +394,16 @@ textarea {
     transform var(--transition-fast);
 }
 
+/*
+ * A press arrives instantly and eases back on release. Overriding the token
+ * rather than each rule works because a transition reads the duration of the
+ * state it is moving into: pressing drops it to nothing, and letting go
+ * restores the inherited value in time for the return trip.
+ */
+*:active {
+  --transition-fast: 0s;
+}
+
 button,
 select,
 input,
@@ -311,6 +431,15 @@ select:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
+/*
+ * Anything that lifts under the pointer has to answer the press as well, or
+ * the gap between click and result reads as the application having missed it.
+ */
+button:active:not(:disabled),
+select:active:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
 button:disabled,
 select:disabled {
   cursor: default;
@@ -324,8 +453,8 @@ select:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 @media (pointer: coarse) {

@@ -5,7 +5,7 @@ use super::native::{
     remove_codex_path, remove_codex_provider, remove_json_path, set_codex_path, set_json_path,
     value_at_path,
 };
-use crate::agent::{AgentKind, MainConfigValueKind};
+use crate::agent::{AgentKind, MainConfigCondition, MainConfigValueKind};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -54,6 +54,7 @@ pub(crate) struct VisualConfigOptionState {
     pub(crate) path: String,
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
+    pub(crate) visible_when: Option<MainConfigCondition>,
     pub(crate) group: &'static str,
     pub(crate) value_kind: &'static str,
     pub(crate) enum_values: Vec<&'static str>,
@@ -110,6 +111,7 @@ pub(crate) fn inspect_visual_config(agent: AgentKind, content: &str) -> Result<V
             path: path_string(field.path),
             label: field.label,
             description: field.description,
+            visible_when: field.visible_when,
             group: field.group,
             value_kind: match field.value_kind {
                 MainConfigValueKind::String => "string",
@@ -177,7 +179,14 @@ pub(crate) fn render_visual_main(
             .iter()
             .find(|field| path_string(field.path) == input.path)
             .with_context(|| format!("unsupported Visual Config Option: {}", input.path))?;
-        if input.included {
+        let available = field.visible_when.is_none_or(|condition| {
+            inputs.iter().any(|parent| {
+                parent.path == condition.path
+                    && parent.included
+                    && parent.value.as_ref().and_then(Value::as_str) == Some(condition.value)
+            })
+        });
+        if input.included && available {
             let value = input
                 .value
                 .clone()

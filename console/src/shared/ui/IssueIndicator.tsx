@@ -1,7 +1,9 @@
-import { CircleAlert, CircleHelp, TriangleAlert } from "lucide-react";
+import { CircleHelp } from "lucide-react";
 import type { ReactNode } from "react";
 import { AnchoredTooltip } from "@/shared/ui/AnchoredTooltip";
 import styles from "@/shared/ui/IssueIndicator.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
+import { toneIcons } from "@/shared/icons/consoleIcons";
 
 const TOOLTIP_DELAY_MS = 150;
 
@@ -27,7 +29,7 @@ export function HelpTooltip({ label, message }: { label: string; message: string
       className={`${styles.indicator} ${styles.help}`}
       ariaLabel={`Help for ${label}`}
     >
-      <CircleHelp size={14} strokeWidth={2} aria-hidden="true" />
+      <CircleHelp size={iconSize.xs} aria-hidden="true" />
     </IssueTooltip>
   );
 }
@@ -43,7 +45,7 @@ export function IssueIndicator({
   message: string;
   ariaLabel: string;
 }) {
-  const IssueIcon = tone === "error" ? CircleAlert : TriangleAlert;
+  const IssueIcon = toneIcons[tone];
   return (
     <IssueTooltip
       tone={tone}
@@ -53,7 +55,7 @@ export function IssueIndicator({
       ariaLabel={ariaLabel}
       interactive={false}
     >
-      <IssueIcon size={13} strokeWidth={2.2} aria-hidden="true" />
+      <IssueIcon size={iconSize.xs} aria-hidden="true" />
     </IssueTooltip>
   );
 }

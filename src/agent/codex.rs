@@ -4,8 +4,8 @@ use super::{MainConfigField, MainConfigValueKind, NO_ENUM_VALUES};
 
 const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
-const REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
-const PLAN_REASONING_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
+const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
+const PLAN_REASONING_EFFORTS: &[&str] = &["none", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
     MainConfigField {
@@ -13,6 +13,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Approval policy",
         description: "Controls when Codex pauses before executing commands.",
+        visible_when: None,
         group: "Execution & permissions",
         enum_values: APPROVAL_POLICIES,
         sensitive: false,
@@ -25,8 +26,22 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Sandbox mode",
         description: "Filesystem and network access policy for command execution.",
+        visible_when: None,
         group: "Execution & permissions",
         enum_values: SANDBOX_MODES,
+        sensitive: false,
+        required: true,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
+    },
+    MainConfigField {
+        path: &["model"],
+        value_kind: MainConfigValueKind::String,
+        label: "Model",
+        description: "Model selected for Codex sessions.",
+        visible_when: None,
+        group: "Model & reasoning",
+        enum_values: NO_ENUM_VALUES,
         sensitive: false,
         required: true,
         required_for_custom_provider: false,
@@ -37,6 +52,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Model reasoning effort",
         description: "Reasoning effort for supported models.",
+        visible_when: None,
         group: "Model & reasoning",
         enum_values: REASONING_EFFORTS,
         sensitive: false,
@@ -49,6 +65,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Plan mode reasoning effort",
         description: "Reasoning effort override used in Plan mode.",
+        visible_when: None,
         group: "Model & reasoning",
         enum_values: PLAN_REASONING_EFFORTS,
         sensitive: false,
@@ -57,22 +74,11 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         request_proxy_route: false,
     },
     MainConfigField {
-        path: &["model"],
-        value_kind: MainConfigValueKind::String,
-        label: "Model",
-        description: "Model selected for Codex sessions.",
-        group: "Model & reasoning",
-        enum_values: NO_ENUM_VALUES,
-        sensitive: false,
-        required: true,
-        required_for_custom_provider: false,
-        request_proxy_route: false,
-    },
-    MainConfigField {
         path: &["model_provider"],
         value_kind: MainConfigValueKind::String,
         label: "Model provider",
         description: "Provider id selected from the model_providers table.",
+        visible_when: None,
         group: "Provider",
         enum_values: &["openai", "custom"],
         sensitive: false,
@@ -85,6 +91,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Custom provider name",
         description: "Display name for the fixed custom provider.",
+        visible_when: None,
         group: "Provider",
         enum_values: NO_ENUM_VALUES,
         sensitive: false,
@@ -97,6 +104,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::String,
         label: "Custom provider base URL",
         description: "API base URL for the fixed custom provider.",
+        visible_when: None,
         group: "Provider",
         enum_values: NO_ENUM_VALUES,
         sensitive: false,
@@ -109,6 +117,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         value_kind: MainConfigValueKind::Bool,
         label: "Use OpenAI authentication",
         description: "Whether the custom provider uses OpenAI authentication.",
+        visible_when: None,
         group: "Provider",
         enum_values: NO_ENUM_VALUES,
         sensitive: false,

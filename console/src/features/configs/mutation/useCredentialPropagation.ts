@@ -1,4 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
 import { useState } from "react";
 
 import type {
@@ -9,14 +8,13 @@ import type {
 } from "@/api/configs";
 import { propagationGroup } from "@/features/configs/configCatalog";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
-import { messageOf } from "@/shared/lib/errors";
 
 interface CredentialPropagationOptions {
   api: Pick<ConfigApi, "executeCredentialPropagation" | "previewCredentialPropagation">;
   loadCatalog: (kind?: ConfigCatalogLoadKind) => Promise<ConfigListData | null>;
   onBusyChange: (busy: boolean) => void;
   operationRunning: boolean;
-  setError: Dispatch<SetStateAction<string | null>>;
+  reportActionFailure: (title: string, cause: unknown) => void;
 }
 
 export function useCredentialPropagation({
@@ -24,7 +22,7 @@ export function useCredentialPropagation({
   loadCatalog,
   onBusyChange,
   operationRunning,
-  setError,
+  reportActionFailure,
 }: CredentialPropagationOptions) {
   const [preview, setPreview] = useState<PropagationPreview | null>(null);
   const [report, setReport] = useState<PropagationReport | null>(null);
@@ -35,7 +33,7 @@ export function useCredentialPropagation({
       setPreview(await api.previewCredentialPropagation());
       setReport(null);
     } catch (cause) {
-      setError(messageOf(cause));
+      reportActionFailure("Couldn’t preview credential propagation", cause);
     } finally {
       onBusyChange(false);
     }
@@ -49,7 +47,7 @@ export function useCredentialPropagation({
       setPreview(null);
       await loadCatalog("background");
     } catch (cause) {
-      setError(messageOf(cause));
+      reportActionFailure("Couldn’t propagate credentials", cause);
     } finally {
       onBusyChange(false);
     }

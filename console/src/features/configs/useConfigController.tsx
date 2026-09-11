@@ -35,6 +35,8 @@ import {
 } from "@/features/configs/route";
 import { useConfigCatalog } from "@/features/configs/catalog/useConfigCatalog";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
+import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
+import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 import { useConfigCrud } from "@/features/configs/mutation/useConfigCrud";
 import { useCredentialPropagation } from "@/features/configs/mutation/useCredentialPropagation";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
@@ -48,8 +50,11 @@ interface ControllerOptions {
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onCancelLeave?: () => void;
+  onContinueLeave?: () => void | Promise<void>;
   onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
+  pendingLeave?: boolean;
 }
 
 export interface ConfigViewModel {
@@ -67,6 +72,7 @@ export interface ConfigViewModel {
     loadingTenants: boolean;
     managedTenantMissing: boolean;
     refreshing: boolean;
+    refreshConfigs: () => Promise<void>;
     retryTenants: () => void;
     selectAgent: (values: ReadonlySet<CodingAgentKind>) => void;
     selectTenant: (values: ReadonlySet<TenantSelectionValue>) => void;
@@ -120,6 +126,7 @@ export interface ConfigViewModel {
     closePropagation: () => void;
     createError: string | null;
     createHelpId: string;
+    createNameTaken: boolean;
     createNameValid: boolean;
     createOpen: boolean;
     createTitleId: string;
@@ -139,13 +146,16 @@ export interface ConfigViewModel {
   editor: {
     dirtyFiles: readonly string[];
     editorMode: "visual" | "raw";
+    filesRevealed: boolean;
     handleLinkedFileSaved: (name: string) => void;
     handlePaneSaved: () => void;
     handleVisualAvailable: (available: boolean) => void;
+    hideFiles: () => void;
     registerPane: (name: string, element: HTMLDivElement | null) => void;
     prepareMainConfigSave: (customProvider: boolean) => boolean;
     registerFileController: (name: string, controller: ConfigFileController | null) => void;
     registerRevealRetry: (name: string, retry: (() => void) | null) => void;
+    revealFiles: () => void;
     requestEditorAction: (action: () => void | Promise<void>) => void;
     retryReveals: () => void;
     showRawEditor: () => void;
@@ -155,7 +165,9 @@ export interface ConfigViewModel {
   feedback: {
     appliedName: string | null;
     applyFeedback: string | null;
+    dismissNotification: (source: NotificationSource) => void;
     error: string | null;
+    notifications: NotificationItemData[];
     setError: Dispatch<SetStateAction<string | null>>;
   };
 }
@@ -165,7 +177,10 @@ export function useConfigController({
   operation,
   search,
   onDirtyChange,
+  onCancelLeave,
+  onContinueLeave,
   onLocationChange,
+  pendingLeave,
 }: ControllerOptions): ConfigViewModel {
   const route = useMemo(() => readConfigRoute(search), [search]);
   const { agent, detailOpen, selection, tenant } = route;
@@ -180,6 +195,12 @@ export function useConfigController({
   const [visualAvailable, setVisualAvailable] = useState(false);
   const visualModeInitialized = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const { dismissNotification, notifications, reportFailure } =
+    useFailureNotifications("Configs API call failed");
+  const reportActionFailure = useCallback(
+    (title: string, cause: unknown) => reportFailure("action", title, cause),
+    [reportFailure],
+  );
   const [workflow, dispatchWorkflow] = useReducer(configWorkflowReducer, initialConfigWorkflow);
   const { mutationBusy: busy, selectedKeys, selectionMode } = workflow;
   const onBusyChange = useCallback(
@@ -259,6 +280,7 @@ export function useConfigController({
     : inspectedName
       ? `named:${inspectedName}`
       : "named-catalog";
+  const filesRevealed = true;
   const configFiles = catalog?.files ?? [];
   const file =
     route.file && configFiles.includes(route.file) ? route.file : (configFiles[0] ?? null);
@@ -283,7 +305,14 @@ export function useConfigController({
     `${selectedTenantSelectionValue}:${agent}`,
     onDirtyChange,
     setError,
+    {
+      pending: pendingLeave,
+      onCancel: onCancelLeave,
+      onContinue: onContinueLeave,
+    },
   );
+  const revealFiles = useCallback(() => {}, []);
+  const hideFiles = useCallback(() => {}, []);
   const crud = useConfigCrud({
     agent,
     api,
@@ -299,7 +328,7 @@ export function useConfigController({
     requestEditorAction,
     selection,
     selectionMode,
-    setError,
+    reportActionFailure,
     tenant,
   });
   const propagation = useCredentialPropagation({
@@ -307,7 +336,7 @@ export function useConfigController({
     loadCatalog,
     onBusyChange,
     operationRunning,
-    setError,
+    reportActionFailure,
   });
   const panes = useElementRegistry<HTMLDivElement>();
   function closeConfigDetail() {
@@ -340,12 +369,12 @@ export function useConfigController({
     setEditorMode("raw");
   }, [agent, selectedConfigKey, selectedTenantSelectionValue]);
   useEffect(() => {
-    if (!detailOpen || !file) return;
+    if (!filesRevealed || !detailOpen || !file) return;
     const frame = window.requestAnimationFrame(() =>
       panes.get(file)?.scrollIntoView?.({ block: "nearest" }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, catalog, panes]);
+  }, [detailOpen, file, filesRevealed, catalog, panes]);
   useEffect(() => {
     // Loading a different external Config catalog resets editor-local state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -364,6 +393,7 @@ export function useConfigController({
   const handleVisualAvailable = useCallback(
     (available: boolean) => {
       setVisualAvailable(available);
+      if (!available) setEditorMode("raw");
       if (available && !visualModeInitialized.current && !currentSelection) {
         visualModeInitialized.current = true;
         setEditorMode("visual");
@@ -385,7 +415,10 @@ export function useConfigController({
     },
     [currentSelection, editorMode, requestEditorAction, visualAvailable],
   );
-  const showRawEditor = useCallback(() => setEditorMode("raw"), []);
+  const showRawEditor = useCallback(() => switchEditorMode("raw"), [switchEditorMode]);
+  async function refreshConfigs() {
+    if (await loadCatalog("refresh")) reloadFiles(configFiles);
+  }
   function selectTenant(values: ReadonlySet<TenantSelectionValue>) {
     const next = [...values][0];
     if (!next || next === configTenantSelectionValue(tenant)) return;
@@ -436,6 +469,7 @@ export function useConfigController({
     }
   }
   const createNameValid = DNS_LABEL_PATTERN.test(crud.dialogs.newName);
+  const createNameTaken = (catalog?.configs ?? []).some((row) => row.name === crud.dialogs.newName);
   return {
     catalog: {
       agent,
@@ -451,6 +485,7 @@ export function useConfigController({
       loadingTenants,
       managedTenantMissing,
       refreshing,
+      refreshConfigs,
       retryTenants,
       selectAgent,
       selectTenant,
@@ -495,6 +530,7 @@ export function useConfigController({
       ...propagation.dialogs,
       cancelPending,
       createHelpId,
+      createNameTaken,
       createNameValid,
       createTitleId,
       discardAndRunPendingAction,
@@ -505,13 +541,16 @@ export function useConfigController({
     editor: {
       dirtyFiles,
       editorMode,
+      filesRevealed,
       handleLinkedFileSaved,
       handlePaneSaved,
       handleVisualAvailable,
+      hideFiles,
       prepareMainConfigSave,
       registerFileController,
       registerPane: panes.register,
       registerRevealRetry,
+      revealFiles,
       requestEditorAction,
       retryReveals,
       showRawEditor,
@@ -521,7 +560,9 @@ export function useConfigController({
     feedback: {
       appliedName,
       applyFeedback: crud.applyFeedback,
+      dismissNotification,
       error,
+      notifications,
       setError,
     },
   };

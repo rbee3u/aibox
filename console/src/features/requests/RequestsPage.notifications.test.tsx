@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
@@ -28,7 +28,7 @@ describe("Requests page failure notifications", () => {
     await screen.findByRole("button", { name: "POST api.example.test/v1/responses" });
   });
 
-  it("retries the currently selected request from its inspection notification", async () => {
+  it("retries the currently selected request from the detail pane that states the failure", async () => {
     window.history.replaceState(
       null,
       "",
@@ -41,11 +41,11 @@ describe("Requests page failure notifications", () => {
     const user = userEvent.setup();
     renderApp({ getRequest });
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Couldn’t load request");
-    expect(screen.getByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
+    // The pane carries the failure and its Retry, so nothing is said twice.
+    expect(await screen.findByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Back to Request list" })).toBeInTheDocument();
-    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByRole("region", { name: "Request details" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Response" })).toHaveAttribute("aria-selected", "true");
@@ -66,7 +66,7 @@ describe("Requests page failure notifications", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Request not found");
   });
 
-  it("stacks simultaneous list and detail failures by source", async () => {
+  it("keeps a list read failure inline while the detail pane states its own", async () => {
     vi.useFakeTimers();
     const listRequests = vi
       .fn<RequestsApi["listRequests"]>()
@@ -80,15 +80,18 @@ describe("Requests page failure notifications", () => {
     await flushEffects();
     fireEvent.click(screen.getByRole("button", { name: "POST api.example.test/v1/responses" }));
     await flushEffects();
-    expect(screen.getByRole("alert")).toHaveTextContent("detail loading failed");
+    expect(screen.getByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     await advanceTimers(5000);
-    expect(screen.getAllByRole("alert")).toHaveLength(2);
-    expect(screen.getByText("list polling failed")).toBeInTheDocument();
-    expect(screen.getByText("detail loading failed")).toBeInTheDocument();
+    // Each read states itself where its own content would be: one banner for
+    // the list, the detail pane for the detail.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("list polling failed");
+    expect(screen.getByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
   });
 
-  it("orders the three notification sources with the newest failure first", async () => {
+  it("notifies an action failure without repeating an inline read failure", async () => {
     vi.useFakeTimers();
     const listRequests = vi
       .fn<RequestsApi["listRequests"]>()
@@ -110,14 +113,15 @@ describe("Requests page failure notifications", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await flushEffects();
 
-    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
-      expect.stringContaining("Couldn’t load request"),
-      expect.stringContaining("Couldn’t delete request"),
-      expect.stringContaining("Couldn’t load requests"),
-    ]);
+    // Only the delete is an event; both reads already own a surface.
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toContain("list failed");
+    expect(alerts[1]).toContain("Couldn’t delete request");
+    expect(screen.getByRole("heading", { name: "Request unavailable" })).toBeInTheDocument();
   });
 
-  it("does not re-notify a continuous polling failure until a successful request", async () => {
+  it("keeps a continuous polling failure stated instead of letting it time out", async () => {
     vi.useFakeTimers();
     const listRequests = vi
       .fn<RequestsApi["listRequests"]>()
@@ -128,16 +132,14 @@ describe("Requests page failure notifications", () => {
     await flushEffects();
     await advanceTimers(5000);
     expect(screen.getByRole("alert")).toHaveTextContent("polling remains unavailable");
-    await advanceTimers(8000);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    listRequests
-      .mockResolvedValueOnce(requestList)
-      .mockRejectedValueOnce(new Error("polling remains unavailable"));
-    await advanceTimers(2000);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await advanceTimers(5000);
+    // A toast would have auto-dismissed here and left the list unexplained.
+    await advanceTimers(8000);
     expect(screen.getByRole("alert")).toHaveTextContent("polling remains unavailable");
+
+    listRequests.mockResolvedValue(requestList);
+    await advanceTimers(5000);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps a post-delete list refresh failure visible", async () => {

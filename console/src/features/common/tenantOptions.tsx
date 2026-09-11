@@ -4,6 +4,7 @@ import type { TenantSelectionValue } from "@/domain/tenant";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import type { SelectionOption } from "@/shared/ui/SelectionMenu";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 /**
  * Projects Control API Tenant rows into Selection Menu options.
@@ -48,7 +49,7 @@ export function tenantSelectionOptions(
           {
             value: "host" as const,
             label: "Host Tenant",
-            icon: <HostTenantIcon size={14} aria-hidden="true" />,
+            icon: <HostTenantIcon size={iconSize.xs} aria-hidden="true" />,
           },
         ]
       : []),
@@ -56,7 +57,7 @@ export function tenantSelectionOptions(
       value: `managed:${tenant.name}` as const,
       label: tenant.display_name,
       summaryLabel: tenant.display_name,
-      icon: <ManagedTenantIcon size={14} aria-hidden="true" />,
+      icon: <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />,
     })),
   ];
 }
@@ -80,6 +81,6 @@ export function agentSelectionOptions(
   return agents.map((value) => ({
     value,
     label: value === "codex" ? "Codex" : "Claude",
-    icon: <BrandIcon brand={brandForAgent(value)} size={14} />,
+    icon: <BrandIcon brand={brandForAgent(value)} size={iconSize.xs} />,
   }));
 }

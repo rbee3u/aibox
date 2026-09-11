@@ -6,12 +6,14 @@ import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
 const ManagedTenantIcon = resourceIcons.managedTenant;
@@ -85,7 +87,7 @@ export function SessionCatalogPane({
               disabled={selectedKeys.size === 0 || mutationBusy}
               onClick={() => openBatchDelete([...selectedKeys])}
             >
-              <Trash2 size={14} aria-hidden="true" />
+              <Trash2 size={iconSize.xs} aria-hidden="true" />
               Delete
             </ActionButton>
           </>
@@ -100,7 +102,7 @@ export function SessionCatalogPane({
                 options={tenantOptions}
                 pluralLabel="tenants"
                 selected={selectedTenants}
-                triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
+                triggerIcon={<ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />}
                 unavailableSummary={
                   loadingTenants ? "Loading" : sessionTenantMissing ? "Not found" : "Unavailable"
                 }
@@ -115,9 +117,12 @@ export function SessionCatalogPane({
                 selected={selectedAgents}
                 triggerIcon={
                   selectedAgents.size === 1 ? (
-                    <BrandIcon brand={brandForAgent([...selectedAgents][0] ?? "codex")} size={14} />
+                    <BrandIcon
+                      brand={brandForAgent([...selectedAgents][0] ?? "codex")}
+                      size={iconSize.xs}
+                    />
                   ) : (
-                    <Box size={14} aria-hidden="true" />
+                    <Box size={iconSize.xs} aria-hidden="true" />
                   )
                 }
               />
@@ -126,28 +131,28 @@ export function SessionCatalogPane({
               <RefreshButton
                 ref={refreshButton}
                 data-dialog-focus-fallback="true"
-                className={layout.refreshAction}
                 label="Refresh Sessions"
                 busyLabel="Refreshing Sessions"
                 busy={refreshing}
                 disabled={loadingList || refreshing || deletionBusy}
+                compactOnNarrow
                 onClick={() => void load("refresh")}
               >
                 Refresh
               </RefreshButton>
-              <ActionButton
+              <IconLabelButton
                 ref={selectButton}
-                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Sessions"
                 disabled={
                   sessions.length === 0 || unsafeView || loadingList || refreshing || deletionBusy
                 }
                 onClick={enterSelection}
+                compactOnNarrow
+                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
               >
-                <ListChecks size={14} aria-hidden="true" />
                 Select
-              </ActionButton>
+              </IconLabelButton>
             </div>
           </>
         )}
@@ -158,7 +163,7 @@ export function SessionCatalogPane({
             className={styles.inlineWarning}
             key={warning}
             tone="warning"
-            icon={<AlertTriangle size={15} aria-hidden="true" />}
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
           >
             {warning}
           </AlertBanner>
@@ -178,6 +183,7 @@ export function SessionCatalogPane({
             deletionBusy={deletionBusy}
             loadingList={loadingList}
             unsafeView={unsafeView}
+            showSource={selectedTenants.size > 1 || selectedAgents.size > 1}
             onOpen={() => void openSession(row)}
             onToggle={() => toggleSession(row.key)}
             onDelete={() => openSingleDelete(row)}
@@ -188,7 +194,9 @@ export function SessionCatalogPane({
         {data?.sessions.length === 0 && !loadingList && (
           <EmptyState
             variant="list"
-            icon={<SessionIcon size={22} data-icon="session-list-empty" aria-hidden="true" />}
+            icon={
+              <SessionIcon size={iconSize.lg} data-icon="session-list-empty" aria-hidden="true" />
+            }
             title="No Sessions found"
             description="No Sessions were found for the selected Tenants and Coding Agents."
           />

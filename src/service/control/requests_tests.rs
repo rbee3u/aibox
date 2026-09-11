@@ -627,6 +627,82 @@ async fn decoded_body_api_handles_identity_zstd_and_gzip_without_changing_raw_by
     );
 }
 
+fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
+    let mut input = bytes;
+    let mut output = Vec::new();
+    brotli::BrotliCompress(
+        &mut input,
+        &mut output,
+        &brotli::enc::BrotliEncoderParams::default(),
+    )
+    .unwrap();
+    output
+}
+
+fn deflate_encode(bytes: &[u8]) -> Vec<u8> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[tokio::test]
+async fn decoded_body_api_handles_brotli_and_deflate_without_changing_raw_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    let source = br#"{"result":"compressed-response"}"#;
+    for (encoding, encoded) in [
+        ("br", brotli_encode(source)),
+        ("deflate", deflate_encode(source)),
+    ] {
+        let (mut request, _) = store
+            .begin(ObservedRequest::test("POST", &format!("/{encoding}")))
+            .unwrap();
+        request.request_body.write_all(b"{}").unwrap();
+        request.response_body.write_all(&encoded).unwrap();
+        store
+            .write_response(
+                &request.locator,
+                &request.summary,
+                &ResponseMetadata {
+                    format_version: crate::request::format_version(),
+                    source: ResponseSource::Upstream,
+                    headers_at: "2026-08-09T00:00:00Z".to_string(),
+                    status: 200,
+                    http_version: "HTTP/2".to_string(),
+                    headers: vec![recorded_header("content-encoding", encoding)],
+                },
+            )
+            .unwrap();
+        let id = request.id.clone();
+        store
+            .finish(
+                &request,
+                std::time::Instant::now(),
+                &RuntimeMeasurements::default(),
+                Outcome::Completed,
+                None,
+            )
+            .unwrap();
+
+        let decoded = decoded_body_response(inspection(&store), &id, true).await;
+        assert_eq!(decoded.status(), StatusCode::OK, "{encoding}");
+        assert_eq!(
+            decoded.into_body().collect().await.unwrap().to_bytes(),
+            source.as_slice(),
+            "{encoding}"
+        );
+        let raw = body_response(inspection(&store), &id, true, 0).await;
+        assert_eq!(
+            raw.into_body().collect().await.unwrap().to_bytes(),
+            encoded.as_slice(),
+            "{encoding}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn decoded_body_api_rejects_incomplete_unsupported_and_corrupt_content() {
     let temp = tempfile::tempdir().unwrap();

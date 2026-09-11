@@ -6,6 +6,7 @@ import { ConfigDialogs } from "@/features/configs/mutation/ConfigDialogs";
 import { useConfigController } from "@/features/configs/useConfigController";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
+import { NotificationCenter } from "@/shared/ui/NotificationCenter";
 import layout from "@/shared/ui/layout/catalog.module.css";
 
 interface PageProps {
@@ -13,8 +14,11 @@ interface PageProps {
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onCancelLeave?: () => void;
+  onContinueLeave?: () => void | Promise<void>;
   onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
+  pendingLeave?: boolean;
 }
 
 export function ConfigPage(props: PageProps) {
@@ -56,6 +60,12 @@ export function ConfigPage(props: PageProps) {
           mutations={mutations}
         />
       </div>
+      <NotificationCenter
+        notifications={feedback.notifications}
+        paused={dialogs.createOpen || dialogs.deleteTarget !== null || dialogs.applyTarget !== null}
+        onAction={() => undefined}
+        onDismiss={feedback.dismissNotification}
+      />
       <ConfigDialogs catalog={catalog} dialogs={dialogs} editor={editor} mutations={mutations} />
     </div>
   );

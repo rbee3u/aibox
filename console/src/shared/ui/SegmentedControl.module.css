@@ -43,12 +43,21 @@
   color: var(--muted);
 }
 
+.filled > button:active:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
 .filled > button[aria-pressed="true"],
 .filled > button[aria-pressed="true"]:hover:not(:disabled) {
   border-color: transparent;
   background: var(--surface-selected);
-  color: var(--accent);
+  color: var(--ink);
   box-shadow: none;
+}
+
+.filled > button[aria-pressed="true"]:active,
+.filled > button[aria-pressed="true"]:active:not(:disabled) {
+  background: var(--surface-pressed);
 }
 
 .filled > button:disabled {
@@ -78,15 +87,27 @@
   color: var(--muted);
 }
 
+.tabs > button:active:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
 .tabs > button[aria-selected="true"] {
   background: var(--surface-selected);
-  color: var(--accent);
-  box-shadow: inset 0 -2px var(--accent);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.tabs > button[aria-selected="true"]:active {
+  background: var(--surface-pressed);
 }
 
 .tabs > button[aria-selected="true"]:hover:not(:disabled) {
   background: var(--surface-selected);
-  color: var(--accent);
+  color: var(--ink);
+}
+
+.tabs > button[aria-selected="true"]:active:not(:disabled) {
+  background: var(--surface-pressed);
 }
 
 @container (max-width: 520px) {
@@ -97,11 +118,5 @@
 
   .tabs > button {
     flex: 0 0 auto;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .root > button {
-    transition-duration: 0.01ms;
   }
 }

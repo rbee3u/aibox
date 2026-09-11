@@ -65,8 +65,25 @@ export function errorKindLabel(kind: string): string {
 }
 
 export function assessmentPrimaryLabel(primary: AssessmentPrimary): string {
-  const httpStatus = primary.source === "http" ? /^http_(\d+)$/.exec(primary.kind)?.[1] : null;
-  return httpStatus ? `HTTP ${httpStatus}` : errorKindLabel(primary.kind);
+  const httpStatus = httpStatusFromPrimary(primary);
+  return httpStatus != null ? `HTTP ${httpStatus}` : errorKindLabel(primary.kind);
+}
+
+/** True when the Assessment primary is the same HTTP status already on the record. */
+export function assessmentRestatesHttpStatus(
+  assessment: RequestAssessment,
+  status: number | null,
+): boolean {
+  if (status == null || !assessment.primary) return false;
+  return httpStatusFromPrimary(assessment.primary) === status;
+}
+
+function httpStatusFromPrimary(primary: AssessmentPrimary): number | null {
+  if (primary.source !== "http") return null;
+  const match = /^http_(\d+)$/.exec(primary.kind);
+  if (!match) return null;
+  const status = Number(match[1]);
+  return Number.isInteger(status) ? status : null;
 }
 
 export function statusTone(status: number): RequestStatusTone {
@@ -91,6 +108,22 @@ export function assessmentPresentation(
 
 export function assessmentIssueText(issue: AssessmentPresentation): string {
   return `Request ${issue.tone}: ${issue.label}. ${issue.message}`;
+}
+
+export function assessmentCatalogLabel(issue: AssessmentPresentation): string {
+  return `${issue.tone === "error" ? "Error" : "Warning"}: ${issue.label}`;
+}
+
+/** Catalog label for an independent finding; null when it only restates the row status. */
+export function catalogAssessmentPresentation(
+  assessment: RequestAssessment,
+  status: number | null,
+  state: RequestState,
+): AssessmentPresentation | null {
+  if (state === "active" || assessmentRestatesHttpStatus(assessment, status)) {
+    return null;
+  }
+  return assessmentPresentation(assessment);
 }
 
 export function requestStatusPresentation({
@@ -135,6 +168,10 @@ export function requestHeadlinePresentation(
       .filter(Boolean)
       .join(" "),
     tone: statusTone(response.status),
-    tag: active ? { label: "Streaming", tone: "active" } : assessmentPresentation(assessment),
+    tag: active
+      ? { label: "Streaming", tone: "active" }
+      : assessmentRestatesHttpStatus(assessment, response.status)
+        ? null
+        : assessmentPresentation(assessment),
   };
 }

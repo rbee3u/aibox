@@ -10,6 +10,7 @@ import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/tenants/TenantPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const ManagedTenantIcon = resourceIcons.managedTenant;
 export function TenantDetailPane({
@@ -24,6 +25,7 @@ export function TenantDetailPane({
 }) {
   const {
     attentionComponentCount,
+    attentionKind,
     checkingLatest,
     checkForUpdates,
     componentActionProgress,
@@ -34,7 +36,7 @@ export function TenantDetailPane({
     componentMenuRef,
     componentTotalCount,
     installedComponentCount,
-    isComponentExpanded,
+    updatableComponentCount,
     latestSnapshot,
     loadComponents,
     mutateComponent,
@@ -43,7 +45,6 @@ export function TenantDetailPane({
     openSpecificVersion,
     registerComponentMenuButton,
     registerComponentMenuItem,
-    toggleComponentExpanded,
     toggleComponentMenu,
   } = components;
   const {
@@ -77,7 +78,7 @@ export function TenantDetailPane({
                   });
                 }}
               >
-                <ChevronLeft size={17} />
+                <ChevronLeft size={iconSize.md} />
               </IconButton>
               <div className={styles.componentHeaderIdentity}>
                 <h2 ref={detailHeadingRef} tabIndex={-1}>
@@ -102,43 +103,59 @@ export function TenantDetailPane({
                       }
                       onClick={() => void copyHome(selected.home, selected.home)}
                     >
-                      {copiedHome === selected.home ? <Check size={13} /> : <Clipboard size={13} />}
+                      {copiedHome === selected.home ? (
+                        <Check size={iconSize.xs} />
+                      ) : (
+                        <Clipboard size={iconSize.xs} />
+                      )}
                     </IconButton>
                   </div>
                 </div>
               </div>
-              <div className={styles.componentHeaderMeta} aria-label="Component summary">
-                {componentCatalogLoading ? (
-                  <span className={styles.componentHeaderLoading}>Loading…</span>
-                ) : (
-                  <>
-                    <span className={styles.componentInstalledSummary}>
-                      <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
-                    </span>
-                    {attentionComponentCount > 0 && (
-                      <span className={styles.componentSummaryAttention}>
-                        {attentionComponentCount}{" "}
-                        {attentionComponentCount === 1 ? "issue" : "issues"}
-                      </span>
-                    )}
-                  </>
-                )}
-                <div className={styles.componentCheckStatus}>
-                  {latestSnapshot ? (
-                    <time
-                      dateTime={latestSnapshot.checked_at}
-                      title={new Date(latestSnapshot.checked_at).toLocaleString()}
-                    >
-                      Checked {relativeTimeLabel(latestSnapshot.checked_at)}
-                    </time>
+              <div className={styles.componentHeaderMeta}>
+                <div className={styles.componentSummary} aria-label="Component summary">
+                  {componentCatalogLoading ? (
+                    <span className={styles.componentHeaderLoading}>Loading…</span>
                   ) : (
-                    <span>Not checked</span>
+                    <>
+                      <span className={styles.componentInstalledSummary}>
+                        <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
+                      </span>
+                      {attentionComponentCount > 0 && (
+                        <span className={styles.componentSummaryAttention}>
+                          {attentionComponentCount}{" "}
+                          {attentionComponentCount === 1 ? "issue" : "issues"}
+                        </span>
+                      )}
+                      {updatableComponentCount > 0 && (
+                        <span className={styles.componentSummaryUpdates}>
+                          {updatableComponentCount}{" "}
+                          {updatableComponentCount === 1 ? "update" : "updates"}
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
+                {latestSnapshot && (
+                  <span className={styles.componentCheckedAt}>
+                    Checked {relativeTimeLabel(latestSnapshot.checked_at)}
+                  </span>
+                )}
                 <RefreshButton
                   className={styles.componentCheckButton}
                   tone="ghost"
-                  label="Check for updates"
+                  compactOnNarrow
+                  /*
+                   * The accessible name keeps the freshness unconditionally.
+                   * The visible node beside this button carries it wherever
+                   * there is room, and drops out on a narrow pane — so the name
+                   * is the one path that is never the width's to take away.
+                   */
+                  label={
+                    latestSnapshot
+                      ? `Check for updates, checked ${relativeTimeLabel(latestSnapshot.checked_at)}`
+                      : "Check for updates"
+                  }
                   busy={checkingLatest}
                   busyLabel="Checking for updates"
                   disabled={checkingLatest}
@@ -180,14 +197,13 @@ export function TenantDetailPane({
                               key={row.kind}
                               row={row}
                               model={model}
-                              expanded={isComponentExpanded(row.kind)}
+                              highlighted={attentionKind === row.kind}
                               progressLabel={rowProgress}
                               busy={busy}
                               mutationBusy={mutationBusy}
                               openMenu={openMenu}
                               menuPosition={componentMenuPosition}
                               menuRef={componentMenuRef}
-                              onToggleExpanded={() => toggleComponentExpanded(row.kind)}
                               onRetryInspection={() => void loadComponents(selected)}
                               onInstall={() => void mutateComponent(row, true)}
                               onRemove={() => requestComponentRemove(row, selected.display_name)}
@@ -221,7 +237,7 @@ export function TenantDetailPane({
       ) : (
         <EmptyState
           variant="detail"
-          icon={<ManagedTenantIcon size={26} aria-hidden="true" />}
+          icon={<ManagedTenantIcon size={iconSize.xl} aria-hidden="true" />}
           title="Select a Tenant"
           description="Choose a Tenant to inspect its Components."
         />

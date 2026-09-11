@@ -7,6 +7,30 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 describe("TenantPage", () => {
+  /*
+   * A refused delete leaves the Tenant in place, so the Component catalog
+   * reload that follows it succeeds — and that success used to clear the very
+   * message explaining the refusal, leaving the whole failure silent.
+   */
+  it("states why a refused Tenant delete failed instead of reloading the reason away", async () => {
+    const { api } = tenantApi({
+      deleteTenants: () =>
+        Promise.reject(new Error("Tenant work has a running container and cannot be deleted")),
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox"), "work");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t delete Tenant work");
+    expect(alert).toHaveTextContent("has a running container");
+    expect(await screen.findByRole("button", { name: "Delete Tenant work" })).toBeInTheDocument();
+  });
+
   it("keeps Install available before checking and validates a specific version dialog", async () => {
     const { api, mutateComponent } = tenantApi({
       mutateComponent: () => Promise.resolve({ kind: "completed", value: {} }),
@@ -24,7 +48,8 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
 
     const row = await screen.findByRole("listitem");
-    expect(screen.getByText("Not checked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeInTheDocument();
+    expect(screen.queryByText("Not checked")).not.toBeInTheDocument();
     expect(within(row).queryByLabelText("Python latest release")).toBeNull();
     expect(row).not.toHaveTextContent("—");
     const options = screen.getByRole("button", {
@@ -93,15 +118,8 @@ describe("TenantPage", () => {
     const row = await screen.findByRole("listitem");
     expect(row).toHaveTextContent("Latest unavailable");
     expect(within(row).getByText("Latest unavailable")).not.toHaveAttribute("title");
-    const user = userEvent.setup();
-    const details = within(row).getByRole("button", { name: "Details" });
-    expect(details).toHaveAttribute("aria-expanded", "false");
-    await user.click(details);
-    expect(details).toHaveAttribute("aria-expanded", "true");
     expect(row).toHaveTextContent("No comparable stable release feed.");
-    await user.click(details);
-    expect(details).toHaveAttribute("aria-expanded", "false");
-    expect(row).not.toHaveTextContent("No comparable stable release feed.");
+    expect(within(row).queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
   });
   it("shows incomparable versions as an inline diagnostic", async () => {
@@ -128,12 +146,10 @@ describe("TenantPage", () => {
         },
       ],
     });
-    const user = userEvent.setup();
     render(<TenantPage api={api} />);
     const row = await screen.findByRole("listitem");
     expect(row).toHaveTextContent("vdevelopment");
     expect(row).toHaveTextContent("Latest v24.19.0");
-    await user.click(within(row).getByRole("button", { name: "Details" }));
     expect(row).toHaveTextContent("The observed and current versions could not be compared.");
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
   });

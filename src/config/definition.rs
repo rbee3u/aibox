@@ -112,6 +112,24 @@ impl NamedConfigDefinition {
         bail!("unsupported Named Config file: {file}")
     }
 
+    pub(super) fn project_main_file(
+        agent: AgentKind,
+        named: &str,
+        current: &str,
+    ) -> Result<String> {
+        let main = agent.parse_main_config(named)?;
+        validate_config_main(agent, &main)?;
+        let definition = Self {
+            agent,
+            main,
+            auth: agent.native_auth_file().map(|_| Map::new()),
+        };
+        Ok(definition
+            .apply(Some(current), agent.native_auth_file().map(|_| "{}"))?
+            .main
+            .unwrap_or_default())
+    }
+
     /// Apply every fixed Config Field to the current native configuration.
     pub(crate) fn apply(
         &self,

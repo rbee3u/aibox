@@ -613,6 +613,34 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
 }
 
 #[test]
+fn missing_terminal_event_is_not_claimed_when_response_interpretation_failed() {
+    let mut protocol = ProtocolSummary::for_url(Some("https://api.example.test/v1/messages"));
+    protocol.response_mode.observed = Some(ResponseModeValue::Stream);
+    let mut summary = SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", Some(protocol));
+    summary.terminal = true;
+    summary.outcome = Some(Outcome::Completed);
+    summary.timing.upstream_response_body_completed_at_ns = Some("25".to_string());
+    summary.warnings.push(DiagnosticMetadata {
+        phase: "recording".to_string(),
+        kind: "response_interpretation_failed".to_string(),
+        message: "unsupported Content-Encoding \"compress\"".to_string(),
+        at_ns: "25".to_string(),
+    });
+
+    let findings = diagnostic_findings(&summary, false);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.kind == "response_interpretation_failed")
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.kind != "model_response_terminal_not_observed")
+    );
+}
+
+#[test]
 fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();

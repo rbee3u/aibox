@@ -1,4 +1,6 @@
+import { ConfigComparisonProvider } from "@/features/configs/detail/ConfigComparisonContext";
 import { AlertTriangle, ChevronLeft, Save } from "lucide-react";
+import { useId } from "react";
 
 import type { ConfigApi } from "@/api/configs";
 import { ConfigFilePane } from "@/features/configs/detail/ConfigFilePane";
@@ -16,6 +18,7 @@ import { Loading } from "@/shared/ui/ManagementFeedback";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
@@ -29,6 +32,7 @@ export function ConfigDetailPane({
 }: Pick<ConfigViewModel, "catalog" | "detail" | "editor" | "feedback" | "mutations"> & {
   api: ConfigApi;
 }) {
+  const filesId = useId();
   const {
     agent,
     catalog: data,
@@ -44,6 +48,7 @@ export function ConfigDetailPane({
   const {
     dirtyFiles,
     editorMode,
+    filesRevealed,
     handleLinkedFileSaved,
     handlePaneSaved,
     handleVisualAvailable,
@@ -57,6 +62,17 @@ export function ConfigDetailPane({
   } = editor;
   const { setError } = feedback;
   const { mutationBusy, saveAll } = mutations;
+  const hostRisk = tenant.kind === "host";
+  const showUnredactedWarning =
+    filesRevealed && (selection.current || agent === "codex" || editorMode === "raw");
+  const editorNotice = [
+    hostRisk ? "Host risk" : null,
+    showUnredactedWarning
+      ? "Native content may contain credentials and is displayed without redaction."
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   return (
     <section className={layout.detailPane}>
       {loadingTenants || loadingCatalog ? (
@@ -64,14 +80,14 @@ export function ConfigDetailPane({
       ) : managedTenantMissing ? (
         <EmptyState
           variant="detail"
-          icon={<ManagedTenantIcon size={26} aria-hidden="true" />}
+          icon={<ManagedTenantIcon size={iconSize.xl} aria-hidden="true" />}
           title="Managed Tenant not found"
           description="The selected Managed Tenant does not exist."
         />
       ) : isNamedCatalog(selection) && data ? (
         <EmptyState
           variant="detail"
-          icon={<NamedConfigIcon size={26} aria-hidden="true" />}
+          icon={<NamedConfigIcon size={iconSize.xl} aria-hidden="true" />}
           title="Named Configs"
           description="Select Current Config or a Named Config to inspect its files."
         />
@@ -83,16 +99,17 @@ export function ConfigDetailPane({
               label="Back to Configs"
               onClick={closeConfigDetail}
             >
-              <ChevronLeft size={17} />
+              <ChevronLeft size={iconSize.md} />
             </IconButton>
             <div className={styles.configContextStack}>
+              <h2 ref={detailHeadingRef} tabIndex={-1}>
+                {configSelectionLabel}
+              </h2>
+              {editorNotice ? <p className={styles.editorNotice}>{editorNotice}</p> : null}
               <div className={styles.contextFacts} aria-label="Config editing context">
                 <span>
                   <small>Tenant</small>
-                  <strong>
-                    {configTenantLabel}
-                    {tenant.kind === "host" && <em>Host risk</em>}
-                  </strong>
+                  <strong>{configTenantLabel}</strong>
                 </span>
                 <span>
                   <small>Coding Agent</small>
@@ -112,19 +129,9 @@ export function ConfigDetailPane({
                   </strong>
                 </span>
               </div>
-              {(selection.current || agent === "codex" || editorMode === "raw") && (
-                <span className={styles.sensitiveContext}>
-                  Native content may contain credentials and is displayed without redaction.
-                </span>
-              )}
-              <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {agent === "codex" && !selection.current
-                  ? "Codex configuration"
-                  : (file ?? "Configuration")}
-              </h2>
             </div>
           </div>
-          <div className={styles.configFilePanel}>
+          <div id={filesId} className={styles.configFilePanel}>
             <div className={styles.editorModeBar} aria-label="Editor mode">
               <span>
                 {dirtyFiles.length > 0
@@ -155,47 +162,65 @@ export function ConfigDetailPane({
                   disabled={mutationBusy}
                   onClick={() => void saveAll()}
                 >
-                  <Save size={14} /> Save all
+                  <Save size={iconSize.xs} /> Save all
                 </ActionButton>
               )}
             </div>
-            <div className={styles.configFileStack}>
-              {configFiles.map((name) => (
-                <div
-                  key={name}
-                  ref={(element) => registerPane(name, element)}
-                  className={`${styles.configFileSection} ${file === name ? styles.configFileSectionFocused : ""}`}
-                >
-                  <ConfigFilePane
-                    key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${namedConfigName(selection)}`}:${name}`}
-                    api={api}
-                    tenant={tenant}
-                    agent={agent}
-                    selection={selection}
-                    file={name}
-                    mode={selection.current ? "raw" : editorMode}
-                    controlsDisabled={mutationBusy}
-                    onControllerChange={registerFileController}
-                    onError={setError}
-                    onRevealRetryChange={registerRevealRetry}
-                    onSaved={handlePaneSaved}
-                    onBeforeSave={name === "config.toml" ? prepareMainConfigSave : undefined}
-                    onLinkedFileSaved={handleLinkedFileSaved}
-                    onVisualAvailable={
-                      name === (agent === "claude" ? "settings.json" : "config.toml")
-                        ? handleVisualAvailable
-                        : undefined
-                    }
-                    onRequestRaw={showRawEditor}
-                  />
-                </div>
-              ))}
-            </div>
+            <ConfigComparisonProvider
+              key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : namedConfigName(selection)}`}
+              api={api}
+              target={{
+                tenant,
+                agent,
+                current: selection.current,
+                config: selection.current ? null : namedConfigName(selection),
+              }}
+              enabled={Boolean(
+                data.application.last_application &&
+                (selection.current ||
+                  namedConfigName(selection) === data.application.last_application.applied),
+              )}
+              files={configFiles}
+              refresh={data}
+            >
+              <div className={styles.configFileStack}>
+                {configFiles.map((name) => (
+                  <div
+                    key={name}
+                    ref={(element) => registerPane(name, element)}
+                    className={`${styles.configFileSection} ${file === name ? styles.configFileSectionFocused : ""}`}
+                  >
+                    <ConfigFilePane
+                      key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${namedConfigName(selection)}`}:${name}`}
+                      api={api}
+                      tenant={tenant}
+                      agent={agent}
+                      selection={selection}
+                      file={name}
+                      mode={selection.current ? "raw" : editorMode}
+                      controlsDisabled={mutationBusy}
+                      onControllerChange={registerFileController}
+                      onError={setError}
+                      onRevealRetryChange={registerRevealRetry}
+                      onSaved={handlePaneSaved}
+                      onBeforeSave={name === "config.toml" ? prepareMainConfigSave : undefined}
+                      onLinkedFileSaved={handleLinkedFileSaved}
+                      onVisualAvailable={
+                        name === (agent === "claude" ? "settings.json" : "config.toml")
+                          ? handleVisualAvailable
+                          : undefined
+                      }
+                      onRequestRaw={showRawEditor}
+                    />
+                  </div>
+                ))}
+              </div>
+            </ConfigComparisonProvider>
           </div>
         </>
       ) : (
         <div className={styles.emptyPane} role="status">
-          <AlertTriangle size={22} aria-hidden="true" />
+          <AlertTriangle size={iconSize.lg} aria-hidden="true" />
           <span>Configuration is unavailable. Use Retry to load it again.</span>
         </div>
       )}

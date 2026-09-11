@@ -1,11 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { forwardRef, type ReactNode } from "react";
-import {
-  ActionButton,
-  type ActionButtonProps,
-  type ActionButtonTone,
-} from "@/shared/ui/ActionButton";
-import styles from "@/shared/ui/RefreshButton.module.css";
+import { type ActionButtonProps, type ActionButtonTone } from "@/shared/ui/ActionButton";
+import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 
 export interface RefreshButtonProps extends Omit<
   ActionButtonProps,
@@ -15,7 +11,7 @@ export interface RefreshButtonProps extends Omit<
   busy?: boolean;
   busyLabel?: string;
   children?: ReactNode;
-  iconOnly?: boolean;
+  compactOnNarrow?: boolean;
   iconSize?: number;
   tone?: Extract<ActionButtonTone, "ghost" | "secondary">;
 }
@@ -28,7 +24,7 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
       busyLabel,
       children,
       className,
-      iconOnly = false,
+      compactOnNarrow = false,
       iconSize = 14,
       tone = "ghost",
       ...props
@@ -36,18 +32,21 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
     ref,
   ) {
     return (
-      <ActionButton
+      <IconLabelButton
         {...props}
         ref={ref}
-        className={`${styles.button} ${iconOnly ? styles.iconOnly : ""} ${className ?? ""}`}
+        className={className}
+        compactOnNarrow={compactOnNarrow}
+        icon={
+          <RefreshCw className={busy ? "spin" : undefined} size={iconSize} aria-hidden="true" />
+        }
         data-refresh-button="true"
         tone={tone}
         aria-label={busy && busyLabel ? busyLabel : label}
         aria-busy={busy || undefined}
       >
-        <RefreshCw className={busy ? "spin" : undefined} size={iconSize} aria-hidden="true" />
-        {!iconOnly && (children ?? label)}
-      </ActionButton>
+        {children ?? label}
+      </IconLabelButton>
     );
   },
 );

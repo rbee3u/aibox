@@ -5,13 +5,17 @@ import {
   configIssueDescriptionId,
   configIssuePresentation,
   configWarningPresentation,
+  lastAppliedDescriptionId,
+  lastAppliedMeta,
 } from "@/features/configs/configCatalog";
 import { configTenantSelectionValue, namedConfigName } from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
+import { catalogMarksInspection, useNarrowLayout } from "@/shared/hooks/useNarrowLayout";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { ActionButton } from "@/shared/ui/ActionButton";
+import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { IssueIndicator } from "@/shared/ui/IssueIndicator";
 import { Loading } from "@/shared/ui/ManagementFeedback";
@@ -20,6 +24,7 @@ import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const CurrentConfigIcon = resourceIcons.currentConfig;
 const ManagedTenantIcon = resourceIcons.managedTenant;
@@ -40,7 +45,7 @@ export function ConfigCatalogPane({
     agent,
     agentOptions,
     catalog: data,
-    loadCatalog,
+    refreshConfigs,
     loadingCatalog,
     loadingTenants,
     managedTenantMissing,
@@ -50,7 +55,9 @@ export function ConfigCatalogPane({
     tenant,
     tenantOptions,
   } = catalog;
-  const { openConfig, openCurrent, selection } = detail;
+  const { detailOpen, openConfig, openCurrent, selection } = detail;
+  const narrowLayout = useNarrowLayout();
+  const marksInspection = catalogMarksInspection(narrowLayout, detailOpen);
   const { openCreateDialog, requestApply } = dialogs;
   const { requestEditorAction } = editor;
   const { appliedName, applyFeedback } = feedback;
@@ -98,7 +105,7 @@ export function ConfigCatalogPane({
               disabled={selectedCount === 0 || mutationBusy}
               onClick={() => requestDelete([...selectedKeys])}
             >
-              <Trash2 size={14} aria-hidden="true" /> Delete
+              <Trash2 size={iconSize.xs} aria-hidden="true" /> Delete
             </ActionButton>
           </>
         ) : (
@@ -112,7 +119,7 @@ export function ConfigCatalogPane({
                 options={tenantOptions}
                 pluralLabel="tenants"
                 selected={new Set([configTenantSelectionValue(tenant)])}
-                triggerIcon={<ManagedTenantIcon size={14} aria-hidden="true" />}
+                triggerIcon={<ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />}
                 unavailableSummary={
                   loadingTenants ? "Loading" : managedTenantMissing ? "Not found" : "Unavailable"
                 }
@@ -126,54 +133,45 @@ export function ConfigCatalogPane({
                 options={agentOptions}
                 pluralLabel="Coding Agents"
                 selected={new Set([agent])}
-                triggerIcon={<BrandIcon brand={brandForAgent(agent)} size={14} />}
+                triggerIcon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
                 allowMultiple={false}
               />
             </div>
             <div className={layout.toolbarActions}>
               <RefreshButton
-                className={layout.refreshAction}
                 label="Refresh Configs"
                 busyLabel="Refreshing Configs"
                 busy={refreshing}
                 disabled={loadingCatalog || refreshing || busy}
+                compactOnNarrow
                 onClick={() =>
                   requestEditorAction(async () => {
-                    await loadCatalog("refresh");
+                    await refreshConfigs();
                   })
                 }
               >
                 Refresh
               </RefreshButton>
-              <ActionButton
-                tone="ghost"
+              <IconLabelButton
                 className={layout.selectionEnter}
                 aria-label="Select Configs"
                 disabled={selectableNames.length === 0 || loadingCatalog || refreshing || busy}
                 onClick={enterSelection}
+                compactOnNarrow
+                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
               >
-                <ListChecks size={14} aria-hidden="true" /> Select
-              </ActionButton>
+                Select
+              </IconLabelButton>
             </div>
           </>
         )}
       </div>
       <div className={styles.configWarnings} aria-live="polite">
-        {appliedName && !applyFeedback && (
-          <AlertBanner
-            className={styles.inlineNotice}
-            tone="success"
-            icon={<Check size={15} aria-hidden="true" />}
-          >
-            Last applied: <strong>Named Config {appliedName}</strong>. Application is a one-time
-            projection to Current Config, not an Active Config.
-          </AlertBanner>
-        )}
         {applyFeedback && (
           <AlertBanner
             className={styles.inlineNotice}
             tone="success"
-            icon={<Check size={15} aria-hidden="true" />}
+            icon={<Check size={iconSize.xs} aria-hidden="true" />}
           >
             {applyFeedback}
           </AlertBanner>
@@ -182,7 +180,7 @@ export function ConfigCatalogPane({
           <AlertBanner
             className={styles.inlineWarning}
             tone="warning"
-            icon={<AlertTriangle size={15} aria-hidden="true" />}
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
           >
             <span title={data.application.detail}>Last applied Named Config is missing.</span>
           </AlertBanner>
@@ -191,7 +189,7 @@ export function ConfigCatalogPane({
           <AlertBanner
             className={styles.inlineWarning}
             tone="warning"
-            icon={<AlertTriangle size={15} aria-hidden="true" />}
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
           >
             {data.application.detail}
           </AlertBanner>
@@ -202,20 +200,28 @@ export function ConfigCatalogPane({
         <div className={layout.rowGroup}>
           {!managedTenantMissing && (
             <div
-              className={`${layout.row} ${selection.current ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
+              className={`${layout.row} ${marksInspection && selection.current ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
             >
               <button
                 ref={(element) => registerConfigRow("current", element)}
                 type="button"
                 className={styles.configRowMain}
                 aria-label={selectionMode ? "Current Config cannot be selected" : "Current Config"}
-                aria-pressed={!selectionMode && selection.current ? true : undefined}
+                aria-describedby={appliedName ? lastAppliedDescriptionId : undefined}
+                aria-pressed={
+                  !selectionMode && marksInspection && selection.current ? true : undefined
+                }
                 disabled={busy || loadingCatalog || (selectionMode ? true : false)}
                 onClick={() => void openCurrent()}
               >
-                <CurrentConfigIcon size={16} data-icon="current-config" />
+                <CurrentConfigIcon size={iconSize.sm} data-icon="current-config" />
                 <span className={styles.configRowText}>
                   <strong>Current Config</strong>
+                  {appliedName && (
+                    <small id={lastAppliedDescriptionId} className={styles.configRowMeta}>
+                      {lastAppliedMeta(appliedName, data?.application.drift)}
+                    </small>
+                  )}
                 </span>
                 {selectionMode && <span className={layout.protectedBadge}>Protected</span>}
               </button>
@@ -224,7 +230,7 @@ export function ConfigCatalogPane({
                 agent === "codex" &&
                 data?.credential_propagation_available && (
                   <ActionButton
-                    tone="primarySoft"
+                    tone="ghost"
                     className={`${styles.configRowPrimaryAction} ${styles.configPropagateAction}`}
                     aria-label="Propagate credentials"
                     disabled={mutationBusy}
@@ -237,15 +243,14 @@ export function ConfigCatalogPane({
           )}
           <div className={layout.divider}>
             <span>Named Configs</span>
-            <ActionButton
-              tone="primarySoft"
+            <IconButton
               className={layout.addAction}
-              aria-label="Create Named Config"
+              label="Create Named Config"
               disabled={mutationBusy || loadingCatalog || selectionMode}
               onClick={openCreateDialog}
             >
-              <Plus size={15} aria-hidden="true" />
-            </ActionButton>
+              <Plus size={iconSize.xs} aria-hidden="true" />
+            </IconButton>
           </div>
           {data?.configs.map((entry) => {
             const applied = entry.name === appliedName;
@@ -276,7 +281,7 @@ export function ConfigCatalogPane({
                     selectionMode ? toggleConfig(entry.name) : void openConfig(entry.name)
                   }
                 >
-                  <NamedConfigIcon size={16} />
+                  <NamedConfigIcon size={iconSize.sm} />
                   <span className={styles.configRowText}>
                     <span className={styles.configRowTitle}>
                       <strong>{entry.name}</strong>
@@ -293,7 +298,7 @@ export function ConfigCatalogPane({
                   </span>
                   {selectionMode && (
                     <span className={layout.selectionIndicator} aria-hidden="true">
-                      {selectedForDeletion && <Check size={15} strokeWidth={3} />}
+                      {selectedForDeletion && <Check size={iconSize.xs} strokeWidth={3} />}
                     </span>
                   )}
                   {issue && (
@@ -333,7 +338,7 @@ export function ConfigCatalogPane({
                       disabled={mutationBusy}
                       onClick={() => requestDelete([entry.name])}
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={iconSize.xs} />
                     </IconButton>
                   </div>
                 )}
@@ -343,7 +348,7 @@ export function ConfigCatalogPane({
           {data && data.configs.length === 0 && !loadingCatalog && (
             <EmptyState
               variant="list"
-              icon={<NamedConfigIcon size={22} aria-hidden="true" />}
+              icon={<NamedConfigIcon size={iconSize.lg} aria-hidden="true" />}
               title="No Named Configs found."
             />
           )}

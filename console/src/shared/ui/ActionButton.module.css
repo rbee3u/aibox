@@ -14,6 +14,11 @@
   font-weight: var(--weight-regular);
   box-shadow: none;
   white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .dangerPrimary {
@@ -27,6 +32,19 @@
   border-color: var(--action-danger-strong);
   color: var(--action-danger-strong);
   background: var(--danger-soft);
+}
+
+.primary {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-surface);
+  font-weight: var(--weight-medium);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-hover-surface);
 }
 
 .primarySoft {
@@ -90,19 +108,26 @@
   background: var(--danger-soft);
 }
 
+/*
+ * Every variant answers a press the same way. The pressed ink goes on as a
+ * layer rather than a fill because a Primary and a Danger button already own
+ * their background, and a single flat token cannot darken all seven of them.
+ */
 .button:active:not(:disabled) {
   transform: translateY(1px);
+  background-image: linear-gradient(var(--surface-pressed), var(--surface-pressed));
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .button:disabled {
   opacity: 1;
 }
 
+.primary:disabled,
 .primarySoft:disabled {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);
@@ -133,11 +158,5 @@
   .button {
     min-width: 44px;
     min-height: 44px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .button {
-    transition-duration: 0.01ms;
   }
 }

@@ -20,6 +20,7 @@ export const routes = {
   configs_create: { method: "POST", path: "/_aibox/api/configs/create" },
   configs_reveal: { method: "POST", path: "/_aibox/api/configs/reveal" },
   configs_save: { method: "POST", path: "/_aibox/api/configs/save" },
+  configs_compare: { method: "POST", path: "/_aibox/api/configs/compare" },
   configs_diagnose: { method: "POST", path: "/_aibox/api/configs/diagnose" },
   configs_apply: { method: "POST", path: "/_aibox/api/configs/apply" },
   configs_delete: { method: "POST", path: "/_aibox/api/configs/delete" },

@@ -2,6 +2,7 @@ import { AlertTriangle, LoaderCircle } from "lucide-react";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/shared/ui/ManagementFeedback.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 export function PageError({ error, onRetry }: { error: string | null; onRetry?: () => void }) {
   if (!error) return null;
@@ -9,7 +10,7 @@ export function PageError({ error, onRetry }: { error: string | null; onRetry?: 
     <AlertBanner
       variant="page"
       tone="danger"
-      icon={<AlertTriangle size={16} aria-hidden="true" />}
+      icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
       action={
         onRetry ? (
           <RefreshButton type="button" label="Retry" onClick={onRetry}>
@@ -26,7 +27,7 @@ export function PageError({ error, onRetry }: { error: string | null; onRetry?: 
 export function Loading() {
   return (
     <div className={styles.loading}>
-      <LoaderCircle className="spin" size={22} aria-label="Loading" />
+      <LoaderCircle className="spin" size={iconSize.lg} aria-label="Loading" />
     </div>
   );
 }

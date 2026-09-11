@@ -15,16 +15,19 @@ import { compactDuration, formatTimestamp } from "@/shared/lib/format";
 import { requestUrl } from "@/features/requests/requestFormat";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/requests/catalog/RequestList.module.css";
-import { RequestStatus } from "@/features/requests/RequestStatus";
+import { RequestCatalogIssue, RequestStatus } from "@/features/requests/RequestStatus";
 import {
   assessmentIssueText,
   assessmentPresentation,
+  catalogAssessmentPresentation,
 } from "@/features/requests/statusPresentation";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const RequestIcon = moduleIcons.requests;
 
@@ -41,11 +44,11 @@ function PageTurnButton({
     <button type="button" className={styles.pageTurn} onClick={onClick} disabled={disabled}>
       {direction === "previous" ? (
         <>
-          <ChevronLeft size={15} aria-hidden="true" /> Previous
+          <ChevronLeft size={iconSize.xs} aria-hidden="true" /> Previous
         </>
       ) : (
         <>
-          Next <ChevronRight size={15} aria-hidden="true" />
+          Next <ChevronRight size={iconSize.xs} aria-hidden="true" />
         </>
       )}
     </button>
@@ -234,7 +237,7 @@ export function RequestList({
                 disabled={selected.size === 0 || deletionBusy}
                 aria-label="Delete selected"
               >
-                <Trash2 size={14} aria-hidden="true" />
+                <Trash2 size={iconSize.xs} aria-hidden="true" />
                 Delete
               </ActionButton>
             </>
@@ -248,19 +251,21 @@ export function RequestList({
                 label="Refresh Requests"
                 busyLabel="Refreshing Requests"
                 busy={refreshing}
+                compactOnNarrow
               >
                 Refresh
               </RefreshButton>
-              <ActionButton
+              <IconLabelButton
                 ref={selectButton}
-                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Requests"
                 onClick={onEnterSelection}
                 disabled={deletableCount === 0 || loading || deletionBusy}
+                compactOnNarrow
+                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
               >
-                <ListChecks size={14} aria-hidden="true" /> Select
-              </ActionButton>
+                Select
+              </IconLabelButton>
             </div>
           )}
         </div>
@@ -274,13 +279,13 @@ export function RequestList({
       <div className={styles.requests} aria-busy={loading}>
         {loading && requests.length === 0 ? (
           <div className={styles.loadingState} role="status" aria-live="polite">
-            <LoaderCircle className="spin" size={22} aria-hidden="true" />
+            <LoaderCircle className="spin" size={iconSize.lg} aria-hidden="true" />
             <p>Loading Requests…</p>
           </div>
         ) : requests.length === 0 ? (
           <EmptyState
             variant="list"
-            icon={<Inbox size={22} data-icon="request-empty" aria-hidden="true" />}
+            icon={<Inbox size={iconSize.lg} data-icon="request-empty" aria-hidden="true" />}
             title="No request recorded yet."
           />
         ) : (
@@ -298,6 +303,11 @@ export function RequestList({
             const timestampValue = request.ended_at ?? request.started_at;
             const timestamp = formatTimestamp(timestampValue);
             const issue = assessmentPresentation(request.assessment);
+            const catalogIssue = catalogAssessmentPresentation(
+              request.assessment,
+              request.status,
+              request.state,
+            );
             const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
@@ -340,7 +350,7 @@ export function RequestList({
                 >
                   <RequestIcon
                     className={styles.requestIcon}
-                    size={16}
+                    size={iconSize.sm}
                     data-icon="request-row"
                     aria-hidden="true"
                   />
@@ -356,10 +366,22 @@ export function RequestList({
                       assessment={request.assessment}
                     />
                   </span>
-                  <span className={styles.metadata}>
-                    <span className={styles.modelMetadata} title={modelDescription}>
-                      {compactModel}
-                    </span>
+                  <span
+                    className={styles.metadata}
+                    title={catalogIssue ? modelDescription : undefined}
+                  >
+                    {catalogIssue ? (
+                      <span className={styles.catalogIssueSlot}>
+                        <RequestCatalogIssue issue={catalogIssue} />
+                        <span id={metadataDescriptionId} className="srOnly">
+                          {metadataDescription}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className={styles.modelMetadata} title={modelDescription}>
+                        {compactModel}
+                      </span>
+                    )}
                     <span className={styles.timingMetadata}>
                       <span className={styles.timing} title={timingDescription}>
                         {firstToken} / {totalDuration}
@@ -372,13 +394,15 @@ export function RequestList({
                         {timestamp}
                       </time>
                     </span>
-                    <span id={metadataDescriptionId} className="srOnly">
-                      {metadataDescription}
-                    </span>
+                    {!catalogIssue && (
+                      <span id={metadataDescriptionId} className="srOnly">
+                        {metadataDescription}
+                      </span>
+                    )}
                   </span>
                   {selectionMode && (
                     <span className={styles.selectionIndicator} aria-hidden="true">
-                      {checked && <Check size={16} strokeWidth={3} />}
+                      {checked && <Check size={iconSize.xs} strokeWidth={3} />}
                     </span>
                   )}
                 </button>
@@ -405,9 +429,9 @@ export function RequestList({
                       aria-busy={deletingRequestId === request.id}
                     >
                       {deletingRequestId === request.id ? (
-                        <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                        <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
                       ) : (
-                        <Trash2 size={15} aria-hidden="true" />
+                        <Trash2 size={iconSize.xs} aria-hidden="true" />
                       )}
                     </IconButton>
                   </span>

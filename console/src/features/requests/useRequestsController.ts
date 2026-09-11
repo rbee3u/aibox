@@ -22,6 +22,7 @@ import {
 } from "@/features/requests/catalog/listModel";
 import type { DetailTab } from "@/features/requests/viewTypes";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
+import { messageOf } from "@/shared/lib/errors";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { LatestRequest } from "@/shared/lib/latestRequest";
@@ -54,12 +55,15 @@ export interface RequestsViewModel {
   catalog: {
     currentId: string | null;
     list: RequestList;
+    listError: string | null;
     loadingList: boolean;
     navigatePage: (nextPage: number) => void;
     openRequest: (id: string) => void;
     page: number;
     refreshPage: () => Promise<void>;
     refreshing: boolean;
+    /** Absent in selection mode: reloading the list would discard the selection. */
+    retryList: (() => void) | undefined;
   };
   detail: {
     bodies: Inspection["bodies"];
@@ -145,20 +149,30 @@ export function useRequestsController({
   const deletionInProgress = useRef(false);
   const pageNavigation = useRef(false);
   const failedListPage = useRef<number | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const deletingRequestId = deletion?.kind === "request" ? deletion.id : null;
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
 
   const handleInspectionFailure = useCallback(
     (failure: InspectionFailure) => {
-      const title =
-        failure.kind === "detail"
-          ? "Couldn’t load request"
-          : failure.kind === "body"
-            ? "Couldn’t load Body"
-            : "Couldn’t download Body";
-      reportFailure("inspection", title, failure.message, failure.retryable !== false);
-      if (failure.kind === "detail" && failure.retryable === false) {
+      /*
+       * A retryable detail read keeps the detail pane open, and the pane
+       * already states the failure and offers the same Retry, so a notice
+       * would say it twice. A non-retryable one closes the pane, which leaves
+       * nothing on screen to carry the reason, so that one still notifies.
+       */
+      const dismissesDetail = failure.kind === "detail" && failure.retryable === false;
+      if (failure.kind !== "detail" || dismissesDetail) {
+        const title =
+          failure.kind === "detail"
+            ? "Couldn’t load request"
+            : failure.kind === "body"
+              ? "Couldn’t load Body"
+              : "Couldn’t download Body";
+        reportFailure("inspection", title, failure.message, failure.retryable !== false);
+      }
+      if (dismissesDetail) {
         setDetailOpen(false);
         setFocusAfterInspection(null);
         updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
@@ -264,13 +278,13 @@ export function useRequestsController({
           failedListPage.current === targetPage
         ) {
           failedListPage.current = null;
-          resolveFailure("list");
+          setListError(null);
         }
         return payload;
       } catch (cause) {
         if (request.isCurrent() && !requestWasCancelled(cause, request.signal)) {
           if (!background || failedListPage.current === null) failedListPage.current = targetPage;
-          reportFailure("list", "Couldn’t load requests", cause, true);
+          setListError(messageOf(cause));
         }
         return null;
       } finally {
@@ -281,7 +295,7 @@ export function useRequestsController({
         request.release();
       }
     },
-    [api, reportFailure, resolveFailure],
+    [api],
   );
 
   useEffect(() => {
@@ -481,23 +495,21 @@ export function useRequestsController({
 
   function handleNotificationAction(notification: NotificationItemData) {
     resolveFailure(notification.source);
-    if (notification.source === "list") {
-      void retryListFailure();
-    } else if (notification.source === "inspection") {
-      retryInspectionFailure();
-    }
+    if (notification.source === "inspection") retryInspectionFailure();
   }
 
   return {
     catalog: {
       currentId,
       list,
+      listError,
       loadingList,
       navigatePage,
       openRequest,
       page,
       refreshPage,
       refreshing,
+      retryList: selectionMode ? undefined : () => void retryListFailure(),
     },
     detail: {
       bodies,
@@ -558,13 +570,7 @@ export function useRequestsController({
     feedback: {
       dismissNotification,
       handleNotificationAction,
-      notifications: selectionMode
-        ? notifications.map((notification) =>
-            notification.source === "list"
-              ? { ...notification, actionLabel: undefined }
-              : notification,
-          )
-        : notifications,
+      notifications,
     },
   };
 }

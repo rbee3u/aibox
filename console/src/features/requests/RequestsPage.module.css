@@ -104,4 +104,8 @@
   .detailBack:hover {
     background: var(--surface-hover);
   }
+
+  .detailBack:active {
+    background: var(--surface-pressed);
+  }
 }

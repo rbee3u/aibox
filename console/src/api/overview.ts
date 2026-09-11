@@ -1,4 +1,3 @@
-import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
   OverviewResponse,
   TopologyAgent,
@@ -8,9 +7,7 @@ import type {
   TopologyTenant,
 } from "@/api/generated/wire";
 import type { Operation } from "@/api/operations";
-import { sessionSummaryRequest, type SessionSummaryData } from "@/api/sessions";
 import type { ControlApi } from "@/api/transport";
-import type { TenantSelection } from "@/domain/tenant";
 
 /**
  * The Overview and Topology reads, named the way the Console refers to them.
@@ -27,11 +24,6 @@ export type { TopologyAgent, TopologyComponents, TopologyNamedConfigs, TopologyT
 export interface OverviewApi {
   loadOverview(signal?: AbortSignal): Promise<OverviewData>;
   loadTopology(signal?: AbortSignal): Promise<TopologyData>;
-  loadSessionSummary(
-    tenant: TenantSelection,
-    agent: CodingAgentKind,
-    signal?: AbortSignal,
-  ): Promise<SessionSummaryData>;
   buildImage(force: boolean): Promise<Operation>;
 }
 
@@ -39,7 +31,6 @@ export function overviewApi(client: ControlApi): OverviewApi {
   return {
     loadOverview: (signal) => client.get<OverviewData>("/_aibox/api/overview", signal),
     loadTopology: (signal) => client.get<TopologyData>("/_aibox/api/topology", signal),
-    loadSessionSummary: sessionSummaryRequest(client),
     buildImage: (force) => client.post<Operation>("/_aibox/api/operations/build", { force }),
   };
 }

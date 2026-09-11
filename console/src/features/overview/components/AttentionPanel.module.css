@@ -1,0 +1,249 @@
+.panel {
+  padding: 0 24px 12px;
+}
+.quiet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+}
+/*
+ * The count is the panel's own label, so it takes the section-title role: the
+ * quiet 12px step every other titled section in the Console uses above larger
+ * content. It carries the total because the rows may be capped, and the number
+ * of real conditions is the one fact a capped list cannot state by itself.
+ */
+.count {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
+}
+/*
+ * One grid for the whole list so the label column is a column.
+ *
+ * The panel used to be a horizontal `flex-wrap` run of variable-width items,
+ * which put each row's label wherever the previous row's server-supplied
+ * detail sentence happened to end. Subgrid lets every row inherit these four
+ * tracks, so mark, label, detail, and action line up down the list and the
+ * label column sizes itself to the longest label rather than to a guess.
+ */
+.list {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+.row {
+  display: grid;
+  grid-column: span 4;
+  grid-template-columns: subgrid;
+  min-width: 0;
+}
+.rowLink,
+.rowStatic {
+  display: grid;
+  grid-column: span 4;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: 0 8px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  transition: background-color var(--transition-fast);
+}
+.mark {
+  display: inline-flex;
+  align-items: center;
+}
+/*
+ * Severity rides on the mark's shape, not only on its colour: simulated for
+ * deuteranopia `--warning` and `--danger` land ~6 ΔE apart in the light theme,
+ * so a shared glyph would have made an error and a warning the same row.
+ */
+.warning .mark {
+  color: var(--warning);
+}
+.error .mark {
+  color: var(--danger);
+}
+/*
+ * The label names the category, not the fault, so it stays ink and takes the
+ * row-title step. It is the scanning target; the detail is the sentence you
+ * read once the label has told you whether this row is yours.
+ */
+.label {
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--text-row-title);
+  font-weight: var(--weight-row-title);
+  line-height: var(--line-height-row-title);
+}
+.detail {
+  min-width: 0;
+  color: var(--ink-secondary);
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
+  overflow-wrap: anywhere;
+}
+.chevron {
+  color: var(--muted);
+}
+a.rowLink:hover {
+  background: var(--surface-hover);
+}
+a.rowLink:hover .chevron {
+  color: var(--accent);
+}
+a.rowLink:active {
+  background: var(--surface-pressed);
+}
+/*
+ * The retry sits with its own message, not in the chevron's right-hand slot.
+ * Placed in the action column it drifted to the panel's right edge, hundreds
+ * of pixels from the sentence it acts on. It is the shared refresh control,
+ * not a text run: a text-only button beside a text-only disclosure gave the
+ * panel's one recovery action nothing to say it could be pressed.
+ */
+.rowStatic .retry {
+  grid-column: 3;
+  justify-self: start;
+  margin-top: 4px;
+}
+/*
+ * The raw diagnostic opens under the sentence it explains, in the same column,
+ * so it reads as that row's evidence rather than as a new condition. It keeps
+ * the metadata voice: this is the text the reader chose to see, not the
+ * message the panel leads with.
+ */
+.technical {
+  grid-column: 3;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-meta);
+}
+/*
+ * The summary keeps the browser's disclosure marker: `Environment details`
+ * sixty pixels above carries one, and an `inline-flex` summary silently drops
+ * it, leaving a label that reads as a caption rather than a control.
+ */
+.technical summary {
+  width: fit-content;
+  min-height: 24px;
+  padding-block: 3px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.technical summary:hover {
+  color: var(--accent);
+}
+.technical summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.technical p {
+  margin: 2px 0 4px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+/*
+ * The overflow toggle is a disclosure, so it stays a text control and carries
+ * a chevron for the same reason the summaries carry a marker.
+ */
+.moreToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  margin-top: 2px;
+  margin-left: -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  background: transparent;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.moreToggle:hover {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+.moreToggle:active {
+  background: var(--surface-pressed);
+}
+.rowLink:focus-visible,
+.moreToggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+/*
+ * Narrow: the label column stops being a column because a two-word label plus
+ * a sentence does not fit one line, so label and detail stack in one text
+ * column. The mark keeps the left rail and the chevron keeps the right edge,
+ * both spanning the two text rows — a chevron pushed under the sentence stops
+ * reading as "this row opens something" and becomes a loose glyph.
+ */
+@media (max-width: 700px) {
+  .list {
+    grid-template-columns: auto 1fr auto;
+  }
+  .row,
+  .rowLink,
+  .rowStatic {
+    grid-column: span 3;
+  }
+  .rowLink,
+  .rowStatic {
+    align-items: center;
+    row-gap: 2px;
+  }
+  .mark {
+    grid-row: span 2;
+  }
+  .label {
+    grid-area: 1 / 2;
+  }
+  .detail {
+    grid-area: 2 / 2;
+  }
+  .chevron {
+    grid-row: span 2;
+  }
+  /*
+   * The disclosure and the retry control each take their own full-width line
+   * under the sentence. Both are wider than a glyph — one is a monospace error
+   * chain, the other a labelled button — so sharing the text column with the
+   * sentence would squeeze all three.
+   */
+  .technical {
+    grid-area: 3 / 2 / 4 / 4;
+  }
+  .rowStatic .retry {
+    grid-area: 4 / 2 / 5 / 4;
+    justify-self: start;
+  }
+}
+@media (max-width: 1000px) {
+  .panel {
+    padding-inline: 16px;
+  }
+}
+@media (pointer: coarse) {
+  .rowLink,
+  .rowStatic,
+  .moreToggle {
+    min-height: 44px;
+  }
+}

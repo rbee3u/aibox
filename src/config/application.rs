@@ -175,7 +175,7 @@ fn prepare_last_application(selected: &TenantAgent, config: &str) -> Result<Prep
     document.prepare(selected)
 }
 
-fn read_last_application(selected: &TenantAgent) -> Result<Option<LastApplication>> {
+pub(super) fn read_last_application(selected: &TenantAgent) -> Result<Option<LastApplication>> {
     let document = metadata::read(selected)?;
     let Some(record): Option<LastApplication> = document.section(LAST_APPLICATION_SECTION)? else {
         return Ok(None);

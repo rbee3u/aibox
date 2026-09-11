@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
+import { sessionListCopy } from "@/features/sessions/sessionListCopy";
 import {
   accessibleSessionSource,
   visibleSessionListSource,
@@ -8,6 +9,7 @@ import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
 import { IconButton } from "@/shared/ui/IconButton";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
 
@@ -23,6 +25,8 @@ interface SessionRowProps {
   loadingList: boolean;
   /** A traversal error makes the listed rows unsafe to act on. */
   unsafeView: boolean;
+  /** When the catalog already names one Tenant and one Agent, omit the source. */
+  showSource: boolean;
   onOpen: () => void;
   onToggle: () => void;
   onDelete: () => void;
@@ -41,13 +45,14 @@ export function SessionRow({
   deletionBusy,
   loadingList,
   unsafeView,
+  showSource,
   onOpen,
   onToggle,
   onDelete,
   registerRow,
   registerDelete,
 }: SessionRowProps) {
-  const title = row.title || "Untitled Session";
+  const copy = sessionListCopy(row.title, row.latest_message);
   const accessibleSource = accessibleSessionSource(row.source);
   return (
     <div
@@ -66,23 +71,25 @@ export function SessionRow({
         className={styles.sessionRowMain}
         aria-label={
           selectionMode
-            ? `${selected ? "Deselect" : "Select"} ${title}, ${accessibleSource}`
-            : `${title}, ${accessibleSource}`
+            ? `${selected ? "Deselect" : "Select"} ${copy.headline}, ${accessibleSource}`
+            : `${copy.headline}, ${accessibleSource}`
         }
         aria-pressed={selectionMode ? selected : undefined}
         disabled={deletionBusy || loadingList}
         onClick={() => (selectionMode ? onToggle() : onOpen())}
       >
-        <SessionIcon size={16} data-icon="session-record" aria-hidden="true" />
+        <SessionIcon size={iconSize.sm} data-icon="session-record" aria-hidden="true" />
         <span>
-          <strong title={title}>{title}</strong>
+          <strong title={copy.headline}>{copy.headline}</strong>
           <small className={styles.sessionRowMetadata}>
-            <span>{visibleSessionListSource(row.source)}</span>
+            {showSource ? <span>{visibleSessionListSource(row.source)}</span> : null}
             <time dateTime={row.start_ts}>{formatTimestamp(row.start_ts)}</time>
           </small>
-          <small className={styles.sessionRowPreview} title={row.latest_message ?? ""}>
-            {row.latest_message || "No readable conversation content"}
-          </small>
+          {(copy.supporting || copy.emptyPreview) && (
+            <small className={styles.sessionRowPreview} title={copy.supporting ?? ""}>
+              {copy.supporting || "No readable conversation content"}
+            </small>
+          )}
         </span>
         {row.warnings.length > 0 && (
           <span
@@ -91,12 +98,12 @@ export function SessionRow({
             aria-label={`Session has ${row.warnings.length} Transcript warning${row.warnings.length === 1 ? "" : "s"}`}
             title={row.warnings.join("\n")}
           >
-            <AlertTriangle size={14} aria-hidden="true" />
+            <AlertTriangle size={iconSize.xs} aria-hidden="true" />
           </span>
         )}
         {selectionMode && (
           <span className={styles.sessionSelectionIndicator} aria-hidden="true">
-            {selected && <Check size={15} strokeWidth={3} />}
+            {selected && <Check size={iconSize.xs} strokeWidth={3} />}
           </span>
         )}
       </button>
@@ -115,9 +122,9 @@ export function SessionRow({
           onClick={onDelete}
         >
           {deleting ? (
-            <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
           ) : (
-            <Trash2 size={15} aria-hidden="true" />
+            <Trash2 size={iconSize.xs} aria-hidden="true" />
           )}
         </IconButton>
       )}

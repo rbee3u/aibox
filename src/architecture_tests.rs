@@ -363,6 +363,16 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             ]),
         ),
         (
+            "config::comparison",
+            BTreeSet::from([
+                "config::application",
+                "config::definition",
+                "config::editing",
+                "config::visual",
+                "tenant",
+            ]),
+        ),
+        (
             "config::definition",
             BTreeSet::from(["agent", "config::native"]),
         ),
@@ -482,6 +492,7 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             BTreeSet::from([
                 "component",
                 "docker",
+                "foundation::platform",
                 "foundation::safe_fs",
                 "request",
                 "tenant",
@@ -678,6 +689,9 @@ const TEST_ONLY_SURFACE: &[&str] = &[
     // Config fixtures written through the same validation production uses.
     "config/editing.rs::save_config_file",
     "config/mod.rs::ConfigCatalogState",
+    "config/mod.rs::ConfigComparisonFile",
+    "config/mod.rs::ConfigComparisonSide",
+    "config/mod.rs::ConfigDifference",
     "config/mod.rs::PropagationEntry",
     "config/mod.rs::PropagationOutcome",
     "config/mod.rs::PropagationPreviewEntry",

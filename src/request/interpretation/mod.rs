@@ -462,6 +462,8 @@ impl ProtocolObserver {
         if self.summary.family != ProtocolFamily::Unknown
             && self.summary.family != ProtocolFamily::OpenaiChatCompletions
             && let Some(usage) = usage
+            && (self.summary.family != ProtocolFamily::ClaudeMessages
+                || claude::is_top_level_usage_kind(kind, event_name))
         {
             changed |= self.apply_usage(&usage, Some(at_ns.clone()));
         }

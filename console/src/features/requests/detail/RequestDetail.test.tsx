@@ -9,6 +9,7 @@ import {
   completedDetail,
   withIncompleteRequestBody,
   withRequestEncoding,
+  withResponseEncoding,
 } from "@/features/requests/testFixtures";
 import type { RequestDetail as RequestDetailData, TokenUsage } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
@@ -160,7 +161,7 @@ describe("RequestDetail", () => {
     const modelSummary = within(summary).getByRole("region", { name: "Model" });
     expect(within(summary).getByText("claude-opus-5")).toBeInTheDocument();
     expect(within(summary).getByText("high")).toBeInTheDocument();
-    expect(within(modelSummary).getByText("Streaming")).toBeInTheDocument();
+    expect(within(modelSummary).getByText("Stream")).toBeInTheDocument();
     const tokenUsage = within(summary).getByRole("region", { name: "Token usage" });
     const inputTokens = within(tokenUsage).getByRole("group", { name: "Input tokens" });
     expect(terms(inputTokens)).toEqual(["Base input", "Cache hits & refreshes", "Cache writes"]);
@@ -272,7 +273,7 @@ describe("RequestDetail", () => {
       "effective-model high",
     );
     expect(within(modelSummary).getByText("high")).toHaveClass(styles.modelEffort);
-    expect(within(modelSummary).getByText("Non-streaming")).toBeInTheDocument();
+    expect(within(modelSummary).getByText("Non-stream")).toBeInTheDocument();
     expect(screen.queryByText("requested-model")).not.toBeInTheDocument();
     const timingSection = screen.getByRole("region", { name: "Timing" });
     expect(terms(timingSection)).toEqual(["First token", "Duration", "Ended"]);
@@ -330,7 +331,8 @@ describe("RequestDetail", () => {
     );
     expect(within(modelSummary).getByTitle("Model Not reported")).toHaveTextContent("Not reported");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
-    expect(within(modelSummary).queryByText("Streaming")).not.toBeInTheDocument();
+    expect(within(modelSummary).queryByText("Stream")).not.toBeInTheDocument();
+    expect(within(modelSummary).queryByText("Non-stream")).not.toBeInTheDocument();
 
     const active = {
       ...completedDetail,
@@ -351,7 +353,8 @@ describe("RequestDetail", () => {
     modelSummary = screen.getByRole("region", { name: "Model" });
     expect(within(modelSummary).getByTitle("Model Detecting…")).toHaveTextContent("Detecting…");
     expect(within(modelSummary).queryByText("Reasoning effort")).not.toBeInTheDocument();
-    expect(within(modelSummary).queryByText("Streaming")).not.toBeInTheDocument();
+    expect(within(modelSummary).queryByText("Stream")).not.toBeInTheDocument();
+    expect(within(modelSummary).queryByText("Non-stream")).not.toBeInTheDocument();
   });
 
   it("derives usage state from the persisted protocol summary", () => {
@@ -570,6 +573,60 @@ describe("RequestDetail", () => {
     expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
   });
 
+  it("keeps Request Headers collapsed until opened", async () => {
+    const user = userEvent.setup();
+    const detail = {
+      ...completedDetail,
+      request: {
+        ...completedDetail.request,
+        headers: [
+          { name: "authorization", value_base64: btoa("Bearer test-token") },
+          { name: "content-type", value_base64: btoa("application/json") },
+          { name: "x-stainless-os", value_base64: btoa("MacOS") },
+        ],
+      },
+    };
+    renderRequestBody(detail, new TextEncoder().encode("{}"));
+
+    const toggle = screen.getByRole("button", {
+      name: "Request headers: 3 headers · application/json",
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("3 headers · application/json");
+    expect(screen.queryByRole("cell", { name: "authorization" })).toBeNull();
+    expect(screen.queryByText("Bearer test-token")).toBeNull();
+    expect(screen.getByRole("heading", { name: /Body/ })).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("cell", { name: "authorization" })).toBeVisible();
+    expect(screen.getByText("Bearer test-token")).toBeVisible();
+  });
+
+  it("states when a Request has no headers", () => {
+    renderRequestBody(
+      {
+        ...completedDetail,
+        request: { ...completedDetail.request, headers: [] },
+      },
+      new TextEncoder().encode("{}"),
+    );
+
+    expect(screen.getByText("No headers.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Request headers:/ })).toBeNull();
+  });
+
+  it("states the no-redaction policy without warning chrome", () => {
+    renderRequestBody(completedDetail, new TextEncoder().encode("{}"));
+    const notice = screen.getByText(
+      "Raw Body data may contain sensitive values and is displayed without redaction.",
+    );
+    expect(notice.tagName).toBe("P");
+    expect(notice.className).toMatch(/sensitiveContext/);
+    expect(notice.closest("[role=note], [role=status], [role=alert]")).toBeNull();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("navigates visible JSON nodes with the ARIA tree keyboard model", () => {
     const source = '{"nested":{"answer":42},"tail":true}';
     renderRequestBody(
@@ -635,15 +692,37 @@ describe("RequestDetail", () => {
     const source = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);
     renderRequestBody(
       {
-        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "br")),
+        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "compress")),
         request_body_bytes: source.length,
       },
       source,
     );
 
     expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("status")).toHaveTextContent("Unsupported Content-Encoding: br");
+    expect(screen.getByRole("status")).toHaveTextContent("Unsupported Content-Encoding: compress");
     expect(screen.queryByText(/Waiting for the complete JSON Body/)).not.toBeInTheDocument();
+  });
+
+  it("derives the br wait state from Body completeness", () => {
+    const source = new Uint8Array([0x8b, 0x03]);
+    renderRequestBody(
+      {
+        ...withIncompleteRequestBody(withRequestEncoding(activeDetail, "br")),
+        request_body_bytes: source.length,
+      },
+      source,
+      {
+        decodedBodies: {
+          request: { bytes: null, error: null },
+          response: { bytes: null, error: null },
+        },
+      },
+    );
+
+    expect(screen.getByRole("button", { name: "Pretty" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Waiting for the complete br Body before decoding",
+    );
   });
 
   it("derives the zstd wait state from Body completeness", () => {
@@ -734,6 +813,35 @@ describe("RequestDetail", () => {
     expect(screen.queryByText(/No Pretty renderer/)).not.toBeInTheDocument();
   });
 
+  it("does not alarm when encoded SSE has no Event timing index", () => {
+    const source = 'data: {"type":"message_stop"}\n\n';
+    renderDetail(
+      {
+        ...withResponseEncoding(completedDetail, "br"),
+        response_body_bytes: source.length,
+      },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        decodedBodies: {
+          request: { bytes: null, error: null },
+          response: { bytes: new TextEncoder().encode(source), error: null },
+        },
+        eventTimings: {
+          state: "unavailable",
+          events: [],
+          next_sequence: 0,
+          warning: "SSE Event timing index is unavailable",
+        },
+        tab: "response",
+      },
+    );
+
+    expect(screen.queryByText("SSE Event timing index is unavailable")).not.toBeInTheDocument();
+    expect(screen.getByText("Time unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /message_stop/ })).toBeInTheDocument();
+  });
+
   it("keeps Chat content and tool-call deltas as inspectable raw Events", async () => {
     const user = userEvent.setup();
     const payload = JSON.stringify({
@@ -759,15 +867,115 @@ describe("RequestDetail", () => {
     );
 
     const chunk = screen.getByRole("button", { name: /chat\.completion\.chunk/ });
+    expect(chunk).toHaveTextContent("Hello");
     await user.click(chunk);
     await user.click(screen.getByRole("button", { name: "Expand choices" }));
     await user.click(screen.getByRole("button", { name: "Expand 0" }));
     await user.click(screen.getByRole("button", { name: "Expand delta" }));
-    expect(screen.getByText(/Hello/)).toBeInTheDocument();
+    expect(screen.getByText('"Hello"')).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Expand tool_calls" }));
     await user.click(screen.getByRole("button", { name: "Expand 0" }));
     await user.click(screen.getByRole("button", { name: "Expand function" }));
     expect(screen.getByText(/city.*San/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /message/ })).toBeInTheDocument();
+  });
+
+  it("collapses a run of preview-less SSE Events and expands them on demand", async () => {
+    const user = userEvent.setup();
+    const source = [
+      'data: {"type":"message_start"}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"原诗"}}\n\n',
+    ].join("");
+    renderDetail(
+      { ...completedDetail, response_body_bytes: source.length },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        tab: "response",
+      },
+    );
+
+    const eventList = screen.getByRole("list", { name: "SSE Events" });
+    expect(within(eventList).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(eventList).getByRole("button", { name: /message_start/ })).toBeInTheDocument();
+    expect(within(eventList).getByText("原诗")).toBeInTheDocument();
+    expect(within(eventList).queryByRole("button", { name: /#2content_block_delta/ })).toBeNull();
+
+    const run = within(eventList).getByRole("button", {
+      name: "3 content_block_delta events, #2 to #4",
+    });
+    expect(run).toHaveTextContent("3 content_block_delta · #2–#4");
+    expect(run).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(run);
+    expect(run).toHaveAttribute("aria-expanded", "true");
+    expect(within(eventList).getByRole("button", { name: /#2content_block_delta/ })).toBeVisible();
+    expect(within(eventList).getByRole("button", { name: /#4content_block_delta/ })).toBeVisible();
+    expect(within(eventList).getByText("原诗")).toBeInTheDocument();
+  });
+
+  it("shows Event-local text on collapsed SSE cards", () => {
+    const source =
+      'data: {"type":"response.output_text.delta","delta":"可将"}\n\n' +
+      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n' +
+      'data: {"type":"response.created"}\n\n';
+    renderDetail(
+      { ...completedDetail, response_body_bytes: source.length },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        tab: "response",
+      },
+    );
+
+    const items = within(screen.getByRole("list", { name: "SSE Events" })).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(screen.getByRole("button", { name: /output_text.delta/ })).toHaveTextContent("可将");
+    expect(screen.getByRole("button", { name: /output_text.done/ })).toHaveTextContent(
+      "可将“好”改为“旧”",
+    );
+    expect(screen.getByRole("button", { name: /response.created/ })).not.toHaveTextContent("可将");
+  });
+
+  it("collapses a run of short-preview SSE Events without joining them into a reply", async () => {
+    const user = userEvent.setup();
+    const source = [
+      'data: {"type":"response.created"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"可"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"将"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"好"}\n\n',
+      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n',
+    ].join("");
+    renderDetail(
+      { ...completedDetail, response_body_bytes: source.length },
+      {
+        bodies: { request: [], response: [new TextEncoder().encode(source)] },
+        bodyStatus: { request: "idle", response: "loaded" },
+        tab: "response",
+      },
+    );
+
+    const eventList = screen.getByRole("list", { name: "SSE Events" });
+    expect(within(eventList).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(eventList).getByText("可将“好”改为“旧”")).toBeInTheDocument();
+    expect(
+      within(eventList).queryByRole("button", { name: /#2response\.output_text\.delta/ }),
+    ).toBeNull();
+
+    const run = within(eventList).getByRole("button", {
+      name: "3 response.output_text.delta events, #2 to #4",
+    });
+    expect(run).toHaveTextContent("3 response.output_text.delta · #2–#4");
+    expect(run).not.toHaveTextContent("可将");
+
+    await user.click(run);
+    expect(run).toHaveAttribute("aria-expanded", "true");
+    expect(
+      within(eventList).getByRole("button", { name: /#2response\.output_text\.delta/ }),
+    ).toHaveTextContent("可");
+    expect(within(eventList).getByText("可将“好”改为“旧”")).toBeInTheDocument();
   });
 });

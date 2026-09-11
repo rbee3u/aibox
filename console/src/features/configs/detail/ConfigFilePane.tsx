@@ -1,5 +1,13 @@
+import {
+  FileDifferences,
+  FieldDifferences,
+  FileDifferenceCount,
+} from "@/features/configs/detail/ConfigDifferences";
+import { useConfigComparison } from "@/features/configs/detail/ConfigComparisonContext";
+import { differenceRange } from "@/features/configs/detail/configDifferenceRanges";
+import type { ConfigDifference } from "@/api/configs";
 import { AlertTriangle, Check, Download, Eye, EyeOff, LoaderCircle, Save } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ConfigApi } from "@/api/configs";
 import { decodeBase64 } from "@/shared/lib/encoding";
@@ -18,6 +26,7 @@ import { Loading } from "@/shared/ui/ManagementFeedback";
 import { TextArea, TextInput } from "@/shared/ui/FormControls";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface ConfigFilePaneProps {
   api: ConfigApi;
@@ -42,6 +51,8 @@ export function ConfigFilePane({
   controlsDisabled,
   ...options
 }: ConfigFilePaneProps) {
+  const { result: comparisonResult, current: comparingCurrent } = useConfigComparison();
+  const [locate, setLocate] = useState<ConfigDifference | null>(null);
   const [revealed, setRevealed] = useState(false);
   const {
     authKey,
@@ -55,6 +66,7 @@ export function ConfigFilePane({
     loading,
     rawDiagnostics,
     rawEditorParent,
+    revealRange,
     save,
     setAuthKey,
     setAuthMode,
@@ -68,6 +80,19 @@ export function ConfigFilePane({
   } = useConfigFileSession(options);
   const { api, file, mode, tenant } = options;
 
+  useEffect(() => {
+    if (!locate || mode !== "raw") return;
+    const fileResult = comparisonResult?.files.find((entry) => entry.file === file);
+    const side = comparingCurrent ? fileResult?.current : fileResult?.named;
+    if (side?.content !== editor) return;
+    const latest = fileResult?.differences.find(
+      (difference) => JSON.stringify(difference.path) === JSON.stringify(locate.path),
+    );
+    if (!latest) return;
+    const range = differenceRange(file, editor, latest, comparingCurrent);
+    if (range) revealRange(range);
+  }, [locate, mode, file, editor, comparisonResult, comparingCurrent, revealRange]);
+
   if (loading)
     return (
       <div className={styles.configFilePane}>
@@ -80,7 +105,10 @@ export function ConfigFilePane({
     <section className={styles.configFilePane} aria-label={`${file} editor`}>
       <div className={styles.editorTools}>
         <div className={styles.fileTitle}>
-          <strong>{file}</strong>
+          <div className={styles.fileHeading}>
+            <strong>{file}</strong>
+            <FileDifferenceCount file={file} />
+          </div>
           <span>{snapshot.exists ? "Existing file" : "New file"}</span>
         </div>
         {isAuth && mode === "visual" && <span className={styles.authModeBadge}>{authMode}</span>}
@@ -89,23 +117,35 @@ export function ConfigFilePane({
           disabled={controlsDisabled || !dirty || !canSave}
           onClick={() => void save()}
         >
-          {feedback === "saving" ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}
+          {feedback === "saving" ? (
+            <LoaderCircle className="spin" size={iconSize.xs} />
+          ) : (
+            <Save size={iconSize.xs} />
+          )}
           <span aria-live="polite">
             {feedback === "saving" ? "Saving…" : feedback === "saved" ? "Saved" : "Save"}
           </span>
         </ActionButton>
       </div>
+      <FileDifferences
+        file={file}
+        onLocate={(difference) => {
+          setLocate(difference);
+          onRequestRaw();
+        }}
+      />
       {snapshot.warnings && snapshot.warnings.length > 0 && (
         <AlertBanner
           variant="strip"
           tone="warning"
-          icon={<AlertTriangle size={14} aria-hidden="true" />}
+          icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
         >
           {snapshot.warnings.join(" ")}
         </AlertBanner>
       )}
       {mode === "visual" && !isAuth && visualOptions ? (
         <VisualConfigOptions
+          file={file}
           fields={visualOptions}
           provider={customProvider ?? undefined}
           onChange={updateVisualOption}
@@ -115,15 +155,13 @@ export function ConfigFilePane({
         />
       ) : mode === "visual" && isAuth && snapshot.auth ? (
         <div className={styles.visualEditor}>
-          <section className={styles.visualGroup}>
-            <header>
-              <h3>Credentials</h3>
-            </header>
+          <div className={styles.visualFieldList}>
             <div className={styles.authVisualBody}>
+              <FieldDifferences file={file} path="" sensitive />
               {authMode === "chatgpt" ? (
                 <>
                   <div className={styles.authStatus} role="status">
-                    <Check size={16} /> ChatGPT credentials are active.
+                    <Check size={iconSize.sm} /> ChatGPT credentials are active.
                   </div>
                   <p>Use Raw to inspect the native token object, or switch to an API key.</p>
                   <div className={styles.dialogActions}>
@@ -144,12 +182,7 @@ export function ConfigFilePane({
               ) : (
                 <div className={styles.visualField}>
                   <div className={styles.visualFieldMeta}>
-                    <VisualOptionLabel
-                      id="config-option-openai-api-key"
-                      label="OpenAI API key"
-                      description="API key used by Codex for OpenAI authentication."
-                      required={false}
-                    />
+                    <VisualOptionLabel label="OpenAI API key" />
                   </div>
                   <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
                     <TextInput
@@ -163,7 +196,7 @@ export function ConfigFilePane({
                       label={revealed ? "Hide OpenAI API key" : "Show OpenAI API key"}
                       onClick={() => setRevealed((value) => !value)}
                     >
-                      {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {revealed ? <EyeOff size={iconSize.xs} /> : <Eye size={iconSize.xs} />}
                     </IconButton>
                   </div>
                 </div>
@@ -173,7 +206,7 @@ export function ConfigFilePane({
                   className={styles.inlineWarning}
                   key={warning}
                   tone="warning"
-                  icon={<AlertTriangle size={15} aria-hidden="true" />}
+                  icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
                 >
                   {warning}
                 </AlertBanner>
@@ -182,13 +215,13 @@ export function ConfigFilePane({
                 <AlertBanner
                   className={styles.inlineWarning}
                   tone="warning"
-                  icon={<AlertTriangle size={15} aria-hidden="true" />}
+                  icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
                 >
                   Saving will replace extra native credential fields.
                 </AlertBanner>
               )}
             </div>
-          </section>
+          </div>
         </div>
       ) : textEditable ? (
         useCodeMirror ? (
@@ -204,7 +237,7 @@ export function ConfigFilePane({
         )
       ) : (
         <div className={styles.binaryConfigNotice} role="status">
-          <AlertTriangle size={18} />
+          <AlertTriangle size={iconSize.md} />
           <span>This file is not valid UTF-8 and cannot be edited in the Console.</span>
           <button
             type="button"
@@ -218,7 +251,7 @@ export function ConfigFilePane({
               URL.revokeObjectURL(url);
             }}
           >
-            <Download size={14} /> Download raw file
+            <Download size={iconSize.xs} /> Download raw file
           </button>
         </div>
       )}

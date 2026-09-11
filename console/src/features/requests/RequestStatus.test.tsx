@@ -1,9 +1,16 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestAssessment, RequestState, ResponseMetadata } from "@/api/requests";
-import { RecordHeadlineStatus, RequestStatus } from "@/features/requests/RequestStatus";
 import {
+  RecordHeadlineStatus,
+  RequestCatalogIssue,
+  RequestStatus,
+} from "@/features/requests/RequestStatus";
+import {
+  assessmentCatalogLabel,
+  assessmentPresentation,
   assessmentPrimaryLabel,
+  catalogAssessmentPresentation,
   errorKindLabel,
   requestHeadlinePresentation,
   requestStatusPresentation,
@@ -99,6 +106,12 @@ describe("request status presentation", () => {
     expect(
       assessmentPrimaryLabel({ source: "http", kind: "http_401", message: "Unauthorized" }),
     ).toBe("HTTP 401");
+    expect(assessmentCatalogLabel(assessmentPresentation(providerError)!)).toBe(
+      "Error: Server error",
+    );
+    expect(assessmentCatalogLabel(assessmentPresentation(disconnectWarning)!)).toBe(
+      "Warning: Client disconnected",
+    );
   });
 
   it("keeps HTTP 200 and a Provider Error separate", () => {
@@ -111,6 +124,54 @@ describe("request status presentation", () => {
         tone: "error",
         additionalIssues: 1,
       },
+    });
+  });
+
+  it("omits a catalog label that only restates the HTTP status", () => {
+    const http401: RequestAssessment = {
+      level: "error",
+      primary: {
+        source: "http",
+        kind: "http_401",
+        message: "Upstream returned HTTP 401",
+      },
+      issue_count: 1,
+    };
+    expect(catalogAssessmentPresentation(http401, 401, "completed")).toBeNull();
+    expect(catalogAssessmentPresentation(http401, 200, "completed")).toMatchObject({
+      label: "HTTP 401",
+      tone: "error",
+    });
+    expect(catalogAssessmentPresentation(providerError, 200, "completed")).toMatchObject({
+      label: "Server error",
+    });
+    expect(catalogAssessmentPresentation(providerError, 200, "active")).toBeNull();
+  });
+
+  it("does not hang a headline tag that only restates the HTTP status", () => {
+    const http401: RequestAssessment = {
+      level: "error",
+      primary: {
+        source: "http",
+        kind: "http_401",
+        message: "Upstream returned HTTP 401",
+      },
+      issue_count: 1,
+    };
+    expect(
+      requestHeadlinePresentation(
+        { ...response, status: 401, reason_phrase: "Unauthorized" },
+        "completed",
+        http401,
+      ),
+    ).toEqual({
+      statusText: "HTTP/2 401 Unauthorized",
+      tone: "error",
+      tag: null,
+    });
+    expect(requestHeadlinePresentation(response, "completed", http401).tag).toMatchObject({
+      label: "HTTP 401",
+      tone: "error",
     });
   });
 });
@@ -129,13 +190,17 @@ describe("RequestStatus", () => {
   it("renders accessible list issues and opens their tooltips", () => {
     vi.useFakeTimers();
     const { rerender } = render(
-      <RequestStatus status={200} state="completed" assessment={providerError} />,
+      <>
+        <RequestStatus status={200} state="completed" assessment={providerError} />
+        <RequestCatalogIssue issue={assessmentPresentation(providerError)!} />
+      </>,
     );
     expect(screen.getByText("200")).toBeInTheDocument();
+    expect(screen.getByText("Error: Server error")).toBeInTheDocument();
+    expect(screen.queryByText(providerError.primary!.message)).not.toBeInTheDocument();
     const errorMarker = screen.getByRole("img", {
       name: /Request error: Server error.*currently overloaded/,
     });
-    expect(screen.queryByText("Server error")).not.toBeInTheDocument();
     expect(errorMarker).not.toHaveAttribute("title");
 
     fireEvent.pointerEnter(errorMarker);
@@ -153,11 +218,17 @@ describe("RequestStatus", () => {
     fireEvent.pointerLeave(errorMarker);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    rerender(<RequestStatus status={null} state="completed" assessment={disconnectWarning} />);
+    rerender(
+      <>
+        <RequestStatus status={null} state="completed" assessment={disconnectWarning} />
+        <RequestCatalogIssue issue={assessmentPresentation(disconnectWarning)!} />
+      </>,
+    );
     const warningMarker = screen.getByRole("img", {
       name: /Request warning: Client disconnected/,
     });
-    expect(screen.queryByText("Client disconnected")).not.toBeInTheDocument();
+    expect(screen.getByText("Warning: Client disconnected")).toBeInTheDocument();
+    expect(screen.queryByText(disconnectWarning.primary!.message)).not.toBeInTheDocument();
     expect(within(showTooltip(warningMarker)).getByText("Warning")).toBeInTheDocument();
 
     fireEvent.scroll(window);
@@ -207,7 +278,7 @@ describe("RequestStatus", () => {
   });
 
   it("opens compact diagnostics on touch-style click and closes outside", () => {
-    render(<RequestStatus status={200} state="completed" assessment={disconnectWarning} />);
+    render(<RequestCatalogIssue issue={assessmentPresentation(disconnectWarning)!} />);
     const trigger = screen.getByRole("img", { name: /Client disconnected/ });
 
     fireEvent.click(trigger);

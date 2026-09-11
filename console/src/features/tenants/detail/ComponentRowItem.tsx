@@ -1,6 +1,6 @@
 import { ArrowUp, ChevronDown, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 import { createPortal } from "react-dom";
-import type { RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ComponentKind, ComponentRow } from "@/api/tenants";
 import { ComponentGlyph } from "@/features/tenants/detail/ComponentGlyph";
 import { type ComponentRowModel } from "@/features/tenants/componentCatalog";
@@ -8,11 +8,11 @@ import { ActionButton } from "@/shared/ui/ActionButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { StatusBadge, type StatusTone, type StatusVariant } from "@/shared/ui/StatusBadge";
 import styles from "@/features/tenants/TenantPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface ComponentRowItemProps {
   row: ComponentRow;
   model: ComponentRowModel;
-  expanded: boolean;
   /** Label of the Operation running for this row, if any. */
   progressLabel: string | null;
   busy: boolean;
@@ -20,7 +20,6 @@ interface ComponentRowItemProps {
   openMenu: ComponentKind | null;
   menuPosition: { top: number; left: number } | null;
   menuRef: RefObject<HTMLDivElement | null>;
-  onToggleExpanded: () => void;
   onRetryInspection: () => void;
   onInstall: () => void;
   onRemove: () => void;
@@ -30,23 +29,23 @@ interface ComponentRowItemProps {
   onToggleMenu: (anchor: HTMLButtonElement) => void;
   registerMenuButton: (element: HTMLButtonElement | null) => void;
   registerMenuItem: (element: HTMLButtonElement | null) => void;
+  highlighted?: boolean;
 }
 
 /**
- * A quiet, non-selectable Component list item: a bare brand icon, a fixed
- * two-line information block, and an independent trailing action group.
+ * A quiet, non-selectable Component list item: a bare brand icon, a two-line
+ * information block, an independent trailing action group, and — only when the
+ * row has something to explain — a third line saying why.
  */
 export function ComponentRowItem({
   row,
   model,
-  expanded,
   progressLabel,
   busy,
   mutationBusy,
   openMenu,
   menuPosition,
   menuRef,
-  onToggleExpanded,
   onRetryInspection,
   onInstall,
   onRemove,
@@ -56,8 +55,17 @@ export function ComponentRowItem({
   onToggleMenu,
   registerMenuButton,
   registerMenuItem,
+  highlighted = false,
 }: ComponentRowItemProps) {
   const { label, presentation, latest, diagnostic, primaryAction } = model;
+  const rowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!highlighted) return;
+    const node = rowRef.current;
+    if (!node || typeof node.scrollIntoView !== "function") return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    node.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+  }, [highlighted]);
   const menuOpen = openMenu === row.kind;
   const stateTone: StatusTone =
     row.error || !row.status
@@ -72,20 +80,22 @@ export function ComponentRowItem({
 
   return (
     <div
+      ref={rowRef}
       className={`${styles.componentRow} ${progressLabel ? styles.componentRowBusy : ""}`}
       role="listitem"
+      data-attention={highlighted ? "true" : undefined}
     >
       <span className={styles.componentIconTile} data-component-icon={row.kind}>
         <ComponentGlyph kind={row.kind} />
       </span>
       <div className={styles.componentContent}>
         <div className={styles.componentIdentity}>
-          <strong>{label}</strong>
+          <strong title={label}>{label}</strong>
         </div>
         <div className={styles.componentMetadata}>
           {progressLabel ? (
             <span className={styles.componentProgress} role="status">
-              <LoaderCircle className="spin" size={14} aria-hidden="true" />
+              <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
               {progressLabel}
             </span>
           ) : (
@@ -121,20 +131,9 @@ export function ComponentRowItem({
         </div>
       </div>
       <div className={styles.componentActions}>
-        {diagnostic && (
-          <ActionButton
-            tone="ghost"
-            className={styles.componentDetailsButton}
-            aria-expanded={expanded}
-            aria-controls={`component-diagnostic-${row.kind}`}
-            onClick={onToggleExpanded}
-          >
-            Details
-          </ActionButton>
-        )}
         {presentation.primaryAction === "Retry inspection" ? (
           <ActionButton tone="secondary" disabled={busy} onClick={onRetryInspection}>
-            <RefreshCw size={14} aria-hidden="true" />
+            <RefreshCw size={iconSize.xs} aria-hidden="true" />
             Retry inspection
           </ActionButton>
         ) : primaryAction && model.canSpecificVersion ? (
@@ -146,9 +145,9 @@ export function ComponentRowItem({
               onClick={onInstall}
             >
               {primaryAction === "Update" ? (
-                <ArrowUp size={14} aria-hidden="true" />
+                <ArrowUp size={iconSize.xs} aria-hidden="true" />
               ) : (
-                <Download size={14} aria-hidden="true" />
+                <Download size={iconSize.xs} aria-hidden="true" />
               )}{" "}
               {primaryAction}
             </ActionButton>
@@ -170,7 +169,7 @@ export function ComponentRowItem({
                 onOpenMenu(event.currentTarget);
               }}
             >
-              <ChevronDown size={14} />
+              <ChevronDown size={iconSize.xs} />
             </ActionButton>
             {menuOpen &&
               createPortal(
@@ -199,9 +198,9 @@ export function ComponentRowItem({
                     }}
                   >
                     {model.specificVersionMode === "update" ? (
-                      <ArrowUp size={14} aria-hidden="true" />
+                      <ArrowUp size={iconSize.xs} aria-hidden="true" />
                     ) : (
-                      <Download size={14} aria-hidden="true" />
+                      <Download size={iconSize.xs} aria-hidden="true" />
                     )}
                     {model.specificVersionMode === "update"
                       ? "Update to version…"
@@ -219,9 +218,9 @@ export function ComponentRowItem({
             onClick={onInstall}
           >
             {primaryAction === "Update" ? (
-              <ArrowUp size={14} aria-hidden="true" />
+              <ArrowUp size={iconSize.xs} aria-hidden="true" />
             ) : (
-              <Download size={14} aria-hidden="true" />
+              <Download size={iconSize.xs} aria-hidden="true" />
             )}{" "}
             {primaryAction}
           </ActionButton>
@@ -233,15 +232,11 @@ export function ComponentRowItem({
             disabled={mutationBusy}
             onClick={onRemove}
           >
-            <Trash2 size={15} aria-hidden="true" />
+            <Trash2 size={iconSize.xs} aria-hidden="true" />
           </IconButton>
         )}
       </div>
-      {expanded && diagnostic && (
-        <div id={`component-diagnostic-${row.kind}`} className={styles.componentDiagnostic}>
-          {diagnostic}
-        </div>
-      )}
+      {diagnostic && <p className={styles.componentDiagnostic}>{diagnostic}</p>}
     </div>
   );
 }

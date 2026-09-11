@@ -1,3 +1,9 @@
+import {
+  useConfigComparison,
+  type ConfigComparisonDraft,
+} from "@/features/configs/detail/ConfigComparisonContext";
+import { differenceRange } from "@/features/configs/detail/configDifferenceRanges";
+import { openDifference } from "@/features/configs/detail/ConfigDifferences";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -17,6 +23,7 @@ import {
 } from "@/features/configs/configCatalog";
 import type { ConfigFileController } from "@/features/configs/detail/configFileController";
 import {
+  omitUnavailableOptions,
   configEditorBytes,
   configFileCanSave,
   configFileDirty,
@@ -63,6 +70,8 @@ export function useConfigFileSession({
   onLinkedFileSaved,
   onVisualAvailable,
 }: ConfigFileSessionOptions) {
+  const comparison = useConfigComparison();
+  const { register, current: comparingCurrent } = comparison;
   const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
   const [editor, setEditor] = useState("");
   const [visualOptions, setVisualOptions] = useState<ConfigVisualOption[] | null>(null);
@@ -185,6 +194,30 @@ export function useConfigFileSession({
   });
   const canSave = configFileCanSave(snapshot, textEditable, isAuth, authMode, mode);
 
+  const comparisonDraft =
+    snapshot && editorBytes
+      ? JSON.stringify({
+          input: {
+            ...configFileInput({
+              snapshot,
+              editorBytes,
+              mode: isAuth && authMode === "chatgpt" ? "raw" : mode,
+              isAuth,
+              visualOptions,
+              customProvider,
+              authKey,
+            }),
+            file,
+            originalBase64: snapshot.content_base64,
+          },
+          dirty,
+        })
+      : null;
+  useEffect(() => {
+    register(file, comparisonDraft ? (JSON.parse(comparisonDraft) as ConfigComparisonDraft) : null);
+    return () => register(file, null);
+  }, [register, file, comparisonDraft]);
+
   const save = useCallback(async (): Promise<boolean> => {
     if (!snapshot || !editorBytes || !canSave) return false;
     if (
@@ -296,17 +329,32 @@ export function useConfigFileSession({
     },
     [diagnose],
   );
-  const { parentRef: rawEditorParent } = useCodeMirrorEditor({
+  const comparedFile = comparison.result?.files.find((entry) => entry.file === file);
+  const ranges = useMemo(() => {
+    const side = comparingCurrent ? comparedFile?.current : comparedFile?.named;
+    if (side?.content !== editor) return [];
+    return (comparedFile?.differences ?? []).flatMap((difference) => {
+      const range = differenceRange(file, editor, difference, comparingCurrent);
+      return range ? [{ range, path: difference.path }] : [];
+    });
+  }, [comparedFile, comparingCurrent, editor, file]);
+  const onDifference = useCallback((path: string[]) => openDifference(file, path), [file]);
+  const { parentRef: rawEditorParent, revealRange } = useCodeMirrorEditor({
     enabled: codeMirrorAvailable && mode === "raw" && Boolean(snapshot) && textEditable,
     file,
     document: editor,
     diagnostics: rawDiagnostics,
+    differences: ranges,
+    onDifference,
     onChange: updateEditor,
   });
   const updateVisualOption = useCallback((path: string, update: Partial<ConfigVisualOption>) => {
-    setVisualOptions(
-      (fields) =>
-        fields?.map((field) => (field.path === path ? { ...field, ...update } : field)) ?? null,
+    setVisualOptions((fields) =>
+      fields
+        ? omitUnavailableOptions(
+            fields.map((field) => (field.path === path ? { ...field, ...update } : field)),
+          )
+        : null,
     );
   }, []);
   const updateCustomProvider = useCallback((update: Partial<ConfigCustomProvider>) => {
@@ -325,6 +373,7 @@ export function useConfigFileSession({
     loading,
     rawDiagnostics,
     rawEditorParent,
+    revealRange,
     save,
     setAuthKey,
     setAuthMode,

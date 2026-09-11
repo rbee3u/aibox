@@ -1,14 +1,10 @@
 import type { ApplicationStatus } from "@/api/configs";
+import { driftCatalogLabel } from "@/features/configs/configCatalog";
 import { StatusBadge } from "@/shared/ui/StatusBadge";
 import styles from "@/features/configs/ConfigPage.module.css";
 
 export function ConfigDriftBadge({ status }: { status: ApplicationStatus }) {
-  const driftLabel =
-    status.drift === "comparison-error"
-      ? "Comparison error"
-      : status.drift === "source-missing"
-        ? "Source missing"
-        : status.drift[0].toUpperCase() + status.drift.slice(1);
+  const driftLabel = driftCatalogLabel(status.drift);
   const routine = status.drift === "clean" || status.drift === "untracked";
   return (
     <StatusBadge
@@ -18,7 +14,7 @@ export function ConfigDriftBadge({ status }: { status: ApplicationStatus }) {
       tone={
         status.drift === "clean" ? "good" : status.drift === "untracked" ? "neutral" : "warning"
       }
-      title={status.detail ?? status.last_application?.applied_at}
+      title={status.detail}
     >
       {driftLabel}
     </StatusBadge>

@@ -41,7 +41,10 @@ describe("Requests page list", () => {
       /\.target\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow:\s*hidden;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/s,
     );
     expect(requestListCss).toMatch(
-      /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-2\);[\s\S]*?white-space:\s*nowrap;/s,
+      /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-md\);[\s\S]*?white-space:\s*nowrap;/s,
+    );
+    expect(requestListCss).toMatch(
+      /\.catalogIssueSlot\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/s,
     );
   });
 
@@ -101,7 +104,13 @@ describe("Requests page list", () => {
     expect(
       within(requestListPanel).getByRole("button", { name: "Refresh Requests" }),
     ).toBeEnabled();
+    expect(
+      within(requestListPanel).getByRole("button", { name: "Refresh Requests" }),
+    ).toHaveTextContent("Refresh");
     expect(within(requestListPanel).getByRole("button", { name: "Select Requests" })).toBeEnabled();
+    expect(
+      within(requestListPanel).getByRole("button", { name: "Select Requests" }),
+    ).toHaveTextContent("Select");
     expect(within(requestListPanel).queryByRole("button", { name: "Delete all" })).toBeNull();
     const completedRow = within(requestListPanel).getByRole("button", {
       name: "POST api.example.test/v1/responses",
@@ -260,10 +269,39 @@ describe("Requests page list", () => {
       name: /Request error: Server error.*currently overloaded/,
     });
     expect(issueMarker).not.toHaveAttribute("tabindex");
-    expect(within(row).queryByText("Server error")).not.toBeInTheDocument();
+    expect(within(row).getByText("Error: Server error")).toBeInTheDocument();
+    expect(within(row).queryByText("gpt-5.6-sol high")).not.toBeInTheDocument();
+    expect(within(row).getByTitle("Model gpt-5.6-sol; Reasoning effort high")).toBeInTheDocument();
+    expect(within(row).queryByText(message)).not.toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
       /Request error: Server error\. Our servers are currently overloaded/,
     );
+    expect(row).toHaveAccessibleDescription(/Model gpt-5.6-sol; Reasoning effort high/);
+  });
+
+  it("does not repeat an HTTP status as a catalog issue label", async () => {
+    const http401 = {
+      ...completedSummary,
+      status: 401,
+      assessment: {
+        level: "error" as const,
+        primary: {
+          source: "http" as const,
+          kind: "http_401",
+          message: "Upstream returned HTTP 401",
+        },
+        issue_count: 1,
+      },
+    };
+    renderApp({ listRequests: vi.fn().mockResolvedValue(requestListFor([http401])) });
+
+    const row = await screen.findByRole("button", {
+      name: "POST api.example.test/v1/responses",
+    });
+    expect(within(row).getByText("401")).toBeInTheDocument();
+    expect(within(row).queryByText("Error: HTTP 401")).not.toBeInTheDocument();
+    expect(within(row).getByText("gpt-5.6-sol high")).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(/Request error: HTTP 401/);
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {

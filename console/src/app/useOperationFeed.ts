@@ -29,7 +29,8 @@ export function useOperationFeed(api: ConnectedControlApi | null) {
   const [operation, setOperation] = useState<Operation | null>(null);
   const [connection, setConnection] = useState<OperationConnection>("connecting");
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  /** Space the fixed panel occupies, reported by the panel and reserved by the shell. */
+  const [height, setHeight] = useState(0);
 
   useEffect(() => {
     if (!api) return;
@@ -50,8 +51,8 @@ export function useOperationFeed(api: ConnectedControlApi | null) {
   return {
     operation,
     connection,
-    expanded,
-    setExpanded,
+    height,
+    setHeight,
     record,
     adopt: setOperation,
     dismiss: useCallback(() => setDismissed(operation?.id ?? null), [operation]),

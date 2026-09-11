@@ -12,6 +12,51 @@
   white-space: pre-wrap;
 }
 
+.skillLabel {
+  display: inline-block;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--code-text);
+  background: var(--surface-inset);
+  font: var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.plainRest {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.assessmentFacts {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.assessmentRationale {
+  margin-top: 6px;
+}
+
+.reviewDump {
+  margin-top: 8px;
+  border-top: 1px solid var(--line-content);
+  padding-top: 6px;
+}
+
+.reviewDump > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.reviewDump pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--ink-secondary);
+  font: var(--text-xs) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
 .markdown > :first-child {
   margin-top: 0;
 }
@@ -38,6 +83,11 @@
   margin-top: 4px;
 }
 
+/*
+ * Agent output is content, not chrome, so its headings carry their own scale
+ * instead of the section and panel roles. A heading here must stay at least as
+ * prominent as the prose it introduces.
+ */
 .markdown h1,
 .markdown h2,
 .markdown h3,
@@ -45,16 +95,17 @@
   margin: 18px 0 8px;
   color: var(--ink);
   font-size: var(--text-sm);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 
 .markdown h1 {
-  font-size: var(--text-panel-title);
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
 }
 
 .markdown h2 {
-  font-size: var(--text-section-title);
+  font-weight: var(--weight-bold);
 }
 
 .markdown blockquote {
@@ -125,8 +176,10 @@
 
 .copyCode {
   display: inline-grid;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   place-items: center;
   border-color: transparent;
   padding: 0;
@@ -138,6 +191,10 @@
   border-color: var(--line-control-strong);
   color: var(--muted);
   background: var(--surface-hover);
+}
+
+.copyCode:active {
+  background: var(--surface-pressed);
 }
 
 .codeBlock pre {
@@ -177,4 +234,13 @@
 .role {
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
+}
+
+@media (pointer: coarse) {
+  .copyCode {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

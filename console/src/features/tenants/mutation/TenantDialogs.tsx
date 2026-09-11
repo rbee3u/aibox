@@ -9,6 +9,7 @@ import { TextInput } from "@/shared/ui/FormControls";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/tenants/TenantPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 export function TenantDialogs({
   components,
@@ -26,6 +27,7 @@ export function TenantDialogs({
     closeCreateDialog,
     createError,
     createHelpId,
+    createNameTaken,
     createNameValid,
     createOpen,
     createTitleId,
@@ -53,7 +55,7 @@ export function TenantDialogs({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !mutationBusy) void createTenant();
+              if (createNameValid && !createNameTaken && !mutationBusy) void createTenant();
             }}
           >
             <h2 id={createTitleId}>Create Managed Tenant</h2>
@@ -64,7 +66,7 @@ export function TenantDialogs({
                 aria-label="Tenant name"
                 value={newName}
                 onChange={(event) => changeNewName(event.target.value)}
-                aria-invalid={newName.length > 0 && !createNameValid}
+                aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
                 aria-describedby={createHelpId}
               />
             </label>
@@ -76,16 +78,25 @@ export function TenantDialogs({
               <AlertBanner
                 className={layout.alertBanner}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 Enter a valid lowercase DNS label.
+              </AlertBanner>
+            )}
+            {createNameValid && createNameTaken && (
+              <AlertBanner
+                className={layout.alertBanner}
+                tone="danger"
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+              >
+                Managed Tenant {newName} already exists.
               </AlertBanner>
             )}
             {createError && (
               <AlertBanner
                 className={layout.alertBanner}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 {createError}
               </AlertBanner>
@@ -101,12 +112,12 @@ export function TenantDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
-                disabled={!createNameValid || mutationBusy}
+                tone="primary"
+                disabled={!createNameValid || createNameTaken || mutationBusy}
               >
                 {busy ? (
                   <>
-                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                    <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
                     Creating…
                   </>
                 ) : (
@@ -187,7 +198,7 @@ export function TenantDialogs({
               <AlertBanner
                 className={layout.alertBanner}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 {specificVersionValidationError}
               </AlertBanner>
@@ -196,7 +207,7 @@ export function TenantDialogs({
               <AlertBanner
                 className={layout.alertBanner}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 {specificVersionError}
               </AlertBanner>
@@ -212,13 +223,13 @@ export function TenantDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
+                tone="primary"
                 disabled={!specificVersionValid || mutationBusy}
               >
                 {mutationBusy ? (
-                  <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
                 ) : (
-                  <Download size={14} />
+                  <Download size={iconSize.xs} />
                 )}
                 {mutationBusy
                   ? specificVersionTarget.mode === "update"

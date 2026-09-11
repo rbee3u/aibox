@@ -65,19 +65,19 @@
   padding: var(--catalog-row-roomy-padding);
   border-bottom: 1px solid var(--line-content);
   background: var(--surface);
-}
-
-.sessionRow::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
+  transition: background-color var(--transition-fast);
 }
 
 .sessionRow:hover {
   background: var(--surface-hover);
+}
+
+.sessionRow:active {
+  background: var(--surface-pressed);
+}
+
+.currentSessionRow {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
 }
 
 .currentSessionRow,
@@ -86,27 +86,27 @@
   background: var(--surface-selected);
 }
 
+.currentSessionRow:active {
+  background: var(--surface-pressed);
+}
+
 .sessionRowSelected,
 .sessionRowSelected:hover,
 .sessionRowSelected:focus-within {
   background: var(--surface-selected);
 }
 
-.currentSessionRow .sessionRowMain,
-.sessionRowSelected .sessionRowMain {
-  color: var(--accent);
+.sessionRowSelected:active {
+  background: var(--surface-pressed);
 }
 
-.currentSessionRow::before {
-  background: var(--accent);
+.currentSessionRow .sessionRowMain,
+.sessionRowSelected .sessionRowMain {
+  color: var(--ink);
 }
 
 .sessionSelectionRow {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.sessionSelectionRow.currentSessionRow::before {
-  background: transparent;
 }
 
 .sessionRowMain {
@@ -178,14 +178,15 @@
 }
 
 .sessionRowMetadata {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  display: flex;
+  min-width: 0;
   align-items: center;
-  column-gap: 9px;
+  gap: 9px;
 }
 
-.sessionRowMetadata > span,
-.sessionRowMetadata time {
+.sessionRowMetadata > span {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -193,9 +194,13 @@
 }
 
 .sessionRowMetadata time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sessionRowWarning {
@@ -234,6 +239,7 @@
 
 .sessionDetailActions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -313,9 +319,17 @@
   background: var(--surface-hover);
 }
 
+.sessionTabs button:active {
+  background: var(--surface-pressed);
+}
+
 .sessionTabActive {
-  color: var(--accent) !important;
+  color: var(--ink) !important;
   background: var(--surface-selected) !important;
+}
+
+.sessionTabActive:active {
+  background: var(--surface-pressed);
 }
 
 .sessionTabActive::after {
@@ -325,19 +339,21 @@
   left: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
-  background: var(--accent);
+  background: transparent;
   content: "";
 }
 
+/* The count sits at the floor of the ladder, and the disc grows to hold it. */
 .sessionTabIssue {
   display: inline-grid;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   place-items: center;
   border-radius: 50%;
   color: var(--warning);
   background: var(--warning-soft);
-  font-size: 10px;
+  font-size: var(--text-xs);
+  line-height: 1;
 }
 
 .sessionConversationScroll,
@@ -421,9 +437,18 @@
   background: var(--surface-hover);
 }
 
+.sessionConversationRail button:active,
+.sessionConversationMobileNav button:active {
+  background: var(--surface-pressed);
+}
+
 .sessionConversationNavActive {
-  color: var(--accent);
+  color: var(--ink);
   background: var(--surface-selected);
+}
+
+.sessionConversationNavActive:active {
+  background: var(--surface-pressed);
 }
 
 .sessionConversationNavDot {
@@ -447,9 +472,9 @@
 .sessionConversationNavActive .sessionConversationNavDot {
   width: 16px;
   height: 16px;
-  border-color: var(--accent);
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  box-shadow: none;
 }
 
 .sessionConversationNavActive .sessionConversationNavDot span {
@@ -468,8 +493,8 @@
 
 .sessionConversationContent,
 .sessionDetailsContent {
-  width: min(100%, 920px);
-  margin: 0 auto;
+  min-width: 0;
+  width: min(100%, var(--measure-text));
 }
 
 .sessionConversationContent {
@@ -484,12 +509,12 @@
 }
 
 .sessionDetailsSection + .sessionDetailsSection {
-  margin-top: 24px;
+  margin-top: var(--space-section);
 }
 
 .sessionDetailsSection h3 {
-  margin: 0 0 12px;
-  color: var(--ink);
+  margin: 0 0 var(--space-section-title);
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -498,7 +523,6 @@
 .sessionDetailsSectionHeading {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 12px;
 }
 
@@ -532,7 +556,6 @@
   color: var(--muted);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
 }
 
 .sessionDetailsGrid dd,
@@ -547,6 +570,7 @@
 .sessionDetailsGrid dd time,
 .sessionDetailsGrid dd > code,
 .sessionDiagnosticsGrid dd {
+  color: var(--code-muted);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -565,11 +589,13 @@
   white-space: nowrap;
 }
 
+/*
+ * Size comes from the primitive's own step, which keeps the coarse-pointer
+ * floor. Overriding the box here is what put this control below the touch
+ * target minimum: a feature stylesheet loads after the primitive's, so it
+ * won on source order.
+ */
 .sessionCopyAction {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  flex-basis: 24px;
   border-color: transparent;
   color: var(--muted);
   opacity: 0.3;
@@ -601,7 +627,6 @@
 }
 
 .sessionConversationWarning span:nth-of-type(2) {
-  margin-left: auto;
   color: var(--accent);
   font-weight: var(--weight-semibold);
 }
@@ -618,7 +643,8 @@
 }
 
 .sessionMessage {
-  width: min(100%, 900px);
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   border: 0;
@@ -630,21 +656,24 @@
   align-self: flex-start;
 }
 
+/* User messages stay inset from the measure so the left/right offset remains
+ * the fastest cue for who is speaking. */
 .sessionMessageUser {
-  width: min(100%, 720px);
+  width: min(100%, calc(var(--measure-text) * 0.82));
   align-self: flex-end;
   border: 1px solid var(--info-line);
   border-radius: var(--radius-md);
   background: var(--surface-inset);
   box-shadow: none;
 }
+/* Author and timestamp, or title and count, are one metadata group: they stay
+ * adjacent instead of tracking the two edges of the measure. */
 .sessionMessage header,
 .sessionActivity summary,
 .sessionEvidence summary,
 .sessionActivityGroup summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 0 0 5px;
   border-bottom: 0;
@@ -693,14 +722,14 @@
 .sessionActivity,
 .sessionEvidence,
 .sessionActivityGroup {
-  width: min(100%, 760px);
+  min-width: 0;
+  width: 100%;
   border: 1px solid var(--line-control);
   border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
 
 .sessionActivityGroup {
-  width: min(100%, 900px);
   align-self: flex-start;
   background: transparent;
 }
@@ -723,19 +752,25 @@
   gap: 6px;
 }
 
-.sessionActivityGroup > summary span:first-of-type svg:last-child {
+.sessionActivityGroup > summary span:first-of-type svg[aria-label="Activity has diagnostics"] {
   color: var(--warning);
 }
 .sessionActivity summary span:first-of-type,
 .sessionEvidence summary span:first-of-type,
 .sessionActivityGroup summary span:first-of-type {
+  min-width: 0;
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
+}
+
+.sessionActivity summary span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sessionActivity summary span:nth-of-type(2),
 .sessionEvidence summary span:nth-of-type(2),
 .sessionActivityGroup summary span:nth-of-type(2) {
-  margin-left: auto;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-meta);
@@ -799,6 +834,16 @@
 .sessionActivityGroupItems .sessionActivity summary,
 .sessionActivityGroupItems .sessionEvidence summary {
   padding: 7px 9px;
+}
+
+@media (pointer: coarse) {
+  .sessionCopyAction {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex-basis: 44px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -884,9 +929,13 @@
   }
 
   .sessionConversationMobileNav .sessionConversationNavActive {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--line);
+    color: var(--ink);
     background: var(--surface-selected);
+  }
+
+  .sessionConversationMobileNav .sessionConversationNavActive:active {
+    background: var(--surface-pressed);
   }
 
   .sessionConversationMobileNav .sessionConversationNavDot {

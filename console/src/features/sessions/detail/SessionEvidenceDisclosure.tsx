@@ -5,6 +5,7 @@ import type { SessionApi, TranscriptEvidence } from "@/api/sessions";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { messageOf } from "@/shared/lib/errors";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface SessionEvidenceDisclosureProps {
   api: SessionApi;
@@ -81,7 +82,7 @@ export function SessionEvidenceDisclosure({
             type="button"
             onClick={() => void navigator.clipboard.writeText(evidence.content)}
           >
-            <Clipboard size={13} aria-hidden="true" /> Copy {evidence.encoding}
+            <Clipboard size={iconSize.xs} aria-hidden="true" /> Copy {evidence.encoding}
           </button>
           <pre>{evidence.content}</pre>
         </div>

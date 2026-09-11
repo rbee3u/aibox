@@ -33,7 +33,7 @@
   white-space: nowrap;
 }
 
-.headerActions button,
+.headerActions button:not([data-icon-button]):not([data-refresh-button]),
 .pageTurn {
   display: inline-flex;
   flex: 0 0 auto;
@@ -95,26 +95,21 @@
     box-shadow var(--transition-fast);
 }
 
-.request::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
-  transition: background-color var(--transition-fast);
-}
-
 .request:hover {
   background: var(--surface-hover);
 }
 
+.request:active {
+  background: var(--surface-pressed);
+}
+
 .current {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
   background: var(--surface-selected);
 }
 
-.current::before {
-  background: var(--accent);
+.current:active {
+  background: var(--surface-pressed);
 }
 
 .request.current:hover,
@@ -122,12 +117,24 @@
   background: var(--surface-selected);
 }
 
+.request.current:active {
+  background: var(--surface-pressed);
+}
+
 .selectionRecord.current {
   background: var(--surface-selected);
 }
 
+.selectionRecord.current:active {
+  background: var(--surface-pressed);
+}
+
 .selectionRecord:not(.unselectable):hover {
   background: var(--surface-hover);
+}
+
+.selectionRecord:active:not(.unselectable) {
+  background: var(--surface-pressed);
 }
 
 .selectionRecord.unselectable {
@@ -140,16 +147,20 @@
   background: var(--surface-selected);
 }
 
+.selectionRecord.selected:active {
+  background: var(--surface-pressed);
+}
+
 .request.current .rowButton,
 .request.selected .rowButton {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .request.current .requestIcon,
 .request.selected .requestIcon,
 .request.current .targetHost,
 .request.selected .targetHost {
-  color: var(--accent);
+  color: var(--ink-secondary);
 }
 
 .rowButton {
@@ -183,7 +194,7 @@
 }
 
 .rowButton:focus-visible {
-  outline-offset: 1px;
+  outline-offset: var(--focus-offset);
 }
 
 .rowButton:disabled {
@@ -226,7 +237,7 @@
   grid-row: 1;
   min-width: max-content;
   justify-self: end;
-  padding-left: var(--space-2);
+  padding-left: var(--space-md);
   font-size: var(--text-xs);
   white-space: nowrap;
 }
@@ -245,6 +256,13 @@
   font-size: var(--catalog-row-secondary-size);
   font-weight: var(--weight-regular);
   line-height: var(--catalog-row-secondary-line-height);
+}
+
+.catalogIssueSlot {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
 }
 
 .modelMetadata,
@@ -349,6 +367,10 @@
 .pageTurn:hover:not(:disabled) {
   border-color: transparent;
   background: var(--surface-hover);
+}
+
+.pageTurn:active:not(:disabled) {
+  background: var(--surface-pressed);
 }
 
 .headerPagination {

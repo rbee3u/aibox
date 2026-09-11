@@ -12,6 +12,7 @@ import {
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { capitalize } from "@/shared/lib/format";
 import styles from "@/features/requests/detail/JsonTree.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface JsonTreeProps {
   value: JsonValue;
@@ -173,9 +174,9 @@ function JsonNode(props: JsonNodeProps) {
             aria-expanded={open}
           >
             {open ? (
-              <ChevronDown size={14} aria-hidden="true" />
+              <ChevronDown size={iconSize.xs} aria-hidden="true" />
             ) : (
-              <ChevronRight size={14} aria-hidden="true" />
+              <ChevronRight size={iconSize.xs} aria-hidden="true" />
             )}
           </button>
         ) : (
@@ -209,9 +210,9 @@ function JsonNode(props: JsonNodeProps) {
           title={copiedPath === path ? "JSON value copied" : "Copy JSON value"}
         >
           {copiedPath === path ? (
-            <Check size={13} aria-hidden="true" />
+            <Check size={iconSize.xs} aria-hidden="true" />
           ) : (
-            <Clipboard size={13} aria-hidden="true" />
+            <Clipboard size={iconSize.xs} aria-hidden="true" />
           )}
         </button>
       </div>

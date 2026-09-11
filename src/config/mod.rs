@@ -4,6 +4,7 @@
 mod application;
 mod auth;
 mod catalog;
+mod comparison;
 mod definition;
 mod editing;
 mod files;
@@ -31,6 +32,9 @@ pub(crate) use catalog::{
     ConfigCatalogEntry, CurrentConfigInspection, create_named_config, delete_named_configs,
     inspect_current_config, inspect_named_configs,
 };
+pub(crate) use comparison::{ConfigComparison, ConfigComparisonDraft, compare_configs};
+#[cfg(test)]
+pub(crate) use comparison::{ConfigComparisonFile, ConfigComparisonSide, ConfigDifference};
 pub(crate) use editing::{
     config_file_warnings, diagnose_config_file, inspect_named_codex_auth, read_config_file_target,
     save_config_file_target, visual_config_state,

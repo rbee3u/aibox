@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { NativeSelect, TextInput, TextArea, Toggle } from "@/shared/ui/FormControls";
+import { TextInput, TextArea, Toggle } from "@/shared/ui/FormControls";
 describe("shared form controls", () => {
   it("preserves native value and ref behavior for text inputs", async () => {
     const user = userEvent.setup();
@@ -40,18 +40,5 @@ describe("shared form controls", () => {
     await user.click(screen.getByRole("checkbox", { name: "Disabled" }));
     expect(changes).toEqual([]);
     expect(screen.getByRole("checkbox", { name: "Disabled" })).not.toBeChecked();
-  });
-  it("preserves native select attributes and value changes", async () => {
-    const user = userEvent.setup();
-    render(
-      <NativeSelect aria-label="Agent" defaultValue="codex" required>
-        <option value="codex">Codex</option>
-        <option value="claude">Claude</option>
-      </NativeSelect>,
-    );
-    const select = screen.getByRole("combobox", { name: "Agent" });
-    expect(select).toBeRequired();
-    await user.selectOptions(select, "claude");
-    expect(select).toHaveValue("claude");
   });
 });

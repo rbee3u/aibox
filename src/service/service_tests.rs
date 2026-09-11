@@ -1470,6 +1470,7 @@ async fn control_router_exposes_the_complete_method_and_path_surface() {
         (Method::POST, "/_aibox/api/configs/reveal"),
         (Method::POST, "/_aibox/api/configs/save"),
         (Method::POST, "/_aibox/api/configs/diagnose"),
+        (Method::POST, "/_aibox/api/configs/compare"),
         (Method::POST, "/_aibox/api/configs/apply"),
         (Method::POST, "/_aibox/api/configs/delete"),
         (Method::POST, "/_aibox/api/configs/propagate-auth/preview"),
@@ -1534,4 +1535,45 @@ async fn control_router_exposes_the_complete_method_and_path_surface() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn config_comparison_endpoint_is_read_only_and_scoped_to_last_application() {
+    let root = tempfile::tempdir().unwrap();
+    let app = router(test_state(root.path()));
+    for path in ["create", "apply"] {
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                &format!("/_aibox/api/configs/{path}"),
+                serde_json::json!({"tenant":"managed:work", "agent":"codex", "config":"source"})
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let before = filesystem_snapshot(root.path());
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/_aibox/api/configs/compare",
+            serde_json::json!({
+                "tenant":"managed:work", "agent":"codex", "current":true, "config":null, "files":[]
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["source"], "source");
+    assert_eq!(body["incomplete"], false);
+    assert_eq!(body["files"][0]["differences"], serde_json::json!([]));
+    assert_eq!(before, filesystem_snapshot(root.path()));
+    let response = app.oneshot(json_request("/_aibox/api/configs/compare", serde_json::json!({
+        "tenant":"managed:work", "agent":"codex", "current":false, "config":"other", "files":[]
+    }).to_string())).await.unwrap();
+    assert!(!response.status().is_success());
+    assert_eq!(before, filesystem_snapshot(root.path()));
 }

@@ -5,10 +5,7 @@ import { LatestRequest } from "@/shared/lib/latestRequest";
 
 const OVERVIEW_POLL_MS = 15000;
 
-export function useOverviewData(
-  api: Pick<OverviewApi, "loadOverview" | "loadTopology">,
-  onTopologyLoaded: (topology: TopologyData) => void,
-) {
+export function useOverviewData(api: Pick<OverviewApi, "loadOverview" | "loadTopology">) {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [topology, setTopology] = useState<TopologyData | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -52,7 +49,6 @@ export function useOverviewData(
         if (request.signal.aborted || !request.isCurrent()) return;
         setTopology(value);
         setTopologyError(null);
-        onTopologyLoaded(value);
       } catch (cause) {
         if (!request.signal.aborted) setTopologyError(messageOf(cause));
       } finally {
@@ -62,7 +58,7 @@ export function useOverviewData(
         }
       }
     },
-    [api, onTopologyLoaded],
+    [api],
   );
 
   useEffect(() => {
@@ -96,7 +92,6 @@ export function useOverviewData(
     overview,
     overviewError,
     overviewRefreshing,
-    reportOverviewError: setOverviewError,
     topology,
     topologyError,
     topologyRefreshing,

@@ -16,6 +16,26 @@ import {
 } from "@/features/configs/configCatalog";
 import { namedConfigName, type ConfigSelection } from "@/features/configs/route";
 
+export function visualOptionAvailable(
+  field: ConfigVisualOption,
+  fields: ConfigVisualOption[],
+): boolean {
+  const condition = field.visible_when;
+  return (
+    !condition ||
+    fields.some(
+      (parent) =>
+        parent.path === condition.path && parent.included && parent.value === condition.value,
+    )
+  );
+}
+
+export function omitUnavailableOptions(fields: ConfigVisualOption[]): ConfigVisualOption[] {
+  return fields.map((field) =>
+    visualOptionAvailable(field, fields) ? field : { ...field, included: false },
+  );
+}
+
 export interface ConfigFileSnapshotModel {
   editor: string;
   textEditable: boolean;
@@ -64,7 +84,7 @@ export function configFileSnapshotModel(
     return {
       editor,
       textEditable: true,
-      visualOptions: value.visual_options ?? null,
+      visualOptions: value.visual_options ? omitUnavailableOptions(value.visual_options) : null,
       customProvider,
       ...(isAuth && value.auth
         ? { auth: { mode: value.auth.mode, key: value.auth.api_key ?? "" } }
@@ -168,7 +188,7 @@ export function configFileInput({
     contentBase64: encodeBase64(editorBytes),
     ...(mode === "visual" && !isAuth && visualOptions
       ? {
-          visualOptions: visualOptions.map(({ path, included, value }) => ({
+          visualOptions: omitUnavailableOptions(visualOptions).map(({ path, included, value }) => ({
             path,
             included,
             value,

@@ -66,10 +66,22 @@
 }
 
 .configRowText {
-  display: flex;
+  display: grid;
   min-width: 0;
   flex: 1;
   align-items: center;
+  gap: 2px;
+}
+
+.configRowMeta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--catalog-row-secondary-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--catalog-row-secondary-line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .configRowTitle {
@@ -126,7 +138,9 @@
 .configEditorHeader {
   display: flex;
   min-height: 46px;
-  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
@@ -134,17 +148,31 @@
 
 .configEditorHeader > [data-icon-button]:first-child {
   display: none;
+  margin-top: 8px;
   margin-left: 8px;
 }
 
 .configEditorHeader h2 {
   min-width: 0;
   margin: 0;
-  padding: 0 24px;
   overflow: hidden;
-  font: var(--weight-semibold) var(--text-meta) / var(--line-height-meta) var(--font-mono);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.configRevealButton {
+  width: 196px;
+  max-width: calc(100% - 20px);
+  flex: 0 1 auto;
+  margin: 8px 10px;
+  white-space: normal;
+}
+
+.configRevealButton > svg {
+  flex: 0 0 auto;
 }
 
 .editorTools {
@@ -276,6 +304,15 @@
   background: var(--code-bg);
 }
 
+/*
+ * The editor owns its own caret and takes the ring from its container, because
+ * the element that actually receives focus is inside the library's markup.
+ */
+.codeEditor:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
 .codeEditor :global(.cm-editor) {
   height: 100%;
   min-height: 100%;
@@ -355,6 +392,11 @@
   tab-size: 2;
 }
 
+.codeEditorFallback:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
 .visualEditor {
   min-height: 0;
   flex: 1;
@@ -363,40 +405,12 @@
   background: var(--surface);
 }
 
-.visualGroup {
-  margin: 0 auto 22px;
-  max-width: 980px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.visualGroup:last-child {
-  margin-bottom: 0;
-}
-
-.visualGroup > header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 34px;
-  padding: 0 0 8px;
-  border-bottom: 1px solid var(--line-content);
-}
-
-.visualGroup h3 {
-  margin: 0;
-  font-size: var(--text-section-title);
-  font-weight: var(--weight-section-title);
-  line-height: var(--line-height-section-title);
-}
-
 .visualFieldList {
   display: grid;
+  max-width: var(--measure-text);
 }
 
-.visualFieldList > .visualField + .visualField {
+.visualFieldList > .visualField:not(:first-child) {
   border-top: 1px solid var(--line-content);
 }
 
@@ -411,11 +425,11 @@
 }
 
 .visualFieldMeta {
-  display: flex;
-  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(5.5em, auto);
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  column-gap: 6px;
+  min-width: 0;
 }
 
 .visualOptionLabel {
@@ -428,14 +442,24 @@
   font-weight: var(--weight-semibold);
 }
 
-.visualOptionLabel label {
+.visualOptionLabel span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .requiredMarker {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
   color: var(--danger);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.visualPresenceLabel {
+  color: var(--muted);
+  font-size: var(--text-xs);
   line-height: 1;
 }
 
@@ -446,13 +470,32 @@
   gap: 7px;
 }
 
-.visualInclude {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
+.visualFieldMeta > .visualInclude {
+  display: grid;
+  grid-column: 2 / 4;
+  grid-template-columns: 24px minmax(5.5em, auto);
+  min-width: 0;
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.visualFieldMeta > .visualInclude > span:first-of-type,
+.proxyToggle > span:first-of-type {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: none;
+  justify-self: center;
+  align-self: center;
+}
+
+.visualFieldMeta > .visualInclude input:checked + span:first-of-type::after,
+.proxyToggle input:checked + span:first-of-type::after {
+  top: 1px;
+  left: 4px;
+  width: 5px;
+  height: 9px;
 }
 
 .visualTextControl {
@@ -474,8 +517,7 @@
   white-space: nowrap;
 }
 
-.visualTextControl input,
-.visualField select {
+.visualTextControl input {
   width: 100%;
   min-width: 0;
   min-height: 32px;
@@ -485,6 +527,12 @@
   color: var(--ink);
   background: var(--surface);
   font-size: var(--text-xs);
+}
+
+.visualFieldSelect {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .visualTextControl [data-icon-button] {
@@ -547,15 +595,11 @@
   min-width: 0;
   flex: 1;
   gap: 4px;
+  padding: 10px 24px;
 }
 
 .contextFacts {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(90px, auto));
-  align-items: center;
-  gap: 6px 18px;
-  padding: 7px 24px 2px;
+  display: none;
 }
 
 .contextFacts > span {
@@ -582,23 +626,13 @@
 }
 
 .contextFile {
+  color: var(--code-muted);
   font-family: var(--font-mono);
 }
 
-.contextFacts em {
-  flex: 0 0 auto;
-  border: 1px solid var(--warning-line);
-  border-radius: var(--radius-pill);
-  padding: 2px 6px;
-  color: var(--warning);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-  font-style: normal;
-}
-
-.sensitiveContext {
-  padding: 0 24px 3px;
-  color: var(--warning);
+.editorNotice {
+  margin: 0;
+  color: var(--muted);
   font-size: var(--text-xs);
 }
 
@@ -610,6 +644,40 @@
   flex-direction: column;
 }
 
+.configRevealGate {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  place-content: safe center;
+  justify-items: center;
+  gap: 7px;
+  padding: var(--space-2xl);
+  overflow: auto;
+  color: var(--muted);
+  text-align: center;
+}
+
+.configRevealGate > svg {
+  margin-bottom: 5px;
+  color: var(--accent);
+}
+
+.configRevealGate h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
+}
+
+.configRevealGate p {
+  max-width: 420px;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
 .wideDialog {
   width: min(680px, 100%);
 }
@@ -617,8 +685,8 @@
 .propagationGroups {
   display: grid;
   max-height: 54vh;
-  gap: 14px;
-  margin-top: 14px;
+  gap: var(--space-section);
+  margin-top: var(--space-section-title);
   overflow: auto;
 }
 
@@ -627,7 +695,7 @@
   align-items: center;
   justify-content: space-between;
   margin: 0;
-  color: var(--ink-secondary);
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -639,10 +707,19 @@
 
 @media (max-width: 760px) {
   .configEditorHeader {
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0;
   }
 
-  .contextFile {
+  .configRevealButton {
+    max-width: calc(100% - 48px);
+    grid-column: 2;
+    margin: 0 24px 10px;
+  }
+
+  .contextFacts .contextFile {
+    display: block;
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
@@ -650,8 +727,12 @@
   }
 
   .contextFacts {
+    display: grid;
+    min-width: 0;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding-right: 10px;
+    align-items: start;
+    gap: 6px 18px;
+    padding-top: 4px;
   }
 
   .editorTools {
@@ -670,11 +751,6 @@
 
   .visualEditor {
     padding: 10px;
-  }
-
-  .visualGroup > header {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .visualField {
@@ -703,4 +779,80 @@
   .configFileSection {
     min-height: 320px;
   }
+}
+
+/* Config comparison remains supplemental to native editing. */
+.comparisonStatus {
+  display: block;
+  padding: var(--space-md) var(--space-xl);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.fileDifferences,
+.fieldDifference {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-inline-start: 2px solid var(--warning-line);
+  padding: var(--space-md) var(--space-xl);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fieldDifference {
+  grid-column: 1 / -1;
+}
+.fileDifferences summary,
+.fieldDifference summary {
+  cursor: pointer;
+}
+.differenceList,
+.differenceValues {
+  display: grid;
+  gap: var(--space-md);
+  padding-block: var(--space-md);
+}
+.differenceValues {
+  color: var(--ink);
+}
+.differenceValues pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.differenceValues span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.differenceValues button,
+.differenceList button {
+  justify-self: start;
+}
+.codeEditor :global(.cm-config-difference-line) {
+  background: var(--warning-soft);
+}
+.codeEditor :global(.cm-config-difference-button) {
+  /* A gutter control follows one code row, not the generic toolbar button size. */
+  display: block;
+  min-height: 0;
+  height: 1lh;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 0;
+  cursor: pointer;
+  padding: 0 var(--space-md);
+  font: inherit;
+}
+
+.fileHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}
+.differenceCount {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2xs) var(--space-md);
 }

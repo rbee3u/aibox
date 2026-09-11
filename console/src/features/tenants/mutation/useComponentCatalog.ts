@@ -17,7 +17,6 @@ export function useComponentCatalog(
   const [tenantSelectionValue, setTenantSelectionValue] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const catalogRequest = useRef(new LatestRequest());
-  const preserveError = useRef(false);
 
   const load = useCallback(
     async (target: TenantRow | null, showLoading = false): Promise<ComponentRow[] | null> => {
@@ -35,13 +34,11 @@ export function useComponentCatalog(
         if (request.signal.aborted || !request.isCurrent()) return null;
         setComponents(rows);
         setTenantSelectionValue(tenantSelectionValueOf(target));
-        if (preserveError.current) preserveError.current = false;
-        else onError(null);
+        onError(null);
         return rows;
       } catch (cause) {
         if (request.signal.aborted || !request.isCurrent()) return null;
-        if (preserveError.current) preserveError.current = false;
-        else onError(messageOf(cause));
+        onError(messageOf(cause));
         return null;
       } finally {
         if (request.isCurrent()) {
@@ -53,10 +50,6 @@ export function useComponentCatalog(
     [api, onError],
   );
 
-  const preserveNextError = useCallback(() => {
-    preserveError.current = true;
-  }, []);
-
   useEffect(() => {
     const catalogOwner = catalogRequest.current;
     return () => catalogOwner.cancel();
@@ -66,7 +59,6 @@ export function useComponentCatalog(
     components,
     load,
     loading,
-    preserveNextError,
     tenantSelectionValue,
   };
 }

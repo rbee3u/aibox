@@ -1,6 +1,5 @@
 import { useEffect, type RefObject } from "react";
-
-const NARROW_LAYOUT_QUERY = "(max-width: 760px)";
+import { NARROW_LAYOUT_QUERY } from "@/shared/hooks/useNarrowLayout";
 
 /**
  * Moves focus into a detail region when a narrow layout replaces the catalog.

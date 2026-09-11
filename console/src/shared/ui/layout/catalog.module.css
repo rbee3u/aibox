@@ -60,6 +60,7 @@
 
 .sectionHeader h2 {
   margin: 0;
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -142,6 +143,10 @@
   padding: var(--catalog-toolbar-padding);
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
+}
+
+.toolbar:not(.selectionBar) {
+  flex-wrap: wrap;
 }
 
 .toolbarFilters,
@@ -249,10 +254,6 @@
   transform: translateY(-50%);
 }
 
-.refreshAction {
-  composes: button from "@/shared/ui/RefreshButton.module.css";
-}
-
 .list {
   min-height: 0;
   overflow: auto;
@@ -275,19 +276,25 @@
   padding: var(--catalog-row-padding);
   border-bottom: 1px solid var(--line-content);
   background: var(--surface);
-}
-
-.row::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
+  transition: background-color var(--transition-fast);
 }
 
 .row:hover {
   background: var(--surface-hover);
+}
+
+.row:active {
+  background: var(--surface-pressed);
+}
+
+.inspectedMarker::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
 }
 
 .rowInspected,
@@ -296,28 +303,38 @@
   background: var(--surface-selected);
 }
 
+.rowInspected:active {
+  background: var(--surface-pressed);
+}
+
+.rowInspected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
 .rowSelected,
 .rowSelected:hover,
 .rowSelected:focus-within {
   background: var(--surface-selected);
 }
 
-.rowInspected::before {
-  background: var(--accent);
+.rowSelected:active {
+  background: var(--surface-pressed);
 }
 
 .rowInspected .rowMain,
 .rowSelected .rowMain {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .rowSelectable,
 .rowProtected {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.rowSelectable.rowInspected::before {
-  background: transparent;
 }
 
 .rowProtected {
@@ -405,9 +422,9 @@
   gap: 8px;
   padding: var(--catalog-divider-padding);
   border-bottom: 1px solid var(--line-content);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  color: var(--ink-section-title);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
   letter-spacing: 0;
 }
 
@@ -416,6 +433,7 @@
   padding: 16px;
   border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
+  color: var(--ink);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
 }
@@ -508,6 +526,22 @@
 
   .showsDetail .detailPane {
     display: flex;
+  }
+
+  /*
+   * Protection is the missing delete control. An inset wash on the one-pane
+   * picker looks like a preselected row.
+   */
+  .splitLayout:not(.showsDetail) .rowProtected:not(.rowSelected):not(.rowInspected) {
+    background: var(--surface);
+  }
+
+  .splitLayout:not(.showsDetail) .rowProtected:not(.rowSelected):not(.rowInspected):hover {
+    background: var(--surface-hover);
+  }
+
+  .splitLayout:not(.showsDetail) .rowProtected:active:not(.rowSelected):not(.rowInspected) {
+    background: var(--surface-pressed);
   }
 
   .detailHeader > [data-icon-button]:first-child {
