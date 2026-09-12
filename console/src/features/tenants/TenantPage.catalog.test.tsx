@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRow } from "@/api/tenants";
@@ -394,6 +394,110 @@ describe("TenantPage", () => {
     expect(
       await screen.findByLabelText("Selected Tenant: new-tenant, Managed Tenant"),
     ).toBeInTheDocument();
+  });
+  /*
+   * The dialog's own focus restore could not help here: every reload used to
+   * swap the whole list for a spinner, so the control that opened the dialog
+   * was a dead node by the time it tried, and focus fell to <body>.
+   */
+  it("moves focus to the new Tenant's row after a create", async () => {
+    const rows = [...tenantRows];
+    const createTenant = vi.fn((name: string) => {
+      rows.push({
+        kind: "managed",
+        name,
+        display_name: name,
+        home: `/home/test/.aibox/tenants/${name}`,
+        exists: true,
+      });
+      return Promise.resolve();
+    });
+    const { api } = tenantApi({ createTenant, listTenants: () => Promise.resolve([...rows]) });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Managed Tenant" }));
+    await user.keyboard("zeta{Enter}");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "zeta, Managed Tenant" }),
+      ),
+    );
+  });
+  it("moves focus to the row that takes a deleted Tenant's place", async () => {
+    let rows = [
+      ...tenantRows,
+      {
+        kind: "managed" as const,
+        name: "zeta",
+        display_name: "zeta",
+        home: "/home/test/.aibox/tenants/zeta",
+        exists: true,
+      },
+    ];
+    const deleteTenants = vi.fn((names: string[]) => {
+      rows = rows.filter((row) => row.kind !== "managed" || !names.includes(row.name));
+      return Promise.resolve();
+    });
+    const { api } = tenantApi({ listTenants: () => Promise.resolve(rows), deleteTenants });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
+    await user.keyboard("work{Enter}");
+    await waitFor(() => expect(deleteTenants).toHaveBeenCalledWith(["work"]));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "zeta, Managed Tenant" }),
+      ),
+    );
+    expect(screen.queryByRole("button", { name: "Delete Tenant work" })).not.toBeInTheDocument();
+  });
+  it("keeps the rows on screen while the catalog reloads", async () => {
+    let release: (() => void) | null = null;
+    let calls = 0;
+    const { api } = tenantApi({
+      listTenants: () => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve(tenantRows);
+        return new Promise((resolve) => {
+          release = () => resolve(tenantRows);
+        });
+      },
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    const work = await screen.findByRole("button", { name: "work, Managed Tenant" });
+    await user.click(screen.getByRole("button", { name: "Refresh Tenants" }));
+    expect(screen.getByRole("button", { name: "work, Managed Tenant" })).toBe(work);
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "work, Managed Tenant" })).toBe(work);
+  });
+  /*
+   * Typing `my-tenant` passes through `my-`, which is invalid for exactly one
+   * keystroke; the error used to flash a 44px banner and jump the dialog.
+   */
+  it("holds the name format error until the field is left or submitted", async () => {
+    const { api } = tenantApi();
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Managed Tenant" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Managed Tenant" });
+    const input = within(dialog).getByRole("textbox", { name: "Tenant name" });
+    await user.type(input, "my-");
+    expect(
+      within(dialog).queryByText("Enter a valid lowercase DNS label."),
+    ).not.toBeInTheDocument();
+    expect(input).not.toHaveAttribute("aria-invalid", "true");
+    await user.keyboard("{Enter}");
+    expect(within(dialog).getByText("Enter a valid lowercase DNS label.")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    await user.type(input, "tenant");
+    expect(
+      within(dialog).queryByText("Enter a valid lowercase DNS label."),
+    ).not.toBeInTheDocument();
   });
   it("keeps Create disabled when the Managed Tenant name already exists", async () => {
     const createTenant = vi.fn();

@@ -1,4 +1,5 @@
 import { AlertTriangle, Download, LoaderCircle } from "lucide-react";
+import { useState } from "react";
 
 import { canonicalComponentStatus, componentLabel } from "@/features/tenants/componentCatalog";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
@@ -49,87 +50,19 @@ export function TenantDialogs({
   return (
     <>
       {createOpen && (
-        <Dialog
-          className={layout.dialog}
-          ariaLabelledBy={createTitleId}
-          busy={mutationBusy}
-          onCancel={closeCreateDialog}
-        >
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (createNameValid && !createNameTaken && !mutationBusy) void createTenant();
-            }}
-          >
-            <h2 id={createTitleId}>Create Managed Tenant</h2>
-            <label>
-              Name
-              <TextInput
-                autoFocus
-                aria-label="Tenant name"
-                value={newName}
-                onChange={(event) => changeNewName(event.target.value)}
-                aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
-                aria-describedby={createHelpId}
-              />
-            </label>
-            <p id={createHelpId} className={layout.dialogDescription}>
-              Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or
-              number.
-            </p>
-            {newName.length > 0 && !createNameValid && (
-              <AlertBanner
-                className={layout.alertBanner}
-                tone="danger"
-                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
-              >
-                Enter a valid lowercase DNS label.
-              </AlertBanner>
-            )}
-            {createNameValid && createNameTaken && (
-              <AlertBanner
-                className={layout.alertBanner}
-                tone="danger"
-                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
-              >
-                Managed Tenant {newName} already exists.
-              </AlertBanner>
-            )}
-            {createError && (
-              <AlertBanner
-                className={layout.alertBanner}
-                tone="danger"
-                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
-              >
-                {createError}
-              </AlertBanner>
-            )}
-            <div className={styles.dialogActions}>
-              <ActionButton
-                type="button"
-                tone="secondary"
-                onClick={closeCreateDialog}
-                disabled={busy}
-              >
-                Cancel
-              </ActionButton>
-              <ActionButton
-                type="submit"
-                tone="primary"
-                disabled={!createNameValid || createNameTaken || mutationBusy}
-              >
-                {busy ? (
-                  <>
-                    <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
-                    Creating…
-                  </>
-                ) : (
-                  "Create"
-                )}
-              </ActionButton>
-            </div>
-          </form>
-        </Dialog>
+        <CreateTenantDialog
+          busy={busy}
+          changeNewName={changeNewName}
+          closeCreateDialog={closeCreateDialog}
+          createError={createError}
+          createHelpId={createHelpId}
+          createNameTaken={createNameTaken}
+          createNameValid={createNameValid}
+          createTenant={createTenant}
+          createTitleId={createTitleId}
+          mutationBusy={mutationBusy}
+          newName={newName}
+        />
       )}
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
@@ -284,5 +217,123 @@ export function TenantDialogs({
         />
       )}
     </>
+  );
+}
+
+type CreateTenantDialogProps = Pick<
+  TenantViewModel["dialogs"],
+  | "changeNewName"
+  | "closeCreateDialog"
+  | "createError"
+  | "createHelpId"
+  | "createNameTaken"
+  | "createNameValid"
+  | "createTitleId"
+  | "newName"
+> &
+  Pick<TenantViewModel["mutations"], "busy" | "createTenant" | "mutationBusy">;
+
+/**
+ * The format rule is already under the field, so its error waits until the
+ * user leaves the field or submits — a name like `my-` is invalid only for the
+ * keystroke it takes to finish it. A taken name is reported as soon as it
+ * matches, since that never flickers.
+ */
+function CreateTenantDialog({
+  busy,
+  changeNewName,
+  closeCreateDialog,
+  createError,
+  createHelpId,
+  createNameTaken,
+  createNameValid,
+  createTenant,
+  createTitleId,
+  mutationBusy,
+  newName,
+}: CreateTenantDialogProps) {
+  const [nameTouched, setNameTouched] = useState(false);
+  return (
+    <Dialog
+      className={layout.dialog}
+      ariaLabelledBy={createTitleId}
+      busy={mutationBusy}
+      onCancel={closeCreateDialog}
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setNameTouched(true);
+          if (createNameValid && !createNameTaken && !mutationBusy) void createTenant();
+        }}
+      >
+        <h2 id={createTitleId}>Create Managed Tenant</h2>
+        <label>
+          Name
+          <TextInput
+            autoFocus
+            aria-label="Tenant name"
+            value={newName}
+            onChange={(event) => changeNewName(event.target.value)}
+            onBlur={() => setNameTouched(true)}
+            onKeyDown={(event) => {
+              // A disabled Create blocks implicit submission, so Enter reveals why.
+              if (event.key === "Enter") setNameTouched(true);
+            }}
+            aria-invalid={(nameTouched && !createNameValid) || createNameTaken}
+            aria-describedby={createHelpId}
+          />
+        </label>
+        <p id={createHelpId} className={layout.dialogDescription}>
+          Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or number.
+        </p>
+        {nameTouched && !createNameValid && (
+          <AlertBanner
+            className={layout.alertBanner}
+            tone="danger"
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+          >
+            Enter a valid lowercase DNS label.
+          </AlertBanner>
+        )}
+        {createNameValid && createNameTaken && (
+          <AlertBanner
+            className={layout.alertBanner}
+            tone="danger"
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+          >
+            Managed Tenant {newName} already exists.
+          </AlertBanner>
+        )}
+        {createError && (
+          <AlertBanner
+            className={layout.alertBanner}
+            tone="danger"
+            icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+          >
+            {createError}
+          </AlertBanner>
+        )}
+        <div className={styles.dialogActions}>
+          <ActionButton type="button" tone="secondary" onClick={closeCreateDialog} disabled={busy}>
+            Cancel
+          </ActionButton>
+          <ActionButton
+            type="submit"
+            tone="primary"
+            disabled={!createNameValid || createNameTaken || mutationBusy}
+          >
+            {busy ? (
+              <>
+                <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
+                Creating…
+              </>
+            ) : (
+              "Create"
+            )}
+          </ActionButton>
+        </div>
+      </form>
+    </Dialog>
   );
 }

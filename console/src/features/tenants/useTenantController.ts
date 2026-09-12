@@ -28,6 +28,7 @@ import {
 import { useTenantCatalog } from "@/features/tenants/catalog/useTenantCatalog";
 import {
   initialTenantWorkflow,
+  tenantRowSuccessor,
   tenantWorkflowReducer,
   type TenantDeleteTarget,
 } from "@/features/tenants/tenantWorkflow";
@@ -316,6 +317,17 @@ export function useTenantController({
     if (rows) await componentActions.loadComponents(selected, true);
   }
 
+  /**
+   * Moves focus to a row once the reload that produced it has committed. The
+   * dialog that just closed restores focus only when nothing else claimed it,
+   * so a row focused here wins over the control that opened the dialog.
+   */
+  function focusTenantRowSoon(key: TenantSelectionValue) {
+    window.requestAnimationFrame(() => {
+      if (!tenantRows.focus(key)) window.requestAnimationFrame(() => tenantRows.focus(key));
+    });
+  }
+
   async function createTenant() {
     if (!createNameValid || createNameTaken) return;
     dispatchWorkflow({ type: "create_started" });
@@ -326,6 +338,7 @@ export function useTenantController({
       await loadTenants();
       const key = `managed:${created}` as TenantSelectionValue;
       onLocationChange(tenantLocation(key));
+      focusTenantRowSoon(key);
     } catch (cause) {
       dispatchWorkflow({ type: "create_failed", message: messageOf(cause) });
     }
@@ -353,11 +366,16 @@ export function useTenantController({
     if (!deleteTarget || deleteTarget.names.length === 0) return;
     const requestedNames = deleteTarget.names;
     const wasSelectionMode = selectionMode;
+    const successor = tenantRowSuccessor(
+      sortedManagedTenants.map((row) => row.name),
+      requestedNames,
+    );
     dispatchWorkflow({ type: "delete_started" });
     try {
       await api.deleteTenants(requestedNames);
       dispatchWorkflow({ type: "delete_succeeded" });
       await loadTenants();
+      focusTenantRowSoon(successor ?? "host");
     } catch (cause) {
       const refreshed = await loadTenants();
       if (refreshed) {

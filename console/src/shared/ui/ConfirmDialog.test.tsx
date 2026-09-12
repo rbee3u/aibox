@@ -99,38 +99,32 @@ describe("ConfirmDialog", () => {
     expect(confirm).toBeEnabled();
   });
 
-  it("copies the confirmation phrase without filling the input", async () => {
-    vi.useFakeTimers();
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-
+  /*
+   * The typed name is the friction. A copy control beside it used to hand the
+   * name over in one click; Enter, which the pattern promises, did nothing.
+   */
+  it("confirms on Enter once the typed name matches, and offers no copy shortcut", () => {
+    const onConfirm = vi.fn();
     render(
       <ConfirmDialog
         title="Delete Tenant work?"
         confirmation="work"
         confirmLabel="Delete"
-        onConfirm={() => undefined}
+        onConfirm={onConfirm}
         onCancel={() => undefined}
       />,
     );
 
-    const phrase = screen.getByRole("button", { name: "Copy work" });
     const input = screen.getByRole("textbox", { name: "Type work to confirm" });
-    const confirm = screen.getByRole("button", { name: "Delete" });
-    expect(input.closest("label")).toBeNull();
+    expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
 
-    await act(async () => {
-      fireEvent.click(phrase);
-      await Promise.resolve();
-    });
+    fireEvent.change(input, { target: { value: "wor" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(onConfirm).not.toHaveBeenCalled();
 
-    expect(writeText).toHaveBeenCalledWith("work");
-    expect(input).toHaveValue("");
-    expect(confirm).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copied work" })).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1400));
-    expect(screen.getByRole("button", { name: "Copy work" })).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "work" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
   it("renders facts before the risk message", () => {

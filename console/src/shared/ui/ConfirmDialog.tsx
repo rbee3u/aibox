@@ -1,7 +1,6 @@
-import { AlertTriangle, Check, Clipboard, LoaderCircle } from "lucide-react";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
@@ -43,7 +42,6 @@ export function ConfirmDialog({
   const titleId = useId();
   const inputId = useId();
   const [typed, setTyped] = useState("");
-  const [copied, copy] = useClipboardFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const enabled = !confirmation || typed === confirmation;
@@ -57,7 +55,17 @@ export function ConfirmDialog({
       initialFocusRef={confirmation ? inputRef : cancelRef}
       onCancel={onCancel}
     >
-      <section className={styles.content}>
+      {/*
+       * A form so Enter in the typed confirmation confirms, the way the
+       * pattern promises; the button stays disabled until the name matches.
+       */}
+      <form
+        className={styles.content}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (enabled && !busy) onConfirm();
+        }}
+      >
         <div className={`${styles.icon} ${variant === "primary" ? styles.primaryIcon : ""}`}>
           <AlertTriangle size={iconSize.md} aria-hidden="true" />
         </div>
@@ -76,24 +84,9 @@ export function ConfirmDialog({
         {description}
         {confirmation && (
           <div className={styles.confirmation}>
-            <div className={styles.confirmationPrompt}>
-              <label htmlFor={inputId}>
-                Type <code className={styles.confirmationName}>{confirmation}</code> to confirm
-              </label>
-              <button
-                type="button"
-                className={styles.confirmationCopy}
-                onClick={() => void copy(confirmation, true)}
-                aria-label={copied ? `Copied ${confirmation}` : `Copy ${confirmation}`}
-                title={copied ? "Copied" : "Click to copy"}
-              >
-                {copied ? (
-                  <Check size={iconSize.xs} aria-hidden="true" />
-                ) : (
-                  <Clipboard size={iconSize.xs} aria-hidden="true" />
-                )}
-              </button>
-            </div>
+            <label htmlFor={inputId} className={styles.confirmationPrompt}>
+              Type <code className={styles.confirmationName}>{confirmation}</code> to confirm
+            </label>
             <TextInput
               id={inputId}
               ref={inputRef}
@@ -103,19 +96,25 @@ export function ConfirmDialog({
           </div>
         )}
         <div className={styles.actions}>
-          <ActionButton ref={cancelRef} tone="secondary" onClick={onCancel} disabled={busy}>
+          <ActionButton
+            ref={cancelRef}
+            type="button"
+            tone="secondary"
+            onClick={onCancel}
+            disabled={busy}
+          >
             Cancel
           </ActionButton>
           <ActionButton
+            type="submit"
             tone={variant === "danger" ? "dangerPrimary" : "primary"}
-            onClick={onConfirm}
             disabled={!enabled || busy}
           >
             {busy && <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />}
             {busy ? pendingLabel : confirmLabel}
           </ActionButton>
         </div>
-      </section>
+      </form>
     </Dialog>
   );
 }

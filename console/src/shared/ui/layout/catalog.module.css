@@ -428,18 +428,24 @@
   letter-spacing: 0;
 }
 
+/*
+ * One dialog surface. Form dialogs and ConfirmDialog differ in width and in
+ * what they hold, not in material: radius, padding, and backdrop match
+ * ConfirmDialog.module.css so two dialogs opened in a row read as one thing.
+ */
 .dialog {
-  width: min(430px, 100%);
-  padding: 16px;
+  width: min(430px, calc(100vw - 40px));
+  padding: 18px;
   border: 1px solid var(--line-control-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   color: var(--ink);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
 }
 
 .dialog::backdrop {
-  background: rgb(10 15 24 / 0.52);
+  background: rgb(7 11 18 / 0.58);
+  backdrop-filter: blur(2px);
 }
 
 .dialog label {

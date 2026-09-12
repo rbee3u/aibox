@@ -103,13 +103,6 @@
 }
 
 .confirmationPrompt {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.confirmationPrompt label {
   min-width: 0;
 }
 
@@ -122,30 +115,6 @@
   font-family: var(--font-mono);
   font-size: inherit;
   background: var(--surface-inset);
-}
-
-.confirmationCopy {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.confirmationCopy:hover {
-  color: var(--ink);
-  background: var(--surface-inset);
-}
-
-.confirmationCopy:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
 }
 
 .actions {
