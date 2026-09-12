@@ -18,9 +18,21 @@ describe("RefreshButton", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
-  it("announces busy state without changing visible text", () => {
+  /*
+   * Disabling the button while it reloads made the browser drop focus to
+   * <body> on every keyboard Refresh, so the busy state is announced without
+   * `disabled`: the button stays focusable and ignores a second press.
+   */
+  it("announces busy state without changing visible text or losing focus", () => {
+    const onClick = vi.fn();
     render(
-      <RefreshButton label="Refresh Requests" busy busyLabel="Refreshing Requests" disabled>
+      <RefreshButton
+        label="Refresh Requests"
+        busy
+        busyLabel="Refreshing Requests"
+        disabled
+        onClick={onClick}
+      >
         Refresh
       </RefreshButton>,
     );
@@ -28,8 +40,22 @@ describe("RefreshButton", () => {
     const button = screen.getByRole("button", { name: "Refreshing Requests" });
     expect(button).toHaveTextContent("Refresh");
     expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button.querySelector("svg")).toHaveClass("spin");
-    expect(button).toBeDisabled();
+    expect(button).toBeEnabled();
+    button.focus();
+    expect(button).toHaveFocus();
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("still honours the caller's disabled reasons once the reload is over", () => {
+    render(
+      <RefreshButton label="Refresh Requests" disabled>
+        Refresh
+      </RefreshButton>,
+    );
+    expect(screen.getByRole("button", { name: "Refresh Requests" })).toBeDisabled();
   });
 
   it("keeps responsive labels separate from contextual accessible names", () => {

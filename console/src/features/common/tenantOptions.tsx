@@ -49,6 +49,8 @@ export function tenantSelectionOptions(
           {
             value: "host" as const,
             label: "Host Tenant",
+            // The trigger is 112px wide and the icon already says Host.
+            summaryLabel: "Host",
             icon: <HostTenantIcon size={iconSize.xs} aria-hidden="true" />,
           },
         ]

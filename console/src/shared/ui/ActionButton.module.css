@@ -127,28 +127,46 @@
   opacity: 1;
 }
 
+/*
+ * `aria-disabled` is the disabled look without the focus loss: a control that
+ * is busy with the press it just took keeps focus, but answers nothing else.
+ * Pointer events are off so hover and press never reach it; the keyboard
+ * still can, and the component ignores the click.
+ */
+.button[aria-disabled="true"] {
+  pointer-events: none;
+  cursor: default;
+}
+
 .primary:disabled,
-.primarySoft:disabled {
+.primary[aria-disabled="true"],
+.primarySoft:disabled,
+.primarySoft[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);
   background: var(--control-disabled-surface);
 }
 
-.dangerPrimary:disabled {
+.dangerPrimary:disabled,
+.dangerPrimary[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-danger-ink);
   background: var(--control-disabled-danger-surface);
 }
 
-.secondary:disabled {
+.secondary:disabled,
+.secondary[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);
   background: var(--control-disabled-surface);
 }
 
 .ghost:disabled,
+.ghost[aria-disabled="true"],
 .dangerQuiet:disabled,
-.danger:disabled {
+.dangerQuiet[aria-disabled="true"],
+.danger:disabled,
+.danger[aria-disabled="true"] {
   border-color: transparent;
   color: var(--control-disabled-ink);
   background: transparent;

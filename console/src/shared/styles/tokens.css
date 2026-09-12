@@ -441,6 +441,7 @@ select:active:not(:disabled) {
 }
 
 button:disabled,
+button[aria-disabled="true"],
 select:disabled {
   cursor: default;
   color: var(--control-disabled-ink);

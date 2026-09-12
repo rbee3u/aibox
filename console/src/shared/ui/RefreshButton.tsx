@@ -16,6 +16,13 @@ export interface RefreshButtonProps extends Omit<
   tone?: Extract<ActionButtonTone, "ghost" | "secondary">;
 }
 
+/**
+ * A `busy` Refresh stays focusable. Disabling the button the user just
+ * activated makes the browser drop focus to `<body>`, so the reload the user
+ * asked for would end with no idea where they are; the spinning icon and
+ * `aria-disabled` already say it cannot be pressed again. `disabled` still
+ * applies for the caller's other reasons once the reload is over.
+ */
 export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
   function RefreshButton(
     {
@@ -25,7 +32,9 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
       children,
       className,
       compactOnNarrow = false,
+      disabled = false,
       iconSize = 14,
+      onClick,
       tone = "ghost",
       ...props
     },
@@ -44,6 +53,9 @@ export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
         tone={tone}
         aria-label={busy && busyLabel ? busyLabel : label}
         aria-busy={busy || undefined}
+        aria-disabled={busy || undefined}
+        disabled={!busy && disabled}
+        onClick={busy ? undefined : onClick}
       >
         {children ?? label}
       </IconLabelButton>

@@ -503,7 +503,7 @@ describe("ConfigPage", () => {
     const user = userEvent.setup();
     render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
     await revealConfigFiles(user);
-    expect(await screen.findByRole("button", { name: "Tenant: Host Tenant" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Tenant: Host" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Coding Agent: Claude" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "team" })).toHaveAttribute("aria-pressed", "true");
     const editor = await screen.findByRole("textbox", { name: "settings.json content" });

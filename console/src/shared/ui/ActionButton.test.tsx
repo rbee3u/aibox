@@ -86,17 +86,19 @@ describe("ActionButton", () => {
 
   it("keeps disabled variants identifiable without whole-control fading", () => {
     expect(css).toMatch(/\.button:disabled\s*\{[^}]*opacity:\s*1/s);
+    // A busy control wears the disabled look without giving up focus.
+    expect(css).toMatch(/\.button\[aria-disabled="true"\]\s*\{[^}]*pointer-events:\s*none/s);
     expect(css).toMatch(
-      /\.primary:disabled,\s*\.primarySoft:disabled\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
+      /\.primary:disabled,\s*\.primary\[aria-disabled="true"\],\s*\.primarySoft:disabled,\s*\.primarySoft\[aria-disabled="true"\]\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
     );
     expect(css).toMatch(
-      /\.dangerPrimary:disabled\s*\{[^}]*color:\s*var\(--control-disabled-danger-ink\)[^}]*background:\s*var\(--control-disabled-danger-surface\)/s,
+      /\.dangerPrimary:disabled,\s*\.dangerPrimary\[aria-disabled="true"\]\s*\{[^}]*color:\s*var\(--control-disabled-danger-ink\)[^}]*background:\s*var\(--control-disabled-danger-surface\)/s,
     );
     expect(css).toMatch(
-      /\.secondary:disabled\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
+      /\.secondary:disabled,\s*\.secondary\[aria-disabled="true"\]\s*\{[^}]*border-color:\s*var\(--control-disabled-line\)[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*var\(--control-disabled-surface\)/s,
     );
     expect(css).toMatch(
-      /\.ghost:disabled,[^}]*\.dangerQuiet:disabled,[^}]*\.danger:disabled\s*\{[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*transparent/s,
+      /\.ghost:disabled,[^}]*\.dangerQuiet:disabled,[^}]*\.danger:disabled,\s*\.danger\[aria-disabled="true"\]\s*\{[^}]*color:\s*var\(--control-disabled-ink\)[^}]*background:\s*transparent/s,
     );
   });
 

@@ -115,7 +115,7 @@ export function ConfigCatalogPane({
             <div className={layout.toolbarFilters}>
               <SelectionMenu
                 className={layout.filterControl}
-                disabled={busy || loadingCatalog || refreshing}
+                disabled={busy || loadingTenants}
                 label="Tenant"
                 onCommit={selectTenant}
                 options={tenantOptions}
@@ -129,7 +129,7 @@ export function ConfigCatalogPane({
               />
               <SelectionMenu
                 className={layout.filterControl}
-                disabled={busy || loadingCatalog || refreshing}
+                disabled={busy}
                 label="Coding Agent"
                 onCommit={selectAgent}
                 options={agentOptions}

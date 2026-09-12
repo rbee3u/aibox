@@ -330,7 +330,11 @@ describe("Requests page list", () => {
     });
     await user.click(refreshButton);
 
-    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveAttribute(
       "aria-busy",
       "true",

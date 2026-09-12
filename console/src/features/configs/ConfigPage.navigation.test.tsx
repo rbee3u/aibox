@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
+import { deferred } from "@/test/deferred";
 import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
 import layout from "@/shared/ui/layout/catalog.module.css";
 
@@ -103,6 +104,36 @@ describe("ConfigPage", () => {
       "New file",
     );
     expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
+  });
+
+  /*
+   * The scope pickers were disabled while the catalog reloaded, so the focus
+   * SelectionMenu handed back to its trigger fell to <body> a frame later.
+   * A superseded reload is already cancelled by the catalog hook, so the
+   * pickers stay live and keep focus like the same pickers on Sessions.
+   */
+  it("keeps the Tenant picker focused and live while its catalog loads", async () => {
+    const empty = {
+      configs: [],
+      files: ["config.toml", "auth.json"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const slow = deferred<ConfigListData>();
+    let calls = 0;
+    const { api } = configApi({
+      listConfigs: () => (calls++ === 0 ? Promise.resolve(empty) : slow.promise),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Tenant: default" }));
+    await user.click(screen.getByRole("option", { name: "Host Tenant" }));
+    const trigger = screen.getByRole("button", { name: "Tenant: Host" });
+    expect(trigger).toHaveFocus();
+    expect(trigger).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Coding Agent: Codex" })).toBeEnabled();
+    slow.resolve(empty);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Tenant: Host" })).toHaveFocus());
   });
 
   it("opens the Named Configs catalog without inspecting Current Config", async () => {
