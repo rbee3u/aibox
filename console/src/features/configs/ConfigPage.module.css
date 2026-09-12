@@ -237,6 +237,10 @@
   font-size: var(--text-xs);
 }
 
+.fileTitle .fileStateDirty {
+  color: var(--warning);
+}
+
 .authModeBadge {
   min-height: var(--status-height);
   padding: 2px 6px;
@@ -265,10 +269,6 @@
 .configFileSection:last-child {
   flex: 1 1 0;
   border-bottom: 0;
-}
-
-.configFileSectionFocused {
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .configFilePane {

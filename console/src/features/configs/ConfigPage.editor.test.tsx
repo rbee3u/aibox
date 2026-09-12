@@ -403,6 +403,41 @@ describe("ConfigPage", () => {
       "config.toml",
     ]);
   });
+  it("names the dirty file in its own header and holds Save all until two files are dirty", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=freebie&file=config.toml",
+    );
+    const { catalog, revealConfigFile } = visualCodexNamedConfig();
+    const { api } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => revealConfigFile(target.file),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await revealConfigFiles(user);
+    const main = await screen.findByRole("region", { name: "config.toml editor" });
+    const auth = await screen.findByRole("region", { name: "auth.json editor" });
+    // At rest an existing file's header carries no caption and no marker.
+    expect(within(main).queryByText("Existing file")).not.toBeInTheDocument();
+    expect(document.querySelector('[class*="configFileSectionFocused"]')).toBeNull();
+    // One dirty file: its own header says so, and no Save all appears.
+    const apiKey = await screen.findByLabelText("OpenAI API key");
+    await user.clear(apiKey);
+    await user.type(apiKey, "sk-new");
+    expect(screen.getByText("1 unsaved file")).toBeInTheDocument();
+    expect(within(auth).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(within(main).queryByText("Unsaved changes")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save all" })).not.toBeInTheDocument();
+    // Two dirty files: Save all has a job of its own.
+    const providerName = await screen.findByRole("textbox", { name: "Custom provider name" });
+    await user.clear(providerName);
+    await user.type(providerName, "custom-v2");
+    expect(screen.getByText("2 unsaved files")).toBeInTheDocument();
+    expect(within(main).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save all" })).toBeEnabled();
+  });
   it("keeps the Custom provider Save gate on the main file while auth.json is dirty", async () => {
     window.history.replaceState(
       null,

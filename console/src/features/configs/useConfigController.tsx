@@ -86,7 +86,6 @@ export interface ConfigViewModel {
     detailBackButtonRef: RefObject<HTMLButtonElement | null>;
     detailHeadingRef: RefObject<HTMLHeadingElement | null>;
     detailOpen: boolean;
-    file: string | null;
     openConfig: (name: string) => void;
     openCurrent: () => void;
     selection: ConfigSelection;
@@ -502,7 +501,6 @@ export function useConfigController({
       detailBackButtonRef,
       detailHeadingRef,
       detailOpen,
-      file,
       openConfig,
       openCurrent,
       selection,

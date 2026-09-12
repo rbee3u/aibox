@@ -109,7 +109,12 @@ export function ConfigFilePane({
             <strong>{file}</strong>
             <FileDifferenceCount file={file} />
           </div>
-          <span>{snapshot.exists ? "Existing file" : "New file"}</span>
+          {/* The second line speaks only when there is something to say. */}
+          {dirty ? (
+            <span className={styles.fileStateDirty}>Unsaved changes</span>
+          ) : !snapshot.exists ? (
+            <span>New file</span>
+          ) : null}
         </div>
         {isAuth && mode === "visual" && <span className={styles.authModeBadge}>{authMode}</span>}
         <ActionButton

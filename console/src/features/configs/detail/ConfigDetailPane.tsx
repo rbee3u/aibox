@@ -47,7 +47,7 @@ export function ConfigDetailPane({
     managedTenantMissing,
     tenant,
   } = catalog;
-  const { closeConfigDetail, detailBackButtonRef, detailHeadingRef, file, selection } = detail;
+  const { closeConfigDetail, detailBackButtonRef, detailHeadingRef, selection } = detail;
   const {
     dirtyFiles,
     editorMode,
@@ -180,7 +180,8 @@ export function ConfigDetailPane({
                   Raw
                 </button>
               </SegmentedControl>
-              {dirtyFiles.length > 0 && (
+              {/* One dirty file already has its own Save; Save all earns its place at two. */}
+              {dirtyFiles.length > 1 && (
                 <ActionButton
                   tone="primarySoft"
                   disabled={mutationBusy}
@@ -212,7 +213,7 @@ export function ConfigDetailPane({
                   <div
                     key={name}
                     ref={(element) => registerPane(name, element)}
-                    className={`${styles.configFileSection} ${file === name ? styles.configFileSectionFocused : ""}`}
+                    className={styles.configFileSection}
                   >
                     <ConfigFilePane
                       key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${namedConfigName(selection)}`}:${name}`}
