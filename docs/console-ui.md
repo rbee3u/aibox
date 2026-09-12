@@ -339,6 +339,12 @@ and dirty guards cover every navigation path. Use Last Application and Config
 Drift language; never describe an Active Config. Credential Propagation remains
 a Host Codex Current Config action.
 
+Apply is offered twice for one Named Config: a quiet row action in the catalog
+and the primary action of its detail header, both through the same confirmation.
+The Last Application source is marked where it is read — on its row and in its
+header — as `Applied` while drift is clean, otherwise with the drift label; a
+clean application offers no Apply at all, since rerunning it changes nothing.
+
 For the Last Application source and Current Config, file headers expose difference
 counts and expandable Named/Current value comparisons. Visual fields carry
 persistent difference indicators; Raw uses source-aware line markers. Missing or

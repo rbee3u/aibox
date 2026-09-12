@@ -1,4 +1,5 @@
 import type {
+  ApplicationStatus,
   ConfigCatalogEntry,
   ConfigCustomProvider,
   ConfigDrift,
@@ -7,6 +8,7 @@ import type {
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
 import { configTenantSelectionValue } from "@/features/configs/route";
+import { driftCatalogLabel } from "@/shared/lib/format";
 import type { IssueTone } from "@/shared/ui/IssueIndicator";
 
 export interface ConfigIssuePresentation {
@@ -60,7 +62,31 @@ export function lastAppliedMeta(applied: string, drift?: ConfigDrift): string {
   return drift === "dirty" ? `${base} · differs` : base;
 }
 
-export { driftCatalogLabel } from "@/shared/lib/format";
+export { driftCatalogLabel };
+
+export interface AppliedConfigPresentation {
+  label: string;
+  tone: "good" | "warning";
+  variant: "inline" | "badge";
+  /** Whether Apply still has work to do: a clean application converges to nothing. */
+  applicable: boolean;
+}
+/**
+ * How the Last Application source announces itself, on its catalog row and in
+ * its detail header. Clean drift reads `Applied` — the fact a reader is after —
+ * rather than the drift word; every other state keeps the shared drift label.
+ */
+export function appliedConfigPresentation(status: ApplicationStatus): AppliedConfigPresentation {
+  if (status.drift === "clean") {
+    return { label: "Applied", tone: "good", variant: "inline", applicable: false };
+  }
+  return {
+    label: driftCatalogLabel(status.drift),
+    tone: "warning",
+    variant: "badge",
+    applicable: true,
+  };
+}
 export function propagationGroup(
   status: PropagationOutcome["status"],
 ): "updated" | "skipped" | "attention" {

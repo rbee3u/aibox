@@ -163,6 +163,21 @@
   white-space: nowrap;
 }
 
+/*
+ * The pane's one action sits opposite the title, the Tenants header's
+ * arrangement. When the inspected Named Config is the Last Application
+ * source, its status stands here too — beside the button while drift leaves
+ * something to apply, alone once the application is clean.
+ */
+.configHeaderAction {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  align-self: center;
+  gap: 10px;
+  padding-right: 24px;
+}
+
 .configRevealButton {
   width: 196px;
   max-width: calc(100% - 20px);
@@ -716,6 +731,12 @@
     max-width: calc(100% - 48px);
     grid-column: 2;
     margin: 0 24px 10px;
+  }
+
+  .configHeaderAction {
+    grid-column: 2;
+    justify-self: start;
+    padding: 0 24px 10px;
   }
 
   .contextFacts .contextFile {

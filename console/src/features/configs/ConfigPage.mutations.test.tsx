@@ -33,12 +33,12 @@ describe("ConfigPage", () => {
     ]);
   });
   it.each([
-    ["clean", true, "Clean"],
-    ["dirty", false, "Differs"],
-    ["comparison-error", false, "Comparison error"],
+    ["clean", false, "Applied", "inline"],
+    ["dirty", true, "Differs", "badge"],
+    ["comparison-error", true, "Comparison error", "badge"],
   ] as const)(
-    "keeps Apply visible and sets its disabled state for %s drift",
-    async (drift, disabled, label) => {
+    "marks the Last Application source and offers Apply only while drift leaves work for %s",
+    async (drift, applicable, label, variant) => {
       const catalog = {
         configs: [{ name: "custom", state: "ready" }],
         files: ["config.toml", "auth.json"],
@@ -57,19 +57,70 @@ describe("ConfigPage", () => {
         revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
       });
       render(<ConfigPage api={api} />);
-      const statusElement = (await screen.findByText(label)).closest("[data-status-variant]");
-      expect(statusElement).toHaveAttribute(
-        "data-status-variant",
-        drift === "clean" ? "inline" : "badge",
-      );
-      const apply = screen.getByRole("button", {
+      const row = await screen.findByRole("button", { name: "custom" });
+      const status = within(row).getByText(label).closest("[data-status-variant]");
+      expect(status).toHaveAttribute("data-status-variant", variant);
+      expect(status).toHaveAttribute("data-status-tone", drift === "clean" ? "good" : "warning");
+      expect(screen.queryByText("Clean")).not.toBeInTheDocument();
+      const rowApply = screen.queryByRole("button", {
         name: "Apply Named Config custom to Current Config",
       });
-      if (disabled) expect(apply).toBeDisabled();
-      else expect(apply).toBeEnabled();
-      expect(screen.queryByText("Applied")).not.toBeInTheDocument();
+      if (applicable) expect(rowApply).toBeEnabled();
+      else expect(rowApply).not.toBeInTheDocument();
     },
   );
+  it("gives the inspected Named Config one primary Apply and marks the applied one", async () => {
+    const catalog = {
+      configs: [
+        { name: "custom", state: "ready" },
+        { name: "other", state: "ready" },
+      ],
+      files: ["config.toml", "auth.json"],
+      application: {
+        last_application: { applied: "custom", applied_at: "2026-08-17T00:00:00Z" },
+        drift: "clean",
+      },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, applyConfig } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+      applyConfig: () => Promise.resolve(),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    // Current Config offers nothing to apply, and every row Apply stays quiet.
+    await screen.findByRole("heading", { name: "Current Config" });
+    expect(screen.queryByRole("button", { name: "Apply to Current Config" })).toBeNull();
+    const rowApply = screen.getByRole("button", {
+      name: "Apply Named Config other to Current Config",
+    });
+    expect(rowApply).toHaveClass(actionStyles.secondary);
+    expect(rowApply).not.toHaveClass(actionStyles.primarySoft);
+    // The applied, clean Named Config reads Applied in its header instead of a button.
+    await user.click(screen.getByRole("button", { name: "custom" }));
+    const header = await screen.findByRole("heading", { name: "Named Config custom" });
+    const headerArea = header.closest<HTMLElement>("[class*=configEditorHeader]")!;
+    expect(within(headerArea).getByText("Applied")).toBeInTheDocument();
+    expect(
+      within(headerArea).queryByRole("button", { name: "Apply to Current Config" }),
+    ).toBeNull();
+    // Another Named Config gets the pane's one primary action, wired to the same dialog.
+    await user.click(screen.getByRole("button", { name: "other" }));
+    await screen.findByRole("heading", { name: "Named Config other" });
+    const apply = screen.getByRole("button", { name: "Apply to Current Config" });
+    expect(apply).toHaveClass(actionStyles.primarySoft);
+    await user.click(apply);
+    const dialog = screen.getByRole("dialog", { name: "Apply other to Current Config?" });
+    await user.click(within(dialog).getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(applyConfig).toHaveBeenCalledWith(
+        { kind: "managed", name: "default" },
+        "codex",
+        "other",
+      ),
+    );
+  });
   it("summarizes Config Application and requires typed Host Tenant confirmation", async () => {
     const catalog = {
       configs: [{ name: "custom", state: "ready" }],
@@ -323,7 +374,10 @@ describe("ConfigPage", () => {
     expect(screen.queryByRole("dialog", { name: "Create Named Config" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Apply Named Config new-config to Current Config" }),
-    ).toHaveClass(actionStyles.primarySoft);
+    ).toHaveClass(actionStyles.secondary);
+    expect(screen.getByRole("button", { name: "Apply to Current Config" })).toHaveClass(
+      actionStyles.primarySoft,
+    );
   });
   it("keeps Create disabled when the Named Config name already exists", async () => {
     const { api, createConfig } = configApi({

@@ -1,7 +1,8 @@
 import { AlertTriangle, Check, ListChecks, Plus, Trash2 } from "lucide-react";
 
-import { ConfigDriftBadge } from "@/features/configs/catalog/ConfigDriftBadge";
+import { ConfigDriftBadge } from "@/features/configs/ConfigDriftBadge";
 import {
+  appliedConfigPresentation,
   configIssueDescriptionId,
   configIssuePresentation,
   configWarningPresentation,
@@ -313,17 +314,18 @@ export function ConfigCatalogPane({
                 </button>
                 {!selectionMode && (
                   <div className={layout.rowActions}>
-                    {entry.state === "ready" && (
-                      <ActionButton
-                        tone="primarySoft"
-                        className={styles.configRowPrimaryAction}
-                        aria-label={`Apply Named Config ${entry.name} to Current Config`}
-                        disabled={mutationBusy || (applied && data.application.drift === "clean")}
-                        onClick={() => requestApply(entry.name)}
-                      >
-                        Apply
-                      </ActionButton>
-                    )}
+                    {entry.state === "ready" &&
+                      (!applied || appliedConfigPresentation(data.application).applicable) && (
+                        <ActionButton
+                          tone="secondary"
+                          className={styles.configRowPrimaryAction}
+                          aria-label={`Apply Named Config ${entry.name} to Current Config`}
+                          disabled={mutationBusy}
+                          onClick={() => requestApply(entry.name)}
+                        >
+                          Apply
+                        </ActionButton>
+                      )}
                     {entry.state === "incomplete" && (
                       <ActionButton
                         tone="primarySoft"

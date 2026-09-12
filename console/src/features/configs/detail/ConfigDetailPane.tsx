@@ -3,6 +3,8 @@ import { AlertTriangle, ChevronLeft, Save } from "lucide-react";
 import { useId } from "react";
 
 import type { ConfigApi } from "@/api/configs";
+import { ConfigDriftBadge } from "@/features/configs/ConfigDriftBadge";
+import { appliedConfigPresentation } from "@/features/configs/configCatalog";
 import { ConfigFilePane } from "@/features/configs/detail/ConfigFilePane";
 import {
   configTenantSelectionValue,
@@ -26,10 +28,11 @@ export function ConfigDetailPane({
   api,
   catalog,
   detail,
+  dialogs,
   editor,
   feedback,
   mutations,
-}: Pick<ConfigViewModel, "catalog" | "detail" | "editor" | "feedback" | "mutations"> & {
+}: Pick<ConfigViewModel, "catalog" | "detail" | "dialogs" | "editor" | "feedback" | "mutations"> & {
   api: ConfigApi;
 }) {
   const filesId = useId();
@@ -60,8 +63,13 @@ export function ConfigDetailPane({
     switchEditorMode,
     visualAvailable,
   } = editor;
+  const { requestApply } = dialogs;
   const { setError } = feedback;
   const { mutationBusy, saveAll } = mutations;
+  const inspectedName = namedConfigName(selection);
+  const inspectedEntry = data?.configs.find((entry) => entry.name === inspectedName) ?? null;
+  const inspectedApplied =
+    inspectedName !== null && data?.application.last_application?.applied === inspectedName;
   const hostRisk = tenant.kind === "host";
   const showUnredactedWarning =
     filesRevealed && (selection.current || agent === "codex" || editorMode === "raw");
@@ -130,6 +138,20 @@ export function ConfigDetailPane({
                 </span>
               </div>
             </div>
+            {inspectedEntry?.state === "ready" && (
+              <div className={styles.configHeaderAction}>
+                {inspectedApplied && <ConfigDriftBadge status={data.application} />}
+                {(!inspectedApplied || appliedConfigPresentation(data.application).applicable) && (
+                  <ActionButton
+                    tone="primarySoft"
+                    disabled={mutationBusy}
+                    onClick={() => requestApply(inspectedEntry.name)}
+                  >
+                    Apply to Current Config
+                  </ActionButton>
+                )}
+              </div>
+            )}
           </div>
           <div id={filesId} className={styles.configFilePanel}>
             <div className={styles.editorModeBar} aria-label="Editor mode">

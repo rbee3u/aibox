@@ -78,7 +78,7 @@ describe("Config comparison", () => {
       ).toBe("https://draft.test"),
     );
     expect(await screen.findByText(/1 difference · Unsaved content/)).toBeVisible();
-    expect(screen.getByText("Differs")).not.toHaveAttribute("title");
+    for (const badge of screen.getAllByText("Differs")) expect(badge).not.toHaveAttribute("title");
   });
 
   it("clears obsolete results during invalid Raw drafts and recovers", async () => {

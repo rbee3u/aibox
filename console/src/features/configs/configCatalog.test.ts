@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigCatalogEntry } from "@/api/configs";
 import {
+  appliedConfigPresentation,
   comparableProvider,
   configIssuePresentation,
   configWarningPresentation,
@@ -137,5 +138,27 @@ describe("Request Proxy routing", () => {
         proxy_routed: true,
       }),
     ).toEqual({ included: true, name: "local", base_url: "http://api.test" });
+  });
+});
+
+describe("appliedConfigPresentation", () => {
+  it("reads Applied with nothing left to apply when the application is clean", () => {
+    expect(appliedConfigPresentation({ last_application: null, drift: "clean" })).toEqual({
+      label: "Applied",
+      tone: "good",
+      variant: "inline",
+      applicable: false,
+    });
+  });
+  it("keeps the shared drift label and an applicable Apply for every other state", () => {
+    expect(appliedConfigPresentation({ last_application: null, drift: "dirty" })).toEqual({
+      label: "Differs",
+      tone: "warning",
+      variant: "badge",
+      applicable: true,
+    });
+    expect(
+      appliedConfigPresentation({ last_application: null, drift: "comparison-error" }).label,
+    ).toBe("Comparison error");
   });
 });

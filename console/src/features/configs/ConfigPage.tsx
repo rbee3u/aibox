@@ -55,6 +55,7 @@ export function ConfigPage(props: PageProps) {
           api={props.api}
           catalog={catalog}
           detail={detail}
+          dialogs={dialogs}
           editor={editor}
           feedback={feedback}
           mutations={mutations}
