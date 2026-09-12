@@ -105,6 +105,20 @@
   color: var(--ink);
 }
 
+/* In selection mode only a ticked row is filled; the current one keeps its bar. */
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected) {
+  background: var(--surface);
+}
+
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):hover,
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):focus-within {
+  background: var(--surface-hover);
+}
+
+.sessionSelectionRow.currentSessionRow:active:not(.sessionRowSelected) {
+  background: var(--surface-pressed);
+}
+
 .sessionSelectionRow {
   grid-template-columns: minmax(0, 1fr);
 }

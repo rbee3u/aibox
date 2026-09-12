@@ -44,6 +44,8 @@ describe("Requests page selection and deletion", () => {
       }),
     ).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Select Requests" }));
+    // The active stream cannot be ticked, so focus lands on the first row that can.
+    expect(screen.getByRole("button", { name: /^Select POST/ })).toHaveFocus();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const count = screen.getByText("0 selected");
     const pageSelection = screen.getByRole("button", { name: "Select page" });

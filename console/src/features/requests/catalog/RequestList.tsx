@@ -27,6 +27,7 @@ import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const RequestIcon = moduleIcons.requests;
@@ -155,7 +156,6 @@ export function RequestList({
   const pageSelected = deletable.length > 0 && selectedOnPage === deletable.length;
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
-  const focusSelectAfterExit = useRef(false);
   const deleteButtons = useElementRegistry<HTMLButtonElement>();
   const requestButtons = useElementRegistry<HTMLButtonElement>();
 
@@ -181,11 +181,14 @@ export function RequestList({
     onFocusAfterInspection();
   }, [focusAfterInspection, onFocusAfterInspection, requestButtons, requests]);
 
-  useEffect(() => {
-    if (selectionMode || !focusSelectAfterExit.current) return;
-    focusSelectAfterExit.current = false;
-    selectButton.current?.focus();
-  }, [selectionMode]);
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => deletable.some((request) => requestButtons.focus(request.id)),
+    onEnter: onEnterSelection,
+    onExit: onExitSelection,
+  });
 
   const pageTurnLocked = loading || deletionBusy;
   const paginationProps = {
@@ -209,10 +212,7 @@ export function RequestList({
               <ActionButton
                 tone="ghost"
                 className={layout.selectionCancel}
-                onClick={() => {
-                  focusSelectAfterExit.current = true;
-                  onExitSelection();
-                }}
+                onClick={cancelSelection}
               >
                 Cancel
               </ActionButton>
@@ -259,7 +259,7 @@ export function RequestList({
                 ref={selectButton}
                 className={layout.selectionEnter}
                 aria-label="Select Requests"
-                onClick={onEnterSelection}
+                onClick={enterSelection}
                 disabled={deletableCount === 0 || loading || deletionBusy}
                 compactOnNarrow
                 icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}

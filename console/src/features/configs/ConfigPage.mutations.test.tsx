@@ -347,6 +347,27 @@ describe("ConfigPage", () => {
     await user.keyboard("{Enter}");
     expect(createConfig).not.toHaveBeenCalled();
   });
+  it("moves focus onto the first Named Config on enter and back to Select on cancel", async () => {
+    const { api } = configApi({
+      listConfigs: () =>
+        Promise.resolve({
+          configs: [
+            { name: "first", state: "ready" },
+            { name: "second", state: "ready" },
+          ],
+          files: ["config.toml", "auth.json"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: false,
+        } satisfies ConfigListData),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await screen.findByRole("button", { name: "first" });
+    await user.click(screen.getByRole("button", { name: "Select Configs" }));
+    expect(screen.getByRole("button", { name: "Select first" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Select Configs" })).toHaveFocus();
+  });
   it("reconciles surviving selections after a non-transactional batch deletion failure", async () => {
     let configs: ConfigListData["configs"] = [
       { name: "first", state: "ready" },

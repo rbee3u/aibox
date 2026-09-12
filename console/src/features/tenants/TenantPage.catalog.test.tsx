@@ -340,6 +340,45 @@ describe("TenantPage", () => {
       "true",
     );
   });
+  /*
+   * Entering selection swaps the toolbar under the button that was just
+   * pressed, so focus would otherwise fall to <body>. Host and the protected
+   * Default Tenant cannot be ticked, so the first row that can is `work`.
+   */
+  it("moves focus onto the first selectable row on enter and back to Select on cancel", async () => {
+    const { api } = tenantApi();
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Select Tenants" }));
+    expect(screen.getByRole("button", { name: "Select work" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Select Tenants" })).toHaveFocus();
+  });
+  it("lists a batch deletion in catalog order regardless of tick order", async () => {
+    const rows = [
+      ...tenantRows,
+      {
+        kind: "managed" as const,
+        name: "extra",
+        display_name: "extra",
+        home: "/var/lib/aibox/tenants/extra",
+        exists: true,
+      },
+    ];
+    const { api } = tenantApi({ listTenants: () => Promise.resolve(rows) });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Select Tenants" }));
+    await user.click(screen.getByRole("button", { name: "Select work" }));
+    await user.click(screen.getByRole("button", { name: "Select extra" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected Tenants" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete selected Managed Tenants?" });
+    expect(
+      within(dialog)
+        .getAllByRole("code")
+        .map((code) => code.textContent),
+    ).toEqual(["extra", "work"]);
+  });
   it("protects Host from bulk selection and disables create in selection mode", async () => {
     const { api } = tenantApi();
     const user = userEvent.setup();

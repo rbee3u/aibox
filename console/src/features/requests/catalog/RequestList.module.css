@@ -121,11 +121,17 @@
   background: var(--surface-pressed);
 }
 
-.selectionRecord.current {
-  background: var(--surface-selected);
+/* In selection mode only a ticked row is filled; the current one keeps its bar. */
+.selectionRecord.current:not(.selected) {
+  background: var(--surface);
 }
 
-.selectionRecord.current:active {
+.selectionRecord.current:not(.selected):hover,
+.selectionRecord.current:not(.selected):focus-within {
+  background: var(--surface-hover);
+}
+
+.selectionRecord.current:active:not(.selected) {
   background: var(--surface-pressed);
 }
 

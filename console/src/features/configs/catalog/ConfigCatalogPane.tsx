@@ -65,7 +65,9 @@ export function ConfigCatalogPane({
   const {
     allSelectable,
     cancelSelection,
+    refreshButton,
     registerConfigRow,
+    selectButton,
     selectableNames,
     selectedCount,
     selectedKeys,
@@ -139,6 +141,7 @@ export function ConfigCatalogPane({
             </div>
             <div className={layout.toolbarActions}>
               <RefreshButton
+                ref={refreshButton}
                 label="Refresh Configs"
                 busyLabel="Refreshing Configs"
                 busy={refreshing}
@@ -153,6 +156,7 @@ export function ConfigCatalogPane({
                 Refresh
               </RefreshButton>
               <IconLabelButton
+                ref={selectButton}
                 className={layout.selectionEnter}
                 aria-label="Select Configs"
                 disabled={selectableNames.length === 0 || loadingCatalog || refreshing || busy}

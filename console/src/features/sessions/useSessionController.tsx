@@ -37,6 +37,7 @@ import {
 } from "@/features/sessions/mutation/useSessionDeletion";
 import type { TenantSelectionValue } from "@/domain/tenant";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
@@ -203,7 +204,6 @@ export function useSessionController({
   });
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
-  const focusSelectAfterExit = useRef(false);
   const sessionRows = useElementRegistry<HTMLButtonElement>();
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
@@ -372,14 +372,14 @@ export function useSessionController({
     selectedTenants,
     updateSessionLocation,
   ]);
-  useEffect(() => {
-    if (selectionMode || !focusSelectAfterExit.current) return;
-    focusSelectAfterExit.current = false;
-    const target = selectButton.current;
-    if (target && !target.disabled) target.focus();
-    else if (refreshButton.current && !refreshButton.current.disabled)
-      refreshButton.current.focus();
-  }, [selectionMode]);
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => (data?.sessions ?? []).some((row) => sessionRows.focus(row.key)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: () => dispatchWorkflow({ type: "selection_cancel" }),
+  });
   function toggleSession(key: string) {
     dispatchWorkflow({ type: "selection_toggle", key });
   }
@@ -387,10 +387,6 @@ export function useSessionController({
     const keys = data?.sessions.map((row) => row.key) ?? [];
     const allSelected = keys.length > 0 && keys.every((key) => selectedKeys.has(key));
     dispatchWorkflow({ type: "selection_toggle_all", keys, clear: allSelected });
-  }
-  function cancelSelection() {
-    focusSelectAfterExit.current = true;
-    dispatchWorkflow({ type: "selection_cancel" });
   }
   function commitTenants(values: ReadonlySet<TenantSelectionValue>) {
     const next = new Set(values);
@@ -503,7 +499,7 @@ export function useSessionController({
       selectedKeys,
       selectionMode,
       registerSessionRow: sessionRows.register,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       toggleAllSessions,
       toggleSession,
     },

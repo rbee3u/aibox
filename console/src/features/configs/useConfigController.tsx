@@ -40,6 +40,7 @@ import type { NotificationItemData, NotificationSource } from "@/shared/ui/notif
 import { useConfigCrud } from "@/features/configs/mutation/useConfigCrud";
 import { useCredentialPropagation } from "@/features/configs/mutation/useCredentialPropagation";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
@@ -93,7 +94,9 @@ export interface ConfigViewModel {
   selection: {
     allSelectable: boolean;
     cancelSelection: () => void;
+    refreshButton: RefObject<HTMLButtonElement | null>;
     registerConfigRow: (key: string, element: HTMLButtonElement | null) => void;
+    selectButton: RefObject<HTMLButtonElement | null>;
     selectableNames: string[];
     selectedCount: number;
     selectedKeys: Set<string>;
@@ -242,6 +245,8 @@ export function useConfigController({
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const detailBackButtonRef = useRef<HTMLButtonElement>(null);
   const configRows = useElementRegistry<HTMLButtonElement>();
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const selectButton = useRef<HTMLButtonElement>(null);
   const focusAfterDetailClose = useRef<string | null>(null);
   const unsavedTitleId = useId();
   const createTitleId = useId();
@@ -387,6 +392,14 @@ export function useConfigController({
   const selectableNames = catalog?.configs.map((entry) => entry.name) ?? [];
   const allSelectable =
     selectableNames.length > 0 && selectableNames.every((name) => selectedKeys.has(name));
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => selectableNames.some((name) => configRows.focus(name)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: resetSelection,
+  });
   const handlePaneSaved = useCallback(() => {
     void loadCatalog("background");
   }, [loadCatalog]);
@@ -456,9 +469,6 @@ export function useConfigController({
       clear: allSelectable,
     });
   }
-  function cancelSelection() {
-    resetSelection();
-  }
   async function saveAll() {
     onBusyChange(true);
     try {
@@ -506,12 +516,14 @@ export function useConfigController({
     selection: {
       allSelectable,
       cancelSelection,
+      refreshButton,
       registerConfigRow: configRows.register,
+      selectButton,
       selectableNames,
       selectedCount,
       selectedKeys,
       selectionMode,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       toggleAllConfigs,
       toggleConfig,
     },

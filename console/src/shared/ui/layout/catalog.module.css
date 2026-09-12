@@ -332,6 +332,23 @@
   color: var(--ink);
 }
 
+/*
+ * In selection mode the fill means "ticked". The inspected row keeps only
+ * its bar, so a reader scanning for grey rows counts exactly the selection.
+ */
+.rowSelectable.rowInspected:not(.rowSelected) {
+  background: var(--surface);
+}
+
+.rowSelectable.rowInspected:not(.rowSelected):hover,
+.rowSelectable.rowInspected:not(.rowSelected):focus-within {
+  background: var(--surface-hover);
+}
+
+.rowSelectable.rowInspected:active:not(.rowSelected) {
+  background: var(--surface-pressed);
+}
+
 .rowSelectable,
 .rowProtected {
   grid-template-columns: minmax(0, 1fr);

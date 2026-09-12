@@ -11,6 +11,7 @@ import type {
 } from "@/api/tenants";
 import { allSelected } from "@/features/common/catalogSelection";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { hostTenant, managedTenants } from "@/features/common/tenantOptions";
 import { parseComponentKind, type ComponentGroup } from "@/features/tenants/componentCatalog";
 import {
@@ -58,9 +59,11 @@ export interface TenantViewModel {
     hostTenant: TenantRow | null;
     loadingTenants: boolean;
     managedTenants: Array<TenantRow & { kind: "managed"; name: string }>;
+    refreshButton: RefObject<HTMLButtonElement | null>;
     refreshing: boolean;
     refreshTenants: () => Promise<void>;
     retryTenantPage: () => Promise<void>;
+    selectButton: RefObject<HTMLButtonElement | null>;
     tenantCatalogError: string | null;
   };
   detail: {
@@ -200,6 +203,8 @@ export function useTenantController({
     return kind && tenant ? { tenant, kind } : null;
   });
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const selectButton = useRef<HTMLButtonElement>(null);
   const tenantRows = useElementRegistry<HTMLButtonElement, TenantSelectionValue>();
   const createTitleId = useId();
   const createHelpId = useId();
@@ -222,6 +227,14 @@ export function useTenantController({
     .filter((row) => row.name !== "default")
     .map((row) => tenantSelectionValueOf(row));
   const allSelectable = allSelected(selectableKeys, selectedKeys);
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => selectableKeys.some((key) => tenantRows.focus(key)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: () => dispatchWorkflow({ type: "selection_cancel" }),
+  });
   const selectedCount = selectedKeys.size;
   const createNameValid = DNS_LABEL_PATTERN.test(newName);
   const createNameTaken = tenants.some((row) => row.kind === "managed" && row.name === newName);
@@ -353,10 +366,6 @@ export function useTenantController({
     dispatchWorkflow({ type: "selection_toggle_all", keys: selectableKeys, clear: allSelectable });
   }
 
-  function cancelSelection() {
-    dispatchWorkflow({ type: "selection_cancel" });
-  }
-
   function requestTenantDelete(names: string[]) {
     if (names.length === 0) return;
     dispatchWorkflow({ type: "delete_requested", names });
@@ -404,9 +413,11 @@ export function useTenantController({
       hostTenant: selectedHostTenant,
       loadingTenants,
       managedTenants: sortedManagedTenants,
+      refreshButton,
       refreshing,
       refreshTenants,
       retryTenantPage,
+      selectButton,
       tenantCatalogError,
     },
     detail: {
@@ -426,7 +437,7 @@ export function useTenantController({
       selectedKeys,
       selectableKeys,
       selectionMode,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       focusTenantRow: tenantRows.focus,
       registerTenantRow: tenantRows.register,
       toggleAllTenants,

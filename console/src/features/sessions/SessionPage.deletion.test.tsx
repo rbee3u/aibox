@@ -87,6 +87,7 @@ describe("SessionPage", () => {
     await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
     expect(screen.queryByRole("button", { name: "Delete all" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
+    expect(screen.getByRole("button", { name: /^Select First prompt/ })).toHaveFocus();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const count = screen.getByText("0 selected");
     const selectAll = screen.getByRole("button", { name: "Select all" });

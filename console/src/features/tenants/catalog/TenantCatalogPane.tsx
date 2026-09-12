@@ -36,8 +36,10 @@ export function TenantCatalogPane({
     hostTenant,
     loadingTenants,
     managedTenants,
+    refreshButton,
     refreshing,
     refreshTenants,
+    selectButton,
     tenantCatalogError,
   } = catalog;
   const { detailOpen, selectedKey } = detail;
@@ -86,7 +88,14 @@ export function TenantCatalogPane({
               className={layout.selectionDelete}
               aria-label="Delete selected Tenants"
               disabled={selectedCount === 0 || mutationBusy}
-              onClick={() => requestTenantDelete([...selectedKeys].map((key) => key.slice(8)))}
+              onClick={() =>
+                // Catalog order, so the dialog reads against the list beside it.
+                requestTenantDelete(
+                  managedTenants
+                    .filter((row) => selectedKeys.has(tenantSelectionValueOf(row)))
+                    .map((row) => row.name),
+                )
+              }
             >
               <Trash2 size={iconSize.xs} aria-hidden="true" /> Delete
             </ActionButton>
@@ -94,6 +103,7 @@ export function TenantCatalogPane({
         ) : (
           <div className={layout.toolbarActions}>
             <RefreshButton
+              ref={refreshButton}
               label="Refresh Tenants"
               busyLabel="Refreshing Tenants"
               busy={refreshing}
@@ -104,6 +114,7 @@ export function TenantCatalogPane({
               Refresh
             </RefreshButton>
             <IconLabelButton
+              ref={selectButton}
               className={layout.selectionEnter}
               aria-label="Select Tenants"
               disabled={selectableKeys.length === 0 || refreshing || loadingTenants || busy}
