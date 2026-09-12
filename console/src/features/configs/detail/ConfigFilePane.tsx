@@ -68,6 +68,7 @@ export function ConfigFilePane({
     rawEditorParent,
     revealRange,
     save,
+    saveFailure,
     setAuthKey,
     setAuthMode,
     snapshot,
@@ -139,6 +140,15 @@ export function ConfigFilePane({
           onRequestRaw();
         }}
       />
+      {saveFailure && (
+        <AlertBanner
+          variant="strip"
+          tone="danger"
+          icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+        >
+          {saveFailure.message}
+        </AlertBanner>
+      )}
       {snapshot.warnings && snapshot.warnings.length > 0 && (
         <AlertBanner
           variant="strip"
@@ -153,6 +163,7 @@ export function ConfigFilePane({
           file={file}
           fields={visualOptions}
           provider={customProvider ?? undefined}
+          invalidPaths={saveFailure?.paths}
           onChange={updateVisualOption}
           onProviderChange={updateCustomProvider}
           tenant={tenant}
@@ -187,7 +198,7 @@ export function ConfigFilePane({
               ) : (
                 <div className={styles.visualField}>
                   <div className={styles.visualFieldMeta}>
-                    <VisualOptionLabel label="OpenAI API key" />
+                    <VisualOptionLabel label="OpenAI API key" path="OPENAI_API_KEY" />
                   </div>
                   <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
                     <TextInput

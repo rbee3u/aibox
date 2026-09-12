@@ -114,7 +114,8 @@ describe("ConfigPage", () => {
     ]);
     const token = screen.getByLabelText("Auth token", { selector: "input" });
     expect(token).toHaveAttribute("type", "password");
-    expect(screen.queryByText("env.ANTHROPIC_AUTH_TOKEN")).not.toBeInTheDocument();
+    // The label carries its native path so Visual, Raw, and differences agree.
+    expect(screen.getByText("env.ANTHROPIC_AUTH_TOKEN").tagName).toBe("CODE");
     expect(screen.queryByRole("checkbox", { name: "Optional Base URL" })).toBeNull();
     expect(screen.getByLabelText("Base URL")).toHaveAttribute("required");
     expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
@@ -296,7 +297,7 @@ describe("ConfigPage", () => {
     ).toBeTruthy();
     expect(within(approvalList).queryByRole("option", { name: "Custom" })).toBeNull();
     expect(within(approvalList).queryByRole("option", { name: "Select a value" })).toBeNull();
-    expect(screen.queryByText("approval_policy")).not.toBeInTheDocument();
+    expect(screen.getByText("approval_policy").tagName).toBe("CODE");
     await user.keyboard("{Escape}");
     const reasoning = screen.getByRole("combobox", { name: "Model reasoning effort value" });
     const includeReasoning = screen.getByRole("checkbox", {
@@ -376,6 +377,59 @@ describe("ConfigPage", () => {
       proxy_routed: false,
     });
     expect(saveInput?.customProvider).not.toHaveProperty("request_proxy_route");
+  });
+  it("refuses an invalid Visual save in the file, marks the field, and clears on edit", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=team&file=config.toml",
+    );
+    const catalog = {
+      configs: [{ name: "team", state: "ready" }],
+      files: ["config.toml"],
+      application: { last_application: null, drift: "untracked" },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const customProvider = {
+      included: true,
+      name: "custom",
+      base_url: "https://example.com/v1",
+      request_proxy_route: true,
+      proxy_routed: false,
+    } satisfies NonNullable<ConfigFileData["custom_provider"]>;
+    const { api, saveConfigFile } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: () => Promise.resolve(configFile("config.toml", "", [], customProvider)),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await revealConfigFiles(user);
+    const baseUrl = await screen.findByRole("textbox", { name: "Custom provider base URL" });
+    expect(screen.getByText("model_providers.custom.base_url").tagName).toBe("CODE");
+    expect(screen.queryByText(/Routed through the Request Proxy/)).toBeNull();
+    await user.clear(baseUrl);
+    await user.type(baseUrl, "not a url");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const region = screen.getByRole("region", { name: "config.toml editor" });
+    expect(within(region).getByRole("alert", { name: "" }).textContent).toBe(
+      "Base URL must be a valid HTTP or HTTPS URL.",
+    );
+    expect(baseUrl).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Custom provider name" })).not.toHaveAttribute(
+      "aria-invalid",
+    );
+    expect(saveConfigFile).not.toHaveBeenCalled();
+    await user.type(baseUrl, "x");
+    expect(within(region).queryByRole("alert")).toBeNull();
+    expect(baseUrl).not.toHaveAttribute("aria-invalid");
+    await user.clear(baseUrl);
+    await user.type(baseUrl, "https://api.example.com/v1");
+    await user.click(
+      screen.getByRole("checkbox", { name: "Route Custom provider through Request Proxy" }),
+    );
+    expect(screen.getByText(/Routed through the Request Proxy at/)).toHaveTextContent(
+      "http://host.docker.internal:3000/",
+    );
   });
   it("saves every dirty Visual Codex file in one Save all click", async () => {
     window.history.replaceState(

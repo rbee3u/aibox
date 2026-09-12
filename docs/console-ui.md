@@ -331,9 +331,12 @@ controls stay visible and disabled, except fields whose model-declared visibilit
 condition is unmet. Conditional omission follows [Config semantics](configs.md).
 
 Visual fields form one ordered list without group headings or field-help icons.
-Codex places the Custom provider aggregate first. Including it shows a name
-field on that same row and reveals Base URL below. Other fields follow
-Agent-defined order. Native file headers and independent Save actions remain.
+Each label carries the field's native path in a monospace caption, so Visual,
+Raw, and the difference list name a field the same way. Codex places the
+Custom provider aggregate first. Including it shows a name field on that same
+row and reveals Base URL below. Other fields follow Agent-defined order. A
+routed field states the Request Proxy prefix its saved value carries under its
+control. Native file headers and independent Save actions remain.
 Files stack at their content height in one scrolling region with each file's
 header sticky while its file is in view; editors do not scroll inside the
 pane. The Raw editor's own chrome — selection, search, panels, tooltips —
@@ -341,6 +344,13 @@ takes the Console's tokens in both themes. A file header's second line speaks on
 `Unsaved changes` or `New file` — and Save all appears only once two files are
 dirty, since one dirty file already has its own Save. Field captions are not
 control labels. Checkbox labels still toggle inclusion.
+
+A refused Visual save stays in its file: the reason appears as a strip under
+that file's header and the field it names is marked invalid, with the same
+checks the Service applies — required values present, URLs valid HTTP(S). The
+strip and the mark clear on the next edit to that file. Server refusals use
+the same strip without a field mark. Read failures still use the page-level
+error.
 
 Drafts and results are tracked per file. Ordered saves do not imply rollback,
 and dirty guards cover every navigation path. Use Last Application and Config

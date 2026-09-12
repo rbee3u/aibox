@@ -592,10 +592,9 @@
 }
 
 .visualOptionLabel {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  gap: 6px;
+  gap: 1px;
   color: var(--ink);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
@@ -603,6 +602,14 @@
 
 .visualOptionLabel span {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.visualOptionPath {
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
   overflow-wrap: anywhere;
 }
 
@@ -625,8 +632,22 @@
 .visualFieldControl {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
+}
+
+.proxyRouteNote {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+  overflow-wrap: anywhere;
+}
+
+.proxyRouteNote code {
+  color: var(--code-muted);
+  font-family: var(--font-mono);
 }
 
 .visualFieldMeta > .visualInclude {

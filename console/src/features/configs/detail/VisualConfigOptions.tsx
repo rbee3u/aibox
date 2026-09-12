@@ -10,27 +10,37 @@ import {
 } from "@/features/configs/configCatalog";
 import { IconButton } from "@/shared/ui/IconButton";
 import { TextInput, Toggle } from "@/shared/ui/FormControls";
-import { visualOptionAvailable } from "@/features/configs/detail/configFileModel";
+import {
+  customProviderPaths,
+  visualOptionAvailable,
+} from "@/features/configs/detail/configFileModel";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import styles from "@/features/configs/ConfigPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const BLANK_SELECT = "__blank__";
 
-export function VisualOptionLabel({ label }: { label: string }) {
+/**
+ * A field's label over its native path, so the form, the difference list, and
+ * the Raw file all name a field the same way.
+ */
+export function VisualOptionLabel({ label, path }: { label: string; path?: string }) {
   return (
     <div className={styles.visualOptionLabel}>
       <span>{label}</span>
+      {path && <code className={styles.visualOptionPath}>{path}</code>}
     </div>
   );
 }
 
 function VisualFieldMeta({
   label,
+  path,
   required,
   include,
 }: {
   label: string;
+  path?: string;
   required: boolean;
   include?: {
     id?: string;
@@ -40,7 +50,7 @@ function VisualFieldMeta({
 }) {
   return (
     <div className={styles.visualFieldMeta}>
-      <VisualOptionLabel label={label} />
+      <VisualOptionLabel label={label} path={path} />
       {required ? (
         <>
           <span className={styles.requiredMarker} aria-hidden="true">
@@ -84,10 +94,20 @@ function includeUpdate(
   return { included: true, ...extras };
 }
 
+/** The prefix a routed value carries, stated so the toggle's effect is visible. */
+function ProxyRouteNote({ route }: { route: string }) {
+  return (
+    <small className={styles.proxyRouteNote}>
+      Routed through the Request Proxy at <code>{route}</code>
+    </small>
+  );
+}
+
 export function VisualConfigOptions({
   file,
   fields,
   provider,
+  invalidPaths,
   onChange,
   onProviderChange,
   tenant,
@@ -96,6 +116,8 @@ export function VisualConfigOptions({
   file: string;
   fields: ConfigVisualOption[];
   provider?: ConfigCustomProvider;
+  /** Native paths a refused save named; their inputs read as invalid until edited. */
+  invalidPaths?: readonly string[];
   onChange: (path: string, update: Partial<ConfigVisualOption>) => void;
   onProviderChange?: (update: Partial<ConfigCustomProvider>) => void;
   tenant?: TenantSelection;
@@ -103,6 +125,9 @@ export function VisualConfigOptions({
 }) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
   const customProviderSelected = Boolean(provider?.included);
+  const invalid = (path: string) => (invalidPaths?.includes(path) ? true : undefined);
+  const proxyRouteFor = () =>
+    requestProxyRoute(tenant ?? { kind: "managed", name: "default" }, listen);
   return (
     <div className={styles.visualEditor}>
       <div className={styles.visualFieldList}>
@@ -111,6 +136,7 @@ export function VisualConfigOptions({
             <div className={styles.visualField}>
               <VisualFieldMeta
                 label="Custom provider"
+                path="model_providers.custom"
                 required={false}
                 include={{
                   id: "config-option-custom-provider",
@@ -134,6 +160,7 @@ export function VisualConfigOptions({
                     value={provider.name}
                     onChange={(event) => onProviderChange({ name: event.target.value })}
                     aria-label="Custom provider name"
+                    aria-invalid={invalid(customProviderPaths.name)}
                     required
                     aria-required="true"
                   />
@@ -143,61 +170,12 @@ export function VisualConfigOptions({
             <FieldDifferences file={file} path="model_provider" />
             <FieldDifferences file={file} path="model_providers.custom" />
             {provider.included && (
-              <div className={styles.visualField}>
-                <VisualFieldMeta label="Base URL" required />
-                <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
-                  <TextInput
-                    id="config-option-custom-provider-base-url"
-                    value={(() => {
-                      const route = requestProxyRoute(
-                        tenant ?? { kind: "managed", name: "default" },
-                        listen,
-                      );
-                      return splitRequestProxyValue(provider.base_url, route).upstream;
-                    })()}
-                    onChange={(event) => {
-                      const route = requestProxyRoute(
-                        tenant ?? { kind: "managed", name: "default" },
-                        listen,
-                      );
-                      const routed = provider.proxy_routed && route;
-                      onProviderChange({
-                        base_url: routed ? `${route}${event.target.value}` : event.target.value,
-                        proxy_routed: Boolean(routed),
-                      });
-                    }}
-                    aria-label="Custom provider base URL"
-                    required
-                    aria-required="true"
-                  />
-                  {(() => {
-                    const route = requestProxyRoute(
-                      tenant ?? { kind: "managed", name: "default" },
-                      listen,
-                    );
-                    const upstream = splitRequestProxyValue(provider.base_url, route).upstream;
-                    const routed =
-                      Boolean(provider.proxy_routed) ||
-                      splitRequestProxyValue(provider.base_url, route).routed;
-                    return (
-                      <Toggle
-                        className={styles.proxyToggle}
-                        aria-label="Route Custom provider through Request Proxy"
-                        checked={routed}
-                        disabled={!route || !proxyValueIsValid(upstream)}
-                        onCheckedChange={(checked) =>
-                          onProviderChange({
-                            base_url: checked ? `${route}${upstream}` : upstream,
-                            proxy_routed: checked,
-                          })
-                        }
-                      >
-                        Proxy
-                      </Toggle>
-                    );
-                  })()}
-                </div>
-              </div>
+              <CustomProviderBaseUrlField
+                provider={provider}
+                route={proxyRouteFor()}
+                invalid={invalid(customProviderPaths.baseUrl)}
+                onProviderChange={onProviderChange}
+              />
             )}
           </div>
         )}
@@ -240,6 +218,7 @@ export function VisualConfigOptions({
               <article className={styles.visualField} key={field.path} role="group">
                 <VisualFieldMeta
                   label={field.label}
+                  path={field.path}
                   required={required}
                   include={
                     required
@@ -305,69 +284,131 @@ export function VisualConfigOptions({
                       }}
                     />
                   ) : (
-                    <div className={styles.visualTextControl}>
-                      <TextInput
-                        id={fieldId}
-                        type={field.sensitive && !isRevealed ? "password" : "text"}
-                        disabled={!included}
-                        value={String(value)}
-                        required={required}
-                        aria-required={required}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          onChange(field.path, {
-                            value: routed && proxyRoute ? `${proxyRoute}${nextValue}` : nextValue,
-                            ...(field.request_proxy_route ? { proxy_routed: routed } : {}),
-                          });
-                        }}
-                        aria-label={field.label}
-                      />
-                      {field.sensitive && (
-                        <IconButton
-                          label={isRevealed ? `Hide ${field.label}` : `Show ${field.label}`}
-                          onClick={() =>
-                            setRevealed((current) => {
-                              const next = new Set(current);
-                              if (next.has(field.path)) next.delete(field.path);
-                              else next.add(field.path);
-                              return next;
-                            })
-                          }
-                        >
-                          {isRevealed ? <EyeOff size={iconSize.xs} /> : <Eye size={iconSize.xs} />}
-                        </IconButton>
-                      )}
-                      {field.request_proxy_route && (
-                        <Toggle
-                          className={styles.proxyToggle}
-                          aria-label={`Route ${field.label} through Request Proxy`}
-                          checked={routed}
-                          disabled={!included || !proxyRoute || !proxyValueIsValid(String(value))}
-                          onCheckedChange={(checked) => {
-                            if (!checked) {
-                              onChange(field.path, {
-                                value: String(value),
-                                proxy_routed: false,
-                              });
-                              return;
-                            }
-                            if (!proxyValueIsValid(String(value))) return;
+                    <>
+                      <div className={styles.visualTextControl}>
+                        <TextInput
+                          id={fieldId}
+                          type={field.sensitive && !isRevealed ? "password" : "text"}
+                          disabled={!included}
+                          value={String(value)}
+                          required={required}
+                          aria-required={required}
+                          aria-invalid={invalid(field.path)}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
                             onChange(field.path, {
-                              value: `${proxyRoute}${String(value)}`,
-                              proxy_routed: true,
+                              value: routed && proxyRoute ? `${proxyRoute}${nextValue}` : nextValue,
+                              ...(field.request_proxy_route ? { proxy_routed: routed } : {}),
                             });
                           }}
-                        >
-                          Proxy
-                        </Toggle>
-                      )}
-                    </div>
+                          aria-label={field.label}
+                        />
+                        {field.sensitive && (
+                          <IconButton
+                            label={isRevealed ? `Hide ${field.label}` : `Show ${field.label}`}
+                            onClick={() =>
+                              setRevealed((current) => {
+                                const next = new Set(current);
+                                if (next.has(field.path)) next.delete(field.path);
+                                else next.add(field.path);
+                                return next;
+                              })
+                            }
+                          >
+                            {isRevealed ? (
+                              <EyeOff size={iconSize.xs} />
+                            ) : (
+                              <Eye size={iconSize.xs} />
+                            )}
+                          </IconButton>
+                        )}
+                        {field.request_proxy_route && (
+                          <Toggle
+                            className={styles.proxyToggle}
+                            aria-label={`Route ${field.label} through Request Proxy`}
+                            checked={routed}
+                            disabled={!included || !proxyRoute || !proxyValueIsValid(String(value))}
+                            onCheckedChange={(checked) => {
+                              if (!checked) {
+                                onChange(field.path, {
+                                  value: String(value),
+                                  proxy_routed: false,
+                                });
+                                return;
+                              }
+                              if (!proxyValueIsValid(String(value))) return;
+                              onChange(field.path, {
+                                value: `${proxyRoute}${String(value)}`,
+                                proxy_routed: true,
+                              });
+                            }}
+                          >
+                            Proxy
+                          </Toggle>
+                        )}
+                      </div>
+                      {routed && proxyRoute && <ProxyRouteNote route={proxyRoute} />}
+                    </>
                   )}
                 </div>
                 <FieldDifferences file={file} path={field.path} sensitive={field.sensitive} />
               </article>
             );
           })}
+      </div>
+    </div>
+  );
+}
+
+function CustomProviderBaseUrlField({
+  provider,
+  route,
+  invalid,
+  onProviderChange,
+}: {
+  provider: ConfigCustomProvider;
+  route: string | null;
+  invalid: true | undefined;
+  onProviderChange: (update: Partial<ConfigCustomProvider>) => void;
+}) {
+  const { upstream, routed: valueRouted } = splitRequestProxyValue(provider.base_url, route);
+  const routed = Boolean(provider.proxy_routed) || valueRouted;
+  return (
+    <div className={styles.visualField}>
+      <VisualFieldMeta label="Base URL" path={customProviderPaths.baseUrl} required />
+      <div className={styles.visualFieldControl}>
+        <div className={styles.visualTextControl}>
+          <TextInput
+            id="config-option-custom-provider-base-url"
+            value={upstream}
+            onChange={(event) => {
+              const keepRouted = provider.proxy_routed && route;
+              onProviderChange({
+                base_url: keepRouted ? `${route}${event.target.value}` : event.target.value,
+                proxy_routed: Boolean(keepRouted),
+              });
+            }}
+            aria-label="Custom provider base URL"
+            aria-invalid={invalid}
+            required
+            aria-required="true"
+          />
+          <Toggle
+            className={styles.proxyToggle}
+            aria-label="Route Custom provider through Request Proxy"
+            checked={routed}
+            disabled={!route || !proxyValueIsValid(upstream)}
+            onCheckedChange={(checked) =>
+              onProviderChange({
+                base_url: checked ? `${route}${upstream}` : upstream,
+                proxy_routed: checked,
+              })
+            }
+          >
+            Proxy
+          </Toggle>
+        </div>
+        {routed && route && <ProxyRouteNote route={route} />}
       </div>
     </div>
   );

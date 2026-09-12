@@ -11,6 +11,7 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
 import {
   comparableProvider,
+  proxyValueIsValid,
   requestProxyRoute,
   splitRequestProxyValue,
 } from "@/features/configs/configCatalog";
@@ -207,4 +208,60 @@ export function configFileInput({
       : {}),
     ...(mode === "visual" && isAuth ? { visualAuth: { included: true, value: authKey } } : {}),
   };
+}
+
+/** Native paths the Custom provider aggregate edits, for marking its own inputs. */
+export const customProviderPaths = {
+  name: "model_providers.custom.name",
+  baseUrl: "model_providers.custom.base_url",
+} as const;
+
+/** Why a save was refused, and which fields — by native path — to mark. */
+export interface SaveFailure {
+  message: string;
+  paths: string[];
+}
+
+/**
+ * The checks a Visual save runs before asking the Service, each naming the
+ * field it is about so the form can mark it. Server refusals arrive with no
+ * field and are reported with an empty path list.
+ */
+export function visualSaveFailure(
+  fields: ConfigVisualOption[] | null,
+  provider: ConfigCustomProvider | null,
+  route: string | null,
+): SaveFailure | null {
+  if (provider?.included) {
+    if (!provider.name.trim()) {
+      return { message: "Custom provider name is required.", paths: [customProviderPaths.name] };
+    }
+    const upstream = splitRequestProxyValue(provider.base_url, route).upstream;
+    if (!upstream.trim()) {
+      return { message: "Base URL is required.", paths: [customProviderPaths.baseUrl] };
+    }
+    if (!proxyValueIsValid(upstream)) {
+      return {
+        message: "Base URL must be a valid HTTP or HTTPS URL.",
+        paths: [customProviderPaths.baseUrl],
+      };
+    }
+  }
+  for (const field of fields ?? []) {
+    if (!field.included) continue;
+    const value = typeof field.value === "string" ? field.value : null;
+    if (field.required && field.value_kind !== "bool" && (value === null || !value.trim())) {
+      return { message: `${field.label} is required.`, paths: [field.path] };
+    }
+    if (field.request_proxy_route && value !== null) {
+      const upstream = splitRequestProxyValue(value, route).upstream;
+      if (!proxyValueIsValid(upstream)) {
+        return {
+          message: `${field.label} must be a valid HTTP or HTTPS URL.`,
+          paths: [field.path],
+        };
+      }
+    }
+  }
+  return null;
 }
