@@ -13,7 +13,7 @@ describe("TenantPage", () => {
     ["not-installed", null, "Not installed", "Install", false],
     ["installed", null, "Installed", null, true],
     ["incomplete", null, "Incomplete", "Repair", true],
-    ["modified", null, "Modified", "Update", true],
+    ["modified", null, "Differs", "Update", true],
     ["unmanaged", null, "Unmanaged", null, false],
     [null, "unsafe component state", "Inspection error", "Retry inspection", false],
   ] as const)(

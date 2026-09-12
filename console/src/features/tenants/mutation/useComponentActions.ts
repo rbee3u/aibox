@@ -12,6 +12,7 @@ import {
   hasComponentUpdate,
   latestEntryFor,
   tenantSelection,
+  updateOverwritesLocalEdits,
 } from "@/features/tenants/componentCatalog";
 import { useComponentCatalog } from "@/features/tenants/mutation/useComponentCatalog";
 import { useComponentLatest } from "@/features/tenants/mutation/useComponentLatest";
@@ -20,6 +21,8 @@ import { tenantSelectionValueOf } from "@/features/tenants/route";
 import type { TenantSelectionValue } from "@/domain/tenant";
 
 export type ComponentRemoveTarget = { row: ComponentRow; tenantLabel: string };
+/** An Update that overwrites hand-edited state, held until the user confirms. */
+export type ComponentUpdateTarget = { row: ComponentRow; tenantLabel: string };
 export type ComponentSpecificVersionTarget = {
   row: ComponentRow;
   tenantLabel: string;
@@ -56,6 +59,9 @@ export function useComponentActions({
   const [componentActionProgress, setComponentActionProgress] =
     useState<ComponentActionProgress | null>(null);
   const [componentRemoveTarget, setComponentRemoveTarget] = useState<ComponentRemoveTarget | null>(
+    null,
+  );
+  const [componentUpdateTarget, setComponentUpdateTarget] = useState<ComponentUpdateTarget | null>(
     null,
   );
   const [specificVersionTarget, setSpecificVersionTarget] =
@@ -226,6 +232,30 @@ export function useComponentActions({
     setComponentRemoveTarget(null);
   }
 
+  /**
+   * Runs the row's primary install-side action. An Update that would overwrite
+   * hand-edited state stops for confirmation first; everything else adds or
+   * repairs and starts at once.
+   */
+  function installComponent(row: ComponentRow) {
+    if (!selected) return;
+    if (updateOverwritesLocalEdits(row)) {
+      setComponentUpdateTarget({ row, tenantLabel: selected.display_name });
+      return;
+    }
+    void mutateComponent(row, true);
+  }
+
+  function cancelComponentUpdate() {
+    setComponentUpdateTarget(null);
+  }
+
+  async function updateComponent() {
+    if (!componentUpdateTarget) return;
+    await mutateComponent(componentUpdateTarget.row, true);
+    setComponentUpdateTarget(null);
+  }
+
   async function submitSpecificVersion() {
     if (!specificVersionTarget || !specificVersionValid) return;
     const installed = await mutateComponent(specificVersionTarget.row, true, specificVersionValue);
@@ -256,9 +286,9 @@ export function useComponentActions({
       componentMenuRef,
       componentTotalCount,
       installedComponentCount,
+      installComponent,
       updatableComponentCount,
       latestSnapshot,
-      mutateComponent,
       openComponentMenu,
       openMenu,
       openSpecificVersion,
@@ -269,9 +299,11 @@ export function useComponentActions({
     },
     dialogs: {
       cancelComponentRemove,
+      cancelComponentUpdate,
       changeSpecificVersion,
       closeSpecificVersion,
       componentRemoveTarget,
+      componentUpdateTarget,
       removeComponent,
       requestComponentRemove,
       specificVersion,
@@ -281,6 +313,7 @@ export function useComponentActions({
       specificVersionTitleId,
       specificVersionValid,
       specificVersionValidationError,
+      updateComponent,
     },
   };
 }

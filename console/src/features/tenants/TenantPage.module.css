@@ -269,7 +269,9 @@
   padding: 5px 8px;
   border-bottom: 1px solid var(--line-content);
   background: var(--surface);
-  transition: background-color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .componentRow:last-child {

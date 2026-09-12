@@ -36,10 +36,10 @@ export function TenantDetailPane({
     componentMenuRef,
     componentTotalCount,
     installedComponentCount,
+    installComponent,
     updatableComponentCount,
     latestSnapshot,
     loadComponents,
-    mutateComponent,
     openComponentMenu,
     openMenu,
     openSpecificVersion,
@@ -205,7 +205,7 @@ export function TenantDetailPane({
                               menuPosition={componentMenuPosition}
                               menuRef={componentMenuRef}
                               onRetryInspection={() => void loadComponents(selected)}
-                              onInstall={() => void mutateComponent(row, true)}
+                              onInstall={() => installComponent(row)}
                               onRemove={() => requestComponentRemove(row, selected.display_name)}
                               onOpenSpecificVersion={() =>
                                 openSpecificVersion(row, model.specificVersionMode)

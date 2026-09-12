@@ -9,6 +9,7 @@ import {
   hasComponentUpdate,
   latestInfoFor,
   parseComponentKind,
+  updateOverwritesLocalEdits,
 } from "@/features/tenants/componentCatalog";
 
 function row(overrides: Partial<ComponentRow> = {}): ComponentRow {
@@ -119,11 +120,22 @@ describe("component row model", () => {
     expect(model.diagnostic).toBe("permission denied");
   });
 
-  it("restores a modified versioned Component but updates an unversioned one", () => {
-    expect(componentRowModel(row({ status: "modified" }), null).primaryAction).toBe("Restore");
-    expect(
-      componentRowModel(row({ status: "modified", supports_version: false }), null).primaryAction,
-    ).toBe("Update");
+  /*
+   * Only statuslines report `modified`, and the Console cannot tell a hand
+   * edit from a definition that changed upstream, so the row says neither:
+   * it says the two differ, and that Update rewrites it.
+   */
+  it("says a differing statusline differs and that Update overwrites it", () => {
+    const model = componentRowModel(row({ status: "modified", supports_version: false }), null);
+    expect(model.primaryAction).toBe("Update");
+    expect(model.presentation.stateBadge).toBe("Differs");
+    expect(model.diagnostic).toContain("Edited here, or changed in a newer AIBox");
+    expect(model.diagnostic).toContain("Update rewrites the statusline");
+    expect(updateOverwritesLocalEdits(row({ status: "modified", supports_version: false }))).toBe(
+      true,
+    );
+    expect(updateOverwritesLocalEdits(row({ status: "installed" }))).toBe(false);
+    expect(updateOverwritesLocalEdits(row({ status: "incomplete" }))).toBe(false);
   });
 });
 
@@ -145,7 +157,7 @@ describe("component row labels", () => {
   it("describes the running Operation", () => {
     expect(componentProgressLabel(row({ status: "not-installed" }), true)).toBe("Installing…");
     expect(componentProgressLabel(row({ status: "incomplete" }), true)).toBe("Repairing…");
-    expect(componentProgressLabel(row({ status: "modified" }), true)).toBe("Restoring…");
+    expect(componentProgressLabel(row({ status: "modified" }), true)).toBe("Updating…");
     expect(componentProgressLabel(row(), false)).toBe("Removing…");
   });
 

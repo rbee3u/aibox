@@ -23,6 +23,7 @@ import {
   type ComponentActionProgress,
   type ComponentRemoveTarget,
   type ComponentSpecificVersionTarget,
+  type ComponentUpdateTarget,
 } from "@/features/tenants/mutation/useComponentActions";
 import { useTenantCatalog } from "@/features/tenants/catalog/useTenantCatalog";
 import {
@@ -96,14 +97,11 @@ export interface TenantViewModel {
     componentMenuRef: RefObject<HTMLDivElement | null>;
     componentTotalCount: number;
     installedComponentCount: number;
+    /** Installs, repairs, or updates the row; an overwriting Update confirms first. */
+    installComponent: (row: ComponentRow) => void;
     updatableComponentCount: number;
     latestSnapshot: ComponentLatestSnapshot | null;
     loadComponents: (target: TenantRow | null, showLoading?: boolean) => Promise<void>;
-    mutateComponent: (
-      row: ComponentRow,
-      install: boolean,
-      requestedVersion?: string | null,
-    ) => Promise<boolean>;
     attentionKind: ComponentKind | null;
     openComponentMenu: (kind: ComponentKind, anchor: HTMLElement, width: number) => void;
     openMenu: ComponentKind | null;
@@ -122,12 +120,14 @@ export interface TenantViewModel {
   };
   dialogs: {
     cancelComponentRemove: () => void;
+    cancelComponentUpdate: () => void;
     cancelDeleteDialog: () => void;
     changeNewName: (name: string) => void;
     changeSpecificVersion: (value: string) => void;
     closeCreateDialog: () => void;
     closeSpecificVersion: () => void;
     componentRemoveTarget: ComponentRemoveTarget | null;
+    componentUpdateTarget: ComponentUpdateTarget | null;
     createError: string | null;
     createHelpId: string;
     createNameTaken: boolean;
@@ -146,6 +146,7 @@ export interface TenantViewModel {
     specificVersionTitleId: string;
     specificVersionValid: boolean;
     specificVersionValidationError: string | null;
+    updateComponent: () => Promise<void>;
   };
   feedback: {
     dismissNotification: (source: NotificationSource) => void;

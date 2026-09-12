@@ -8,8 +8,7 @@ import type {
 import type { TenantSelection } from "@/domain/tenant";
 import type { BrandName } from "@/shared/icons/brandIcons";
 
-export type ComponentPrimaryAction =
-  "Install" | "Update" | "Repair" | "Restore" | "Retry inspection";
+export type ComponentPrimaryAction = "Install" | "Update" | "Repair" | "Retry inspection";
 
 export type ComponentBadgeTone = "warn" | "error";
 
@@ -208,7 +207,7 @@ export function canonicalComponentStatus(row: ComponentRow): string {
     case "incomplete":
       return "Incomplete";
     case "modified":
-      return "Modified";
+      return "Differs";
     case "unmanaged":
       return "Unmanaged";
     default:
@@ -225,10 +224,25 @@ export interface ComponentPresentation {
   diagnostic: string | null;
 }
 
+const COMPONENT_DIFFERS_DIAGNOSTIC =
+  "Edited here, or changed in a newer AIBox — Update rewrites the statusline to the current AIBox definition.";
+
+/**
+ * Whether the row's Update overwrites state the Tenant may have edited by hand,
+ * which is the one Component action that discards something without a way back.
+ */
+export function updateOverwritesLocalEdits(row: ComponentRow): boolean {
+  return row.status === "modified";
+}
+
 /**
  * Maps the observed local state to what the row shows. Normal confirmations stay
  * silent; only exceptional states keep a badge, and unmanaged state is
  * diagnostic only because the Console cannot claim foreign launchers.
+ *
+ * `modified` is reported only by statuslines, and the Console cannot tell a
+ * hand edit from a definition that changed in a newer AIBox, so the row says
+ * "Differs" — true of both — and states what Update will do to it.
  */
 export function componentPresentation(row: ComponentRow): ComponentPresentation {
   if (row.error || !row.status) {
@@ -272,11 +286,11 @@ export function componentPresentation(row: ComponentRow): ComponentPresentation 
     case "modified":
       return {
         stateLabel: "",
-        stateBadge: "Modified",
+        stateBadge: "Differs",
         badgeTone: "warn",
-        primaryAction: row.supports_version ? "Restore" : "Update",
+        primaryAction: "Update",
         canRemove: true,
-        diagnostic: "Detected state differs from the current AIBox definition.",
+        diagnostic: COMPONENT_DIFFERS_DIAGNOSTIC,
       };
     case "unmanaged":
       return {
@@ -359,8 +373,7 @@ export function componentRowModel(
 export function componentProgressLabel(row: ComponentRow, install: boolean): string {
   if (!install) return "Removing…";
   if (row.status === "incomplete") return "Repairing…";
-  if (row.status === "modified") return row.supports_version ? "Restoring…" : "Updating…";
-  if (row.status === "installed") return "Updating…";
+  if (row.status === "modified" || row.status === "installed") return "Updating…";
   return "Installing…";
 }
 
@@ -372,7 +385,6 @@ export function componentFailureTitle(row: ComponentRow, install: boolean): stri
   const label = componentLabel(row.kind);
   if (!install) return `Couldn’t remove ${label}`;
   if (row.status === "incomplete") return `Couldn’t repair ${label}`;
-  if (row.status === "modified" && row.supports_version) return `Couldn’t restore ${label}`;
   if (row.status === "modified" || row.status === "installed") return `Couldn’t update ${label}`;
   return `Couldn’t install ${label}`;
 }

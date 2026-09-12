@@ -19,7 +19,9 @@ export function TenantDialogs({
   const { submitSpecificVersion } = components;
   const {
     cancelComponentRemove,
+    cancelComponentUpdate,
     componentRemoveTarget,
+    componentUpdateTarget,
     changeSpecificVersion,
     closeSpecificVersion,
     cancelDeleteDialog,
@@ -41,6 +43,7 @@ export function TenantDialogs({
     specificVersionTitleId,
     specificVersionValid,
     specificVersionValidationError,
+    updateComponent,
   } = dialogs;
   const { busy, createTenant, deleteTenants, mutationBusy } = mutations;
   return (
@@ -259,6 +262,25 @@ export function TenantDialogs({
           busy={mutationBusy}
           onCancel={cancelComponentRemove}
           onConfirm={() => void removeComponent()}
+        />
+      )}
+      {componentUpdateTarget && (
+        <ConfirmDialog
+          title={`Update ${componentLabel(componentUpdateTarget.row.kind)}?`}
+          facts={[
+            { label: "Tenant", value: componentUpdateTarget.tenantLabel },
+            {
+              label: "Current state",
+              value: canonicalComponentStatus(componentUpdateTarget.row),
+            },
+          ]}
+          message="Rewrites the statusline files to the current AIBox definition. Edits made by hand are lost."
+          confirmLabel="Update"
+          busyLabel="Updating…"
+          variant="primary"
+          busy={mutationBusy}
+          onCancel={cancelComponentUpdate}
+          onConfirm={() => void updateComponent()}
         />
       )}
     </>

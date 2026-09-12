@@ -257,7 +257,7 @@ describe("componentAttentions", () => {
     } satisfies TopologyData;
     const items = componentAttentions(data);
     expect(details(items)).toEqual([
-      "default · Python is modified",
+      "default · Python differs from the AIBox definition",
       "default · Claude Statusline is incomplete",
     ]);
     expect(items[0].target?.query?.toString()).toBe("tenant=managed%3Adefault&component=python");

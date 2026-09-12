@@ -108,7 +108,7 @@ function componentAttentionReason(input: {
   if (!input.kind) return "Components inspection failed";
   const label = componentLabel(input.kind);
   if (input.error) return `${label} inspection failed`;
-  if (input.status === "modified") return `${label} is modified`;
+  if (input.status === "modified") return `${label} differs from the AIBox definition`;
   if (input.status === "incomplete") return `${label} is incomplete`;
   if (input.status === "unmanaged") return `${label} is unmanaged`;
   return label;

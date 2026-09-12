@@ -200,13 +200,77 @@ describe("TenantPage", () => {
     await user.click(await screen.findByRole("button", { name: "Remove Codex Statusline" }));
     const dialog = screen.getByRole("dialog", { name: "Remove Codex Statusline?" });
     expect(within(dialog).getByText("default")).toBeInTheDocument();
-    expect(within(dialog).getByText("Modified")).toBeInTheDocument();
+    expect(within(dialog).getByText("Differs")).toBeInTheDocument();
     expect(mutateComponent).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(mutateComponent).toHaveBeenCalledWith(
       { kind: "managed", name: "default" },
       "codex-statusline",
       false,
+      null,
+    );
+  });
+  /*
+   * Remove already confirmed, while the one install-side action that discards
+   * something — rewriting a statusline the Tenant may have edited by hand — ran
+   * on a single click. It now stops at the same kind of dialog.
+   */
+  it("confirms before an Update overwrites a statusline that differs", async () => {
+    const { api, mutateComponent } = tenantApi({
+      components: [
+        {
+          kind: "claude-statusline",
+          supports_version: false,
+          status: "modified",
+          version: null,
+          error: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update Claude Statusline?" });
+    expect(within(dialog).getByText("Differs")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Edits made by hand are lost/)).toBeInTheDocument();
+    expect(mutateComponent).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mutateComponent).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Update Claude Statusline?" })).getByRole(
+        "button",
+        { name: "Update" },
+      ),
+    );
+    expect(mutateComponent).toHaveBeenCalledWith(
+      { kind: "managed", name: "default" },
+      "claude-statusline",
+      true,
+      null,
+    );
+  });
+  it("installs a missing Component without a confirmation", async () => {
+    const { api, mutateComponent } = tenantApi({
+      components: [
+        {
+          kind: "codex-statusline",
+          supports_version: false,
+          status: "not-installed",
+          version: null,
+          error: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(mutateComponent).toHaveBeenCalledWith(
+      { kind: "managed", name: "default" },
+      "codex-statusline",
+      true,
       null,
     );
   });
