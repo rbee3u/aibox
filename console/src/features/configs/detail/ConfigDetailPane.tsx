@@ -51,7 +51,6 @@ export function ConfigDetailPane({
   const {
     dirtyFiles,
     editorMode,
-    filesRevealed,
     handleLinkedFileSaved,
     handlePaneSaved,
     handleVisualAvailable,
@@ -70,14 +69,14 @@ export function ConfigDetailPane({
   const inspectedEntry = data?.configs.find((entry) => entry.name === inspectedName) ?? null;
   const inspectedApplied =
     inspectedName !== null && data?.application.last_application?.applied === inspectedName;
-  const hostRisk = tenant.kind === "host";
-  const showUnredactedWarning =
-    filesRevealed && (selection.current || agent === "codex" || editorMode === "raw");
+  /*
+   * Standing conditions of this editor, stated once and kept stable across
+   * Visual and Raw so the header never resizes under the mode toggle. Visual
+   * mode masks credentials but still holds them, one reveal away.
+   */
   const editorNotice = [
-    hostRisk ? "Host risk" : null,
-    showUnredactedWarning
-      ? "Native content may contain credentials and is displayed without redaction."
-      : null,
+    tenant.kind === "host" ? "Edits write to the real Host Home" : null,
+    "Native content may contain credentials and is shown without redaction.",
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -110,10 +109,27 @@ export function ConfigDetailPane({
               <ChevronLeft size={iconSize.md} />
             </IconButton>
             <div className={styles.configContextStack}>
-              <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {configSelectionLabel}
-              </h2>
-              {editorNotice ? <p className={styles.editorNotice}>{editorNotice}</p> : null}
+              <div className={styles.configTitleRow}>
+                <h2 ref={detailHeadingRef} tabIndex={-1}>
+                  {configSelectionLabel}
+                </h2>
+                {inspectedEntry?.state === "ready" && (
+                  <div className={styles.configHeaderAction}>
+                    {inspectedApplied && <ConfigDriftBadge status={data.application} />}
+                    {(!inspectedApplied ||
+                      appliedConfigPresentation(data.application).applicable) && (
+                      <ActionButton
+                        tone="primarySoft"
+                        disabled={mutationBusy}
+                        onClick={() => requestApply(inspectedEntry.name)}
+                      >
+                        Apply to Current Config
+                      </ActionButton>
+                    )}
+                  </div>
+                )}
+              </div>
+              <p className={styles.editorNotice}>{editorNotice}</p>
               <div className={styles.contextFacts} aria-label="Config editing context">
                 <span>
                   <small>Tenant</small>
@@ -138,20 +154,6 @@ export function ConfigDetailPane({
                 </span>
               </div>
             </div>
-            {inspectedEntry?.state === "ready" && (
-              <div className={styles.configHeaderAction}>
-                {inspectedApplied && <ConfigDriftBadge status={data.application} />}
-                {(!inspectedApplied || appliedConfigPresentation(data.application).applicable) && (
-                  <ActionButton
-                    tone="primarySoft"
-                    disabled={mutationBusy}
-                    onClick={() => requestApply(inspectedEntry.name)}
-                  >
-                    Apply to Current Config
-                  </ActionButton>
-                )}
-              </div>
-            )}
           </div>
           <div id={filesId} className={styles.configFilePanel}>
             <div className={styles.editorModeBar} aria-label="Editor mode">

@@ -317,8 +317,10 @@ updates. Follow the [Tenant Component contract](tenants.md#tenant-components).
 ### Configs
 
 Every selected Config displays its native files. Content may contain credentials
-and is shown without redaction; keep that reminder in the editor context. Reads
-remain scoped to the selected Tenant, Coding Agent, and Config.
+and is shown without redaction; keep that reminder in the editor context, stated
+once and stable across editor modes — Visual masks credentials without removing
+them. The Host Tenant's reminder also says that edits write to the real Host
+Home. Reads remain scoped to the selected Tenant, Coding Agent, and Config.
 
 Named Config main files use Visual mode only when the API supplies a Visual
 Config Option model; Raw remains available, and Current Config is Raw-only.

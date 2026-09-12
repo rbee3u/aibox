@@ -149,16 +149,13 @@ export interface ConfigViewModel {
   editor: {
     dirtyFiles: readonly string[];
     editorMode: "visual" | "raw";
-    filesRevealed: boolean;
     handleLinkedFileSaved: (name: string) => void;
     handlePaneSaved: () => void;
     handleVisualAvailable: (available: boolean) => void;
-    hideFiles: () => void;
     registerPane: (name: string, element: HTMLDivElement | null) => void;
     prepareMainConfigSave: (customProvider: boolean) => boolean;
     registerFileController: (name: string, controller: ConfigFileController | null) => void;
     registerRevealRetry: (name: string, retry: (() => void) | null) => void;
-    revealFiles: () => void;
     requestEditorAction: (action: () => void | Promise<void>) => void;
     retryReveals: () => void;
     showRawEditor: () => void;
@@ -285,7 +282,6 @@ export function useConfigController({
     : inspectedName
       ? `named:${inspectedName}`
       : "named-catalog";
-  const filesRevealed = true;
   const configFiles = catalog?.files ?? [];
   const file =
     route.file && configFiles.includes(route.file) ? route.file : (configFiles[0] ?? null);
@@ -316,8 +312,6 @@ export function useConfigController({
       onContinue: onContinueLeave,
     },
   );
-  const revealFiles = useCallback(() => {}, []);
-  const hideFiles = useCallback(() => {}, []);
   const crud = useConfigCrud({
     agent,
     api,
@@ -374,12 +368,12 @@ export function useConfigController({
     setEditorMode("raw");
   }, [agent, selectedConfigKey, selectedTenantSelectionValue]);
   useEffect(() => {
-    if (!filesRevealed || !detailOpen || !file) return;
+    if (!detailOpen || !file) return;
     const frame = window.requestAnimationFrame(() =>
       panes.get(file)?.scrollIntoView?.({ block: "nearest" }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [detailOpen, file, filesRevealed, catalog, panes]);
+  }, [detailOpen, file, catalog, panes]);
   useEffect(() => {
     // Loading a different external Config catalog resets editor-local state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -553,16 +547,13 @@ export function useConfigController({
     editor: {
       dirtyFiles,
       editorMode,
-      filesRevealed,
       handleLinkedFileSaved,
       handlePaneSaved,
       handleVisualAvailable,
-      hideFiles,
       prepareMainConfigSave,
       registerFileController,
       registerPane: panes.register,
       registerRevealRetry,
-      revealFiles,
       requestEditorAction,
       retryReveals,
       showRawEditor,

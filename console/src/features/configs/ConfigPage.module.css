@@ -164,30 +164,32 @@
 }
 
 /*
- * The pane's one action sits opposite the title, the Tenants header's
- * arrangement. When the inspected Named Config is the Last Application
- * source, its status stands here too — beside the button while drift leaves
- * something to apply, alone once the application is clean.
+ * The title row holds the pane's one action opposite the title, the Tenants
+ * header's arrangement, while the notice beneath runs the full width. When the
+ * inspected Named Config is the Last Application source, its status stands
+ * here too — beside the button while drift leaves something to apply, alone
+ * once the application is clean.
  */
+.configTitleRow {
+  display: flex;
+  min-width: 0;
+  /* Reserve the control's height so a pane without an action is no shorter. */
+  min-height: var(--control-md);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+}
+
+.configTitleRow > h2 {
+  flex: 1 1 auto;
+}
+
 .configHeaderAction {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  align-self: center;
   gap: 10px;
-  padding-right: 24px;
-}
-
-.configRevealButton {
-  width: 196px;
-  max-width: calc(100% - 20px);
-  flex: 0 1 auto;
-  margin: 8px 10px;
-  white-space: normal;
-}
-
-.configRevealButton > svg {
-  flex: 0 0 auto;
 }
 
 .editorTools {
@@ -659,40 +661,6 @@
   flex-direction: column;
 }
 
-.configRevealGate {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  place-content: safe center;
-  justify-items: center;
-  gap: 7px;
-  padding: var(--space-2xl);
-  overflow: auto;
-  color: var(--muted);
-  text-align: center;
-}
-
-.configRevealGate > svg {
-  margin-bottom: 5px;
-  color: var(--accent);
-}
-
-.configRevealGate h3 {
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--text-panel-title);
-  font-weight: var(--weight-panel-title);
-  line-height: var(--line-height-panel-title);
-}
-
-.configRevealGate p {
-  max-width: 420px;
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: var(--line-height-xs);
-}
-
 .wideDialog {
   width: min(680px, 100%);
 }
@@ -725,18 +693,6 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     row-gap: 0;
-  }
-
-  .configRevealButton {
-    max-width: calc(100% - 48px);
-    grid-column: 2;
-    margin: 0 24px 10px;
-  }
-
-  .configHeaderAction {
-    grid-column: 2;
-    justify-self: start;
-    padding: 0 24px 10px;
   }
 
   .contextFacts .contextFile {

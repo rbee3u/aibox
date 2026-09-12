@@ -88,7 +88,16 @@ describe("ConfigPage", () => {
       "true",
     );
     expect(screen.getByRole("heading", { name: "Named Config team" })).toBeInTheDocument();
-    expect(screen.getByText("Host risk")).toBeInTheDocument();
+    // The notice states both standing conditions, and Visual mode does not hide it.
+    expect(
+      screen.getByText(
+        "Edits write to the real Host Home · Native content may contain credentials and is shown without redaction.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Host risk/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Raw" }));
+    expect(screen.getByText(/Edits write to the real Host Home/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Visual" }));
     expect(
       Array.from(document.querySelectorAll("article[role='group']")).map(
         (group) => group.querySelector("span")?.textContent,
@@ -277,9 +286,7 @@ describe("ConfigPage", () => {
     const approval = await screen.findByRole("combobox", { name: "Approval policy value" });
     expect(screen.getByRole("heading", { name: "Named Config team" })).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Native content may contain credentials and is displayed without redaction.",
-      ),
+      screen.getByText("Native content may contain credentials and is shown without redaction."),
     ).toBeInTheDocument();
     expect(approval).toHaveTextContent("Unsupported: future-policy");
     await user.click(approval);
@@ -615,9 +622,7 @@ describe("ConfigPage", () => {
     expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("heading", { name: "Current Config" })).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Native content may contain credentials and is displayed without redaction.",
-      ),
+      screen.getByText("Native content may contain credentials and is shown without redaction."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select Configs" }));
     const protectedCurrent = screen.getByRole("button", {
