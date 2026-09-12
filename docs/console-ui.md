@@ -334,7 +334,10 @@ Visual fields form one ordered list without group headings or field-help icons.
 Codex places the Custom provider aggregate first. Including it shows a name
 field on that same row and reveals Base URL below. Other fields follow
 Agent-defined order. Native file headers and independent Save actions remain.
-A file header's second line speaks only when there is something to say —
+Files stack at their content height in one scrolling region with each file's
+header sticky while its file is in view; editors do not scroll inside the
+pane. The Raw editor's own chrome — selection, search, panels, tooltips —
+takes the Console's tokens in both themes. A file header's second line speaks only when there is something to say —
 `Unsaved changes` or `New file` — and Save all appears only once two files are
 dirty, since one dirty file already has its own Save. Field captions are not
 control labels. Checkbox labels still toggle inclusion.

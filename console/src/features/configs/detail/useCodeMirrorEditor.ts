@@ -2,7 +2,7 @@ import { indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
-import { lintGutter, setDiagnostics } from "@codemirror/lint";
+import { setDiagnostics } from "@codemirror/lint";
 import { Decoration, GutterMarker, gutter, keymap } from "@codemirror/view";
 import { Compartment, RangeSet, StateField } from "@codemirror/state";
 import { basicSetup, EditorView } from "codemirror";
@@ -80,7 +80,6 @@ export function useCodeMirrorEditor({
         language,
         EditorView.cspNonce.of(codeMirrorCspNonce()),
         syntaxHighlighting(configHighlightStyle),
-        lintGutter(),
         keymap.of([indentWithTab]),
         EditorView.contentAttributes.of({ "aria-label": `${file} content` }),
         EditorView.updateListener.of((update) => {

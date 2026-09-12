@@ -193,10 +193,14 @@
 }
 
 .editorTools {
+  position: sticky;
+  z-index: 1;
+  top: 0;
   min-height: 44px;
   justify-content: flex-end;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line-structural);
+  background: var(--surface);
 }
 
 .editorTools > span {
@@ -249,25 +253,29 @@
   background: var(--surface-inset);
 }
 
+/*
+ * Files stack at their content height and the stack is the one thing that
+ * scrolls, so a long Raw file is read by scrolling the pane rather than a
+ * viewport inside a viewport, and two short Visual files sit tight instead
+ * of each holding a share of blank space. Each file's header sticks to the
+ * top of the stack while its file is in view, keeping its Save reachable.
+ */
 .configFileStack {
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .configFileSection {
   display: flex;
-  min-height: 0;
-  flex: 2 1 0;
+  flex: 0 0 auto;
   flex-direction: column;
-  overflow: hidden;
   border-bottom: 1px solid var(--line-structural);
 }
 
 .configFileSection:last-child {
-  flex: 1 1 0;
   border-bottom: 0;
 }
 
@@ -312,9 +320,6 @@
 .codeEditor {
   width: 100%;
   min-width: 0;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
   border: 0;
   outline: 0;
   color: var(--code-text);
@@ -331,22 +336,18 @@
 }
 
 .codeEditor :global(.cm-editor) {
-  height: 100%;
-  min-height: 100%;
   color: var(--code-text);
   background: var(--code-bg);
   font: var(--text-xs) / 1.6 var(--font-mono);
 }
 
+/* The editor grows with its document; the file stack does the scrolling. */
 .codeEditor :global(.cm-scroller) {
-  height: 100%;
-  min-height: 100%;
-  overflow: auto;
+  overflow: visible;
   padding: 16px 0;
 }
 
 .codeEditor :global(.cm-content) {
-  min-height: 100%;
   padding: 0 16px 0 12px;
   caret-color: var(--accent);
 }
@@ -367,6 +368,151 @@
 .codeEditor :global(.cm-activeLine),
 .codeEditor :global(.cm-activeLineGutter) {
   background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+}
+
+/*
+ * The library's own chrome — selection, cursor, bracket match, search, panels,
+ * tooltips — ships in its default light palette. Everything below routes it
+ * through the same tokens the rest of the editor reads, so both themes hold.
+ * Selectors carry the editor root so they outrank the library's injected
+ * rules at equal order.
+ */
+.codeEditor :global(.cm-editor) :global(.cm-cursor),
+.codeEditor :global(.cm-editor) :global(.cm-dropCursor) {
+  border-left-color: var(--accent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionBackground),
+.codeEditor
+  :global(.cm-editor.cm-focused)
+  > :global(.cm-scroller)
+  > :global(.cm-selectionLayer)
+  :global(.cm-selectionBackground) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionMatch) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-matchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-matchingBracket) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-nonmatchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-nonmatchingBracket) {
+  background: var(--danger-soft);
+  box-shadow: 0 0 0 1px var(--danger-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch) {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  box-shadow: 0 0 0 1px var(--warning-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch.cm-searchMatch-selected) {
+  background: color-mix(in srgb, var(--warning) 36%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-foldPlaceholder) {
+  border-color: var(--line-control);
+  color: var(--muted);
+  background: var(--surface-inset);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels) {
+  z-index: 1;
+  color: var(--ink);
+  background: var(--bg-shell);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-bottom) {
+  border-top: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-top) {
+  border-bottom: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 40px 8px 10px;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) br {
+  flex-basis: 100%;
+  height: 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-secondary);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-textfield) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  background-image: none;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+  text-transform: capitalize;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):hover {
+  border-color: var(--line-control-strong);
+  background: var(--surface-hover);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):active {
+  background: var(--surface-pressed);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel) button[name="close"] {
+  top: 8px;
+  right: 8px;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip) {
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip-lint) {
+  padding: 4px 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-diagnostic-error) {
+  border-left-color: var(--danger);
 }
 
 .codeEditor :global(.cm-config-key) {
@@ -397,9 +543,8 @@
 
 .codeEditorFallback {
   width: 100%;
-  min-height: 0;
-  flex: 1;
-  resize: none;
+  min-height: 320px;
+  resize: vertical;
   padding: 16px;
   border: 0;
   outline: 0;
@@ -415,9 +560,6 @@
 }
 
 .visualEditor {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
   padding: 20px 24px 32px;
   background: var(--surface);
 }
@@ -591,8 +733,6 @@
 
 .binaryConfigNotice {
   display: grid;
-  min-height: 0;
-  flex: 1;
   place-content: center;
   justify-items: center;
   gap: 10px;
@@ -751,10 +891,6 @@
 
   .editorModeBar > span {
     flex: 1 0 100%;
-  }
-
-  .configFileSection {
-    min-height: 320px;
   }
 }
 

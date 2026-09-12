@@ -35,3 +35,30 @@ describe("visual field presence markers", () => {
     );
   });
 });
+
+describe("file stack", () => {
+  it("scrolls as one region with content-sized files and sticky file headers", () => {
+    expect(css).toMatch(/\.configFileStack\s*\{[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.configFileSection\s*\{[^}]*flex:\s*0 0 auto/s);
+    expect(css).toMatch(/\.editorTools\s*\{[^}]*position:\s*sticky/s);
+    expect(css).toMatch(/\.cm-scroller\)\s*\{[^}]*overflow:\s*visible/s);
+    expect(css).not.toMatch(/\.cm-scroller\)\s*\{[^}]*height:\s*100%/s);
+  });
+});
+
+describe("editor chrome", () => {
+  it("routes the library's selection, search, panel, and tooltip colours through tokens", () => {
+    for (const part of [
+      "cm-selectionBackground",
+      "cm-searchMatch",
+      "cm-panels",
+      "cm-textfield",
+      "cm-button",
+      "cm-tooltip",
+      "cm-matchingBracket",
+      "cm-cursor",
+    ]) {
+      expect(css, part).toMatch(new RegExp(`\\.${part}\\)[^{]*\\{[^}]*var\\(--`, "s"));
+    }
+  });
+});
