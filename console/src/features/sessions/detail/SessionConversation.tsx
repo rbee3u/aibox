@@ -29,7 +29,8 @@ interface SessionConversationProps {
   /** Anchor the navigator marks as current. */
   activeUserMessage: string | null;
   loading: boolean;
-  needsAttention: boolean;
+  /** Why the reading below may be incomplete; `null` when it is not. */
+  attentionNotice: string | null;
   snapshot?: string;
   /** Changes whenever the Session reloads, collapsing activity disclosures. */
   revision: number;
@@ -50,7 +51,7 @@ export function SessionConversation({
   userMessages,
   activeUserMessage,
   loading,
-  needsAttention,
+  attentionNotice,
   snapshot,
   revision,
   showJumpLatest,
@@ -78,14 +79,14 @@ export function SessionConversation({
         />
         <div ref={scrollRef} className={styles.sessionConversationScroll} onScroll={onScroll}>
           <div key={revision} className={styles.sessionConversationContent}>
-            {needsAttention && (
+            {attentionNotice !== null && (
               <button
                 type="button"
                 className={styles.sessionConversationWarning}
                 onClick={onViewDiagnostics}
               >
                 <AlertTriangle size={iconSize.xs} aria-hidden="true" />
-                <span>Some transcript events could not be interpreted.</span>
+                <span>{attentionNotice}</span>
                 <span>View Details</span>
               </button>
             )}

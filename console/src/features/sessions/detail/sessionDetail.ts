@@ -186,19 +186,22 @@ export function transcriptAttentionWarnings(warnings: readonly string[]): string
   return warnings.filter((warning) => !isRoutineProjectionWarning(warning));
 }
 
-/** True when Conversation reading is actually impaired, not routine Codex projection. */
-export function transcriptNeedsAttention(input: {
+/**
+ * One sentence naming why Conversation reading is impaired, or `null` when it
+ * is not. A tool that returned an error is content, marked on its own activity
+ * group, and never a Transcript problem; routine Codex projection notes stay
+ * counts on Details.
+ */
+export function transcriptAttentionNotice(input: {
   partial: boolean;
   malformedCount: number;
-  listWarningCount: number;
-  timeline: readonly SessionTimelineItem[];
-}): boolean {
-  return (
-    input.partial ||
-    input.malformedCount > 0 ||
-    input.listWarningCount > 0 ||
-    input.timeline.some((item) => item.kind === "activity" && activitySummary(item.value).hasIssue)
-  );
+  listWarnings: readonly string[];
+}): string | null {
+  if (input.partial) return "Transcript did not finish loading — content may be incomplete.";
+  if (input.malformedCount > 0) {
+    return `${input.malformedCount} malformed ${input.malformedCount === 1 ? "entry" : "entries"} could not be read.`;
+  }
+  return transcriptAttentionWarnings(input.listWarnings)[0] ?? null;
 }
 
 export interface SessionDetailState {

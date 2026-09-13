@@ -14,7 +14,7 @@ import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
 import {
-  transcriptNeedsAttention,
+  transcriptAttentionNotice,
   type SessionTimelineItem,
 } from "@/features/sessions/detail/sessionDetail";
 import {
@@ -96,7 +96,8 @@ export interface SessionViewModel {
     showJumpLatest: boolean;
     timeline: SessionTimelineItem[];
     transcriptHasDiagnostics: boolean;
-    transcriptNeedsAttention: boolean;
+    /** Why Conversation reading is impaired; `null` when the Transcript reads cleanly. */
+    transcriptAttentionNotice: string | null;
     transcriptIsPartial: boolean;
     unsafeView: boolean;
     updateSessionTab: (next: SessionTab) => void;
@@ -421,11 +422,10 @@ export function useSessionController({
     (detailStats?.malformed_count ?? 0) > 0 ||
     (detailStats?.unsupported_count ?? 0) > 0 ||
     (detailStats?.hidden_internal_count ?? 0) > 0;
-  const transcriptNeedsAttentionFlag = transcriptNeedsAttention({
+  const attentionNotice = transcriptAttentionNotice({
     partial: transcriptIsPartial,
     malformedCount: detailStats?.malformed_count ?? 0,
-    listWarningCount: currentSession?.warnings.length ?? 0,
-    timeline,
+    listWarnings: sessionWarnings,
   });
   const userMessages = useMemo(
     () =>
@@ -487,7 +487,7 @@ export function useSessionController({
       showJumpLatest,
       timeline,
       transcriptHasDiagnostics,
-      transcriptNeedsAttention: transcriptNeedsAttentionFlag,
+      transcriptAttentionNotice: attentionNotice,
       transcriptIsPartial,
       unsafeView,
       updateSessionTab,

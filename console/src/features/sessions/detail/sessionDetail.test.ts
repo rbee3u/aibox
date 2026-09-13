@@ -8,7 +8,7 @@ import {
   isRoutineProjectionWarning,
   sessionDetailReducer,
   transcriptAttentionWarnings,
-  transcriptNeedsAttention,
+  transcriptAttentionNotice,
   type SessionActivityItem,
   type SessionDetailAction,
   type SessionDetailState,
@@ -159,50 +159,51 @@ describe("Conversation attention", () => {
 
   it("does not alarm a complete Transcript with routine unsupported projections", () => {
     expect(
-      transcriptNeedsAttention({
+      transcriptAttentionNotice({
         partial: false,
         malformedCount: 0,
-        listWarningCount: 0,
-        timeline: [{ kind: "activity", value: [evidence("unsupported"), evidence("filtered")] }],
+        listWarnings: ["encountered 2 unsupported Transcript Entry projection(s)"],
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  it("alarms when reading is impaired", () => {
+  it("leaves a failed tool to its own activity group", () => {
+    expect(activitySummary([{ kind: "tool", value: { ...tool, status: "failed" } }]).hasIssue).toBe(
+      true,
+    );
     expect(
-      transcriptNeedsAttention({
+      transcriptAttentionNotice({ partial: false, malformedCount: 0, listWarnings: [] }),
+    ).toBeNull();
+  });
+
+  it("names why reading is impaired, one cause at a time", () => {
+    expect(
+      transcriptAttentionNotice({
         partial: true,
-        malformedCount: 0,
-        listWarningCount: 0,
-        timeline: [],
+        malformedCount: 2,
+        listWarnings: ["line 2: malformed JSONL (invalid)"],
       }),
-    ).toBe(true);
+    ).toBe("Transcript did not finish loading — content may be incomplete.");
     expect(
-      transcriptNeedsAttention({
+      transcriptAttentionNotice({
         partial: false,
         malformedCount: 1,
-        listWarningCount: 0,
-        timeline: [],
+        listWarnings: ["line 2: malformed JSONL (invalid)"],
       }),
-    ).toBe(true);
+    ).toBe("1 malformed entry could not be read.");
+    expect(transcriptAttentionNotice({ partial: false, malformedCount: 3, listWarnings: [] })).toBe(
+      "3 malformed entries could not be read.",
+    );
     expect(
-      transcriptNeedsAttention({
+      transcriptAttentionNotice({
         partial: false,
         malformedCount: 0,
-        listWarningCount: 1,
-        timeline: [],
-      }),
-    ).toBe(true);
-    expect(
-      transcriptNeedsAttention({
-        partial: false,
-        malformedCount: 0,
-        listWarningCount: 0,
-        timeline: [
-          { kind: "activity", value: [{ kind: "tool", value: { ...tool, status: "incomplete" } }] },
+        listWarnings: [
+          "encountered 1 unsupported Transcript Entry projection(s)",
+          "Transcript truncated at 4 MB",
         ],
       }),
-    ).toBe(true);
+    ).toBe("Transcript truncated at 4 MB");
   });
 });
 

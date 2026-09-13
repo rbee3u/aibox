@@ -46,11 +46,14 @@ export function SessionDetailPane({
     showJumpLatest,
     timeline,
     transcriptHasDiagnostics,
-    transcriptNeedsAttention,
+    transcriptAttentionNotice,
     transcriptIsPartial,
     updateSessionTab,
     userMessages,
   } = detail;
+  const headline = currentSession
+    ? sessionListCopy(currentSession.title, currentSession.latest_message).headline
+    : "";
   return (
     <section className={styles.detailPane}>
       {currentSession ? (
@@ -60,8 +63,8 @@ export function SessionDetailPane({
               <ChevronLeft size={iconSize.md} />
             </IconButton>
             <div className={styles.sessionDetailHeading}>
-              <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {sessionListCopy(currentSession.title, currentSession.latest_message).headline}
+              <h2 ref={detailHeadingRef} tabIndex={-1} title={headline}>
+                {headline}
               </h2>
               <span className={styles.sessionDetailSource}>
                 {visibleSessionListSource(currentSession.source)} ·{" "}
@@ -75,18 +78,8 @@ export function SessionDetailPane({
             </div>
             <div className={styles.sessionDetailActions}>
               {loadingDetail && (
-                <span className={styles.sessionDetailStatus} role="status">
+                <span className="srOnly" role="status">
                   Reading Transcript…
-                </span>
-              )}
-              {!loadingDetail && !detailStats && (
-                <span className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}>
-                  Partial transcript
-                </span>
-              )}
-              {!loadingDetail && detailStats && transcriptNeedsAttention && (
-                <span className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}>
-                  <AlertTriangle size={iconSize.xs} aria-hidden="true" /> Transcript warning
                 </span>
               )}
               <RefreshButton
@@ -118,7 +111,7 @@ export function SessionDetailPane({
               onClick={() => updateSessionTab("details")}
             >
               Details
-              {transcriptNeedsAttention && (
+              {transcriptAttentionNotice !== null && (
                 <span
                   className={styles.sessionTabIssue}
                   aria-label="Transcript diagnostics"
@@ -147,7 +140,7 @@ export function SessionDetailPane({
               userMessages={userMessages}
               activeUserMessage={resolvedActiveUserMessage}
               loading={loadingDetail}
-              needsAttention={transcriptNeedsAttention && !transcriptIsPartial}
+              attentionNotice={transcriptAttentionNotice}
               snapshot={detailStats?.snapshot}
               revision={detailRevision}
               showJumpLatest={showJumpLatest}

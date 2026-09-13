@@ -247,19 +247,6 @@
   margin-left: auto;
 }
 
-.sessionDetailStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.sessionStatusWarning {
-  color: var(--warning);
-}
-
 .sessionDetailHeading {
   min-width: 0;
 }
@@ -864,10 +851,6 @@
     position: relative;
     min-height: 66px;
     padding: 10px 14px;
-  }
-
-  .sessionDetailHeader .sessionDetailStatus {
-    display: none;
   }
 
   .sessionDetailHeader .sessionDetailHeading {

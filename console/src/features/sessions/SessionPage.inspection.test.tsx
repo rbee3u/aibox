@@ -92,10 +92,7 @@ describe("SessionPage", () => {
     expect(collapsedSummary).not.toHaveTextContent("response_item");
     expect(collapsedSummary).not.toHaveTextContent("world_state");
     expect(activityGroup?.querySelector("summary svg")).toBeNull();
-    expect(
-      screen.queryByText("Some transcript events could not be interpreted."),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("Transcript warning")).not.toBeInTheDocument();
+    expect(screen.queryByText("View Details")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Details/ }));
@@ -215,10 +212,8 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(
-      screen.getByText("Some transcript events could not be interpreted."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Transcript warning")).toBeInTheDocument();
+    expect(screen.getByText("1 malformed entry could not be read.")).toBeInTheDocument();
+    expect(screen.queryByText("Transcript warning")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Transcript diagnostics")).toBeInTheDocument();
     expect(screen.getByLabelText("Activity has diagnostics")).toBeInTheDocument();
     await user.click(
@@ -228,6 +223,53 @@ describe("SessionPage", () => {
     );
     expect(screen.getByText("Malformed")).toBeInTheDocument();
     expect(screen.getByText("line 2: malformed JSONL (invalid)")).toBeInTheDocument();
+  });
+  it("keeps a failed tool on its activity group rather than the Session", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "failed",
+        summary: "grep: no matches",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(await screen.findByLabelText("Activity has diagnostics")).toBeInTheDocument();
+    expect(screen.queryByText("View Details")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "First prompt" })).toHaveAttribute(
+      "title",
+      "First prompt",
+    );
   });
   it("keeps leading evidence-only groups off Conversation and on Details", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
@@ -466,8 +508,11 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(await screen.findByText("Partial transcript")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Details/ }));
+    const notice = await screen.findByText(
+      "Transcript did not finish loading — content may be incomplete.",
+    );
+    expect(screen.queryByText("Partial transcript")).not.toBeInTheDocument();
+    await user.click(notice);
     expect(
       screen.getByText(
         "Transcript detail did not finish loading. Displayed content may be incomplete.",
