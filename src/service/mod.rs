@@ -56,6 +56,7 @@ pub(crate) fn dispatch(command: ConsoleCommand) -> Result<i32> {
     if command.listen.port() == 0 {
         bail!("AIBox Service listener port must not be 0");
     }
+    crate::foundation::platform::raise_nofile_limit();
     let root = tenant::aibox_root()?;
     let host_home = tenant::host_home()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()

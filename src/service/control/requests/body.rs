@@ -154,12 +154,11 @@ pub(super) async fn decoded_body_response(
             );
         }
     };
-    let (body, length) = match coding {
-        BodyContentCoding::Identity => {
-            let file = tokio::fs::File::from_std(file).take(length);
-            (Body::from_stream(ReaderStream::new(file)), Some(length))
-        }
-        BodyContentCoding::Zstd | BodyContentCoding::Gzip => (encoded_body(file, coding), None),
+    let (body, length) = if coding.is_encoded() {
+        (encoded_body(file, coding), None)
+    } else {
+        let file = tokio::fs::File::from_std(file).take(length);
+        (Body::from_stream(ReaderStream::new(file)), Some(length))
     };
     let mut response = Response::new(body);
     response.headers_mut().insert(

@@ -187,6 +187,7 @@ pub(super) async fn send_downstream(
 pub(super) enum ResponseBodyTracker {
     Normal,
     OpaqueEventStream(BodyContentCoding),
+    UninterpretedEventStream,
     EventStream(Box<SseIndexer>),
     Detect {
         sniffer: SsePrefixSniffer,
@@ -203,9 +204,14 @@ impl ResponseBodyTracker {
         match mode {
             ResponseStreamMode::Normal => Self::Normal,
             ResponseStreamMode::EventStream => Self::EventStream(Box::new(new_sse_indexer(guard))),
-            ResponseStreamMode::OpaqueEventStream => Self::OpaqueEventStream(
-                body_content_coding(headers).unwrap_or(BodyContentCoding::Identity),
-            ),
+            ResponseStreamMode::OpaqueEventStream => match body_content_coding(headers) {
+                Ok(coding) if coding.is_encoded() => Self::OpaqueEventStream(coding),
+                Ok(_) => Self::EventStream(Box::new(new_sse_indexer(guard))),
+                Err(error) => {
+                    guard.add_warning("response_interpretation_failed", error.to_string());
+                    Self::UninterpretedEventStream
+                }
+            },
             ResponseStreamMode::Detect => Self::Detect {
                 sniffer: SsePrefixSniffer::default(),
                 pending: Vec::new(),
@@ -220,7 +226,7 @@ impl ResponseBodyTracker {
         guard: &RequestAttempt,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Normal | Self::OpaqueEventStream(_) => Ok(()),
+            Self::Normal | Self::OpaqueEventStream(_) | Self::UninterpretedEventStream => Ok(()),
             Self::EventStream(indexer) => feed_sse_chunk(indexer, chunk, &at_ns, guard),
             Self::Detect { sniffer, pending } => {
                 pending.push((chunk.clone(), at_ns));
@@ -248,7 +254,7 @@ impl ResponseBodyTracker {
 
     pub(super) fn finish(&mut self, guard: &RequestAttempt) -> anyhow::Result<()> {
         match self {
-            Self::Normal => Ok(()),
+            Self::Normal | Self::UninterpretedEventStream => Ok(()),
             Self::OpaqueEventStream(coding) => guard.observe_encoded_sse_response(*coding),
             Self::Detect { .. } => {
                 guard.observe_response_mode(false)?;
@@ -275,7 +281,10 @@ impl ResponseBodyTracker {
     }
 
     pub(super) fn is_event_stream(&self) -> bool {
-        matches!(self, Self::EventStream(_) | Self::OpaqueEventStream(_))
+        matches!(
+            self,
+            Self::EventStream(_) | Self::OpaqueEventStream(_) | Self::UninterpretedEventStream
+        )
     }
 
     fn opaque_coding(&self) -> Option<BodyContentCoding> {
@@ -288,7 +297,10 @@ impl ResponseBodyTracker {
     pub(super) fn terminal_at_ns(&self, family: ProtocolFamily) -> Option<&str> {
         match self {
             Self::EventStream(indexer) => indexer.terminal_at_ns(family),
-            Self::Normal | Self::OpaqueEventStream(_) | Self::Detect { .. } => None,
+            Self::Normal
+            | Self::OpaqueEventStream(_)
+            | Self::UninterpretedEventStream
+            | Self::Detect { .. } => None,
         }
     }
 }

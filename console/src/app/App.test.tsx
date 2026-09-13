@@ -8,6 +8,7 @@ import type { OverviewData, TopologyData } from "@/api/overview";
 import { ControlApi } from "@/api/transport";
 import { materializeControlApi } from "@/test/controlApi";
 import { requestList } from "@/features/requests/testFixtures";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const overview = {
   service: {
@@ -39,6 +40,72 @@ afterEach(() => {
 });
 
 describe("Console App", () => {
+  it("offers a first-tab bypass to the main content", async () => {
+    mockControlApi();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("region", { name: "Service status" });
+    const skipLink = screen.getByRole("link", { name: "Skip to main content" });
+    const main = screen.getByRole("main");
+    expect(skipLink).toHaveAttribute("href", "#main-content");
+    expect(main).toHaveAttribute("id", "main-content");
+    expect(main).toHaveAttribute("tabindex", "-1");
+
+    await user.tab();
+    expect(skipLink).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(main).toHaveFocus();
+    expect(window.location.hash).toBe("");
+  });
+
+  it("names the active module and focuses its main landmark after module navigation", async () => {
+    window.history.replaceState(null, "", "/_aibox/ui/requests");
+    mockControlApi();
+    mockRequestFetch();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("complementary", { name: "Request list" });
+    const requestsMain = screen.getByRole("main", { name: "Requests" });
+    expect(requestsMain).not.toHaveFocus();
+    expect(document.title).toBe("Requests · AIBox");
+
+    screen.getByRole("link", { name: "Overview" }).focus();
+    await user.keyboard("{Enter}");
+
+    await screen.findByRole("region", { name: "Service status" });
+    const overviewMain = screen.getByRole("main", { name: "Overview" });
+    await waitFor(() => expect(overviewMain).toHaveFocus());
+    expect(document.title).toBe("Overview · AIBox");
+  });
+
+  it("focuses the new page instead of the menu after narrow module navigation", async () => {
+    window.history.replaceState(null, "", "/_aibox/ui/requests");
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
+    mockControlApi();
+    mockRequestFetch();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("complementary", { name: "Request list" });
+    const navigation = screen.getByLabelText("Console navigation", { selector: "aside" });
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await waitFor(() => expect(screen.getByRole("link", { name: "Requests" })).toHaveFocus());
+    await user.click(screen.getByRole("link", { name: "Overview" }));
+
+    await screen.findByRole("region", { name: "Service status" });
+    expect(navigation).toHaveAttribute("aria-hidden", "true");
+    await waitFor(() => expect(screen.getByRole("main", { name: "Overview" })).toHaveFocus());
+  });
+
   it("renders the complete resource catalog in the sidebar", async () => {
     mockControlApi();
     render(<App />);
@@ -58,8 +125,10 @@ describe("Console App", () => {
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
       const icon = link.querySelector<HTMLElement>("span");
       expect(icon?.style.getPropertyValue("--brand-icon")).toMatch(/^url\("data:image\/svg\+xml,/);
-      expect(icon?.style.getPropertyValue("--brand-icon-size")).toBe("17px");
+      expect(icon?.style.getPropertyValue("--brand-icon-size")).toBe(`${iconSize.md}px`);
       expect(icon).toHaveAttribute("data-icon", iconName);
+      expect(link).toHaveAttribute("title", name);
+      expect(link).not.toHaveTextContent(name);
     }
     expect(within(screen.getByRole("banner")).queryByRole("link")).not.toBeInTheDocument();
     expect(screen.getByText("v1.2.3")).toBeInTheDocument();
@@ -74,7 +143,7 @@ describe("Console App", () => {
     expect(screen.getByText("Put AI in a Box")).toBeInTheDocument();
     const banner = screen.getByRole("banner");
     expect(within(banner).getByRole("heading", { level: 1, name: "Overview" })).toBeInTheDocument();
-    expect(within(banner).getByText("Service and topology")).toBeInTheDocument();
+    expect(banner).not.toHaveTextContent("Service and topology");
     expect(banner).not.toHaveTextContent("·");
   });
 
@@ -84,6 +153,7 @@ describe("Console App", () => {
 
     await screen.findByRole("region", { name: "Service status" });
     const modules = screen.getByRole("navigation", { name: "Modules" });
+    expect(modules).not.toHaveTextContent("Service and topology");
     const expected = [
       ["Overview", "overview", "lucide-layout-dashboard"],
       ["Tenants", "tenants", "lucide-users-round"],
@@ -93,7 +163,7 @@ describe("Console App", () => {
     ];
 
     for (const [label, iconName, iconClass] of expected) {
-      const link = within(modules).getByRole("link", { name: new RegExp(`^${label}`) });
+      const link = within(modules).getByRole("link", { name: label });
       expect(link.querySelector(`[data-icon="${iconName}"]`)).toHaveClass(iconClass);
       expect(link).toHaveAttribute("href", `/_aibox/ui/${iconName}`);
     }
@@ -209,21 +279,19 @@ describe("Console App", () => {
     mockConfigControlApi();
     const user = userEvent.setup();
     render(<App />);
-
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     await user.type(editor, "changed");
     await waitFor(() => expect(editor).toHaveValue('model = "test"\nchanged'));
 
     await user.click(screen.getByRole("link", { name: /Overview/ }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Discard unsaved Config changes?",
-    });
-    expect(dialog).toHaveTextContent("Unsaved Config changes will be lost if you continue.");
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
+    expect(dialog).toHaveTextContent("Save changes to config.toml before continuing?");
+    expect(within(dialog).getByRole("button", { name: "Save and continue" })).toBeEnabled();
     expect(window.location.pathname).toBe("/_aibox/ui/configs");
     expect(editor).toHaveValue('model = "test"\nchanged');
 
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: "Discard unsaved Config changes?" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Unsaved changes" })).toBeNull();
     expect(window.location.pathname).toBe("/_aibox/ui/configs");
     expect(screen.getByRole("textbox", { name: "config.toml content" })).toHaveValue(
       'model = "test"\nchanged',
@@ -231,9 +299,35 @@ describe("Console App", () => {
 
     await user.click(screen.getByRole("link", { name: /Overview/ }));
     await user.click(
-      within(
-        await screen.findByRole("dialog", { name: "Discard unsaved Config changes?" }),
-      ).getByRole("button", { name: "Discard and continue" }),
+      within(await screen.findByRole("dialog", { name: "Unsaved changes" })).getByRole("button", {
+        name: "Discard and continue",
+      }),
+    );
+    await screen.findByRole("region", { name: "Service status" });
+    expect(window.location.pathname).toBe("/_aibox/ui/overview");
+
+    await user.click(screen.getByRole("link", { name: /Configs/ }));
+    expect(await screen.findByRole("textbox", { name: "config.toml content" })).toBeInTheDocument();
+  });
+  it("saves dirty Config files before a sidebar leave", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&current=1&file=config.toml",
+    );
+    const { save } = mockConfigControlApi();
+    const user = userEvent.setup();
+    render(<App />);
+    const editor = await screen.findByRole("textbox", { name: "config.toml content" });
+    await user.type(editor, "changed");
+    await user.click(screen.getByRole("link", { name: /Overview/ }));
+    await user.click(
+      within(await screen.findByRole("dialog", { name: "Unsaved changes" })).getByRole("button", {
+        name: "Save and continue",
+      }),
+    );
+    await waitFor(() =>
+      expect(save.mock.calls.some((call) => call[0] === "/_aibox/api/configs/save")).toBe(true),
     );
     await screen.findByRole("region", { name: "Service status" });
     expect(window.location.pathname).toBe("/_aibox/ui/overview");
@@ -253,6 +347,9 @@ describe("Console App", () => {
     render(<App />);
 
     await screen.findByRole("region", { name: "Service status" });
+    expect(
+      within(screen.getByRole("banner")).getByRole("heading", { level: 1, name: "Overview" }),
+    ).toBeInTheDocument();
     const navigation = screen.getByLabelText("Console navigation", { selector: "aside" });
     const menu = screen.getByRole("button", { name: "Open navigation" });
     expect(navigation).toHaveAttribute("aria-hidden", "true");
@@ -261,6 +358,19 @@ describe("Console App", () => {
     await user.click(menu);
     expect(navigation).not.toHaveAttribute("aria-hidden");
     expect(navigation).toHaveProperty("inert", false);
+    await waitFor(() => expect(screen.getByRole("link", { name: /Overview/ })).toHaveFocus());
+    const close = within(navigation).getByRole("button", { name: "Close navigation" });
+    expect(close).toBeVisible();
+    const scrim = document.querySelector<HTMLElement>("[data-navigation-scrim]");
+    expect(scrim).toHaveAttribute("aria-hidden", "true");
+    expect(scrim?.tagName).toBe("DIV");
+
+    await user.click(close);
+    expect(navigation).toHaveAttribute("aria-hidden", "true");
+    expect(navigation).toHaveProperty("inert", true);
+    await waitFor(() => expect(menu).toHaveFocus());
+
+    await user.click(menu);
     await waitFor(() => expect(screen.getByRole("link", { name: /Overview/ })).toHaveFocus());
 
     const themeTrigger = within(navigation).getByRole("button", { name: "Color theme: System" });
@@ -316,6 +426,23 @@ function mockConfigControlApi() {
     application: { last_application: null, drift: "untracked" },
     credential_propagation_available: false,
   } satisfies ConfigListData;
+  const save = vi.fn((path: string, body: { content_base64?: string } = {}) => {
+    if (path === "/_aibox/api/configs/reveal")
+      return Promise.resolve({
+        file: "config.toml",
+        exists: true,
+        revision: "config.toml-revision",
+        content_base64: btoa('model = "test"\n'),
+      });
+    if (path === "/_aibox/api/configs/save")
+      return Promise.resolve({
+        file: "config.toml",
+        exists: true,
+        revision: "config.toml-revision-2",
+        content_base64: body.content_base64 ?? btoa('model = "test"\n'),
+      });
+    return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
+  });
   const api = materializeControlApi({
     bootstrap: { version: "1.2.3", csrf_token: "token" },
     get: vi.fn((path: string) => {
@@ -327,16 +454,7 @@ function mockConfigControlApi() {
       if (path === "/_aibox/api/topology") return Promise.resolve(topology);
       return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
     }),
-    post: vi.fn((path: string) => {
-      if (path === "/_aibox/api/configs/reveal")
-        return Promise.resolve({
-          file: "config.toml",
-          exists: true,
-          revision: "config.toml-revision",
-          content_base64: btoa('model = "test"\n'),
-        });
-      return Promise.reject(new Error(`Unexpected Control API request: ${path}`));
-    }),
+    post: save,
   });
   vi.spyOn(ControlApi, "connect").mockResolvedValue(api);
   vi.stubGlobal(
@@ -346,6 +464,7 @@ function mockConfigControlApi() {
       close() {}
     },
   );
+  return { save };
 }
 
 function mockRequestFetch() {

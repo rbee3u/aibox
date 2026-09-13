@@ -1,14 +1,46 @@
 import { AlertTriangle, LoaderCircle } from "lucide-react";
 
-import { propagationDetail, propagationGroup } from "@/features/configs/configCatalog";
+import {
+  propagationDetail,
+  propagationGroup,
+  propagationGroupHeading,
+  propagationGroups,
+  propagationStatus,
+} from "@/features/configs/configCatalog";
+import type { ConfigPendingAction } from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
+import { StatusBadge } from "@/shared/ui/StatusBadge";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
+
+/**
+ * A mode switch keeps the reader on the file, so it must not read as leaving:
+ * the edits live only in the editor being switched away from.
+ */
+function pendingActionCopy(action: ConfigPendingAction, dirtyFiles: readonly string[]) {
+  const subject =
+    dirtyFiles.length > 1 ? `${dirtyFiles.length} files` : (dirtyFiles[0] ?? "this file");
+  if (action.kind === "leave") {
+    return {
+      title: "Unsaved changes",
+      body: `Save changes to ${subject} before continuing?`,
+      verb: "continue",
+    };
+  }
+  const target = action.kind.switchTo === "raw" ? "Raw" : "Visual";
+  const source = action.kind.switchTo === "raw" ? "Visual" : "Raw";
+  return {
+    title: `Switch to ${target}?`,
+    body: `Your unsaved edits to ${subject} only exist in the ${source} editor. Save them first, or discard them to switch.`,
+    verb: "switch",
+  };
+}
 
 export function ConfigDialogs({
   catalog,
@@ -27,6 +59,7 @@ export function ConfigDialogs({
     closePropagation,
     createError,
     createHelpId,
+    createNameTaken,
     createNameValid,
     createOpen,
     createTitleId,
@@ -52,9 +85,10 @@ export function ConfigDialogs({
     saveOrder,
     savePending,
   } = mutations;
+  const pendingCopy = pendingAction && pendingActionCopy(pendingAction, dirtyFiles);
   return (
     <>
-      {pendingAction && (
+      {pendingAction && pendingCopy && (
         <Dialog
           className={layout.dialog}
           ariaLabelledBy={unsavedTitleId}
@@ -62,14 +96,8 @@ export function ConfigDialogs({
           onCancel={cancelPending}
         >
           <section>
-            <h2 id={unsavedTitleId}>Unsaved changes</h2>
-            <p>
-              Save changes to{" "}
-              {dirtyFiles.length > 1
-                ? `${dirtyFiles.length} files`
-                : (dirtyFiles[0] ?? "this file")}{" "}
-              before continuing?
-            </p>
+            <h2 id={unsavedTitleId}>{pendingCopy.title}</h2>
+            <p>{pendingCopy.body}</p>
             <div className={styles.dialogActions}>
               <ActionButton type="button" tone="secondary" onClick={cancelPending} disabled={busy}>
                 Cancel
@@ -80,14 +108,14 @@ export function ConfigDialogs({
                 onClick={() => void discardAndRunPendingAction()}
                 disabled={busy}
               >
-                Discard and continue
+                Discard and {pendingCopy.verb}
               </ActionButton>
               <ActionButton
-                tone="primarySoft"
+                tone="primary"
                 onClick={() => void savePending(saveOrder)}
                 disabled={mutationBusy || dirtyFiles.some((name) => !fileStatuses[name]?.canSave)}
               >
-                Save and continue
+                Save and {pendingCopy.verb}
               </ActionButton>
             </div>
           </section>
@@ -103,7 +131,7 @@ export function ConfigDialogs({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (createNameValid && !mutationBusy) void createConfig(newName);
+              if (createNameValid && !createNameTaken && !mutationBusy) void createConfig(newName);
             }}
           >
             <h2 id={createTitleId}>Create Named Config</h2>
@@ -114,7 +142,7 @@ export function ConfigDialogs({
                 aria-label="Named Config name"
                 value={newName}
                 onChange={(event) => changeNewName(event.target.value)}
-                aria-invalid={newName.length > 0 && !createNameValid}
+                aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
                 aria-describedby={createHelpId}
               />
             </label>
@@ -126,16 +154,25 @@ export function ConfigDialogs({
               <AlertBanner
                 className={styles.dialogAlert}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 Enter a valid lowercase DNS label.
+              </AlertBanner>
+            )}
+            {createNameValid && createNameTaken && (
+              <AlertBanner
+                className={styles.dialogAlert}
+                tone="danger"
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+              >
+                Named Config {newName} already exists.
               </AlertBanner>
             )}
             {createError && (
               <AlertBanner
                 className={styles.dialogAlert}
                 tone="danger"
-                icon={<AlertTriangle size={15} aria-hidden="true" />}
+                icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
               >
                 {createError}
               </AlertBanner>
@@ -151,12 +188,12 @@ export function ConfigDialogs({
               </ActionButton>
               <ActionButton
                 type="submit"
-                tone="primarySoft"
-                disabled={!createNameValid || mutationBusy}
+                tone="primary"
+                disabled={!createNameValid || createNameTaken || mutationBusy}
               >
                 {busy ? (
                   <>
-                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                    <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
                     Creating…
                   </>
                 ) : (
@@ -221,55 +258,66 @@ export function ConfigDialogs({
         >
           <section>
             <h2 id={propagationTitleId}>
-              {preview ? "Credential Propagation preview" : "Credential Propagation result"}
+              {preview ? "Propagate credentials?" : "Credential Propagation result"}
             </h2>
-            {report && (
-              <div
-                className={`${styles.propagationSummary} ${
-                  propagationHasFailures || propagationNeedsAttention
-                    ? styles.propagationSummaryPartial
-                    : styles.propagationSummaryComplete
-                }`}
+            <p className={styles.propagationSource}>
+              Copies the ChatGPT credentials in Host Codex Current Config <code>auth.json</code> to
+              older same-account Codex targets. Nothing else is read or written.
+            </p>
+            {(report || preview) && (
+              <AlertBanner
+                variant="inline"
+                className={styles.propagationSummary}
+                tone={
+                  report
+                    ? propagationHasFailures
+                      ? "danger"
+                      : propagationNeedsAttention
+                        ? "warning"
+                        : "success"
+                    : preview?.preview.updates
+                      ? "info"
+                      : "neutral"
+                }
                 role={propagationHasFailures ? "alert" : "status"}
               >
-                {propagationHasFailures
-                  ? "Partially completed. Successful credential updates were kept; failed targets need attention."
-                  : propagationNeedsAttention
-                    ? "Credential propagation completed with targets that need attention."
-                    : "Credential propagation completed."}
-              </div>
+                {report
+                  ? propagationHasFailures
+                    ? "Partially completed. Successful credential updates were kept; failed targets need attention."
+                    : propagationNeedsAttention
+                      ? "Credential propagation completed with targets that need attention."
+                      : "Credential propagation completed."
+                  : preview?.preview.updates
+                    ? `${preview.preview.updates} target${preview.preview.updates === 1 ? "" : "s"} will receive the source credentials.`
+                    : "No target needs these credentials. Nothing will be written."}
+              </AlertBanner>
             )}
             <div className={styles.propagationGroups}>
-              {(["updated", "skipped", "attention"] as const).map((group) => {
+              {propagationGroups.map((group) => {
                 const entries = (preview?.preview.entries ?? report?.entries ?? []).filter(
                   (entry) => propagationGroup(entry.outcome.status) === group,
                 );
                 if (entries.length === 0) return null;
-                const heading =
-                  group === "updated"
-                    ? "Updated"
-                    : group === "skipped"
-                      ? "Skipped"
-                      : "Needs attention";
                 return (
                   <section key={group}>
                     <h3>
-                      {heading} <span>{entries.length}</span>
+                      {propagationGroupHeading(group, preview !== null)}{" "}
+                      <span>{entries.length}</span>
                     </h3>
-                    <div className={styles.planList}>
-                      {entries.map((entry) => (
-                        <div key={entry.label}>
-                          <code>{entry.label}</code>
-                          <span>
-                            {preview && entry.outcome.status === "updated"
-                              ? "Will update"
-                              : entry.outcome.status}
-                            {propagationDetail(entry.outcome) && (
-                              <small>{propagationDetail(entry.outcome)}</small>
-                            )}
-                          </span>
-                        </div>
-                      ))}
+                    <div className={styles.propagationList}>
+                      {entries.map((entry) => {
+                        const status = propagationStatus(entry.outcome.status, preview !== null);
+                        const detail = propagationDetail(entry.outcome, preview !== null);
+                        return (
+                          <div key={entry.label}>
+                            <code>{entry.label}</code>
+                            <StatusBadge tone={status.tone} variant="inline">
+                              {status.label}
+                            </StatusBadge>
+                            <small>{detail}</small>
+                          </div>
+                        );
+                      })}
                     </div>
                   </section>
                 );
@@ -284,14 +332,14 @@ export function ConfigDialogs({
               </ActionButton>
               {preview && (
                 <ActionButton
-                  tone="primarySoft"
+                  tone="primary"
                   disabled={mutationBusy || preview.preview.updates === 0}
                   onClick={() => void executePropagation()}
                 >
-                  {busy && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+                  {busy && <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />}
                   {busy
                     ? "Propagating…"
-                    : `Propagate ${preview.preview.updates} credential update${preview.preview.updates === 1 ? "" : "s"}`}
+                    : `Propagate to ${preview.preview.updates} target${preview.preview.updates === 1 ? "" : "s"}`}
                 </ActionButton>
               )}
             </div>

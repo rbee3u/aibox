@@ -2,10 +2,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::AgentKind;
+    use crate::agent::{AgentKind, MainConfigCondition};
     use crate::component::{ComponentKind, LatestEntry, LatestEntryState, LatestSnapshot};
     use crate::config::{
-        ApplicationStatus, ConfigCatalogEntry, ConfigCatalogState, ConfigDrift, LastApplication,
+        ApplicationStatus, ConfigCatalogEntry, ConfigCatalogState, ConfigComparison,
+        ConfigComparisonFile, ConfigComparisonSide, ConfigDifference, ConfigDrift, LastApplication,
     };
     use crate::config::{
         AuthPropagationPreview, AuthPropagationReport, PropagationEntry, PropagationOutcome,
@@ -28,11 +29,11 @@ mod tests {
         InstalledComponentResponse, RemovedComponentResponse,
     };
     use crate::service::control::configs::{
-        AuthPropagationPreviewResponse, ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest,
-        ConfigFileResponse, ConfigListResponse, ConfigMutationBase, CreatedConfigResponse,
-        DeleteConfigsRequest, DeletedConfigsResponse, DiagnoseConfigRequest,
-        DiagnoseConfigResponse, ExecuteAuthPropagationRequest, LinkedConfigFileResponse,
-        SaveConfigFileRequest,
+        AuthPropagationPreviewResponse, CompareConfigDraft, CompareConfigsRequest,
+        ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest, ConfigFileResponse,
+        ConfigListResponse, ConfigMutationBase, CreatedConfigResponse, DeleteConfigsRequest,
+        DeletedConfigsResponse, DiagnoseConfigRequest, DiagnoseConfigResponse,
+        ExecuteAuthPropagationRequest, LinkedConfigFileResponse, SaveConfigFileRequest,
     };
     use crate::service::control::operations::{
         BuildRequest, CancelledOperationResponse, OperationEnvelope, OperationQuery,
@@ -40,7 +41,8 @@ mod tests {
     use crate::service::control::overview::{
         BootstrapResponse, DockerOverview, DockerStatus, OverviewResponse, RuntimeImageOverview,
         RuntimeImageStatus, ServiceOverview, TopologyAgent, TopologyComponents,
-        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologyTenant,
+        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologySessions,
+        TopologyTenant,
     };
     use crate::service::control::requests::{
         BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
@@ -106,6 +108,12 @@ mod tests {
             LinkedConfigFileResponse,
             ConfigAuthResponse,
             SaveConfigFileRequest,
+            CompareConfigsRequest,
+            CompareConfigDraft,
+            ConfigComparison,
+            ConfigComparisonFile,
+            ConfigComparisonSide,
+            ConfigDifference,
             DiagnoseConfigRequest,
             ConfigDiagnostic,
             DiagnoseConfigResponse,
@@ -127,6 +135,7 @@ mod tests {
             TopologyAgent,
             TopologyCurrentConfig,
             TopologyNamedConfigs,
+            TopologySessions,
             TopologyComponents,
             SessionDetailQuery,
             SessionEvidenceQuery,
@@ -179,6 +188,7 @@ mod tests {
             VisualConfigOptionInput,
             CustomProviderInput,
             VisualAuthInput,
+            MainConfigCondition,
             VisualConfigOptionState,
             CustomProviderState,
             VisualConfigState,

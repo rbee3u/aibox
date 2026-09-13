@@ -6,6 +6,7 @@ import { TenantDialogs } from "@/features/tenants/mutation/TenantDialogs";
 import { useTenantController } from "@/features/tenants/useTenantController";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
+import { NotificationCenter } from "@/shared/ui/NotificationCenter";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/tenants/TenantPage.module.css";
 
@@ -46,6 +47,12 @@ export function TenantPage(props: PageProps) {
           selection={selection}
         />
       </div>
+      <NotificationCenter
+        notifications={feedback.notifications}
+        paused={dialogs.createOpen || dialogs.deleteTarget !== null}
+        onAction={() => undefined}
+        onDismiss={feedback.dismissNotification}
+      />
       <TenantDialogs components={components} dialogs={dialogs} mutations={mutations} />
     </div>
   );

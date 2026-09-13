@@ -41,6 +41,9 @@ describe("SessionPage", () => {
       }),
     );
     const dialog = screen.getByRole("dialog", { name: "Delete Session 111111111111?" });
+    expect(dialog).toHaveTextContent("First prompt");
+    expect(dialog).toHaveTextContent("default Codex");
+    expect(dialog).toHaveTextContent("2026-08-17 17:00:00");
     expect(dialog).toHaveTextContent(
       "Permanently deletes its Transcript from Tenant default Codex.",
     );
@@ -84,6 +87,7 @@ describe("SessionPage", () => {
     await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
     expect(screen.queryByRole("button", { name: "Delete all" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
+    expect(screen.getByRole("button", { name: /^Select First prompt/ })).toHaveFocus();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const count = screen.getByText("0 selected");
     const selectAll = screen.getByRole("button", { name: "Select all" });
@@ -176,7 +180,8 @@ describe("SessionPage", () => {
     const hostSession = await screen.findByRole("button", {
       name: "First prompt, Host Tenant · Codex",
     });
-    expect(hostSession.querySelector("small")).toHaveTextContent("Host Tenant Codex");
+    expect(hostSession.querySelector("small")).toHaveTextContent("2026-08-17 17:00:00");
+    expect(hostSession.querySelector("small")).not.toHaveTextContent("Host Tenant Codex");
     expect(within(hostSession).getByText("2026-08-17 17:00:00").tagName).toBe("TIME");
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));

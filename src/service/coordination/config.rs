@@ -185,6 +185,17 @@ impl ConfigCoordinator {
         .await
     }
 
+    pub(crate) async fn compare(
+        &self,
+        selection: TenantSelection,
+        agent: AgentKind,
+        target: config::ConfigTarget,
+        drafts: Vec<config::ConfigComparisonDraft>,
+    ) -> Result<config::ConfigComparison> {
+        let selected = self.resolve_agent(&selection, agent)?;
+        run_blocking(move || config::compare_configs(&selected, &target, drafts)).await
+    }
+
     pub(crate) async fn diagnose(
         &self,
         selection: TenantSelection,

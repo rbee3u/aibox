@@ -13,7 +13,10 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common/tenantOptions";
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
-import type { SessionTimelineItem } from "@/features/sessions/detail/sessionDetail";
+import {
+  transcriptNeedsAttention,
+  type SessionTimelineItem,
+} from "@/features/sessions/detail/sessionDetail";
 import {
   SESSION_AGENT_OPTIONS,
   sessionSource,
@@ -34,6 +37,7 @@ import {
 } from "@/features/sessions/mutation/useSessionDeletion";
 import type { TenantSelectionValue } from "@/domain/tenant";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
@@ -92,6 +96,7 @@ export interface SessionViewModel {
     showJumpLatest: boolean;
     timeline: SessionTimelineItem[];
     transcriptHasDiagnostics: boolean;
+    transcriptNeedsAttention: boolean;
     transcriptIsPartial: boolean;
     unsafeView: boolean;
     updateSessionTab: (next: SessionTab) => void;
@@ -199,7 +204,6 @@ export function useSessionController({
   });
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
-  const focusSelectAfterExit = useRef(false);
   const sessionRows = useElementRegistry<HTMLButtonElement>();
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
@@ -368,14 +372,14 @@ export function useSessionController({
     selectedTenants,
     updateSessionLocation,
   ]);
-  useEffect(() => {
-    if (selectionMode || !focusSelectAfterExit.current) return;
-    focusSelectAfterExit.current = false;
-    const target = selectButton.current;
-    if (target && !target.disabled) target.focus();
-    else if (refreshButton.current && !refreshButton.current.disabled)
-      refreshButton.current.focus();
-  }, [selectionMode]);
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => (data?.sessions ?? []).some((row) => sessionRows.focus(row.key)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: () => dispatchWorkflow({ type: "selection_cancel" }),
+  });
   function toggleSession(key: string) {
     dispatchWorkflow({ type: "selection_toggle", key });
   }
@@ -383,10 +387,6 @@ export function useSessionController({
     const keys = data?.sessions.map((row) => row.key) ?? [];
     const allSelected = keys.length > 0 && keys.every((key) => selectedKeys.has(key));
     dispatchWorkflow({ type: "selection_toggle_all", keys, clear: allSelected });
-  }
-  function cancelSelection() {
-    focusSelectAfterExit.current = true;
-    dispatchWorkflow({ type: "selection_cancel" });
   }
   function commitTenants(values: ReadonlySet<TenantSelectionValue>) {
     const next = new Set(values);
@@ -421,6 +421,12 @@ export function useSessionController({
     (detailStats?.malformed_count ?? 0) > 0 ||
     (detailStats?.unsupported_count ?? 0) > 0 ||
     (detailStats?.hidden_internal_count ?? 0) > 0;
+  const transcriptNeedsAttentionFlag = transcriptNeedsAttention({
+    partial: transcriptIsPartial,
+    malformedCount: detailStats?.malformed_count ?? 0,
+    listWarningCount: currentSession?.warnings.length ?? 0,
+    timeline,
+  });
   const userMessages = useMemo(
     () =>
       timeline.flatMap((item) =>
@@ -481,6 +487,7 @@ export function useSessionController({
       showJumpLatest,
       timeline,
       transcriptHasDiagnostics,
+      transcriptNeedsAttention: transcriptNeedsAttentionFlag,
       transcriptIsPartial,
       unsafeView,
       updateSessionTab,
@@ -492,7 +499,7 @@ export function useSessionController({
       selectedKeys,
       selectionMode,
       registerSessionRow: sessionRows.register,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       toggleAllSessions,
       toggleSession,
     },

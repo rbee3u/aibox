@@ -1,20 +1,31 @@
 .DEFAULT_GOAL := help
 
+# Keep dependency installation, asset generation, and checks sequential.
+.NOTPARALLEL:
+
 .PHONY: help install format build test lint check \
 	rust-format rust-build rust-test rust-lint rust-doc-check rust-check \
 	console-ci console-format console-build console-test console-lint console-check \
-	console-contract console-contract-check console-assets-check
+	console-contract console-contract-check
+
+# Share one Console build across every target in this Make invocation.
+install rust-build rust-test rust-lint rust-doc-check rust-check \
+	console-check console-contract console-contract-check: console-build
+
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+console-build: console-ci
+endif
 
 help:
 	@printf '%s\n' \
 		"Project:" \
+		"  make install            Install frontend dependencies, build, and install the CLI" \
 		"  make format             Format Rust and Console sources" \
 		"  make build              Build Console assets and the CLI" \
 		"  make test               Run Rust and Console tests" \
 		"  make lint               Lint Rust and Console sources" \
 		"  make check              Run all socket-free project checks" \
 		"Rust:" \
-		"  make install            Install the CLI with Cargo" \
 		"  make rust-format        Format Rust sources" \
 		"  make rust-build         Build the CLI" \
 		"  make rust-test          Run Rust tests" \
@@ -29,31 +40,20 @@ help:
 		"  make console-lint       Lint frontend sources" \
 		"  make console-check      Run all socket-free frontend and contract checks" \
 		"  make console-contract   Update Rust-owned wire bindings and samples" \
-		"  make console-contract-check  Verify committed Rust-owned wire contracts" \
-		"  make console-assets-check    Verify committed embedded Console assets"
+		"  make console-contract-check  Verify committed Rust-owned wire contracts"
 
 install:
 	cargo install --locked --path .
 
-format:
-	$(MAKE) rust-format
-	$(MAKE) console-format
+format: rust-format console-format
 
-build:
-	$(MAKE) console-build
-	$(MAKE) rust-build
+build: rust-build
 
-test:
-	$(MAKE) rust-test
-	$(MAKE) console-test
+test: rust-test console-test
 
-lint:
-	$(MAKE) rust-lint
-	$(MAKE) console-lint
+lint: rust-lint console-lint
 
-check:
-	$(MAKE) rust-check
-	$(MAKE) console-check
+check: rust-check console-check
 
 rust-format:
 	cargo fmt
@@ -74,7 +74,7 @@ rust-check:
 	cargo fmt --check
 	cargo test --locked
 	cargo clippy --locked --all-targets -- -D warnings
-	$(MAKE) rust-doc-check
+	RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --document-private-items
 
 console-ci:
 	npm --prefix console ci
@@ -91,13 +91,11 @@ console-test:
 console-lint:
 	npm --prefix console run lint
 
-console-check:
+console-check: console-contract-check
 	npm --prefix console run format:check
 	npm --prefix console run typecheck
 	npm --prefix console run test
 	npm --prefix console run lint
-	$(MAKE) console-contract-check
-	$(MAKE) console-assets-check
 
 console-contract:
 	AIBOX_CONTRACT_DIR="$(CURDIR)/console/src/api/generated" TS_RS_LARGE_INT=number \
@@ -111,11 +109,3 @@ console-contract-check:
 		diff -u console/src/api/generated/wire.ts "$$aibox_contract_tmp/wire.ts"; \
 		diff -u console/src/api/generated/routes.ts "$$aibox_contract_tmp/routes.ts"; \
 		diff -u console/src/api/generated/samples.json "$$aibox_contract_tmp/samples.json"
-
-console-assets-check:
-	@aibox_assets_tmp="$$(mktemp -d)"; \
-		trap 'rm -rf "$$aibox_assets_tmp"' EXIT; \
-		AIBOX_CONSOLE_OUT_DIR="$$aibox_assets_tmp" npm --prefix console run build; \
-		for aibox_asset in console.html console.css console.js; do \
-			diff -u "assets/$$aibox_asset" "$$aibox_assets_tmp/$$aibox_asset"; \
-		done

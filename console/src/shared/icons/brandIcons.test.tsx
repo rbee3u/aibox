@@ -9,6 +9,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { moduleIcons, resourceIcons } from "@/shared/icons/consoleIcons";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 describe("BrandIcon", () => {
   it.each([
@@ -20,11 +21,11 @@ describe("BrandIcon", () => {
     ["rust", rustIcon],
     ["go", goIcon],
   ] as const)("uses the registered %s brand asset and explicit size", (brand, source) => {
-    const { container } = render(<BrandIcon brand={brand} size={19} />);
+    const { container } = render(<BrandIcon brand={brand} size={iconSize.md} />);
     const icon = container.querySelector<HTMLElement>(`[data-icon="${brand}"]`);
 
     expect(icon).toHaveAttribute("aria-hidden", "true");
-    expect(icon?.style.getPropertyValue("--brand-icon-size")).toBe("19px");
+    expect(icon?.style.getPropertyValue("--brand-icon-size")).toBe(`${iconSize.md}px`);
     expect(icon?.style.getPropertyValue("--brand-icon")).toBe(`url("${source}")`);
   });
 

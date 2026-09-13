@@ -6,1118 +6,421 @@
   color: var(--ink);
   background: var(--surface);
 }
-
-.summarySection,
-.runtimeSection,
-.topologySection {
+.statusSection {
   border-bottom: 1px solid var(--line-content);
 }
-
-.summarySection,
-.runtimeSection {
-  padding: 16px 22px 0;
+.statusStrip {
+  padding: 16px 24px 8px;
 }
-
-.sectionHeading {
+.statusMain,
+.runtimeGroup,
+.statusActions {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-
-.sectionHeading > div {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
+.statusMain {
+  gap: 8px 24px;
 }
-
-.sectionHeading span {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+.statusActions {
+  margin-left: auto;
 }
-
-.sectionHeading h2 {
-  margin: 0;
-  font-size: var(--text-section-title);
-  font-weight: var(--weight-section-title);
-  line-height: var(--line-height-section-title);
-  letter-spacing: 0;
+/*
+ * Centred, not baseline-aligned: the label leads with an icon and the status
+ * leads with a dot, and a flex box takes its baseline from its first item, so
+ * baseline alignment here lined the status up against the icon's bottom edge
+ * and dropped every value three pixels below its own label.
+ */
+.statusItem {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-block: 6px;
 }
-
-.factGrid {
-  display: grid;
-  margin: 16px -22px 0;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  border-top: 1px solid var(--line-content);
-}
-
-.fact {
-  display: grid;
-  min-width: 0;
-  min-height: 72px;
-  align-content: center;
-  gap: 2px;
-  padding: 7px 14px;
-  border: 0;
-  border-right: 1px solid var(--line-content);
-  border-radius: 0;
-  background: transparent;
-  text-align: left;
-}
-
-button.fact {
-  cursor: pointer;
-}
-
-button.fact:hover {
-  border-color: var(--line-content);
-  background: var(--surface-hover);
-}
-
-.fact:last-child {
-  border-right: 0;
-}
-
 .factLabel {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.fact strong {
-  overflow: hidden;
-  font-size: var(--text-panel-title);
-  font-weight: var(--weight-bold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.factStatus {
-  font-size: var(--text-panel-title);
-  font-weight: var(--weight-bold);
-  line-height: 1.35;
-}
-
-.fact small {
-  overflow: hidden;
-  color: var(--faint);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.attentionPanel {
-  display: grid;
-  gap: 8px;
-  margin: 0 -22px;
-  padding: 10px 22px;
-  border-top: 1px solid var(--line-content);
-  background: var(--surface-inset);
-}
-.attentionPanel > div:first-child {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.attentionPanel > div:first-child > span {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.attentionPanel h3 {
-  margin: 0;
-  font-size: var(--text-section-title);
-  font-weight: var(--weight-section-title);
-  line-height: var(--line-height-section-title);
-}
-.healthySummary {
-  margin: 0;
-  color: var(--success);
-}
-.attentionPending {
-  display: flex;
-  margin: 0;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-}
-.attentionList {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
-}
-.attentionList button {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 8px;
-  min-height: 36px;
-  padding: 6px 8px;
-  text-align: left;
-}
-.attentionList button > span {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-.attentionList small {
-  color: var(--ink-secondary);
-  font-size: var(--text-xs);
-}
-.attentionList .warning {
-  border-color: var(--warning-line);
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-.attentionList .error {
-  border-color: var(--danger-line);
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.fact.good .factLabel,
-.statusIcon.good {
-  color: var(--success);
-}
-
-.fact.warning .factLabel,
-.statusIcon.warning {
-  color: var(--warning);
-}
-
-.fact.error .factLabel,
-.statusIcon.error {
-  color: var(--danger);
-}
-
-.metadataStrip {
-  display: grid;
-  margin: 0 -22px;
-  grid-template-columns: minmax(125px, 0.55fr) minmax(170px, 0.75fr) minmax(260px, 1.5fr);
-  border-top: 1px solid var(--line-content);
-  background: var(--bg-shell);
-}
-
-.metadata {
-  display: grid;
-  min-width: 0;
-  min-height: 42px;
-  grid-template-columns: 16px auto minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  padding: 8px 16px;
-  border-right: 1px solid var(--line-content);
-  color: var(--faint);
-}
-
-.metadata:last-child {
-  border-right: 0;
-}
-
-.metadata span {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.metadata code {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ink-secondary);
-  font-family: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.metadata code.mono,
-.imageMetadata dd {
-  font-family: var(--font-mono);
-}
-
-.runtimeSection {
-  padding-bottom: 20px;
-  background: var(--surface-inset);
-}
-
-.runtimeGrid {
-  display: grid;
-  min-width: 0;
-  align-items: center;
-  gap: 18px;
-  margin-top: 16px;
-  grid-template-columns: minmax(190px, 0.8fr) minmax(220px, 1fr) minmax(280px, 1.2fr) auto;
-}
-
-.runtimeStatus {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 11px;
-}
-
-.statusIcon {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  place-items: center;
-  border: 1px solid var(--line-content);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-}
-
-.runtimeStatus > div {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.runtimeStatus span,
-.runtimeStatus small,
-.imageMetadata dt {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.runtimeStatus strong,
-.runtimeStatus small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtimeStatus strong {
-  font-size: var(--text-sm);
-}
-
-.runtimeStatusValue {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-bold);
-}
-
-.imageMetadata {
-  display: grid;
-  min-width: 0;
-  margin: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-left: 1px solid var(--line-content);
-}
-
-.imageMetadata > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  padding-left: 14px;
-}
-
-.imageMetadata dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--ink-secondary);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtimeActions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.runtimeActions button,
-.topologyToolbar button {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.operationState {
-  display: inline-flex;
-  max-width: 180px;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtimeNotice {
-  margin-top: 14px;
-  color: var(--warning);
-  font-size: var(--text-xs);
-}
-
-.buildUnavailable {
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.topologySection {
-  min-height: 440px;
-  padding: 20px 0 0;
-}
-
-.topologyToolbar {
-  position: sticky;
-  z-index: 7;
-  top: 0;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  min-height: var(--toolbar-height);
-  padding: 5px 14px;
-  border-top: 1px solid var(--line-structural);
-  border-bottom: 1px solid var(--line-structural);
-  background: color-mix(in srgb, var(--bg-shell) 94%, transparent);
-}
-
-.topologyTitleBlock {
-  display: grid;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 2px;
-}
-
-.topologyTitleBlock h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--text-panel-title);
-  line-height: 1.2;
-}
-
-.topologyTitleBlock span {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.topologyActions {
-  display: flex;
-  min-width: max-content;
   align-items: center;
   gap: 5px;
-}
-
-.topologyActions > button:not([data-icon-button]) {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border: 1px solid var(--line-control);
-  border-radius: var(--radius-sm);
-  color: var(--ink-secondary);
-  background: var(--control-rest);
-  cursor: pointer;
+  color: var(--muted);
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
+  line-height: var(--line-height-xs);
+}
+/* Keeps the glyph from carrying a text line box's descender leading. */
+.factLabel > span {
+  display: inline-flex;
+}
+.warning {
+  color: var(--warning);
+}
+.error {
+  color: var(--danger);
+}
+.operationState {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.buildActions,
+.buildSplit {
+  display: flex;
+  align-items: stretch;
 }
 
-.topologyActions > button:not([data-icon-button]):hover:not(:disabled) {
-  border-color: var(--line-control-strong);
-  background: var(--surface-hover);
+.buildActions {
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.topologyActions > button:disabled {
-  cursor: default;
-  opacity: 0.55;
+.buildSplit {
+  gap: 0;
 }
 
-.topologyWorkspace {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  background: var(--surface-inset);
+.buildSplitPrimary {
+  border-right: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  padding-right: 10px;
 }
 
-.topologyInspector {
+.buildSplitTrigger {
+  width: 32px;
+  min-width: 32px;
+  padding-right: 8px;
+  padding-left: 8px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.buildMenu {
   position: fixed;
-  z-index: var(--layer-sidebar);
-  top: 0;
-  left: 0;
-  display: grid;
-  width: min(300px, calc(100vw - 24px));
-  max-height: min(420px, calc(100vh - 24px));
-  min-width: 0;
-  gap: 13px;
-  padding: 16px;
-  border: 1px solid var(--line-structural);
+  z-index: var(--layer-portal-menu);
+  min-width: 12rem;
+  padding: 5px;
+  border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-lg);
-  overflow: auto;
 }
 
-.inspectorHeader {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.inspectorHeader > div {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.inspectorEyebrow {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.inspectorHeader h3 {
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--text-panel-title);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspectorClose {
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.inspectorClose:hover {
-  color: var(--ink);
-  background: var(--surface-hover);
-}
-
-.inspectorStatus {
-  display: grid;
-  grid-template-columns: 18px minmax(0, auto) minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid var(--line-content);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.inspectorStatus.good {
-  color: var(--success);
-}
-
-.inspectorStatus.warning {
-  color: var(--warning);
-}
-
-.inspectorStatus.error {
-  color: var(--danger);
-}
-
-.inspectorStatus.neutral {
-  color: var(--muted);
-}
-
-.inspectorStatus small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-weight: var(--weight-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspectorEvidence {
-  margin: 0;
-  padding: 8px 9px;
-  border-left: 2px solid var(--warning);
-  color: var(--ink-secondary);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.inspectorSection {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
-}
-
-.inspectorSectionHeading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.inspectorSectionHeading span {
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.inspectorList {
-  display: grid;
-  max-height: 245px;
-  gap: 1px;
-  overflow: auto;
-  border-top: 1px solid var(--line-content);
-  border-bottom: 1px solid var(--line-content);
-}
-
-.inspectorRow {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--line-content);
-  font-size: var(--text-xs);
-}
-
-.inspectorRow:last-child {
-  border-bottom: 0;
-}
-
-.inspectorRow > span,
-.inspectorRow > small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspectorRow > small {
-  color: var(--muted);
-}
-
-.inspectorRow > small.good {
-  color: var(--success);
-}
-
-.inspectorRow > small.warning {
-  color: var(--warning);
-}
-
-.inspectorRow > small.error {
-  color: var(--danger);
-}
-
-.inspectorAction {
+.buildMenu button {
   display: inline-flex;
-  min-height: 32px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid var(--line-control);
-  border-radius: var(--radius-sm);
-  color: var(--ink-secondary);
-  background: var(--control-rest);
-  cursor: pointer;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.inspectorAction:hover {
-  border-color: var(--line-control-strong);
-  color: var(--accent);
-  background: var(--surface-hover);
-}
-
-.localError {
-  margin: 12px 16px;
-}
-
-.treeLoading {
-  display: flex;
-  min-height: 220px;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  color: var(--muted);
-}
-
-.canvasShell {
-  position: relative;
-  min-width: 0;
-  border-top: 1px solid var(--line-structural);
-  border-bottom: 1px solid var(--line-structural);
-}
-
-.topologyViewport {
-  position: relative;
   width: 100%;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: visible;
-  overscroll-behavior-x: contain;
-  overscroll-behavior-y: auto;
-  background: var(--surface-inset);
-}
-
-.zoomControls {
-  display: flex;
-  min-width: max-content;
-  flex: 0 0 auto;
+  min-height: 34px;
   align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  padding-left: 7px;
-  border-left: 1px solid var(--line-content);
-}
-
-.zoomControls [data-icon-button] {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  flex-basis: 28px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.zoomControls [data-icon-button][aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--surface-selected);
-}
-
-.zoomValue {
-  width: 52px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0 5px;
-  border-color: transparent;
-  color: var(--muted);
-  background: transparent;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.scaledCanvasFrame {
-  position: relative;
-  min-width: 100%;
-}
-
-.topologyCanvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: top left;
-}
-
-.topologyEdges,
-.topologyTree {
-  position: absolute;
-  inset: 0;
-}
-
-.topologyEdges {
-  z-index: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.topologyTree {
-  z-index: 1;
-}
-
-.topologyEdge {
-  fill: none;
-  stroke: var(--line-strong);
-  stroke-linecap: round;
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-  transition:
-    stroke var(--transition-base),
-    opacity var(--transition-base);
-}
-
-.topologyEdge.warning {
-  stroke: var(--warning);
-}
-
-.topologyEdge.error {
-  stroke: var(--danger);
-}
-
-.topologyEdge.edgeActive {
-  stroke: var(--accent);
-  stroke-width: 2.25;
-}
-
-.topologyNode {
-  position: absolute;
-  z-index: 2;
-  min-width: 0;
-  outline: none;
-  transition: opacity var(--transition-base);
-}
-
-.nodeSurface {
-  display: grid;
-  margin: 0;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  grid-template-columns: 22px minmax(0, 1fr) 10px;
-  align-items: center;
-  gap: 7px;
+  justify-content: flex-start;
+  gap: 6px;
   border: 0;
-  color: var(--ink-secondary);
-  text-decoration: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    color var(--transition-fast),
-    border-color var(--transition-fast),
-    background-color var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-
-.entity .nodeSurface {
   padding: 6px 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  box-shadow: none;
-}
-
-.group .nodeSurface,
-.leaf .nodeSurface {
-  padding: 5px 8px;
-  border-bottom: 2px solid var(--line-strong);
+  color: var(--ink);
   background: transparent;
-}
-
-.topologyNode:hover .nodeSurface {
-  color: var(--ink-secondary);
-  background: var(--surface-hover);
-}
-
-.nodeActive .nodeSurface {
-  color: var(--accent);
-  background: var(--surface-selected);
-}
-
-.topologyNode:focus-visible .nodeSurface,
-.nodeActive:focus .nodeSurface {
-  outline: 2px solid var(--focus);
-  outline-offset: 3px;
-}
-
-.nodeTraced .nodeSurface {
-  border-color: var(--accent);
-}
-
-.entity.warning .nodeSurface,
-.group.warning .nodeSurface,
-.leaf.warning .nodeSurface {
-  border-color: var(--warning);
-}
-
-.entity.error .nodeSurface,
-.group.error .nodeSurface,
-.leaf.error .nodeSurface {
-  border-color: var(--danger);
-}
-
-.nodeIcon {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  color: var(--muted);
-}
-
-.nodeCopy {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.nodeCopy strong,
-.nodeCopy small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  text-align: left;
   white-space: nowrap;
 }
 
-.nodeCopy strong {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-}
-
-.nodeCopy small {
-  color: var(--faint);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.leaf .nodeCopy {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-}
-
-.leaf .nodeCopy strong {
-  flex: 0 1 auto;
-}
-
-.leaf .nodeCopy small {
-  flex: 1 1 auto;
-}
-
-.nodeCopy mark {
-  color: inherit;
-  background: var(--warning-soft);
-}
-
-.statusMark {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.statusMark.good {
-  border-color: var(--success);
-  background: var(--success);
-}
-
-.statusMark.warning {
-  border-color: var(--warning);
-  background: var(--warning);
-}
-
-.statusMark.error {
-  border-color: var(--danger);
-  background: var(--danger);
-}
-
-.statusMark.neutral {
-  background: var(--faint);
-}
-
-.inputPort,
-.outputPort {
-  position: absolute;
-  z-index: 4;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--surface-inset);
-  border-radius: 50%;
-  background: var(--line-strong);
-  transform: translateY(-50%);
-}
-
-.inputPort {
-  left: -4px;
-}
-
-.outputPort {
-  right: -4px;
-}
-
-.disclosure {
-  position: absolute;
-  z-index: 6;
-  top: 50%;
-  right: -14px;
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  place-items: center;
-  padding: 0;
-  border-color: var(--line-strong);
-  border-radius: 50%;
-  color: var(--muted);
-  background: var(--surface-raised);
-  box-shadow: none;
-  transform: translateY(-50%);
-}
-
-.disclosure:hover:not(:disabled) {
+.buildMenu button:hover:not(:disabled) {
+  color: var(--ink-secondary);
   background: var(--surface-hover);
 }
 
-.collapsedCount {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  display: grid;
-  min-width: 17px;
-  height: 17px;
-  place-items: center;
-  padding: 0 4px;
-  border: 2px solid var(--surface-inset);
-  border-radius: var(--radius-pill);
-  color: var(--surface);
-  background: var(--accent);
+.buildMenu button:active:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
+.topologySection {
+  padding: 24px;
+}
+.topologyHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.topologyHeading h2 {
+  margin: 0;
+  font-size: var(--text-panel-title);
+  line-height: var(--line-height-panel-title);
+}
+.topologyHeading p {
+  margin: 4px 0 0;
+  color: var(--ink-secondary);
   font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  line-height: 1;
 }
-
-.topologySessionRefresh.topologySessionRefresh {
-  position: absolute;
-  z-index: 7;
-  top: -9px;
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
-  min-height: 22px;
-  place-items: center;
-  padding: 0;
-  border-radius: var(--radius-sm);
+.treeLoading {
+  margin: 24px 0;
+  color: var(--ink-secondary);
+  font-size: var(--text-sm);
+}
+.environmentDetails summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.environmentDetails {
   color: var(--muted);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
+  font-size: var(--text-xs);
 }
-
-.topologySessionRefresh {
-  right: 4px;
+.environmentDetails summary {
+  width: fit-content;
+  min-height: 28px;
+  padding-block: 6px;
+  cursor: pointer;
 }
-
-@media (max-width: 1280px) {
-  .factGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .fact:nth-child(3) {
-    border-right: 0;
-  }
-  .fact:nth-child(-n + 3) {
-    border-bottom: 1px solid var(--line);
-  }
-  .runtimeGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .metadataStrip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .metadata:nth-child(2n) {
-    border-right: 0;
-  }
-  .metadataWide {
-    grid-column: 1 / -1;
-  }
-  .runtimeActions {
-    justify-content: flex-start;
-  }
+.environmentDetails dl {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0;
+}
+/*
+ * One row height whether or not the value carries a copy control, so a
+ * four-row list reads as one rhythm. The control takes the text-sized step for
+ * the same reason.
+ */
+.environmentDetails dl > div {
+  display: grid;
+  min-height: var(--control-xs);
+  grid-template-columns: 6rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.environmentDetails dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.environmentDetails code {
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
 }
 
 @media (max-width: 760px) {
-  .summarySection,
-  .runtimeSection {
-    padding-inline: 14px;
+  .statusStrip {
+    padding: 12px 16px 8px;
   }
-  .factGrid,
-  .metadataStrip,
-  .attentionPanel {
-    margin-inline: -14px;
+  .statusMain {
+    gap: 8px 16px;
   }
-  .factGrid {
-    grid-template-columns: 1fr;
+  .topologySection {
+    padding: 20px 16px;
   }
-  .fact,
-  .fact:nth-child(3) {
-    min-height: 68px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .metadataStrip {
-    grid-template-columns: 1fr;
-  }
-  .metadata {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .runtimeGrid {
-    grid-template-columns: 1fr;
-  }
-  .imageMetadata {
-    border-left: 0;
-  }
-  .runtimeActions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .runtimeActions button {
-    width: 100%;
-  }
-  .topologyToolbar {
-    align-items: stretch;
-    min-height: 48px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-block: 1px;
-    overscroll-behavior-x: contain;
-  }
-  .topologyInspector {
-    top: auto !important;
-    right: 12px;
-    bottom: 12px;
-    left: 12px !important;
-    width: auto;
-    max-height: 65vh;
-    border-radius: var(--radius-md);
-  }
-  .topologyTitleBlock {
-    flex: 0 0 190px;
+  /*
+   * Stacked label over value, so the row is two lines by design and the shared
+   * single-line min-height no longer applies.
+   */
+  .environmentDetails dl > div {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .topologyEdge,
-  .topologyNode {
-    transition: none;
-  }
-}
-
 @media (pointer: coarse) {
-  .topologySessionRefresh.topologySessionRefresh {
+  .environmentDetails summary,
+  .buildMenu button {
+    min-height: 44px;
+  }
+  .buildSplitTrigger {
+    min-width: 44px;
+  }
+}
+
+.topologyViewport {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-md);
+}
+.topologyCanvas {
+  position: relative;
+  min-width: 100%;
+}
+.topologyEdges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.topologyEdges path {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+.canvasTree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.topologyCard {
+  position: absolute;
+}
+.cardSurface {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  text-decoration: none;
+  transition: background-color var(--transition-fast);
+}
+a.cardSurface:hover {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+a.cardSurface:active {
+  background: var(--surface-pressed);
+}
+.cardSurface:focus-visible,
+.cardToggle:focus-visible,
+.fullNameButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.cardCopy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.cardCopy strong,
+.cardCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cardCopy strong {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.cardCopy small {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+}
+.topologyCard[data-kind="entity"] .cardCopy strong {
+  font-weight: var(--weight-bold);
+}
+.nodeIcon {
+  display: inline-flex;
+  flex: 0 0 18px;
+  color: var(--muted);
+}
+.aggregateStatus {
+  display: inline-flex;
+  color: var(--muted);
+}
+.manageMark {
+  position: absolute;
+  right: 5px;
+  top: 3px;
+  color: var(--muted);
+}
+.cardToggle {
+  position: absolute;
+  top: 50%;
+  right: -14px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.cardToggle:hover {
+  background: var(--surface-hover);
+}
+
+.cardToggle:active {
+  background: var(--surface-pressed);
+}
+.fullNameButton {
+  display: none;
+  position: absolute;
+  right: 0;
+  bottom: -16px;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  place-items: center;
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+}
+.nodeDisclosure {
+  position: fixed;
+  z-index: var(--layer-portal-menu);
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-control-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.nodeDisclosure p {
+  margin: 6px 0 0;
+}
+.nodeDisclosure[role="dialog"] {
+  padding-right: 48px;
+}
+.nodeDisclosure button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 36px;
+  min-height: 36px;
+  display: grid;
+  place-items: center;
+}
+@media (pointer: coarse) {
+  .cardToggle {
     width: 44px;
     height: 44px;
     min-width: 44px;
     min-height: 44px;
-    border-radius: var(--radius-md);
+    right: -22px;
   }
-  .topologySessionRefresh {
-    right: 0;
+  .fullNameButton {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    right: 30px;
+    bottom: -14px;
   }
+}
+
+.topologyCanvas > .canvasTree {
+  height: 100%;
+}
+
+.topologyCard[data-branch] .cardSurface {
+  padding-right: 20px;
 }

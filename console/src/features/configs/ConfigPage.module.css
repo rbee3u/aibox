@@ -66,10 +66,22 @@
 }
 
 .configRowText {
-  display: flex;
+  display: grid;
   min-width: 0;
   flex: 1;
   align-items: center;
+  gap: 2px;
+}
+
+.configRowMeta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--catalog-row-secondary-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--catalog-row-secondary-line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .configRowTitle {
@@ -94,39 +106,20 @@
   align-self: center;
 }
 
-.configPropagateAction {
-  /* Long domain label; still hug content rather than stretch the row. */
-  max-width: 100%;
-}
-
 .configDriftBadge {
   flex: 0 0 auto;
 }
 
 .propagationSummary {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--line-content);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-}
-
-.propagationSummaryPartial {
-  border-color: var(--warning-line);
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-
-.propagationSummaryComplete {
-  color: var(--success);
-  background: var(--success-soft);
+  margin-top: var(--space-section-title);
 }
 
 .configEditorHeader {
   display: flex;
   min-height: 46px;
-  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
@@ -134,24 +127,59 @@
 
 .configEditorHeader > [data-icon-button]:first-child {
   display: none;
+  margin-top: 8px;
   margin-left: 8px;
 }
 
 .configEditorHeader h2 {
   min-width: 0;
   margin: 0;
-  padding: 0 24px;
   overflow: hidden;
-  font: var(--weight-semibold) var(--text-meta) / var(--line-height-meta) var(--font-mono);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/*
+ * The title row holds the pane's one action opposite the title, the Tenants
+ * header's arrangement, while the notice beneath runs the full width. When the
+ * inspected Named Config is the Last Application source, its status stands
+ * here too — beside the button while drift leaves something to apply, alone
+ * once the application is clean.
+ */
+.configTitleRow {
+  display: flex;
+  min-width: 0;
+  /* Reserve the control's height so a pane without an action is no shorter. */
+  min-height: var(--control-md);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+}
+
+.configTitleRow > h2 {
+  flex: 1 1 auto;
+}
+
+.configHeaderAction {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
 .editorTools {
+  position: sticky;
+  z-index: 1;
+  top: 0;
   min-height: 44px;
   justify-content: flex-end;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line-structural);
+  background: var(--surface);
 }
 
 .editorTools > span {
@@ -192,6 +220,10 @@
   font-size: var(--text-xs);
 }
 
+.fileTitle .fileStateDirty {
+  color: var(--warning);
+}
+
 .authModeBadge {
   min-height: var(--status-height);
   padding: 2px 6px;
@@ -200,30 +232,30 @@
   background: var(--surface-inset);
 }
 
+/*
+ * Files stack at their content height and the stack is the one thing that
+ * scrolls, so a long Raw file is read by scrolling the pane rather than a
+ * viewport inside a viewport, and two short Visual files sit tight instead
+ * of each holding a share of blank space. Each file's header sticks to the
+ * top of the stack while its file is in view, keeping its Save reachable.
+ */
 .configFileStack {
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .configFileSection {
   display: flex;
-  min-height: 0;
-  flex: 2 1 0;
+  flex: 0 0 auto;
   flex-direction: column;
-  overflow: hidden;
   border-bottom: 1px solid var(--line-structural);
 }
 
 .configFileSection:last-child {
-  flex: 1 1 0;
   border-bottom: 0;
-}
-
-.configFileSectionFocused {
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .configFilePane {
@@ -267,32 +299,34 @@
 .codeEditor {
   width: 100%;
   min-width: 0;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
   border: 0;
   outline: 0;
   color: var(--code-text);
   background: var(--code-bg);
 }
 
+/*
+ * The editor owns its own caret and takes the ring from its container, because
+ * the element that actually receives focus is inside the library's markup.
+ */
+.codeEditor:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
 .codeEditor :global(.cm-editor) {
-  height: 100%;
-  min-height: 100%;
   color: var(--code-text);
   background: var(--code-bg);
   font: var(--text-xs) / 1.6 var(--font-mono);
 }
 
+/* The editor grows with its document; the file stack does the scrolling. */
 .codeEditor :global(.cm-scroller) {
-  height: 100%;
-  min-height: 100%;
-  overflow: auto;
+  overflow: visible;
   padding: 16px 0;
 }
 
 .codeEditor :global(.cm-content) {
-  min-height: 100%;
   padding: 0 16px 0 12px;
   caret-color: var(--accent);
 }
@@ -313,6 +347,151 @@
 .codeEditor :global(.cm-activeLine),
 .codeEditor :global(.cm-activeLineGutter) {
   background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+}
+
+/*
+ * The library's own chrome — selection, cursor, bracket match, search, panels,
+ * tooltips — ships in its default light palette. Everything below routes it
+ * through the same tokens the rest of the editor reads, so both themes hold.
+ * Selectors carry the editor root so they outrank the library's injected
+ * rules at equal order.
+ */
+.codeEditor :global(.cm-editor) :global(.cm-cursor),
+.codeEditor :global(.cm-editor) :global(.cm-dropCursor) {
+  border-left-color: var(--accent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionBackground),
+.codeEditor
+  :global(.cm-editor.cm-focused)
+  > :global(.cm-scroller)
+  > :global(.cm-selectionLayer)
+  :global(.cm-selectionBackground) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionMatch) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-matchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-matchingBracket) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-nonmatchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-nonmatchingBracket) {
+  background: var(--danger-soft);
+  box-shadow: 0 0 0 1px var(--danger-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch) {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  box-shadow: 0 0 0 1px var(--warning-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch.cm-searchMatch-selected) {
+  background: color-mix(in srgb, var(--warning) 36%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-foldPlaceholder) {
+  border-color: var(--line-control);
+  color: var(--muted);
+  background: var(--surface-inset);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels) {
+  z-index: 1;
+  color: var(--ink);
+  background: var(--bg-shell);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-bottom) {
+  border-top: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-top) {
+  border-bottom: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 40px 8px 10px;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) br {
+  flex-basis: 100%;
+  height: 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-secondary);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-textfield) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  background-image: none;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+  text-transform: capitalize;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):hover {
+  border-color: var(--line-control-strong);
+  background: var(--surface-hover);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):active {
+  background: var(--surface-pressed);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel) button[name="close"] {
+  top: 8px;
+  right: 8px;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip) {
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip-lint) {
+  padding: 4px 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-diagnostic-error) {
+  border-left-color: var(--danger);
 }
 
 .codeEditor :global(.cm-config-key) {
@@ -343,9 +522,8 @@
 
 .codeEditorFallback {
   width: 100%;
-  min-height: 0;
-  flex: 1;
-  resize: none;
+  min-height: 320px;
+  resize: vertical;
   padding: 16px;
   border: 0;
   outline: 0;
@@ -355,48 +533,22 @@
   tab-size: 2;
 }
 
+.codeEditorFallback:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
 .visualEditor {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
   padding: 20px 24px 32px;
   background: var(--surface);
 }
 
-.visualGroup {
-  margin: 0 auto 22px;
-  max-width: 980px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.visualGroup:last-child {
-  margin-bottom: 0;
-}
-
-.visualGroup > header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 34px;
-  padding: 0 0 8px;
-  border-bottom: 1px solid var(--line-content);
-}
-
-.visualGroup h3 {
-  margin: 0;
-  font-size: var(--text-section-title);
-  font-weight: var(--weight-section-title);
-  line-height: var(--line-height-section-title);
-}
-
 .visualFieldList {
   display: grid;
+  max-width: var(--measure-text);
 }
 
-.visualFieldList > .visualField + .visualField {
+.visualFieldList > .visualField:not(:first-child) {
   border-top: 1px solid var(--line-content);
 }
 
@@ -411,48 +563,98 @@
 }
 
 .visualFieldMeta {
-  display: flex;
-  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(5.5em, auto);
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  column-gap: 6px;
+  min-width: 0;
 }
 
 .visualOptionLabel {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  gap: 6px;
+  gap: 1px;
   color: var(--ink);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
 }
 
-.visualOptionLabel label {
+.visualOptionLabel span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
+.visualOptionPath {
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  overflow-wrap: anywhere;
+}
+
 .requiredMarker {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
   color: var(--danger);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.visualPresenceLabel {
+  color: var(--muted);
+  font-size: var(--text-xs);
   line-height: 1;
 }
 
 .visualFieldControl {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
 }
 
-.visualInclude {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
+.proxyRouteNote {
+  flex: 1 0 100%;
   color: var(--muted);
   font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+  overflow-wrap: anywhere;
+}
+
+.proxyRouteNote code {
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+}
+
+.visualFieldMeta > .visualInclude {
+  display: grid;
+  grid-column: 2 / 4;
+  grid-template-columns: 24px minmax(5.5em, auto);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.visualFieldMeta > .visualInclude > span:first-of-type,
+.proxyToggle > span:first-of-type {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: none;
+  justify-self: center;
+  align-self: center;
+}
+
+.visualFieldMeta > .visualInclude input:checked + span:first-of-type::after,
+.proxyToggle input:checked + span:first-of-type::after {
+  top: 1px;
+  left: 4px;
+  width: 5px;
+  height: 9px;
 }
 
 .visualTextControl {
@@ -474,8 +676,7 @@
   white-space: nowrap;
 }
 
-.visualTextControl input,
-.visualField select {
+.visualTextControl input {
   width: 100%;
   min-width: 0;
   min-height: 32px;
@@ -485,6 +686,12 @@
   color: var(--ink);
   background: var(--surface);
   font-size: var(--text-xs);
+}
+
+.visualFieldSelect {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .visualTextControl [data-icon-button] {
@@ -526,8 +733,6 @@
 
 .binaryConfigNotice {
   display: grid;
-  min-height: 0;
-  flex: 1;
   place-content: center;
   justify-items: center;
   gap: 10px;
@@ -547,15 +752,11 @@
   min-width: 0;
   flex: 1;
   gap: 4px;
+  padding: 10px 24px;
 }
 
 .contextFacts {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(90px, auto));
-  align-items: center;
-  gap: 6px 18px;
-  padding: 7px 24px 2px;
+  display: none;
 }
 
 .contextFacts > span {
@@ -582,23 +783,13 @@
 }
 
 .contextFile {
+  color: var(--code-muted);
   font-family: var(--font-mono);
 }
 
-.contextFacts em {
-  flex: 0 0 auto;
-  border: 1px solid var(--warning-line);
-  border-radius: var(--radius-pill);
-  padding: 2px 6px;
-  color: var(--warning);
-  background: var(--warning-soft);
-  font-size: var(--text-xs);
-  font-style: normal;
-}
-
-.sensitiveContext {
-  padding: 0 24px 3px;
-  color: var(--warning);
+.editorNotice {
+  margin: 0;
+  color: var(--muted);
   font-size: var(--text-xs);
 }
 
@@ -610,39 +801,110 @@
   flex-direction: column;
 }
 
+/*
+ * Six target rows read as a table, so the dialog takes the data measure.
+ * The shared `.dialog` width sits later in the cascade; the custom property
+ * is the one hook it exposes.
+ */
 .wideDialog {
-  width: min(680px, 100%);
+  --dialog-width: 680px;
 }
 
+.propagationSource {
+  margin: var(--space-sm) 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.propagationSource code {
+  font-family: var(--font-mono);
+}
+
+/* One column grid for every group, so the status column lines up across them. */
 .propagationGroups {
   display: grid;
   max-height: 54vh;
-  gap: 14px;
-  margin-top: 14px;
+  grid-template-columns: minmax(0, max-content) max-content minmax(0, 1fr);
+  row-gap: var(--space-section);
+  margin-top: var(--space-section);
   overflow: auto;
+}
+
+.propagationGroups > section,
+.propagationList,
+.propagationList > div {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+
+.propagationGroups > p {
+  grid-column: 1 / -1;
 }
 
 .propagationGroups section > h3 {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  gap: var(--space-sm);
   margin: 0;
-  color: var(--ink-secondary);
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
 }
 
-.propagationGroups .planList {
-  margin-top: 6px;
+.propagationGroups section > h3 > span {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+
+/* Target · status · reason, every column starting at its own left edge. */
+.propagationList {
+  margin-top: var(--space-section-title);
+  border-top: 1px solid var(--line-content);
+}
+
+.propagationList > div {
+  align-items: baseline;
+  column-gap: var(--space-lg);
+  padding: 8px 3px;
+  border-bottom: 1px solid var(--line-content);
+}
+
+.propagationList code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.propagationList small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 760px) {
-  .configEditorHeader {
-    align-items: flex-start;
+  /* Too narrow for three columns: the target takes a line, the verdict the next. */
+  .propagationGroups {
+    grid-template-columns: max-content minmax(0, 1fr);
   }
 
-  .contextFile {
+  .propagationList > div > code {
+    grid-column: 1 / -1;
+  }
+
+  .configEditorHeader {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .contextFacts .contextFile {
+    display: block;
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
@@ -650,8 +912,12 @@
   }
 
   .contextFacts {
+    display: grid;
+    min-width: 0;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding-right: 10px;
+    align-items: start;
+    gap: 6px 18px;
+    padding-top: 4px;
   }
 
   .editorTools {
@@ -670,11 +936,6 @@
 
   .visualEditor {
     padding: 10px;
-  }
-
-  .visualGroup > header {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .visualField {
@@ -699,8 +960,80 @@
   .editorModeBar > span {
     flex: 1 0 100%;
   }
+}
 
-  .configFileSection {
-    min-height: 320px;
-  }
+/* Config comparison remains supplemental to native editing. */
+.comparisonStatus {
+  display: block;
+  padding: var(--space-md) var(--space-xl);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.fileDifferences,
+.fieldDifference {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-inline-start: 2px solid var(--warning-line);
+  padding: var(--space-md) var(--space-xl);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fieldDifference {
+  grid-column: 1 / -1;
+}
+.fileDifferences summary,
+.fieldDifference summary {
+  cursor: pointer;
+}
+.differenceList,
+.differenceValues {
+  display: grid;
+  gap: var(--space-md);
+  padding-block: var(--space-md);
+}
+.differenceValues {
+  color: var(--ink);
+}
+.differenceValues pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.differenceValues span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.differenceValues button,
+.differenceList button {
+  justify-self: start;
+}
+.codeEditor :global(.cm-config-difference-line) {
+  background: var(--warning-soft);
+}
+.codeEditor :global(.cm-config-difference-button) {
+  /* A gutter control follows one code row, not the generic toolbar button size. */
+  display: block;
+  min-height: 0;
+  height: 1lh;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 0;
+  cursor: pointer;
+  padding: 0 var(--space-md);
+  font: inherit;
+}
+
+.fileHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}
+.differenceCount {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2xs) var(--space-md);
 }

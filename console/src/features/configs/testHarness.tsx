@@ -1,4 +1,5 @@
 import type { ComponentProps } from "react";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { ConfigApi, ConfigFileData, ConfigListData } from "@/api/configs";
 import type { Bootstrap } from "@/api/core";
@@ -24,12 +25,18 @@ export function ConfigPage(
   );
 }
 
+export async function revealConfigFiles(user?: ReturnType<typeof userEvent.setup>) {
+  void user;
+  await Promise.resolve();
+}
+
 export function configApi(
   options: {
     bootstrap?: Partial<Bootstrap>;
     listTenants?: ConfigApi["listTenants"];
     listConfigs?: ConfigApi["listConfigs"];
     revealConfigFile?: ConfigApi["revealConfigFile"];
+    compareConfigs?: ConfigApi["compareConfigs"];
     diagnoseConfigFile?: ConfigApi["diagnoseConfigFile"];
     saveConfigFile?: ConfigApi["saveConfigFile"];
     createConfig?: ConfigApi["createConfig"];
@@ -61,6 +68,9 @@ export function configApi(
   );
   const revealConfigFile = vi.fn<ConfigApi["revealConfigFile"]>(
     options.revealConfigFile ?? (() => Promise.resolve(defaultFile)),
+  );
+  const compareConfigs = vi.fn<ConfigApi["compareConfigs"]>(
+    options.compareConfigs ?? (() => unconfigured("compareConfigs")),
   );
   const diagnoseConfigFile = vi.fn<ConfigApi["diagnoseConfigFile"]>(
     options.diagnoseConfigFile ?? (() => unconfigured("diagnoseConfigFile")),
@@ -94,6 +104,7 @@ export function configApi(
     listTenants,
     listConfigs,
     revealConfigFile,
+    compareConfigs,
     diagnoseConfigFile,
     saveConfigFile,
     createConfig,
@@ -107,6 +118,7 @@ export function configApi(
     listTenants,
     listConfigs,
     revealConfigFile,
+    compareConfigs,
     diagnoseConfigFile,
     saveConfigFile,
     createConfig,

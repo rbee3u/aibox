@@ -25,10 +25,10 @@ describe("useConsoleRouter", () => {
     });
   });
 
-  it("restores the accepted location when dirty history navigation is cancelled", () => {
+  it("holds dirty history navigation as pending and restores the location on cancel", () => {
     window.history.replaceState(null, "", "/_aibox/ui/configs?current=1");
     const { result } = renderHook(() => useConsoleRouter());
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirm = vi.spyOn(window, "confirm");
     act(() => result.current.recordDirty(true));
 
     act(() => {
@@ -36,20 +36,29 @@ describe("useConsoleRouter", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
 
+    expect(confirm).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/_aibox/ui/configs");
     expect(result.current.route.module).toBe("configs");
+    expect(result.current.pendingNavigation).toBe("/_aibox/ui/sessions");
+
+    act(() => result.current.cancelPendingNavigation());
+    expect(result.current.pendingNavigation).toBeNull();
+    expect(window.location.pathname).toBe("/_aibox/ui/configs");
   });
 
-  it("accepts dirty history navigation after confirmation and guards unload", () => {
+  it("accepts pending dirty history navigation and guards unload", () => {
     window.history.replaceState(null, "", "/_aibox/ui/configs?current=1");
     const { result } = renderHook(() => useConsoleRouter());
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     act(() => result.current.recordDirty(true));
 
     act(() => {
       window.history.pushState(null, "", "/_aibox/ui/sessions");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
+    act(() => {
+      result.current.acceptPendingNavigation();
+    });
+    expect(window.location.pathname).toBe("/_aibox/ui/sessions");
     expect(result.current.route.module).toBe("sessions");
 
     const event = new Event("beforeunload", { cancelable: true });

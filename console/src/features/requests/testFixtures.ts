@@ -250,6 +250,22 @@ export function withRequestEncoding(detail: RequestDetail, encoding: string): Re
   };
 }
 
+export function withResponseEncoding(detail: RequestDetail, encoding: string): RequestDetail {
+  if (!detail.response) {
+    throw new Error("withResponseEncoding requires a recorded Response");
+  }
+  return {
+    ...detail,
+    response: {
+      ...detail.response,
+      headers: [
+        ...detail.response.headers,
+        { name: "content-encoding", value_base64: btoa(encoding) },
+      ],
+    },
+  };
+}
+
 export function withIncompleteRequestBody(detail: RequestDetail): RequestDetail {
   return {
     ...detail,

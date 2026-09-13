@@ -1,7 +1,7 @@
 .root,
 .value,
 .phase,
-.compactIssue {
+.catalogIssue {
   display: inline-flex;
   align-items: center;
 }
@@ -36,8 +36,30 @@
 .phase {
   color: var(--accent);
 }
-.compactIssue {
+.catalogIssue {
+  flex: 1;
   min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.catalogIssueText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+}
+.catalogWarning {
+  color: var(--warning);
+}
+.catalogError {
+  color: var(--danger);
 }
 .phase {
   font-weight: var(--weight-bold);
@@ -75,11 +97,11 @@
   gap: 5px;
   min-height: 23px;
   padding: 2px 7px;
-  border: 1px solid currentColor;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   font-family: var(--font-sans);
   font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   line-height: 1.2;
   white-space: nowrap;
   max-width: 100%;
@@ -87,14 +109,17 @@
 .activeTag {
   color: var(--accent);
   background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--info-line) 50%, transparent);
 }
 .errorTag {
   color: var(--danger);
   background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger-line) 50%, transparent);
 }
 .warningTag {
   color: var(--warning);
   background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning-line) 50%, transparent);
 }
 .issueCount {
   flex: 0 0 auto;

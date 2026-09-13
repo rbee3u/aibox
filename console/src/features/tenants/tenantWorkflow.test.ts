@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { initialTenantWorkflow, tenantWorkflowReducer } from "@/features/tenants/tenantWorkflow";
+import {
+  initialTenantWorkflow,
+  tenantRowSuccessor,
+  tenantWorkflowReducer,
+} from "@/features/tenants/tenantWorkflow";
 
 describe("Tenant workflow reducer", () => {
   it("restores only remaining selections after a partial deletion", () => {
@@ -31,5 +35,15 @@ describe("Tenant workflow reducer", () => {
     expect(cancelled.newName).toBe("work");
     expect(completed.newName).toBe("");
     expect(completed.createOpen).toBe(false);
+  });
+
+  it("names the row that takes a deleted row's place", () => {
+    const order = ["alpha", "bravo", "charlie", "default"];
+    expect(tenantRowSuccessor(order, ["bravo"])).toBe("managed:charlie");
+    expect(tenantRowSuccessor(order, ["default"])).toBe("managed:charlie");
+    expect(tenantRowSuccessor(order, ["bravo", "charlie"])).toBe("managed:default");
+    expect(tenantRowSuccessor(order, ["alpha", "bravo", "charlie"])).toBe("managed:default");
+    expect(tenantRowSuccessor(order, order)).toBeNull();
+    expect(tenantRowSuccessor(order, ["nope"])).toBeNull();
   });
 });

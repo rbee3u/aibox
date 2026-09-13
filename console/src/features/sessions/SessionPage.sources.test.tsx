@@ -212,7 +212,7 @@ describe("SessionPage", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "This Transcript contains no supported user or Coding Agent messages. Transcript events remain available below when present.",
+        "This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details.",
       ),
     ).toBeInTheDocument();
   });

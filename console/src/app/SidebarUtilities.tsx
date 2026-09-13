@@ -22,6 +22,7 @@ import { IconButton } from "@/shared/ui/IconButton";
 import { BrandIcon, type BrandName } from "@/shared/icons/brandIcons";
 import type { ThemePreference } from "@/app/theme/usePersistentTheme";
 import styles from "@/app/App.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface SidebarUtilitiesProps {
   collapsed: boolean;
@@ -77,16 +78,15 @@ export function SidebarUtilities({
       <nav className={styles.resourceLinks} aria-label="Resources">
         {resources.map((resource) => (
           <a
-            className={styles.utilityItem}
+            className={styles.resourceLink}
             href={resource.href}
             key={resource.label}
             aria-label={resource.label}
             target="_blank"
             rel="noopener noreferrer"
-            title={collapsed ? resource.label : undefined}
+            title={resource.label}
           >
-            <BrandIcon brand={resource.brand} size={17} />
-            <span className={styles.utilityLabel}>{resource.label}</span>
+            <BrandIcon brand={resource.brand} size={iconSize.md} />
           </a>
         ))}
       </nav>
@@ -100,9 +100,9 @@ export function SidebarUtilities({
           onClick={onToggleCollapsed}
         >
           {collapsed ? (
-            <ChevronRight size={17} aria-hidden="true" />
+            <ChevronRight size={iconSize.md} aria-hidden="true" />
           ) : (
-            <ChevronLeft size={17} aria-hidden="true" />
+            <ChevronLeft size={iconSize.md} aria-hidden="true" />
           )}
         </IconButton>
       </div>
@@ -225,12 +225,12 @@ function ThemeMenu({
         onClick={() => setOpen((current) => !current)}
         onKeyDown={handleTriggerKeyDown}
       >
-        <ActiveIcon size={17} aria-hidden="true" />
+        <ActiveIcon size={iconSize.md} aria-hidden="true" />
         <span className={styles.utilityLabel}>Theme</span>
         <span className={styles.themeValue}>{activeOption.label}</span>
         <ChevronUp
           className={`${styles.themeChevron} ${open ? styles.themeChevronOpen : ""}`}
-          size={14}
+          size={iconSize.xs}
           aria-hidden="true"
         />
       </ActionButton>
@@ -260,9 +260,11 @@ function ThemeMenu({
                   onClick={() => selectTheme(option.value)}
                   onKeyDown={(event) => handleItemKeyDown(event, index)}
                 >
-                  <Icon size={17} aria-hidden="true" />
+                  <Icon size={iconSize.md} aria-hidden="true" />
                   <span>{option.label}</span>
-                  {selected && <Check className={styles.themeCheck} size={15} aria-hidden="true" />}
+                  {selected && (
+                    <Check className={styles.themeCheck} size={iconSize.xs} aria-hidden="true" />
+                  )}
                 </ActionButton>
               );
             })}

@@ -12,3 +12,10 @@ export type ConsoleNavigate = (module: ModuleId, query?: URLSearchParams) => voi
 export function currentPageSearch(): URLSearchParams {
   return new URLSearchParams(window.location.search);
 }
+
+export const CONSOLE_BASE_PATH = "/_aibox/ui";
+
+export function modulePath(module: ModuleId, query?: URLSearchParams): string {
+  const suffix = query?.toString();
+  return `${CONSOLE_BASE_PATH}/${module}${suffix ? `?${suffix}` : ""}`;
+}

@@ -44,6 +44,8 @@ describe("Requests page selection and deletion", () => {
       }),
     ).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Select Requests" }));
+    // The active stream cannot be ticked, so focus lands on the first row that can.
+    expect(screen.getByRole("button", { name: /^Select POST/ })).toHaveFocus();
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const count = screen.getByText("0 selected");
     const pageSelection = screen.getByRole("button", { name: "Select page" });
@@ -171,7 +173,11 @@ describe("Requests page selection and deletion", () => {
     await user.click(
       screen.getByRole("button", { name: "Delete POST api.example.test/v1/responses" }),
     );
-    expect(screen.getByRole("dialog", { name: "Delete this Request?" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Delete this Request?" });
+    expect(dialog).toHaveTextContent("POST api.example.test/v1/responses");
+    expect(dialog).toHaveTextContent("200");
+    expect(dialog).toHaveTextContent("2026-08-06 12:00:01");
+    expect(dialog).toHaveTextContent("0198-demo-completed");
     await user.click(screen.getByRole("button", { name: "Delete" }));
     const deleting = screen.getByRole("button", {
       name: "Deleting POST api.example.test/v1/responses",
@@ -528,6 +534,7 @@ describe("Requests page selection and deletion", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 selected Request?" });
     expect(dialog).toHaveTextContent(/selected raw Request and Response data/i);
+    expect(dialog).not.toHaveTextContent("0198-demo-completed");
     await flushEffects();
     expect([listSignal?.aborted, detailSignal?.aborted, bodySignal?.aborted]).toEqual([
       true,

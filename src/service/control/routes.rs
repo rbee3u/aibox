@@ -66,6 +66,7 @@ control_routes! {
     CONFIGS_CREATE = "/_aibox/api/configs/create" { "POST" => "configs_create" }
     CONFIGS_REVEAL = "/_aibox/api/configs/reveal" { "POST" => "configs_reveal" }
     CONFIGS_SAVE = "/_aibox/api/configs/save" { "POST" => "configs_save" }
+    CONFIGS_COMPARE = "/_aibox/api/configs/compare" { "POST" => "configs_compare" }
     CONFIGS_DIAGNOSE = "/_aibox/api/configs/diagnose" { "POST" => "configs_diagnose" }
     CONFIGS_APPLY = "/_aibox/api/configs/apply" { "POST" => "configs_apply" }
     CONFIGS_DELETE = "/_aibox/api/configs/delete" { "POST" => "configs_delete" }
@@ -144,6 +145,7 @@ fn config_routes() -> Router<ServiceState> {
         .route(CONFIGS_CREATE, post(configs::create_config))
         .route(CONFIGS_REVEAL, post(configs::reveal_config_file))
         .route(CONFIGS_SAVE, post(configs::save_config_file))
+        .route(CONFIGS_COMPARE, post(configs::compare_configs))
         .route(CONFIGS_DIAGNOSE, post(configs::diagnose_config_file))
         .route(CONFIGS_APPLY, post(configs::apply_config))
         .route(CONFIGS_DELETE, post(configs::delete_configs))

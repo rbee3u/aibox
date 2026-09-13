@@ -1,6 +1,7 @@
 import type { SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import { SessionCopyValue } from "@/features/sessions/detail/SessionCopyValue";
-import { sessionListTenantLabel, type SourcedSession } from "@/features/sessions/sessionSource";
+import { transcriptAttentionWarnings } from "@/features/sessions/detail/sessionDetail";
+import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { compactDuration, formatByteSize, formatTimestamp } from "@/shared/lib/format";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import styles from "@/features/sessions/SessionPage.module.css";
@@ -26,20 +27,13 @@ export function SessionDetails({
   hasDiagnostics,
   partial,
 }: SessionDetailsProps) {
+  const attentionWarnings = transcriptAttentionWarnings(warnings);
   return (
     <div className={styles.sessionDetailsScroll}>
       <div className={styles.sessionDetailsContent}>
         <section className={styles.sessionDetailsSection}>
           <h3>Session</h3>
           <dl className={styles.sessionDetailsGrid}>
-            <div>
-              <dt>Tenant</dt>
-              <dd>{sessionListTenantLabel(session.source.tenantSelectionValue)}</dd>
-            </div>
-            <div>
-              <dt>Coding Agent</dt>
-              <dd>{session.source.agentLabel}</dd>
-            </div>
             <div>
               <dt>Session ID</dt>
               <dd>
@@ -62,14 +56,6 @@ export function SessionDetails({
                 </dd>
               </div>
             )}
-            <div>
-              <dt>Started</dt>
-              <dd>
-                <time dateTime={stats?.start_ts ?? session.start_ts}>
-                  {formatTimestamp(stats?.start_ts ?? session.start_ts)}
-                </time>
-              </dd>
-            </div>
             {stats?.last_event_ts && (
               <div>
                 <dt>Last event</dt>
@@ -80,8 +66,10 @@ export function SessionDetails({
             )}
             {stats && (
               <div>
-                <dt>Duration</dt>
-                <dd>{compactDuration(stats.observed_duration_ms)}</dd>
+                <dt>Observed span</dt>
+                <dd title="First to last Transcript event">
+                  {compactDuration(stats.observed_duration_ms)}
+                </dd>
               </div>
             )}
             {stats && (
@@ -139,9 +127,9 @@ export function SessionDetails({
               )}
             </dl>
           )}
-          {warnings.length > 0 && (
+          {attentionWarnings.length > 0 && (
             <div className={styles.sessionDiagnosticWarnings}>
-              {warnings.map((warning) => (
+              {attentionWarnings.map((warning) => (
                 <AlertBanner key={warning} tone="warning">
                   {warning}
                 </AlertBanner>

@@ -4,7 +4,7 @@ import {
   stringify as stringifyLosslessJson,
   type LosslessNumber,
 } from "lossless-json";
-import type { BodyKind, HeaderValue, RequestDetail } from "@/api/requests";
+import type { BodyKind, EventTimingIndex, HeaderValue, RequestDetail } from "@/api/requests";
 import { formatTimestampWithMilliseconds, hex } from "@/shared/lib/format";
 import { tryDecodeHeader } from "@/features/requests/requestFormat";
 
@@ -36,14 +36,29 @@ export type JsonValue = null | boolean | string | LosslessNumber | JsonValue[] |
 
 type JsonParseResult = { ok: true; value: JsonValue } | { ok: false; message: string };
 
-export type ContentCoding =
-  | { kind: "identity" }
-  | { kind: "zstd" }
-  | { kind: "gzip" }
-  | { kind: "unsupported"; message: string };
+const ENCODED_CONTENT_CODINGS = ["zstd", "gzip", "deflate", "br"] as const;
 
-export function isEncodedContentCoding(kind: ContentCoding["kind"]): kind is "zstd" | "gzip" {
-  return kind === "zstd" || kind === "gzip";
+export type EncodedContentCoding = (typeof ENCODED_CONTENT_CODINGS)[number];
+
+export type ContentCoding =
+  { kind: "identity" } | { kind: EncodedContentCoding } | { kind: "unsupported"; message: string };
+
+export function isEncodedContentCoding(kind: ContentCoding["kind"]): kind is EncodedContentCoding {
+  return kind !== "identity" && kind !== "unsupported";
+}
+
+const MISSING_SSE_TIMING_INDEX = "SSE Event timing index is unavailable";
+
+/** A missing index degrades locally; only a damaged index or a load failure is a notice. */
+export function sseTimingNotice(timings: EventTimingIndex | null): string | null {
+  if (timings == null || timings.state === "available") return null;
+  if (
+    timings.state === "unavailable" &&
+    (timings.warning == null || timings.warning === MISSING_SSE_TIMING_INDEX)
+  ) {
+    return null;
+  }
+  return timings.warning ?? "The SSE Event timing index is incomplete.";
 }
 
 export interface ParsedSseEvent {
@@ -134,8 +149,10 @@ export function contentCoding(headers: HeaderValue[]): ContentCoding {
   if (codings.length === 0 || (codings.length === 1 && codings[0] === "identity")) {
     return { kind: "identity" };
   }
-  if (codings.length === 1 && codings[0] === "zstd") return { kind: "zstd" };
-  if (codings.length === 1 && codings[0] === "gzip") return { kind: "gzip" };
+  if (codings.length === 1) {
+    const encoded = ENCODED_CONTENT_CODINGS.find((coding) => coding === codings[0]);
+    if (encoded) return { kind: encoded };
+  }
   return {
     kind: "unsupported",
     message: `Unsupported Content-Encoding: ${codings.join(", ") || "invalid value"}`,
@@ -157,6 +174,18 @@ export function bodyMediaType(headers: HeaderValue[]): string | null {
   const header = headers.find((candidate) => candidate.name.toLowerCase() === "content-type");
   const value = header ? tryDecodeHeader(header) : null;
   return value?.split(";", 1)[0].trim().toLowerCase() || null;
+}
+
+/** Collapsed Headers row: count plus content-type when that header exists. */
+export function headerListSummary(headers: HeaderValue[]): string {
+  const count = headers.length === 1 ? "1 header" : `${headers.length} headers`;
+  const mediaType = bodyMediaType(headers);
+  return mediaType ? `${count} · ${mediaType}` : count;
+}
+
+export function headerListToggleLabel(kind: BodyKind, headers: HeaderValue[]): string {
+  const side = kind === "request" ? "Request" : "Response";
+  return `${side} headers: ${headerListSummary(headers)}`;
 }
 
 export function isJsonMediaType(mediaType: string | null): boolean {
@@ -238,6 +267,118 @@ export function sseEventTypes(
       ? event.explicitEventType
       : null;
   return { primary, secondary };
+}
+
+/** Live streams stick to the newest event; completed records stay at the top. */
+export function shouldPinSseListToBottom(active: boolean, userPinnedToBottom: boolean): boolean {
+  return active && userPinnedToBottom;
+}
+
+export interface PresentedSseEvent {
+  event: ParsedSseEvent;
+  parsed: ReturnType<typeof parseJson>;
+  types: { primary: string; secondary: string | null };
+  preview: string | null;
+}
+
+export type SseListEntry =
+  | { kind: "event"; item: PresentedSseEvent }
+  | { kind: "run"; type: string; items: PresentedSseEvent[] };
+
+export function presentSseEvent(event: ParsedSseEvent): PresentedSseEvent {
+  const parsed = parseJson(event.data);
+  return {
+    event,
+    parsed,
+    types: sseEventTypes(event, parsed),
+    preview: sseEventTextPreview(parsed),
+  };
+}
+
+/** A card preview shorter than this is only a fragment, not a readable row. */
+export const USEFUL_SSE_PREVIEW_CHARACTERS = 8;
+
+export function sseCardPreviewKind(preview: string | null): "none" | "short" | "useful" {
+  if (!preview) return "none";
+  return [...preview].length >= USEFUL_SSE_PREVIEW_CHARACTERS ? "useful" : "short";
+}
+
+/** Consecutive same-type Events with no useful card preview collapse into one row. */
+export function groupSseEventsWithoutPreview(items: PresentedSseEvent[]): SseListEntry[] {
+  const entries: SseListEntry[] = [];
+  let index = 0;
+  while (index < items.length) {
+    const current = items[index];
+    const kind = sseCardPreviewKind(current.preview);
+    if (kind === "useful") {
+      entries.push({ kind: "event", item: current });
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (
+      end < items.length &&
+      items[end].types.primary === current.types.primary &&
+      sseCardPreviewKind(items[end].preview) === kind
+    ) {
+      end += 1;
+    }
+    const run = items.slice(index, end);
+    if (run.length === 1) {
+      entries.push({ kind: "event", item: current });
+    } else {
+      entries.push({ kind: "run", type: current.types.primary, items: run });
+    }
+    index = end;
+  }
+  return entries;
+}
+
+export function sseEventRunLabel(entry: Extract<SseListEntry, { kind: "run" }>): string {
+  const first = entry.items[0].event.sequence + 1;
+  const last = entry.items[entry.items.length - 1].event.sequence + 1;
+  return `${entry.items.length} ${entry.type} · #${first}–#${last}`;
+}
+
+/** Text already on this Event, for the collapsed card. Does not join other Events. */
+export function sseEventTextPreview(parsed: ReturnType<typeof parseJson>, max = 96): string | null {
+  if (!parsed.ok) return null;
+  const text = jsonTextCandidate(parsed.value);
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function jsonTextCandidate(value: JsonValue, depth = 0): string | null {
+  if (typeof value === "string") {
+    const compact = value.replace(/\s+/g, " ").trim();
+    return compact || null;
+  }
+  if (depth > 2 || !isJsonContainer(value)) return null;
+  if (Array.isArray(value)) return null;
+
+  for (const key of ["delta", "text", "content"] as const) {
+    const field = value[key];
+    if (typeof field === "string") {
+      const compact = field.replace(/\s+/g, " ").trim();
+      if (compact) return compact;
+    }
+  }
+  const nestedDelta = value.delta;
+  if (isJsonContainer(nestedDelta) && !Array.isArray(nestedDelta)) {
+    const nested = jsonTextCandidate(nestedDelta, depth + 1);
+    if (nested) return nested;
+  }
+  const choices = value.choices;
+  if (Array.isArray(choices) && choices[0] !== undefined) {
+    const nested = jsonTextCandidate(choices[0], depth + 1);
+    if (nested) return nested;
+  }
+  const message = value.message;
+  if (isJsonContainer(message) && !Array.isArray(message)) {
+    const nested = jsonTextCandidate(message, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
 }
 
 export function eventRelativeTime(offsetNs: string): string {

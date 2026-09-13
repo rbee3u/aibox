@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { consoleModules, moduleFromPath, modulePath } from "@/app/routing/modules";
+import { consoleModules, moduleFromPath } from "@/app/routing/modules";
+import { modulePath } from "@/shared/lib/navigation";
 import type { ModuleId, ModuleLocationChange } from "@/shared/lib/navigation";
 
 export interface RouteSnapshot {
@@ -15,18 +16,15 @@ function currentLocation(): string {
   return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
-function confirmDiscardedConfig(): boolean {
-  return window.confirm("Discard unsaved Config changes and continue?");
-}
-
 /**
  * Owns the Console's only `history` and `popstate` integration. Pages receive an
  * immutable route snapshot plus a writer for their own query, so no page
  * subscribes to browser history itself.
  *
- * A module holding unsaved edits can mark itself dirty; in-app navigation is
- * then deferred until the caller resolves `pendingNavigation`, while history and
- * unload navigation fall back to a native confirmation.
+ * A module holding unsaved edits can mark itself dirty; in-app and history
+ * navigation are then deferred until the caller resolves `pendingNavigation`,
+ * so Configs shows one Unsaved changes dialog for every leave. Only unload
+ * (reload, close) falls back to the native confirmation.
  */
 export function useConsoleRouter() {
   const [route, setRoute] = useState<RouteSnapshot>(currentRoute);
@@ -37,8 +35,11 @@ export function useConsoleRouter() {
   useEffect(() => {
     const onPopState = () => {
       const next = currentLocation();
-      if (dirty.current && !confirmDiscardedConfig()) {
+      if (dirty.current) {
+        // The browser already moved; hold the accepted location on screen
+        // until the dirty module resolves the deferred navigation.
         window.history.pushState(null, "", acceptedLocation.current);
+        setPendingNavigation(next);
         return;
       }
       acceptedLocation.current = next;

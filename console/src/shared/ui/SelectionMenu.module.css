@@ -7,6 +7,60 @@
   min-width: 0;
 }
 
+.selectionField {
+  width: 100%;
+}
+
+.selectionField .selectionTrigger {
+  min-height: 32px;
+  grid-template-columns: minmax(0, 1fr) 13px;
+  padding: 6px 8px;
+  border-color: var(--line-control);
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.selectionField.selectionFieldWithIcon .selectionTrigger {
+  grid-template-columns: 14px minmax(0, 1fr) 13px;
+}
+
+.selectionField .selectionTrigger:hover:not(:disabled):not([aria-expanded="true"]) {
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.selectionField .selectionTrigger:active:not(:disabled):not([aria-expanded="true"]) {
+  background: var(--surface-pressed);
+}
+
+.selectionField .selectionTrigger[aria-expanded="true"]:not(:disabled) {
+  border-color: var(--line-control-strong);
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.selectionField .selectionTrigger:disabled {
+  cursor: default;
+  border-color: var(--control-disabled-line);
+  color: var(--control-disabled-ink);
+  background: var(--control-disabled-surface);
+}
+
+.selectionMenu.selectionMenuField {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: auto;
+  max-width: none;
+  max-height: min(320px, calc(100vh - 24px));
+}
+
+.selectionOptionField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+}
+
 .selectionTrigger {
   display: grid;
   width: 100%;
@@ -29,10 +83,18 @@
   background: var(--surface-hover);
 }
 
+.selectionTrigger:active:not(:disabled):not([aria-expanded="true"]) {
+  background: var(--surface-pressed);
+}
+
 .selectionTrigger[aria-expanded="true"]:not(:disabled) {
   border-color: transparent;
-  color: var(--accent);
+  color: var(--ink);
   background: var(--surface-selected);
+}
+
+.selectionTrigger[aria-expanded="true"]:active:not(:disabled) {
+  background: var(--surface-pressed);
 }
 
 .selectionTriggerIcon,
@@ -43,11 +105,11 @@
 .selectionTrigger[aria-expanded="true"] .selectionTriggerIcon,
 .selectionOptionSelected .selectionOptionIcon,
 .selectionOption:has(input:checked) .selectionOptionIcon {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .selectionOption:has(input:checked) .selectionOptionIcon {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .selectionTriggerIcon,
@@ -97,7 +159,7 @@
   border: 1px solid var(--line-control-strong);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .sessionAgentFilter .selectionMenu {
@@ -126,6 +188,7 @@
   cursor: pointer;
   font-size: var(--text-xs);
   text-align: left;
+  transition: background-color var(--transition-fast);
 }
 
 .selectionOptionSingle,
@@ -146,14 +209,26 @@
   background: var(--surface-hover);
 }
 
+.selectionOption:active {
+  background: var(--surface-pressed);
+}
+
 .selectionOption:has(input:checked) {
-  color: var(--accent);
+  color: var(--ink);
   background: var(--surface-selected);
 }
 
+.selectionOption:has(input:checked):active {
+  background: var(--surface-pressed);
+}
+
 .selectionOptionSelected {
-  color: var(--accent);
+  color: var(--ink);
   background: var(--surface-selected);
+}
+
+.selectionOptionSelected:active {
+  background: var(--surface-pressed);
 }
 
 .selectionOption:has(input:disabled) {

@@ -35,9 +35,12 @@ import {
 } from "@/features/configs/route";
 import { useConfigCatalog } from "@/features/configs/catalog/useConfigCatalog";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
+import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
+import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 import { useConfigCrud } from "@/features/configs/mutation/useConfigCrud";
 import { useCredentialPropagation } from "@/features/configs/mutation/useCredentialPropagation";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
@@ -48,8 +51,11 @@ interface ControllerOptions {
   operation?: Operation | null;
   search: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onCancelLeave?: () => void;
+  onContinueLeave?: () => void | Promise<void>;
   onLocationChange: ModuleLocationChange;
   onOperation?: (operation: Operation) => void;
+  pendingLeave?: boolean;
 }
 
 export interface ConfigViewModel {
@@ -67,6 +73,7 @@ export interface ConfigViewModel {
     loadingTenants: boolean;
     managedTenantMissing: boolean;
     refreshing: boolean;
+    refreshConfigs: () => Promise<void>;
     retryTenants: () => void;
     selectAgent: (values: ReadonlySet<CodingAgentKind>) => void;
     selectTenant: (values: ReadonlySet<TenantSelectionValue>) => void;
@@ -79,7 +86,6 @@ export interface ConfigViewModel {
     detailBackButtonRef: RefObject<HTMLButtonElement | null>;
     detailHeadingRef: RefObject<HTMLHeadingElement | null>;
     detailOpen: boolean;
-    file: string | null;
     openConfig: (name: string) => void;
     openCurrent: () => void;
     selection: ConfigSelection;
@@ -87,7 +93,9 @@ export interface ConfigViewModel {
   selection: {
     allSelectable: boolean;
     cancelSelection: () => void;
+    refreshButton: RefObject<HTMLButtonElement | null>;
     registerConfigRow: (key: string, element: HTMLButtonElement | null) => void;
+    selectButton: RefObject<HTMLButtonElement | null>;
     selectableNames: string[];
     selectedCount: number;
     selectedKeys: Set<string>;
@@ -120,6 +128,7 @@ export interface ConfigViewModel {
     closePropagation: () => void;
     createError: string | null;
     createHelpId: string;
+    createNameTaken: boolean;
     createNameValid: boolean;
     createOpen: boolean;
     createTitleId: string;
@@ -146,7 +155,10 @@ export interface ConfigViewModel {
     prepareMainConfigSave: (customProvider: boolean) => boolean;
     registerFileController: (name: string, controller: ConfigFileController | null) => void;
     registerRevealRetry: (name: string, retry: (() => void) | null) => void;
-    requestEditorAction: (action: () => void | Promise<void>) => void;
+    requestEditorAction: (
+      action: () => void | Promise<void>,
+      kind?: ConfigPendingAction["kind"],
+    ) => void;
     retryReveals: () => void;
     showRawEditor: () => void;
     switchEditorMode: (next: "visual" | "raw") => void;
@@ -155,7 +167,9 @@ export interface ConfigViewModel {
   feedback: {
     appliedName: string | null;
     applyFeedback: string | null;
+    dismissNotification: (source: NotificationSource) => void;
     error: string | null;
+    notifications: NotificationItemData[];
     setError: Dispatch<SetStateAction<string | null>>;
   };
 }
@@ -165,7 +179,10 @@ export function useConfigController({
   operation,
   search,
   onDirtyChange,
+  onCancelLeave,
+  onContinueLeave,
   onLocationChange,
+  pendingLeave,
 }: ControllerOptions): ConfigViewModel {
   const route = useMemo(() => readConfigRoute(search), [search]);
   const { agent, detailOpen, selection, tenant } = route;
@@ -180,6 +197,12 @@ export function useConfigController({
   const [visualAvailable, setVisualAvailable] = useState(false);
   const visualModeInitialized = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const { dismissNotification, notifications, reportFailure } =
+    useFailureNotifications("Configs API call failed");
+  const reportActionFailure = useCallback(
+    (title: string, cause: unknown) => reportFailure("action", title, cause),
+    [reportFailure],
+  );
   const [workflow, dispatchWorkflow] = useReducer(configWorkflowReducer, initialConfigWorkflow);
   const { mutationBusy: busy, selectedKeys, selectionMode } = workflow;
   const onBusyChange = useCallback(
@@ -221,6 +244,8 @@ export function useConfigController({
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const detailBackButtonRef = useRef<HTMLButtonElement>(null);
   const configRows = useElementRegistry<HTMLButtonElement>();
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const selectButton = useRef<HTMLButtonElement>(null);
   const focusAfterDetailClose = useRef<string | null>(null);
   const unsavedTitleId = useId();
   const createTitleId = useId();
@@ -283,6 +308,11 @@ export function useConfigController({
     `${selectedTenantSelectionValue}:${agent}`,
     onDirtyChange,
     setError,
+    {
+      pending: pendingLeave,
+      onCancel: onCancelLeave,
+      onContinue: onContinueLeave,
+    },
   );
   const crud = useConfigCrud({
     agent,
@@ -299,7 +329,7 @@ export function useConfigController({
     requestEditorAction,
     selection,
     selectionMode,
-    setError,
+    reportActionFailure,
     tenant,
   });
   const propagation = useCredentialPropagation({
@@ -307,7 +337,7 @@ export function useConfigController({
     loadCatalog,
     onBusyChange,
     operationRunning,
-    setError,
+    reportActionFailure,
   });
   const panes = useElementRegistry<HTMLDivElement>();
   function closeConfigDetail() {
@@ -358,12 +388,21 @@ export function useConfigController({
   const selectableNames = catalog?.configs.map((entry) => entry.name) ?? [];
   const allSelectable =
     selectableNames.length > 0 && selectableNames.every((name) => selectedKeys.has(name));
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => selectableNames.some((name) => configRows.focus(name)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: resetSelection,
+  });
   const handlePaneSaved = useCallback(() => {
     void loadCatalog("background");
   }, [loadCatalog]);
   const handleVisualAvailable = useCallback(
     (available: boolean) => {
       setVisualAvailable(available);
+      if (!available) setEditorMode("raw");
       if (available && !visualModeInitialized.current && !currentSelection) {
         visualModeInitialized.current = true;
         setEditorMode("visual");
@@ -378,14 +417,20 @@ export function useConfigController({
         setError("Visual Editor is available only for a valid Named Config main file.");
         return;
       }
-      requestEditorAction(() => {
-        setEditorMode(next);
-        setError(null);
-      });
+      requestEditorAction(
+        () => {
+          setEditorMode(next);
+          setError(null);
+        },
+        { switchTo: next },
+      );
     },
     [currentSelection, editorMode, requestEditorAction, visualAvailable],
   );
-  const showRawEditor = useCallback(() => setEditorMode("raw"), []);
+  const showRawEditor = useCallback(() => switchEditorMode("raw"), [switchEditorMode]);
+  async function refreshConfigs() {
+    if (await loadCatalog("refresh")) reloadFiles(configFiles);
+  }
   function selectTenant(values: ReadonlySet<TenantSelectionValue>) {
     const next = [...values][0];
     if (!next || next === configTenantSelectionValue(tenant)) return;
@@ -423,9 +468,6 @@ export function useConfigController({
       clear: allSelectable,
     });
   }
-  function cancelSelection() {
-    resetSelection();
-  }
   async function saveAll() {
     onBusyChange(true);
     try {
@@ -436,6 +478,7 @@ export function useConfigController({
     }
   }
   const createNameValid = DNS_LABEL_PATTERN.test(crud.dialogs.newName);
+  const createNameTaken = (catalog?.configs ?? []).some((row) => row.name === crud.dialogs.newName);
   return {
     catalog: {
       agent,
@@ -451,6 +494,7 @@ export function useConfigController({
       loadingTenants,
       managedTenantMissing,
       refreshing,
+      refreshConfigs,
       retryTenants,
       selectAgent,
       selectTenant,
@@ -463,7 +507,6 @@ export function useConfigController({
       detailBackButtonRef,
       detailHeadingRef,
       detailOpen,
-      file,
       openConfig,
       openCurrent,
       selection,
@@ -471,12 +514,14 @@ export function useConfigController({
     selection: {
       allSelectable,
       cancelSelection,
+      refreshButton,
       registerConfigRow: configRows.register,
+      selectButton,
       selectableNames,
       selectedCount,
       selectedKeys,
       selectionMode,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       toggleAllConfigs,
       toggleConfig,
     },
@@ -495,6 +540,7 @@ export function useConfigController({
       ...propagation.dialogs,
       cancelPending,
       createHelpId,
+      createNameTaken,
       createNameValid,
       createTitleId,
       discardAndRunPendingAction,
@@ -521,7 +567,9 @@ export function useConfigController({
     feedback: {
       appliedName,
       applyFeedback: crud.applyFeedback,
+      dismissNotification,
       error,
+      notifications,
       setError,
     },
   };

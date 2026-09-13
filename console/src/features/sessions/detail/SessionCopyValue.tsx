@@ -2,6 +2,7 @@ import { Check, Clipboard } from "lucide-react";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { IconButton } from "@/shared/ui/IconButton";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 /** Technical fact with an inline copy control, such as the Session ID. */
 export function SessionCopyValue({ label, value }: { label: string; value: string }) {
@@ -10,14 +11,15 @@ export function SessionCopyValue({ label, value }: { label: string; value: strin
     <span className={styles.sessionCopyValue}>
       <code>{value}</code>
       <IconButton
+        size="sm"
         className={styles.sessionCopyAction}
         label={copied ? `${label} copied` : `Copy ${label}`}
         onClick={() => void copy(value, true)}
       >
         {copied ? (
-          <Check size={13} aria-hidden="true" />
+          <Check size={iconSize.xs} aria-hidden="true" />
         ) : (
-          <Clipboard size={13} aria-hidden="true" />
+          <Clipboard size={iconSize.xs} aria-hidden="true" />
         )}
       </IconButton>
     </span>

@@ -37,6 +37,14 @@ pub(crate) enum MainConfigValueKind {
     Bool,
 }
 
+/// A Visual Editor field is available only for this included parent value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct MainConfigCondition {
+    pub(crate) path: &'static str,
+    pub(crate) value: &'static str,
+}
+
 /// One fixed main-configuration field that every Config Application updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MainConfigField {
@@ -44,6 +52,7 @@ pub(crate) struct MainConfigField {
     pub(crate) value_kind: MainConfigValueKind,
     pub(crate) label: &'static str,
     pub(crate) description: &'static str,
+    pub(crate) visible_when: Option<MainConfigCondition>,
     pub(crate) group: &'static str,
     pub(crate) enum_values: &'static [&'static str],
     pub(crate) sensitive: bool,

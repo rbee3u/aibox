@@ -4,7 +4,6 @@ import type {
   ConversationMessage,
   SessionDetailMeta,
   SessionDetailStats,
-  SessionDiscoverySummary,
   SessionDetailFrame,
   SessionListData,
   SessionListRow,
@@ -18,7 +17,6 @@ import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
 export type SessionRow = SessionListRow;
-export type SessionSummaryData = SessionDiscoverySummary;
 export type {
   ConversationMessage,
   SessionDetailMeta,
@@ -133,12 +131,4 @@ export function sessionsApi(client: ControlApi): SessionApi {
         confirmation: "",
       }),
   };
-}
-
-export function sessionSummaryRequest(client: ControlApi) {
-  return (tenant: TenantSelection, agent: CodingAgentKind, signal?: AbortSignal) =>
-    client.get<SessionSummaryData>(
-      `/_aibox/api/sessions/summary?${sessionSourceQuery(tenant, agent)}`,
-      signal,
-    );
 }

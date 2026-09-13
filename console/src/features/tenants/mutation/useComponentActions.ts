@@ -6,19 +6,23 @@ import type { TenantRow } from "@/api/core";
 import {
   COMPONENT_GROUPS,
   compareStableVersions,
+  componentFailureTitle,
   componentProgressLabel,
   hasComponentAttention,
+  hasComponentUpdate,
   latestEntryFor,
   tenantSelection,
+  updateOverwritesLocalEdits,
 } from "@/features/tenants/componentCatalog";
 import { useComponentCatalog } from "@/features/tenants/mutation/useComponentCatalog";
 import { useComponentLatest } from "@/features/tenants/mutation/useComponentLatest";
 import { useComponentMenu } from "@/features/tenants/mutation/useComponentMenu";
 import { tenantSelectionValueOf } from "@/features/tenants/route";
 import type { TenantSelectionValue } from "@/domain/tenant";
-import { messageOf } from "@/shared/lib/errors";
 
 export type ComponentRemoveTarget = { row: ComponentRow; tenantLabel: string };
+/** An Update that overwrites hand-edited state, held until the user confirms. */
+export type ComponentUpdateTarget = { row: ComponentRow; tenantLabel: string };
 export type ComponentSpecificVersionTarget = {
   row: ComponentRow;
   tenantLabel: string;
@@ -36,7 +40,10 @@ interface ComponentActionOptions {
   operation?: Operation | null;
   onOperation?: (operation: Operation) => void;
   selected: TenantRow | null;
-  setError: (error: string | null) => void;
+  /** Owns the read error: a Component catalog read that succeeds clears it. */
+  setReadError: (error: string | null) => void;
+  /** Owns an action the user asked for; a background read never clears it. */
+  reportActionFailure: (title: string, cause: unknown) => void;
 }
 
 export function useComponentActions({
@@ -45,13 +52,16 @@ export function useComponentActions({
   operation,
   onOperation,
   selected,
-  setError,
+  setReadError,
+  reportActionFailure,
 }: ComponentActionOptions) {
   const [busy, setBusy] = useState(false);
   const [componentActionProgress, setComponentActionProgress] =
     useState<ComponentActionProgress | null>(null);
-  const [expandedComponents, setExpandedComponents] = useState<Set<string>>(new Set());
   const [componentRemoveTarget, setComponentRemoveTarget] = useState<ComponentRemoveTarget | null>(
+    null,
+  );
+  const [componentUpdateTarget, setComponentUpdateTarget] = useState<ComponentUpdateTarget | null>(
     null,
   );
   const [specificVersionTarget, setSpecificVersionTarget] =
@@ -75,14 +85,15 @@ export function useComponentActions({
     components,
     load: loadComponentCatalog,
     loading: loadingComponents,
-    preserveNextError,
     tenantSelectionValue: componentsTenantSelectionValue,
-  } = useComponentCatalog(api, setError);
+  } = useComponentCatalog(api, setReadError);
   const {
     check: checkLatest,
     checking: checkingLatest,
     snapshot: latestSnapshot,
-  } = useComponentLatest(api, setError);
+  } = useComponentLatest(api, (message) =>
+    reportActionFailure("Couldn’t check for Component updates", message),
+  );
   const selectedKey = selected ? tenantSelectionValueOf(selected) : null;
   const componentCatalogLoading =
     loadingComponents || (selectedKey !== null && componentsTenantSelectionValue !== selectedKey);
@@ -91,8 +102,9 @@ export function useComponentActions({
   const installedComponentCount = visibleComponents.filter(
     (row) => row.status === "installed" || row.status === "modified",
   ).length;
-  const attentionComponentCount = visibleComponents.filter((row) =>
-    hasComponentAttention(row, latestSnapshot),
+  const attentionComponentCount = visibleComponents.filter(hasComponentAttention).length;
+  const updatableComponentCount = visibleComponents.filter((row) =>
+    hasComponentUpdate(row, latestSnapshot),
   ).length;
   const componentGroups = COMPONENT_GROUPS.map((group) => ({
     ...group,
@@ -124,21 +136,14 @@ export function useComponentActions({
 
   const loadComponents = useCallback(
     async (target: TenantRow | null, showLoading = false) => {
-      if (showLoading) {
-        setExpandedComponents(new Set());
-        closeComponentMenu();
-      }
+      if (showLoading) closeComponentMenu();
       const rows = await loadComponentCatalog(target, showLoading);
-      if (rows) {
-        setExpandedComponents(new Set());
-        closeComponentMenu();
-      }
+      if (rows) closeComponentMenu();
     },
     [closeComponentMenu, loadComponentCatalog],
   );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadComponents(selected, true);
   }, [loadComponents, selected]);
 
@@ -189,7 +194,7 @@ export function useComponentActions({
       if (!operationStarted) setComponentActionProgress(null);
       return true;
     } catch (cause) {
-      setError(messageOf(cause));
+      reportActionFailure(componentFailureTitle(row, install), cause);
       setComponentActionProgress(null);
       return false;
     } finally {
@@ -213,14 +218,6 @@ export function useComponentActions({
     setSpecificVersionError(null);
   }
 
-  function toggleComponentExpanded(kind: ComponentKind) {
-    setExpandedComponents((current) => {
-      const next = new Set(current);
-      if (!next.delete(kind)) next.add(kind);
-      return next;
-    });
-  }
-
   function requestComponentRemove(row: ComponentRow, tenantLabel: string) {
     setComponentRemoveTarget({ row, tenantLabel });
   }
@@ -233,6 +230,30 @@ export function useComponentActions({
     if (!componentRemoveTarget) return;
     await mutateComponent(componentRemoveTarget.row, false);
     setComponentRemoveTarget(null);
+  }
+
+  /**
+   * Runs the row's primary install-side action. An Update that would overwrite
+   * hand-edited state stops for confirmation first; everything else adds or
+   * repairs and starts at once.
+   */
+  function installComponent(row: ComponentRow) {
+    if (!selected) return;
+    if (updateOverwritesLocalEdits(row)) {
+      setComponentUpdateTarget({ row, tenantLabel: selected.display_name });
+      return;
+    }
+    void mutateComponent(row, true);
+  }
+
+  function cancelComponentUpdate() {
+    setComponentUpdateTarget(null);
+  }
+
+  async function updateComponent() {
+    if (!componentUpdateTarget) return;
+    await mutateComponent(componentUpdateTarget.row, true);
+    setComponentUpdateTarget(null);
   }
 
   async function submitSpecificVersion() {
@@ -253,7 +274,6 @@ export function useComponentActions({
     /** Progress and busy state the page reads outside either group. */
     busy,
     componentActionProgress,
-    preserveNextError,
     loadComponents,
     components: {
       attentionComponentCount,
@@ -266,23 +286,24 @@ export function useComponentActions({
       componentMenuRef,
       componentTotalCount,
       installedComponentCount,
-      isComponentExpanded: (kind: ComponentKind) => expandedComponents.has(kind),
+      installComponent,
+      updatableComponentCount,
       latestSnapshot,
-      mutateComponent,
       openComponentMenu,
       openMenu,
       openSpecificVersion,
       registerComponentMenuButton,
       registerComponentMenuItem,
       submitSpecificVersion,
-      toggleComponentExpanded,
       toggleComponentMenu,
     },
     dialogs: {
       cancelComponentRemove,
+      cancelComponentUpdate,
       changeSpecificVersion,
       closeSpecificVersion,
       componentRemoveTarget,
+      componentUpdateTarget,
       removeComponent,
       requestComponentRemove,
       specificVersion,
@@ -292,6 +313,7 @@ export function useComponentActions({
       specificVersionTitleId,
       specificVersionValid,
       specificVersionValidationError,
+      updateComponent,
     },
   };
 }

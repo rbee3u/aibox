@@ -89,46 +89,42 @@ describe("ConfirmDialog", () => {
       />,
     );
 
-    const input = screen.getByRole("textbox");
+    const input = screen.getByRole("textbox", { name: "Type work to confirm" });
     const confirm = screen.getByRole("button", { name: "Delete" });
     expect(input).toHaveFocus();
     expect(confirm).toBeDisabled();
+    expect(input.closest("label")).toBeNull();
 
     fireEvent.change(input, { target: { value: "work" } });
     expect(confirm).toBeEnabled();
   });
 
-  it("copies the confirmation phrase without filling the input", async () => {
-    vi.useFakeTimers();
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-
+  /*
+   * The typed name is the friction. A copy control beside it used to hand the
+   * name over in one click; Enter, which the pattern promises, did nothing.
+   */
+  it("confirms on Enter once the typed name matches, and offers no copy shortcut", () => {
+    const onConfirm = vi.fn();
     render(
       <ConfirmDialog
         title="Delete Tenant work?"
         confirmation="work"
         confirmLabel="Delete"
-        onConfirm={() => undefined}
+        onConfirm={onConfirm}
         onCancel={() => undefined}
       />,
     );
 
-    const phrase = screen.getByRole("button", { name: "Copy work" });
-    const input = screen.getByRole("textbox");
-    const confirm = screen.getByRole("button", { name: "Delete" });
+    const input = screen.getByRole("textbox", { name: "Type work to confirm" });
+    expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
 
-    await act(async () => {
-      fireEvent.click(phrase);
-      await Promise.resolve();
-    });
+    fireEvent.change(input, { target: { value: "wor" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(onConfirm).not.toHaveBeenCalled();
 
-    expect(writeText).toHaveBeenCalledWith("work");
-    expect(input).toHaveValue("");
-    expect(confirm).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copied work" })).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1400));
-    expect(screen.getByRole("button", { name: "Copy work" })).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "work" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
   it("renders facts before the risk message", () => {
@@ -156,7 +152,7 @@ describe("ConfirmDialog", () => {
     expect(within(dialog).getByText("Codex")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Present fields replace; omitted fixed fields are removed.");
     expect(within(dialog).getByRole("button", { name: "Apply" })).toHaveClass(
-      actionButtonStyles.primarySoft,
+      actionButtonStyles.primary,
     );
 
     const facts = dialog.querySelector("dl");
@@ -165,6 +161,7 @@ describe("ConfirmDialog", () => {
     );
     expect(facts).not.toBeNull();
     expect(facts!.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getComputedStyle(within(dialog).getByText("Tenant")).textTransform).toBe("none");
   });
 
   it("uses an explicit busy label for domain-specific actions", () => {

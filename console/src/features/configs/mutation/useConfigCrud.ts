@@ -1,4 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
 import { useState } from "react";
 
 import type { ConfigApi, ConfigListData } from "@/api/configs";
@@ -30,7 +29,7 @@ interface ConfigCrudOptions {
   requestEditorAction: (action: () => void | Promise<void>) => void;
   selection: ConfigSelection;
   selectionMode: boolean;
-  setError: Dispatch<SetStateAction<string | null>>;
+  reportActionFailure: (title: string, cause: unknown) => void;
   tenant: TenantSelection;
 }
 
@@ -49,7 +48,7 @@ export function useConfigCrud({
   requestEditorAction,
   selection,
   selectionMode,
-  setError,
+  reportActionFailure,
   tenant,
 }: ConfigCrudOptions) {
   const [newName, setNewName] = useState("");
@@ -113,19 +112,23 @@ export function useConfigCrud({
     if (operationRunning) return;
     onBusyChange(true);
     setApplyFeedback(null);
-    let applyError: string | null = null;
+    let applyError: unknown = null;
     try {
       await api.applyConfig(tenant, agent, name);
     } catch (cause) {
-      applyError = `${messageOf(cause)} Some Current Config files may already have been updated.`;
+      applyError = cause;
     } finally {
       const refreshed = await loadCatalog("background");
       if (refreshed && currentSelection) {
         reloadFiles(refreshed.files);
       }
       setApplyTarget(null);
-      setError(applyError);
-      if (!applyError) {
+      if (applyError) {
+        reportActionFailure(
+          `Couldn’t apply Named Config ${name}`,
+          `${messageOf(applyError)} Some Current Config files may already have been updated.`,
+        );
+      } else {
         setApplyFeedback(
           `Applied Named Config ${name} to Current Config. This is a one-time projection; it is not an Active Config.`,
         );
@@ -150,7 +153,6 @@ export function useConfigCrud({
       }
       await loadCatalog("background");
     } catch (cause) {
-      const deletionError = messageOf(cause);
       setDeleteTarget(null);
       const refreshed = await loadCatalog("background");
       if (refreshed) {
@@ -162,7 +164,12 @@ export function useConfigCrud({
           onLocationChange(configLocation(tenant, agent, null), true);
         }
       }
-      setError(deletionError);
+      reportActionFailure(
+        requestedNames.length === 1
+          ? `Couldn’t delete Named Config ${requestedNames[0]}`
+          : `Couldn’t delete ${requestedNames.length} Named Configs`,
+        cause,
+      );
     } finally {
       onBusyChange(false);
     }

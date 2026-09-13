@@ -175,6 +175,7 @@ pub(crate) struct TopologyAgent {
     agent: AgentKind,
     current_config: TopologyCurrentConfig,
     named_configs: TopologyNamedConfigs,
+    sessions: TopologySessions,
     application: config::ApplicationStatus,
 }
 
@@ -193,6 +194,20 @@ pub(crate) struct TopologyCurrentConfig {
 pub(crate) struct TopologyNamedConfigs {
     count: usize,
     attention: Vec<config::ConfigCatalogEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    error: Option<String>,
+}
+
+/// Discovered Sessions for one Coding Agent, as a count only.
+///
+/// Discovery counts Transcripts; it names none and parses none. A failed walk
+/// reports zero beside its error rather than dropping the Agent, matching how
+/// `TopologyNamedConfigs` carries its own failure.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct TopologySessions {
+    count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     error: Option<String>,
@@ -314,6 +329,13 @@ fn topology_agent(snapshot: TopologyAgentSnapshot) -> TopologyAgent {
             Err(error) => TopologyNamedConfigs {
                 count: 0,
                 attention: Vec::new(),
+                error: Some(error),
+            },
+        },
+        sessions: match snapshot.sessions {
+            Ok(count) => TopologySessions { count, error: None },
+            Err(error) => TopologySessions {
+                count: 0,
                 error: Some(error),
             },
         },

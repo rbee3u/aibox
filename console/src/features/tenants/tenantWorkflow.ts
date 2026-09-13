@@ -48,6 +48,27 @@ export type TenantWorkflowAction =
       resumeSelection: boolean;
     };
 
+/**
+ * The row that takes a deleted row's place, so focus can land where the user
+ * was looking: the first survivor at or after the deleted position, else the
+ * last survivor before it, else nothing.
+ */
+export function tenantRowSuccessor(
+  orderedNames: readonly string[],
+  deletedNames: readonly string[],
+): TenantSelectionValue | null {
+  const deleted = new Set(deletedNames);
+  const firstDeleted = orderedNames.findIndex((name) => deleted.has(name));
+  if (firstDeleted === -1) return null;
+  const after = orderedNames.slice(firstDeleted).find((name) => !deleted.has(name));
+  const before = orderedNames
+    .slice(0, firstDeleted)
+    .reverse()
+    .find((name) => !deleted.has(name));
+  const successor = after ?? before;
+  return successor === undefined ? null : `managed:${successor}`;
+}
+
 export function tenantWorkflowReducer(
   state: TenantWorkflowState,
   action: TenantWorkflowAction,

@@ -1,3 +1,9 @@
+import {
+  useConfigComparison,
+  type ConfigComparisonDraft,
+} from "@/features/configs/detail/ConfigComparisonContext";
+import { differenceRange } from "@/features/configs/detail/configDifferenceRanges";
+import { openDifference } from "@/features/configs/detail/ConfigDifferences";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -10,19 +16,18 @@ import type {
 import { encodeBase64 } from "@/shared/lib/encoding";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type { TenantSelection } from "@/domain/tenant";
-import {
-  proxyValueIsValid,
-  requestProxyRoute,
-  splitRequestProxyValue,
-} from "@/features/configs/configCatalog";
+import { requestProxyRoute } from "@/features/configs/configCatalog";
 import type { ConfigFileController } from "@/features/configs/detail/configFileController";
 import {
+  omitUnavailableOptions,
   configEditorBytes,
   configFileCanSave,
   configFileDirty,
   configFileInput,
   configFileSnapshotModel,
   configFileTarget,
+  visualSaveFailure,
+  type SaveFailure,
 } from "@/features/configs/detail/configFileModel";
 import {
   codeMirrorAvailable,
@@ -63,6 +68,8 @@ export function useConfigFileSession({
   onLinkedFileSaved,
   onVisualAvailable,
 }: ConfigFileSessionOptions) {
+  const comparison = useConfigComparison();
+  const { register, current: comparingCurrent } = comparison;
   const [snapshot, setSnapshot] = useState<ConfigFileData | null>(null);
   const [editor, setEditor] = useState("");
   const [visualOptions, setVisualOptions] = useState<ConfigVisualOption[] | null>(null);
@@ -73,6 +80,13 @@ export function useConfigFileSession({
   const [authKey, setAuthKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<"idle" | "saving" | "saved">("idle");
+  /*
+   * A refused save is an event about this file, and usually about one field
+   * in it, so it is reported beside the file and cleared by the next edit —
+   * never through the page-level read-failure banner, whose Retry would
+   * reload the catalog rather than fix a field.
+   */
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const diagnoseTimer = useRef<number | null>(null);
   const diagnoseGeneration = useRef(0);
@@ -185,6 +199,30 @@ export function useConfigFileSession({
   });
   const canSave = configFileCanSave(snapshot, textEditable, isAuth, authMode, mode);
 
+  const comparisonDraft =
+    snapshot && editorBytes
+      ? JSON.stringify({
+          input: {
+            ...configFileInput({
+              snapshot,
+              editorBytes,
+              mode: isAuth && authMode === "chatgpt" ? "raw" : mode,
+              isAuth,
+              visualOptions,
+              customProvider,
+              authKey,
+            }),
+            file,
+            originalBase64: snapshot.content_base64,
+          },
+          dirty,
+        })
+      : null;
+  useEffect(() => {
+    register(file, comparisonDraft ? (JSON.parse(comparisonDraft) as ConfigComparisonDraft) : null);
+    return () => register(file, null);
+  }, [register, file, comparisonDraft]);
+
   const save = useCallback(async (): Promise<boolean> => {
     if (!snapshot || !editorBytes || !canSave) return false;
     if (
@@ -195,38 +233,22 @@ export function useConfigFileSession({
       !onBeforeSave(true)
     )
       return false;
-    if (mode === "visual" && !isAuth && visualOptions) {
-      for (const field of visualOptions) {
-        if (!field.included || !field.request_proxy_route || typeof field.value !== "string")
-          continue;
-        const split = splitRequestProxyValue(
-          field.value,
-          requestProxyRoute(tenant, api.bootstrap?.listen),
-        );
-        if (!proxyValueIsValid(split.upstream)) {
-          onError(`${field.label} must contain a valid HTTP or HTTPS upstream URL.`);
-          return false;
-        }
+    if (mode === "visual" && !isAuth) {
+      const failure = visualSaveFailure(
+        visualOptions,
+        customProvider,
+        requestProxyRoute(tenant, api.bootstrap?.listen),
+      );
+      if (failure) {
+        setSaveFailure(failure);
+        return false;
       }
     }
     if (mode === "visual" && isAuth && snapshot.auth?.extra_fields) {
       if (!window.confirm("Replace the extra native credential fields with an API-key object?"))
         return false;
     }
-    if (mode === "visual" && !isAuth && customProvider?.included) {
-      if (!customProvider.name.trim() || !customProvider.base_url.trim()) {
-        onError("Custom provider name and base URL must not be empty.");
-        return false;
-      }
-      const upstream = splitRequestProxyValue(
-        customProvider.base_url,
-        requestProxyRoute(tenant, api.bootstrap?.listen),
-      ).upstream;
-      if (!proxyValueIsValid(upstream)) {
-        onError("Custom provider base URL must contain a valid HTTP or HTTPS URL.");
-        return false;
-      }
-    }
+    setSaveFailure(null);
     setFeedback("saving");
     try {
       const value = await api.saveConfigFile(
@@ -251,7 +273,7 @@ export function useConfigFileSession({
       return true;
     } catch (cause) {
       setFeedback("idle");
-      onError(messageOf(cause));
+      setSaveFailure({ message: messageOf(cause), paths: [] });
       return false;
     }
   }, [
@@ -276,8 +298,19 @@ export function useConfigFileSession({
   const restore = useCallback(() => {
     if (!snapshot) return;
     setFromSnapshot(snapshot);
+    setSaveFailure(null);
     onError(null);
   }, [onError, setFromSnapshot, snapshot]);
+
+  // The next edit of any draft in this file withdraws the refusal.
+  const setAuthKeyDraft = useCallback((value: string) => {
+    setAuthKey(value);
+    setSaveFailure(null);
+  }, []);
+  const setAuthModeDraft = useCallback((value: ConfigAuthData["mode"]) => {
+    setAuthMode(value);
+    setSaveFailure(null);
+  }, []);
 
   useEffect(() => {
     onControllerChange(
@@ -292,24 +325,42 @@ export function useConfigFileSession({
   const updateEditor = useCallback(
     (value: string) => {
       setEditor(value);
+      setSaveFailure(null);
       diagnose(value);
     },
     [diagnose],
   );
-  const { parentRef: rawEditorParent } = useCodeMirrorEditor({
+  const comparedFile = comparison.result?.files.find((entry) => entry.file === file);
+  const ranges = useMemo(() => {
+    const side = comparingCurrent ? comparedFile?.current : comparedFile?.named;
+    if (side?.content !== editor) return [];
+    return (comparedFile?.differences ?? []).flatMap((difference) => {
+      const range = differenceRange(file, editor, difference, comparingCurrent);
+      return range ? [{ range, path: difference.path }] : [];
+    });
+  }, [comparedFile, comparingCurrent, editor, file]);
+  const onDifference = useCallback((path: string[]) => openDifference(file, path), [file]);
+  const { parentRef: rawEditorParent, revealRange } = useCodeMirrorEditor({
     enabled: codeMirrorAvailable && mode === "raw" && Boolean(snapshot) && textEditable,
     file,
     document: editor,
     diagnostics: rawDiagnostics,
+    differences: ranges,
+    onDifference,
     onChange: updateEditor,
   });
   const updateVisualOption = useCallback((path: string, update: Partial<ConfigVisualOption>) => {
-    setVisualOptions(
-      (fields) =>
-        fields?.map((field) => (field.path === path ? { ...field, ...update } : field)) ?? null,
+    setSaveFailure(null);
+    setVisualOptions((fields) =>
+      fields
+        ? omitUnavailableOptions(
+            fields.map((field) => (field.path === path ? { ...field, ...update } : field)),
+          )
+        : null,
     );
   }, []);
   const updateCustomProvider = useCallback((update: Partial<ConfigCustomProvider>) => {
+    setSaveFailure(null);
     setCustomProvider((provider) => (provider ? { ...provider, ...update } : provider));
   }, []);
 
@@ -325,9 +376,11 @@ export function useConfigFileSession({
     loading,
     rawDiagnostics,
     rawEditorParent,
+    revealRange,
     save,
-    setAuthKey,
-    setAuthMode,
+    saveFailure,
+    setAuthKey: setAuthKeyDraft,
+    setAuthMode: setAuthModeDraft,
     snapshot,
     textEditable,
     updateCustomProvider,

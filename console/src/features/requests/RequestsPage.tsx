@@ -4,13 +4,16 @@ import type { RequestsApi } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
 import { RequestList } from "@/features/requests/catalog/RequestList";
 import { REQUESTS_PER_PAGE } from "@/features/requests/catalog/listModel";
+import { requestDeletionFacts } from "@/features/requests/requestDeletion";
 import { useRequestsController } from "@/features/requests/useRequestsController";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
+import { PageError } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/requests/RequestsPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface RequestsPageProps {
   api: RequestsApi;
@@ -23,12 +26,14 @@ export function RequestsPage(props: RequestsPageProps) {
     catalog: {
       currentId,
       list,
+      listError,
       loadingList,
       navigatePage,
       openRequest,
       page,
       refreshPage,
       refreshing,
+      retryList,
     },
     detail: {
       bodies,
@@ -67,6 +72,7 @@ export function RequestsPage(props: RequestsPageProps) {
 
   return (
     <div className={styles.app}>
+      <PageError error={listError} onRetry={retryList} />
       <div
         className={`${styles.main} ${detailOpen && currentId !== null ? styles.detailOpen : ""}`}
       >
@@ -112,7 +118,7 @@ export function RequestsPage(props: RequestsPageProps) {
               title="Back to Request list"
               onClick={returnToList}
             >
-              <ChevronLeft size={18} aria-hidden="true" />
+              <ChevronLeft size={iconSize.md} aria-hidden="true" />
             </button>
           )}
           {loadingDetail ? (
@@ -120,7 +126,11 @@ export function RequestsPage(props: RequestsPageProps) {
               className={styles.emptyDetail}
               variant="detail"
               icon={
-                <LoaderCircle className={`${styles.loader} spin`} size={28} aria-label="Loading" />
+                <LoaderCircle
+                  className={`${styles.loader} spin`}
+                  size={iconSize.xl}
+                  aria-label="Loading"
+                />
               }
               description="Loading request…"
               role="status"
@@ -142,7 +152,7 @@ export function RequestsPage(props: RequestsPageProps) {
             <EmptyState
               className={styles.emptyDetail}
               variant="detail"
-              icon={<CircleAlert size={26} aria-hidden="true" />}
+              icon={<CircleAlert size={iconSize.xl} aria-hidden="true" />}
               title="Request unavailable"
               description="Request details could not be loaded."
             >
@@ -157,7 +167,11 @@ export function RequestsPage(props: RequestsPageProps) {
               className={styles.emptyDetail}
               variant="detail"
               icon={
-                <ArrowLeftRight size={26} data-icon="request-detail-empty" aria-hidden="true" />
+                <ArrowLeftRight
+                  size={iconSize.xl}
+                  data-icon="request-detail-empty"
+                  aria-hidden="true"
+                />
               }
               title="Select a Request"
               description="Choose a Request to inspect its summary and raw data."
@@ -177,6 +191,14 @@ export function RequestsPage(props: RequestsPageProps) {
             dialog.kind === "request"
               ? "Delete this Request?"
               : `Delete ${dialog.ids.length} selected Request${dialog.ids.length === 1 ? "" : "s"}?`
+          }
+          facts={
+            dialog.kind === "request"
+              ? requestDeletionFacts(
+                  list.requests.find((request) => request.id === dialog.id),
+                  dialog.id,
+                )
+              : undefined
           }
           message="Permanently deletes the selected raw Request and Response data."
           confirmLabel="Delete"

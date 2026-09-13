@@ -1,5 +1,6 @@
 .operationPanel header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -42,10 +43,40 @@
   white-space: nowrap;
 }
 
-.operationPanel header > span {
+.operationPanel header > .stateGroup {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   margin-left: auto;
+  gap: 8px;
+}
+
+/*
+ * Two readings of the same fact: the tone answers what happened, the elapsed
+ * time answers whether it is moving. The time stays a caption so the state
+ * remains the thing the eye lands on.
+ */
+.elapsed {
   color: var(--muted);
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The mark carries the state's tone, matching the label beside it. */
+.stateIcon.active {
+  color: var(--accent);
+}
+
+.stateIcon.good {
+  color: var(--success);
+}
+
+.stateIcon.warning {
+  color: var(--warning);
+}
+
+.stateIcon.error {
+  color: var(--danger);
 }
 
 .operationPanel pre {
@@ -66,25 +97,19 @@
 }
 
 .operationPanel footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   padding: 7px 10px;
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.operationPanel footer strong {
-  overflow: hidden;
-  color: var(--ink-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.operationGap,
+.operationError,
+.operationResult {
+  margin: 0;
 }
 
-.operationGap,
-.operationError {
-  margin: 0;
+.operationResult {
+  overflow-wrap: anywhere;
 }
 @media (max-width: 900px) {
   .operationPanel {

@@ -56,7 +56,7 @@ export function appendActivityItem(
             ...existing.value,
             entry_ids: [...existing.value.entry_ids, ...entry.value.entry_ids],
             status: entry.value.status,
-            summary: entry.value.summary || existing.value.summary,
+            summary: existing.value.summary || entry.value.summary,
           },
         };
       }
@@ -94,26 +94,111 @@ export function appendConversationMessage(
   return [...current, { kind: "message", value: message }];
 }
 
+export function toolNeedsAttention(status: ToolActivity["status"]): boolean {
+  return status === "failed" || status === "incomplete" || status === "unknown";
+}
+
+export function evidenceNeedsAttention(status: string): boolean {
+  return status === "malformed";
+}
+
 /** Summarizes one activity group for its collapsed disclosure. */
 export function activitySummary(entries: SessionActivityItem[]): {
   count: number;
+  toolCount: number;
+  evidenceCount: number;
   labels: string[];
+  title: string;
+  detail: string;
   hasIssue: boolean;
 } {
-  const labels = [
-    ...new Set(
-      entries
-        .map((entry) => (entry.kind === "tool" ? entry.value.name : entry.value.native_type))
-        .filter(Boolean),
-    ),
-  ];
-  const hasIssue = entries.some((entry) => {
-    if (entry.kind === "tool") {
-      return !["started", "completed"].includes(entry.value.status);
+  const toolCount = entries.filter((entry) => entry.kind === "tool").length;
+  const evidenceCount = entries.length - toolCount;
+  const hasIssue = entries.some((entry) =>
+    entry.kind === "tool"
+      ? toolNeedsAttention(entry.value.status)
+      : evidenceNeedsAttention(entry.value.status),
+  );
+  if (toolCount > 0) {
+    const labels = uniqueLabels(
+      entries.flatMap((entry) =>
+        entry.kind === "tool" && entry.value.name ? [entry.value.name] : [],
+      ),
+    );
+    return {
+      count: entries.length,
+      toolCount,
+      evidenceCount,
+      labels,
+      title: `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`,
+      detail: [
+        formatLabelList(labels),
+        evidenceCount > 0 ? `${evidenceCount} ${evidenceCount === 1 ? "event" : "events"}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      hasIssue,
+    };
+  }
+  return {
+    count: entries.length,
+    toolCount,
+    evidenceCount,
+    labels: [],
+    title: "Transcript activity",
+    detail: `${entries.length} ${entries.length === 1 ? "item" : "items"}`,
+    hasIssue,
+  };
+}
+
+/** Evidence-only groups before the first message stay off the reading stream. */
+export function conversationReadingTimeline(
+  timeline: readonly SessionTimelineItem[],
+): SessionTimelineItem[] {
+  let seenMessage = false;
+  return timeline.filter((item) => {
+    if (item.kind === "message") {
+      seenMessage = true;
+      return true;
     }
-    return ["malformed", "unsupported", "hidden_internal"].includes(entry.value.status);
+    return seenMessage || activitySummary(item.value).toolCount > 0;
   });
-  return { count: entries.length, labels, hasIssue };
+}
+
+function uniqueLabels(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function formatLabelList(labels: string[]): string {
+  if (labels.length === 0) return "";
+  return `${labels.slice(0, 3).join(", ")}${labels.length > 3 ? ` +${labels.length - 3}` : ""}`;
+}
+
+const ROUTINE_UNSUPPORTED_PROJECTION =
+  /^encountered \d+ unsupported Transcript Entry projection\(s\)$/;
+
+/** Routine Codex projection notes are counts, not attention chrome. */
+export function isRoutineProjectionWarning(warning: string): boolean {
+  return ROUTINE_UNSUPPORTED_PROJECTION.test(warning);
+}
+
+export function transcriptAttentionWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter((warning) => !isRoutineProjectionWarning(warning));
+}
+
+/** True when Conversation reading is actually impaired, not routine Codex projection. */
+export function transcriptNeedsAttention(input: {
+  partial: boolean;
+  malformedCount: number;
+  listWarningCount: number;
+  timeline: readonly SessionTimelineItem[];
+}): boolean {
+  return (
+    input.partial ||
+    input.malformedCount > 0 ||
+    input.listWarningCount > 0 ||
+    input.timeline.some((item) => item.kind === "activity" && activitySummary(item.value).hasIssue)
+  );
 }
 
 export interface SessionDetailState {
