@@ -16,7 +16,7 @@ pub(super) fn terminal_safe(value: &str) -> String {
     terminal_safe_with(value, |_| false)
 }
 
-fn terminal_safe_with(value: &str, keep_control: impl Fn(char) -> bool) -> String {
+pub(super) fn terminal_safe_with(value: &str, keep_control: impl Fn(char) -> bool) -> String {
     let mut output = String::with_capacity(value.len());
     for character in value.chars() {
         if character.is_control() && !keep_control(character) {

@@ -4,6 +4,7 @@ import type { SessionApi } from "@/api/sessions";
 import { SessionEvidenceDisclosure } from "@/features/sessions/detail/SessionEvidenceDisclosure";
 import {
   activitySummary,
+  isRoutineEvidence,
   type SessionActivityItem,
 } from "@/features/sessions/detail/sessionDetail";
 import {
@@ -32,10 +33,55 @@ export function SessionActivityGroup({
 }: SessionActivityGroupProps) {
   const disclosureRef = useRef<HTMLDetailsElement>(null);
   const summary = activitySummary(entries);
+  const routine = entries.filter(isRoutineEvidence);
+  const shown = entries.filter((entry) => !isRoutineEvidence(entry));
 
   useEffect(() => {
     if (disclosureRef.current) disclosureRef.current.open = false;
   }, [reloadRevision]);
+
+  const renderEntry = (entry: SessionActivityItem) => {
+    if (entry.kind === "tool") {
+      const headline = toolActivityHeadline(entry.value.summary);
+      return (
+        <SessionEvidenceDisclosure
+          key={`tool:${entry.value.entry_ids.join(",")}`}
+          api={api}
+          entryId={entry.value.entry_ids[0]}
+          label={
+            <>
+              <Wrench size={iconSize.xs} aria-hidden="true" /> {entry.value.name}
+              {headline ? ` · ${headline}` : ""}
+            </>
+          }
+          meta={compactMessageTimestamp(entry.value.timestamp, session.start_ts)}
+          preview={entry.value.summary}
+          result={
+            entry.result
+              ? { entryId: entry.result.entry_ids[0], preview: entry.result.summary }
+              : undefined
+          }
+          session={session}
+          snapshot={snapshot}
+          status="tool"
+          toolStatus={entry.value.status}
+        />
+      );
+    }
+    return (
+      <SessionEvidenceDisclosure
+        key={entry.value.entry_id}
+        api={api}
+        entryId={entry.value.entry_id}
+        label={entry.value.native_type}
+        meta={`${entry.value.status} · ${compactMessageTimestamp(entry.value.timestamp, session.start_ts)}`}
+        preview={entry.value.preview}
+        session={session}
+        snapshot={snapshot}
+        status={entry.value.status}
+      />
+    );
+  };
 
   return (
     <details ref={disclosureRef} className={styles.sessionActivityGroup}>
@@ -47,49 +93,18 @@ export function SessionActivityGroup({
             <AlertTriangle size={iconSize.xs} aria-label="Activity has diagnostics" />
           )}
         </span>
-        {summary.detail && <span>{summary.detail}</span>}
+        {summary.detail && <span className={styles.sessionRowMeta}>{summary.detail}</span>}
       </summary>
       <div className={styles.sessionActivityGroupItems}>
-        {entries.map((entry) => {
-          if (entry.kind === "tool") {
-            const headline = toolActivityHeadline(entry.value.summary);
-            return (
-              <SessionEvidenceDisclosure
-                key={`tool:${entry.value.entry_ids.join(",")}`}
-                api={api}
-                entryId={entry.value.entry_ids[0]}
-                label={
-                  <>
-                    <Wrench size={iconSize.xs} aria-hidden="true" /> {entry.value.name}
-                    {headline ? ` · ${headline}` : ""}
-                  </>
-                }
-                meta={
-                  ["started", "completed"].includes(entry.value.status)
-                    ? compactMessageTimestamp(entry.value.timestamp, session.start_ts)
-                    : entry.value.status
-                }
-                preview={entry.value.summary}
-                session={session}
-                snapshot={snapshot}
-                status="tool"
-              />
-            );
-          }
-          return (
-            <SessionEvidenceDisclosure
-              key={entry.value.entry_id}
-              api={api}
-              entryId={entry.value.entry_id}
-              label={entry.value.native_type}
-              meta={`${entry.value.status} · ${compactMessageTimestamp(entry.value.timestamp, session.start_ts)}`}
-              preview={entry.value.preview}
-              session={session}
-              snapshot={snapshot}
-              status={entry.value.status}
-            />
-          );
-        })}
+        {shown.map(renderEntry)}
+        {routine.length > 0 && (
+          <details className={styles.sessionRoutineEntries}>
+            <summary>
+              {routine.length} routine {routine.length === 1 ? "entry" : "entries"}
+            </summary>
+            <div className={styles.sessionActivityGroupItems}>{routine.map(renderEntry)}</div>
+          </details>
+        )}
       </div>
     </details>
   );

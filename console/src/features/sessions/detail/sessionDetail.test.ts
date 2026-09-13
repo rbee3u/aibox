@@ -74,12 +74,14 @@ describe("Conversation attention", () => {
     expect(activitySummary([{ kind: "tool", value: tool }]).hasIssue).toBe(false);
   });
 
-  it("labels tool-bearing groups as tools and keeps evidence-only groups as quiet Transcript activity", () => {
+  it("labels tool-bearing groups as tools and counts only diagnostics beside them", () => {
     expect(
       activitySummary([evidence("filtered"), evidence("unsupported", "world_state")]),
     ).toMatchObject({
       title: "Transcript activity",
-      detail: "2 items",
+      detail: "1 unsupported",
+      routineCount: 1,
+      diagnosticCount: 1,
       labels: [],
     });
     expect(
@@ -90,7 +92,9 @@ describe("Conversation attention", () => {
       ]),
     ).toMatchObject({
       title: "1 tool",
-      detail: "exec · 2 events",
+      detail: "exec",
+      routineCount: 2,
+      diagnosticCount: 0,
     });
     expect(activitySummary([{ kind: "tool", value: { ...tool, name: "exec" } }])).toMatchObject({
       title: "1 tool",
@@ -139,8 +143,8 @@ describe("Conversation attention", () => {
     ).toEqual(["line 2: malformed JSONL (invalid)", "skipped 1 malformed JSONL record(s)"]);
   });
 
-  it("keeps leading evidence-only groups off the Conversation reading stream", () => {
-    const leading = {
+  it("keeps routine-only groups off the Conversation reading stream wherever they fall", () => {
+    const diagnostic = {
       kind: "activity" as const,
       value: [evidence("filtered"), evidence("unsupported")],
     };
@@ -148,11 +152,14 @@ describe("Conversation attention", () => {
       kind: "activity" as const,
       value: [{ kind: "tool" as const, value: tool }],
     };
-    const trailing = { kind: "activity" as const, value: [evidence("hidden_internal")] };
+    const routine = {
+      kind: "activity" as const,
+      value: [evidence("hidden_internal"), evidence("filtered")],
+    };
     expect(
-      conversationReadingTimeline([leading, { kind: "message", value: message }, trailing]),
-    ).toEqual([{ kind: "message", value: message }, trailing]);
-    expect(conversationReadingTimeline([leading])).toEqual([]);
+      conversationReadingTimeline([routine, { kind: "message", value: message }, routine]),
+    ).toEqual([{ kind: "message", value: message }]);
+    expect(conversationReadingTimeline([diagnostic])).toEqual([diagnostic]);
     expect(conversationReadingTimeline([tools, { kind: "message", value: message }])).toEqual([
       tools,
       { kind: "message", value: message },
@@ -354,7 +361,8 @@ describe("Session detail reducer", () => {
       if (firstActivity?.kind === "tool") {
         expect(firstActivity.value.entry_ids).toEqual(["tool-0-start", "tool-0-complete"]);
         expect(firstActivity.value.status).toBe("completed");
-        expect(firstActivity.value.summary).toBe("Completed 0");
+        expect(firstActivity.value.summary).toBe("");
+        expect(firstActivity.result?.summary).toBe("Completed 0");
       }
     }
     const last = state.timeline.at(-1);

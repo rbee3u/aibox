@@ -16,7 +16,13 @@ export type SessionTimelineItem =
   | { kind: "activity"; value: SessionActivityItem[] };
 
 export type SessionActivityItem =
-  { kind: "tool"; value: ToolActivity } | { kind: "evidence"; value: TranscriptEvidenceSummary };
+  | {
+      kind: "tool";
+      value: ToolActivity;
+      /** The terminal record for this call, once it has arrived: what came back. */
+      result?: ToolActivity;
+    }
+  | { kind: "evidence"; value: TranscriptEvidenceSummary };
 
 export function sessionItemKey(item: SessionTimelineItem): string {
   if (item.kind === "message") return `message:${item.value.entry_ids.join(",")}`;
@@ -56,8 +62,8 @@ export function appendActivityItem(
             ...existing.value,
             entry_ids: [...existing.value.entry_ids, ...entry.value.entry_ids],
             status: entry.value.status,
-            summary: existing.value.summary || entry.value.summary,
           },
+          result: entry.value,
         };
       }
       const next = [...current];
@@ -117,23 +123,49 @@ export function evidenceNeedsAttention(status: string): boolean {
   return status === "malformed";
 }
 
+/**
+ * Housekeeping the CLI writes around every call — mode, permission, latch,
+ * last prompt — and reasoning the reader hides on purpose. Neither is
+ * something a reader of the Conversation is looking for.
+ */
+export function isRoutineEvidence(entry: SessionActivityItem): boolean {
+  return (
+    entry.kind === "evidence" &&
+    (entry.value.status === "filtered" || entry.value.status === "hidden_internal")
+  );
+}
+
 /** Summarizes one activity group for its collapsed disclosure. */
 export function activitySummary(entries: SessionActivityItem[]): {
   count: number;
   toolCount: number;
-  evidenceCount: number;
+  /** Evidence the reader could not project: unsupported or malformed. */
+  diagnosticCount: number;
+  routineCount: number;
   labels: string[];
   title: string;
   detail: string;
   hasIssue: boolean;
 } {
   const toolCount = entries.filter((entry) => entry.kind === "tool").length;
-  const evidenceCount = entries.length - toolCount;
+  const routineCount = entries.filter(isRoutineEvidence).length;
+  const diagnostics = entries.filter(
+    (entry) => entry.kind === "evidence" && !isRoutineEvidence(entry),
+  );
   const hasIssue = entries.some((entry) =>
     entry.kind === "tool"
       ? toolNeedsAttention(entry.value.status)
       : evidenceNeedsAttention(entry.value.status),
   );
+  const diagnosticDetail = Object.entries(
+    diagnostics.reduce<Record<string, number>>((counts, entry) => {
+      if (entry.kind === "evidence")
+        counts[entry.value.status] = (counts[entry.value.status] ?? 0) + 1;
+      return counts;
+    }, {}),
+  )
+    .map(([status, count]) => `${count} ${status}`)
+    .join(" · ");
   if (toolCount > 0) {
     const labels = uniqueLabels(
       entries.flatMap((entry) =>
@@ -143,40 +175,37 @@ export function activitySummary(entries: SessionActivityItem[]): {
     return {
       count: entries.length,
       toolCount,
-      evidenceCount,
+      diagnosticCount: diagnostics.length,
+      routineCount,
       labels,
       title: `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`,
-      detail: [
-        formatLabelList(labels),
-        evidenceCount > 0 ? `${evidenceCount} ${evidenceCount === 1 ? "event" : "events"}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      detail: [formatLabelList(labels), diagnosticDetail].filter(Boolean).join(" · "),
       hasIssue,
     };
   }
   return {
     count: entries.length,
     toolCount,
-    evidenceCount,
+    diagnosticCount: diagnostics.length,
+    routineCount,
     labels: [],
     title: "Transcript activity",
-    detail: `${entries.length} ${entries.length === 1 ? "item" : "items"}`,
+    detail: diagnosticDetail,
     hasIssue,
   };
 }
 
-/** Evidence-only groups before the first message stay off the reading stream. */
+/**
+ * Groups holding nothing but routine evidence stay off the reading stream:
+ * there is nothing in them a reader would open. Details still counts them.
+ */
 export function conversationReadingTimeline(
   timeline: readonly SessionTimelineItem[],
 ): SessionTimelineItem[] {
-  let seenMessage = false;
   return timeline.filter((item) => {
-    if (item.kind === "message") {
-      seenMessage = true;
-      return true;
-    }
-    return seenMessage || activitySummary(item.value).toolCount > 0;
+    if (item.kind === "message") return true;
+    const summary = activitySummary(item.value);
+    return summary.toolCount > 0 || summary.diagnosticCount > 0;
   });
 }
 

@@ -781,25 +781,32 @@
 .sessionActivityGroup > summary span:first-of-type svg[aria-label="Activity has diagnostics"] {
   color: var(--warning);
 }
-.sessionActivity summary span:first-of-type,
-.sessionEvidence summary span:first-of-type,
-.sessionActivityGroup summary span:first-of-type {
+.sessionActivity summary > span:first-of-type,
+.sessionEvidence summary > span:first-of-type,
+.sessionActivityGroup summary > span:first-of-type {
   min-width: 0;
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
 }
 
-.sessionActivity summary span:first-of-type {
+.sessionActivity summary > span:first-of-type {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sessionActivity summary span:nth-of-type(2),
-.sessionEvidence summary span:nth-of-type(2),
-.sessionActivityGroup summary span:nth-of-type(2) {
+
+/* The row's time keeps one line and its own width; the label gives way. */
+.sessionRowMeta {
+  flex-shrink: 0;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.sessionActivityGroup > summary .sessionRowMeta {
+  flex-shrink: 1;
+  white-space: normal;
 }
 .sessionActivity[open] summary,
 .sessionEvidence[open] summary,
@@ -815,17 +822,97 @@
   font-size: var(--text-xs);
 }
 
-.sessionEvidenceRaw {
+.sessionActivity summary > [data-status-tone] {
+  flex-shrink: 0;
+}
+
+.sessionEvidenceRawList {
+  display: grid;
+  gap: 4px;
   border-top: 1px solid var(--line-content);
+  padding: 6px 8px;
+}
+
+.sessionEvidenceRaw > summary {
+  display: block;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.sessionEvidenceRaw > summary:hover {
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
+}
+
+.sessionEvidenceRaw > summary:active {
+  background: var(--surface-pressed);
 }
 
 .sessionEvidenceRaw button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin: 9px 12px 0;
+  margin: 6px 6px 0;
   color: var(--accent);
   font-size: var(--text-xs);
+}
+
+.sessionEvidenceRaw pre {
+  max-height: 360px;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+/* A tool row reads as an exchange: what was asked, then what came back. */
+.sessionToolExchange section + section {
+  border-top: 1px solid var(--line-content);
+}
+
+.sessionToolExchange h4 {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sessionToolExchange pre {
+  padding-top: 6px;
+}
+
+.sessionToolResultFailed h4,
+.sessionToolResultFailed pre {
+  color: var(--danger);
+}
+
+/* Housekeeping the CLI writes around every call folds behind one line. */
+.sessionRoutineEntries > summary {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.sessionRoutineEntries > summary:hover {
+  background: var(--surface-hover);
+}
+
+.sessionRoutineEntries > summary:active {
+  background: var(--surface-pressed);
+}
+
+.sessionRoutineEntries > div {
+  padding: 6px 0 0;
+  border-top: 0;
 }
 
 .sessionActivity p,

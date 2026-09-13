@@ -14,8 +14,8 @@
 
 use crate::session::{
     ConversationMessage, ConversationNotice, ConversationRole, DetailRecord, PromptRecord,
-    SessionBackend, SessionNativeFacts, ToolActivity, ToolActivityStatus, bounded_preview,
-    evidence_for, ts_of,
+    SessionBackend, SessionNativeFacts, ToolActivity, ToolActivityStatus, evidence_for,
+    tool_input_preview, tool_output_preview, ts_of,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -153,7 +153,7 @@ impl SessionBackend for Claude {
                         status: ToolActivityStatus::Started,
                         summary: item
                             .get("input")
-                            .map(|input| bounded_preview(&input.to_string()))
+                            .map(tool_input_preview)
                             .unwrap_or_default(),
                     }));
                 }
@@ -173,7 +173,7 @@ impl SessionBackend for Claude {
                         },
                         summary: item
                             .get("content")
-                            .map(|content| bounded_preview(&content.to_string()))
+                            .map(tool_output_preview)
                             .unwrap_or_default(),
                     }));
                 }

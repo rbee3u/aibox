@@ -88,7 +88,7 @@ describe("SessionPage", () => {
     const activitySummary = screen.getByText("Transcript activity");
     const activityGroup = activitySummary.closest("details");
     const collapsedSummary = activitySummary.closest("summary");
-    expect(collapsedSummary).toHaveTextContent("2 items");
+    expect(collapsedSummary).toHaveTextContent("1 unsupported");
     expect(collapsedSummary).not.toHaveTextContent("response_item");
     expect(collapsedSummary).not.toHaveTextContent("world_state");
     expect(activityGroup?.querySelector("summary svg")).toBeNull();
@@ -165,11 +165,25 @@ describe("SessionPage", () => {
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
     expect(screen.getByText("1 tool")).toBeInTheDocument();
-    expect(screen.getByText("exec · 1 event")).toBeInTheDocument();
+    expect(screen.getByText("1 tool").closest("summary")).toHaveTextContent(/^1 toolexec$/);
     expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
     await user.click(screen.getByText("1 tool"));
     expect(screen.getByText(/exec · git status --porcelain/)).toBeInTheDocument();
-    expect(screen.queryByText("Script completed")).not.toBeInTheDocument();
+    // The event beside it is housekeeping: folded, not gone.
+    const routine = screen.getByText("1 routine entry").closest("details");
+    expect(routine).not.toHaveAttribute("open");
+    expect(screen.getByText("event_msg").closest("details")).toBe(
+      routine?.querySelector("details"),
+    );
+    await user.click(screen.getByText("1 routine entry"));
+    expect(routine).toHaveAttribute("open");
+    // The result rides on the call's row, under its own heading.
+    await user.click(screen.getByText(/exec · git status --porcelain/));
+    expect(screen.getByRole("heading", { name: "Input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Result" })).toBeInTheDocument();
+    expect(screen.getByText("Script completed")).toBeInTheDocument();
+    expect(screen.getByText("Raw call entry")).toBeInTheDocument();
+    expect(screen.getByText("Raw result entry")).toBeInTheDocument();
   });
   it("keeps Conversation alarms for malformed Transcript records", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
@@ -338,7 +352,7 @@ describe("SessionPage", () => {
       screen.getAllByRole("button", { name: /Jump to message 1: Please inspect/ }),
     ).toHaveLength(2);
   });
-  it("keeps leading evidence-only groups off Conversation and on Details", async () => {
+  it("keeps routine-only groups off Conversation and on Details", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
       handlers.onEvidence({
         entry_id: "leading-1",
@@ -390,9 +404,10 @@ describe("SessionPage", () => {
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
     expect(screen.getByRole("article")).toHaveTextContent("Please inspect this.");
-    const activity = screen.getByText("Transcript activity");
-    expect(activity.closest("summary")).toHaveTextContent("1 item");
+    // Both groups hold only routine housekeeping, so neither reaches the reading stream.
+    expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
     expect(screen.queryByText("session_meta")).not.toBeInTheDocument();
+    expect(screen.queryByText("event_msg")).not.toBeInTheDocument();
     await user.click(
       within(screen.getByRole("navigation", { name: "Session views" })).getByRole("button", {
         name: /Details/,
