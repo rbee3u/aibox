@@ -24,9 +24,10 @@ pub(crate) use detail::{
 };
 pub(crate) use filesystem::{SessionDiscoverySummary, UUID_TEXT_LEN};
 pub(crate) use model::{
-    ConversationMessage, ConversationRole, DetailRecord, PromptRecord, SessionDetailMeta,
-    SessionDetailStats, SessionListData, SessionNativeFacts, ToolActivity, ToolActivityStatus,
-    TranscriptEvidence, TranscriptEvidenceSummary, bounded_preview, evidence_for, ts_of,
+    ConversationMessage, ConversationNotice, ConversationRole, DetailRecord, PromptRecord,
+    SessionDetailMeta, SessionDetailStats, SessionListData, SessionNativeFacts, ToolActivity,
+    ToolActivityStatus, TranscriptEvidence, TranscriptEvidenceSummary, bounded_preview,
+    evidence_for, ts_of,
 };
 #[cfg(test)]
 pub(crate) use model::{EvidenceEncoding, SessionListRow};

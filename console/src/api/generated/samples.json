@@ -170,6 +170,18 @@
       }
     },
     {
+      "type": "message",
+      "message": {
+        "entry_ids": [
+          "entry-1b"
+        ],
+        "role": "assistant",
+        "timestamp": "2026-08-27T00:00:01Z",
+        "text": "API Error: Request rejected (429)",
+        "notice": "api_error"
+      }
+    },
+    {
       "type": "tool_activity",
       "tool_activity": {
         "entry_ids": [

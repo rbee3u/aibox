@@ -94,6 +94,18 @@ pub(crate) enum ConversationRole {
     Assistant,
 }
 
+/// A Transcript line the Coding Agent CLI wrote in a speaker's slot without
+/// anyone having said it. The Console renders these as events, not speech.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConversationNotice {
+    /// The model request failed; the text is the CLI's error line.
+    ApiError,
+    /// The user cut the turn short; the text is the CLI's marker.
+    Interrupted,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ConversationMessage {
@@ -101,6 +113,9 @@ pub(crate) struct ConversationMessage {
     pub(crate) role: ConversationRole,
     pub(crate) timestamp: String,
     pub(crate) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) notice: Option<ConversationNotice>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]

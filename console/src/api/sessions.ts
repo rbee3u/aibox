@@ -2,6 +2,7 @@ import type { TenantRow } from "@/api/core";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
   ConversationMessage,
+  ConversationNotice,
   SessionDetailMeta,
   SessionDetailStats,
   SessionDetailFrame,
@@ -19,6 +20,7 @@ import type { TenantSelection } from "@/domain/tenant";
 export type SessionRow = SessionListRow;
 export type {
   ConversationMessage,
+  ConversationNotice,
   SessionDetailMeta,
   SessionDetailStats,
   SessionListData,

@@ -71,13 +71,28 @@ export function appendActivityItem(
   return [...current, { kind: "activity", value: [entry] }];
 }
 
-/** Adjacent Agent messages merge only when no other record separates them. */
+/** A CLI-written line in a speaker's slot: an event, not something anyone said. */
+export function isConversationNotice(message: ConversationMessage): boolean {
+  return message.notice !== undefined;
+}
+
+/**
+ * Adjacent Agent messages merge only when no other record separates them. A
+ * notice never merges: it is not the Agent's voice, and an API error folded
+ * into the reply before it would read as the model's last sentence.
+ */
 export function appendConversationMessage(
   current: SessionTimelineItem[],
   message: ConversationMessage,
 ): SessionTimelineItem[] {
   const last = current.at(-1);
-  if (message.role === "assistant" && last?.kind === "message" && last.value.role === "assistant") {
+  if (
+    message.role === "assistant" &&
+    !isConversationNotice(message) &&
+    last?.kind === "message" &&
+    last.value.role === "assistant" &&
+    !isConversationNotice(last.value)
+  ) {
     return [
       ...current.slice(0, -1),
       {

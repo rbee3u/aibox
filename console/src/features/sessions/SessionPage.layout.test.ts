@@ -32,3 +32,9 @@ describe("Session detail copy controls", () => {
     expect(rule![1]).not.toMatch(/flex\s*:/);
   });
 });
+
+describe("Session detail header", () => {
+  it("never shrinks the action group below its controls", () => {
+    expect(css).toMatch(/\.sessionDetailActions\s*\{[^}]*flex-shrink:\s*0/s);
+  });
+});

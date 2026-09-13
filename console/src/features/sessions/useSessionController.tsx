@@ -14,6 +14,7 @@ import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
 import {
+  isConversationNotice,
   transcriptAttentionNotice,
   type SessionTimelineItem,
 } from "@/features/sessions/detail/sessionDetail";
@@ -430,7 +431,9 @@ export function useSessionController({
   const userMessages = useMemo(
     () =>
       timeline.flatMap((item) =>
-        item.kind === "message" && item.value.role === "user" ? [item.value] : [],
+        item.kind === "message" && item.value.role === "user" && !isConversationNotice(item.value)
+          ? [item.value]
+          : [],
       ),
     [timeline],
   );

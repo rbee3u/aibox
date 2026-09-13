@@ -61,9 +61,10 @@ mod tests {
     use crate::service::control::{AgentTenantQuery, ControlErrorResponse};
     use crate::service::operation::{OperationLog, OperationSnapshot, OperationState};
     use crate::session::{
-        ConversationMessage, ConversationRole, EvidenceEncoding, SessionDetailMeta,
-        SessionDetailStats, SessionDiscoverySummary, SessionListData, SessionListRow, ToolActivity,
-        ToolActivityStatus, TranscriptEvidence, TranscriptEvidenceSummary,
+        ConversationMessage, ConversationNotice, ConversationRole, EvidenceEncoding,
+        SessionDetailMeta, SessionDetailStats, SessionDiscoverySummary, SessionListData,
+        SessionListRow, ToolActivity, ToolActivityStatus, TranscriptEvidence,
+        TranscriptEvidenceSummary,
     };
     use serde::Serialize;
     use std::collections::VecDeque;
@@ -212,6 +213,7 @@ mod tests {
             SessionListRow,
             SessionListData,
             ConversationMessage,
+            ConversationNotice,
             ConversationRole,
             ToolActivity,
             ToolActivityStatus,
@@ -360,6 +362,16 @@ mod tests {
                         role: ConversationRole::User,
                         timestamp: "2026-08-27T00:00:00Z".to_string(),
                         text: "hello".to_string(),
+                        notice: None,
+                    },
+                },
+                SessionDetailFrame::Message {
+                    message: ConversationMessage {
+                        entry_ids: vec!["entry-1b".to_string()],
+                        role: ConversationRole::Assistant,
+                        timestamp: "2026-08-27T00:00:01Z".to_string(),
+                        text: "API Error: Request rejected (429)".to_string(),
+                        notice: Some(ConversationNotice::ApiError),
                     },
                 },
                 SessionDetailFrame::ToolActivity {

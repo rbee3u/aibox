@@ -13,8 +13,9 @@
 //! The session id is just the transcript filename without `.jsonl`.
 
 use crate::session::{
-    ConversationMessage, ConversationRole, DetailRecord, PromptRecord, SessionBackend,
-    SessionNativeFacts, ToolActivity, ToolActivityStatus, bounded_preview, evidence_for, ts_of,
+    ConversationMessage, ConversationNotice, ConversationRole, DetailRecord, PromptRecord,
+    SessionBackend, SessionNativeFacts, ToolActivity, ToolActivityStatus, bounded_preview,
+    evidence_for, ts_of,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -103,15 +104,18 @@ impl SessionBackend for Claude {
                     entry_ids: vec![entry_id.to_string()],
                     role: ConversationRole::Assistant,
                     timestamp: ts_of(value),
+                    notice: notice_for(value, role, text),
                     text: text.clone(),
                 })];
             }
             Value::String(_) if user_text.is_some() => {
+                let text = user_text.unwrap_or_default();
                 return vec![DetailRecord::Message(ConversationMessage {
                     entry_ids: vec![entry_id.to_string()],
                     role: ConversationRole::User,
                     timestamp: ts_of(value),
-                    text: user_text.unwrap_or_default(),
+                    notice: notice_for(value, role, &text),
+                    text,
                 })];
             }
             Value::Array(items) => items,
@@ -194,6 +198,7 @@ impl SessionBackend for Claude {
                         ConversationRole::Assistant
                     },
                     timestamp: ts_of(value),
+                    notice: notice_for(value, role, &text),
                     text,
                 }),
             );
@@ -264,6 +269,23 @@ impl SessionBackend for Claude {
 /// The content is typically a plain string; some turns use an array of blocks,
 /// so we join supported text blocks, ignore known non-text blocks, and flag
 /// unknown shapes without hiding text that was still readable.
+/// The CLI writes two kinds of line in a speaker's slot that nobody said: an
+/// assistant turn flagged `isApiErrorMessage` when the model request failed,
+/// and a user turn holding `[Request interrupted by user…]` when the turn was
+/// cut short. The text is kept verbatim; the notice tells the reader whose
+/// voice it is not.
+fn notice_for(value: &Value, role: &str, text: &str) -> Option<ConversationNotice> {
+    match role {
+        "assistant" if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) => {
+            Some(ConversationNotice::ApiError)
+        }
+        "user" if text.starts_with("[Request interrupted by user") => {
+            Some(ConversationNotice::Interrupted)
+        }
+        _ => None,
+    }
+}
+
 fn content_record(value: &Value) -> PromptRecord {
     match value
         .get("message")

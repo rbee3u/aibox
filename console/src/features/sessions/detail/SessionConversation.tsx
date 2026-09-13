@@ -1,6 +1,6 @@
-import { AlertTriangle, ArrowDown } from "lucide-react";
+import { AlertTriangle, ArrowDown, Ban, type LucideIcon } from "lucide-react";
 import type { RefObject, UIEvent } from "react";
-import type { ConversationMessage, SessionApi } from "@/api/sessions";
+import type { ConversationMessage, ConversationNotice, SessionApi } from "@/api/sessions";
 import { SessionActivityGroup } from "@/features/sessions/detail/SessionActivityGroup";
 import { SessionConversationNav } from "@/features/sessions/detail/SessionConversationNav";
 import { SessionMessageContent } from "@/features/sessions/detail/SessionMessageContent";
@@ -15,11 +15,24 @@ import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
-import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { resourceIcons, toneIcons } from "@/shared/icons/consoleIcons";
 import styles from "@/features/sessions/SessionPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
+
+/**
+ * A notice is a line the CLI wrote in a speaker's slot. It keeps its verbatim
+ * text but drops the author, so a failed request never reads as the Agent's
+ * last sentence and an interruption never reads as something the user typed.
+ */
+const conversationNotices: Record<
+  ConversationNotice,
+  { icon: LucideIcon; label: string; className: "sessionNoticeError" | "sessionNoticeMuted" }
+> = {
+  api_error: { icon: toneIcons.error, label: "Request failed", className: "sessionNoticeError" },
+  interrupted: { icon: Ban, label: "Turn interrupted", className: "sessionNoticeMuted" },
+};
 
 interface SessionConversationProps {
   api: SessionApi;
@@ -91,6 +104,27 @@ export function SessionConversation({
               </button>
             )}
             {readingTimeline.map((item) => {
+              if (item.kind === "message" && item.value.notice) {
+                const notice = conversationNotices[item.value.notice];
+                const NoticeIcon = notice.icon;
+                return (
+                  <div
+                    key={sessionItemKey(item)}
+                    className={`${styles.sessionNotice} ${styles[notice.className]}`}
+                    role="note"
+                    aria-label={notice.label}
+                  >
+                    <NoticeIcon size={iconSize.xs} aria-hidden="true" />
+                    <span>{item.value.text}</span>
+                    <time
+                      dateTime={item.value.timestamp}
+                      title={formatTimestamp(item.value.timestamp)}
+                    >
+                      {compactMessageTimestamp(item.value.timestamp, session.start_ts)}
+                    </time>
+                  </div>
+                );
+              }
               if (item.kind === "message") {
                 const label = item.value.role === "user" ? "You" : session.source.agentLabel;
                 const timestamp = compactMessageTimestamp(item.value.timestamp, session.start_ts);

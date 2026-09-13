@@ -8,7 +8,10 @@
   overflow-wrap: anywhere;
 }
 
+/* Verbatim means line breaks and spacing survive, not that a prompt reads as
+ * code: the card, not the face, says who is speaking. */
 .plainText {
+  font-family: inherit;
   white-space: pre-wrap;
 }
 

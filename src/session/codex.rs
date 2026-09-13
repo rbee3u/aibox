@@ -161,6 +161,7 @@ impl SessionBackend for Codex {
                 role: ConversationRole::User,
                 timestamp: ts_of(value),
                 text,
+                notice: None,
             })];
             if unsupported {
                 output.push(DetailRecord::Evidence(evidence_for(
@@ -184,6 +185,7 @@ impl SessionBackend for Codex {
                     role: ConversationRole::Assistant,
                     timestamp: ts_of(value),
                     text,
+                    notice: None,
                 })];
                 if unsupported {
                     output.push(DetailRecord::Evidence(evidence_for(

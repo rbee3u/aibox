@@ -241,6 +241,7 @@
 
 .sessionDetailActions {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
@@ -655,6 +656,42 @@
   background: var(--surface-inset);
   box-shadow: none;
 }
+/* A CLI-written event sits in the Agent's column without an author: icon,
+ * verbatim text, and time on one line, toned by what happened. */
+.sessionNotice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.sessionNotice svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.sessionNotice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sessionNotice time {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionNoticeError {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionNoticeMuted {
+  color: var(--muted);
+}
+
 /* Author and timestamp, or title and count, are one metadata group: they stay
  * adjacent instead of tracking the two edges of the measure. */
 .sessionMessage header,

@@ -271,6 +271,73 @@ describe("SessionPage", () => {
       "First prompt",
     );
   });
+  it("renders CLI-written lines as events, not speech", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-2"],
+        role: "assistant",
+        timestamp: firstSession.start_ts,
+        text: "Starting.",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-3"],
+        role: "assistant",
+        timestamp: firstSession.start_ts,
+        text: "API Error: Request rejected (429)",
+        notice: "api_error",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-4"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "[Request interrupted by user]",
+        notice: "interrupted",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 4,
+          tool_count: 0,
+          entry_count: 4,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    const failure = await screen.findByRole("note", { name: "Request failed" });
+    expect(failure).toHaveTextContent("API Error: Request rejected (429)");
+    expect(screen.getByRole("note", { name: "Turn interrupted" })).toHaveTextContent(
+      "[Request interrupted by user]",
+    );
+    // The reply before the failure keeps its own text: the error is not merged in.
+    const reply = screen.getAllByRole("article").find((a) => a.textContent?.includes("Starting."));
+    expect(reply).not.toHaveTextContent("API Error");
+    expect(failure.closest("article")).toBeNull();
+    // Neither line is anyone's speech: no author, and the interruption is not a navigator stop.
+    expect(screen.queryByText("[Request interrupted by user]")?.closest("article")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /Jump to message/ })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /Jump to message 1: Please inspect/ }),
+    ).toHaveLength(2);
+  });
   it("keeps leading evidence-only groups off Conversation and on Details", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
       handlers.onEvidence({

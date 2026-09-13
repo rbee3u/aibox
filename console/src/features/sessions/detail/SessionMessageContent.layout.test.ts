@@ -22,3 +22,11 @@ describe("Session conversation code copy", () => {
     expect(css).not.toMatch(/\.copyCode\s*\{[^}]*width:\s*26px/s);
   });
 });
+
+describe("Session user prompt", () => {
+  it("reads in the body face, keeping only the verbatim whitespace", () => {
+    expect(css).toMatch(
+      /\.plainText\s*\{[^}]*font-family:\s*inherit;[^}]*white-space:\s*pre-wrap/s,
+    );
+  });
+});

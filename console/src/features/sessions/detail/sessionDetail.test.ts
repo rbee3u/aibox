@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ConversationMessage, SessionDetailStats, ToolActivity } from "@/api/sessions";
 import {
   activitySummary,
+  appendConversationMessage,
+  isConversationNotice,
   appendActivityItem,
   conversationReadingTimeline,
   emptySessionDetail,
@@ -204,6 +206,26 @@ describe("Conversation attention", () => {
         ],
       }),
     ).toBe("Transcript truncated at 4 MB");
+  });
+});
+
+describe("Conversation notices", () => {
+  it("never merge into the Agent reply beside them", () => {
+    const reply = { ...message, role: "assistant" as const, text: "Working on it." };
+    const failure = {
+      ...message,
+      entry_ids: ["m-err"],
+      role: "assistant" as const,
+      text: "API Error: Request rejected (429)",
+      notice: "api_error" as const,
+    };
+    const merged = appendConversationMessage([{ kind: "message", value: reply }], failure);
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toEqual({ kind: "message", value: failure });
+    const after = appendConversationMessage(merged, { ...reply, entry_ids: ["m-next"] });
+    expect(after).toHaveLength(3);
+    expect(isConversationNotice(failure)).toBe(true);
+    expect(isConversationNotice(reply)).toBe(false);
   });
 });
 
