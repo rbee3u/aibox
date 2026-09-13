@@ -215,5 +215,8 @@ describe("SessionPage", () => {
         "This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details.",
       ),
     ).toBeInTheDocument();
+    // The rail stays mounted with nothing to number, so the reading keeps its column.
+    expect(screen.getAllByRole("navigation", { name: "Conversation messages" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /Jump to message/ })).not.toBeInTheDocument();
   });
 });

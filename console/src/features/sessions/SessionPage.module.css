@@ -373,16 +373,22 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  /* The rail may render empty; the reading never falls into its column. */
+  grid-column: 2;
 }
 
 .sessionConversationRail {
   position: relative;
   display: flex;
   min-height: 0;
+  align-items: flex-start;
   justify-content: center;
   overflow: auto;
   border-right: 1px solid var(--line-content);
   background: var(--bg-canvas);
+  scrollbar-width: none;
+  /* Following the current stop keeps it a stop away from the rail's edge. */
+  scroll-padding-block: 38px;
 }
 
 .sessionConversationRail .sessionConversationNavItems {
@@ -393,10 +399,11 @@
   padding: 22px 0;
 }
 
+/* The connector runs from the first stop's center to the last's, no further. */
 .sessionConversationRail .sessionConversationNavItems::before {
   position: absolute;
-  top: 28px;
-  bottom: 28px;
+  top: 38px;
+  bottom: 38px;
   left: 50%;
   width: 1px;
   background: var(--line-strong);
@@ -417,13 +424,13 @@
 
 .sessionConversationRail button {
   width: 48px;
-  height: 30px;
+  height: 32px;
 }
 
 .sessionConversationRail button:hover,
 .sessionConversationMobileNav button:hover {
   border-color: transparent;
-  color: var(--muted);
+  color: var(--ink);
   background: var(--surface-hover);
 }
 
@@ -434,45 +441,31 @@
 
 .sessionConversationNavActive {
   color: var(--ink);
-  background: var(--surface-selected);
 }
 
 .sessionConversationNavActive:active {
   background: var(--surface-pressed);
 }
 
-.sessionConversationNavDot {
-  position: relative;
+.sessionConversationNavMarker {
   display: grid;
-  width: 12px;
-  height: 12px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   border: 1px solid var(--line-control-strong);
   border-radius: 50%;
+  color: inherit;
   background: var(--bg-canvas);
+  font: var(--text-meta) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.sessionConversationNavDot span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
+.sessionConversationNavActive .sessionConversationNavMarker {
+  border-color: var(--ink);
+  color: var(--bg-canvas);
+  background: var(--ink);
 }
 
-.sessionConversationNavActive .sessionConversationNavDot {
-  width: 16px;
-  height: 16px;
-  border-color: var(--line-control-strong);
-  color: var(--ink);
-  box-shadow: none;
-}
-
-.sessionConversationNavActive .sessionConversationNavDot span {
-  width: 6px;
-  height: 6px;
-}
-
-.sessionConversationNavIndex,
 .sessionConversationNavLabel {
   display: none;
 }
@@ -1047,23 +1040,9 @@
     background: var(--surface-pressed);
   }
 
-  .sessionConversationMobileNav .sessionConversationNavDot {
-    width: 10px;
-    height: 10px;
+  .sessionConversationMobileNav .sessionConversationNavMarker {
     flex: 0 0 auto;
     background: var(--surface);
-  }
-
-  .sessionConversationMobileNav .sessionConversationNavActive .sessionConversationNavDot {
-    width: 12px;
-    height: 12px;
-    box-shadow: none;
-  }
-
-  .sessionConversationNavIndex {
-    display: inline;
-    color: var(--muted);
-    font: var(--text-meta) / 1 var(--font-mono);
   }
 
   .sessionConversationNavLabel {

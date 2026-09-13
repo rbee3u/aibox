@@ -38,3 +38,33 @@ describe("Session detail header", () => {
     expect(css).toMatch(/\.sessionDetailActions\s*\{[^}]*flex-shrink:\s*0/s);
   });
 });
+
+describe("Conversation navigation rail", () => {
+  /*
+   * The rail is the grid's first column. Without this the reading auto-places
+   * into that 48px column whenever the rail has nothing to render — every open
+   * until the first user message arrives, and any Session without one.
+   */
+  it("pins the reading to the second column", () => {
+    expect(css).toMatch(/\.sessionConversationMain\s*\{[^}]*grid-column:\s*2/s);
+  });
+
+  it("runs the connector from the first stop's center to the last's", () => {
+    const items = /\.sessionConversationRail \.sessionConversationNavItems\s*\{([^}]*)\}/s.exec(
+      css,
+    );
+    const stop = /\.sessionConversationRail button\s*\{([^}]*)\}/s.exec(css);
+    const line =
+      /\.sessionConversationRail \.sessionConversationNavItems::before\s*\{([^}]*)\}/s.exec(css);
+    expect(items).not.toBeNull();
+    expect(stop).not.toBeNull();
+    expect(line).not.toBeNull();
+    const padding = Number(/padding:\s*(\d+)px 0/.exec(items![1])![1]);
+    const height = Number(/height:\s*(\d+)px/.exec(stop![1])![1]);
+    const center = padding + height / 2;
+    expect(line![1]).toMatch(new RegExp(`top:\\s*${center}px`));
+    expect(line![1]).toMatch(new RegExp(`bottom:\\s*${center}px`));
+    expect(items![1]).not.toMatch(/align-self|flex:\s*1/);
+    expect(css).toMatch(/\.sessionConversationRail\s*\{[^}]*align-items:\s*flex-start/s);
+  });
+});

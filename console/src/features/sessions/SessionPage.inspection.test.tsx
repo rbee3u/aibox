@@ -575,12 +575,21 @@ describe("SessionPage", () => {
     expect(
       screen.getAllByRole("button", { name: /Jump to message 2: Second request/ }),
     ).toHaveLength(2);
-    await user.click(screen.getAllByRole("button", { name: /Jump to message 2/ })[0]);
+    // Each stop carries its number; the text stays in the accessible name and title.
+    const secondStop = screen.getAllByRole("button", { name: /Jump to message 2/ })[0];
+    expect(secondStop.querySelector("[aria-hidden]")).toHaveTextContent("2");
+    expect(secondStop).toHaveAttribute("title", "Second request");
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await user.click(secondStop);
     expect(
       screen
         .getAllByRole("button", { name: /Jump to message 2/ })
         .every((button) => button.getAttribute("aria-current") === "location"),
     ).toBe(true);
+    // The rail follows the current stop, so a long Session never hides it.
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(scrollIntoView.mock.instances).toContain(secondStop);
   });
   it("reports an incomplete Transcript as a diagnostic", async () => {
     const streamSessionDetail = vi.fn().mockRejectedValue(new Error("truncated Transcript"));
