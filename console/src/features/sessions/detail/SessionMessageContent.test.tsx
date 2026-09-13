@@ -91,11 +91,24 @@ it("shows a leading skill file link as $name with the path on the title", () => 
   expect(screen.getByText("请补测试")).toBeInTheDocument();
   expect(screen.queryByText(/\[\$improve-unit-tests\]/)).not.toBeInTheDocument();
 });
-it("offers a copy button for fenced code blocks", () => {
+it("offers a copy button for fenced code blocks and labels them by language alone", () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   render(<SessionMessageContent role="assistant" text={"```ts\nconst answer = 42;\n```"} />);
   const copy = screen.getByRole("button", { name: "Copy code" });
   copy.click();
   expect(writeText).toHaveBeenCalledWith("const answer = 42;");
+  expect(screen.getByText("ts")).toBeInTheDocument();
+  expect(screen.queryByText(/hljs/)).not.toBeInTheDocument();
+});
+it("never fetches an image: local or remote, it is a reference", () => {
+  render(
+    <SessionMessageContent
+      role="assistant"
+      text={"![failed](/tmp/uxwalk/t4-failed.png)\n\n![](https://example.test/pixel.gif)"}
+    />,
+  );
+  expect(document.querySelector("img")).toBeNull();
+  expect(screen.getByText("failed")).toHaveAttribute("title", "/tmp/uxwalk/t4-failed.png");
+  expect(screen.getByText("https://example.test/pixel.gif").tagName).toBe("CODE");
 });

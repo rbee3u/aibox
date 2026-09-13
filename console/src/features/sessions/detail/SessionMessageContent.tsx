@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Image as ImageIcon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -21,6 +21,7 @@ interface SessionMessageContentProps {
 
 type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & { node?: unknown };
 type MarkdownLinkProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
+type MarkdownImageProps = ComponentPropsWithoutRef<"img"> & { node?: unknown };
 
 function withoutNode<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
   const next = { ...props };
@@ -54,7 +55,8 @@ function MarkdownCode({ className, children, ...props }: MarkdownCodeProps) {
     );
   }
 
-  const language = className?.replace(/^language-/, "");
+  // rehype-highlight leaves `hljs language-<name>`; only the name is a label.
+  const language = /(?:^|\s)language-([^\s]+)/.exec(className ?? "")?.[1];
   return (
     <span className={styles.codeBlock}>
       <span className={styles.codeToolbar}>
@@ -91,6 +93,21 @@ function MarkdownLink({ children, href, ...props }: MarkdownLinkProps) {
     <a {...anchorProps} href={href} target="_blank" rel="noreferrer">
       {children}
     </a>
+  );
+}
+
+/**
+ * An image in a Transcript is a reference, never a fetch: a local path cannot
+ * resolve from here (and would reach the Service as a Request Proxy target),
+ * and a remote one would have the Console call out on the Agent's behalf.
+ */
+function MarkdownImage({ alt, src }: MarkdownImageProps) {
+  const source = typeof src === "string" ? src : undefined;
+  return (
+    <code className={styles.imageReference} title={source}>
+      <ImageIcon size={iconSize.xs} aria-hidden="true" />
+      {alt || source || "image"}
+    </code>
   );
 }
 
@@ -163,6 +180,7 @@ function MarkdownMessage({ text }: { text: string }) {
         components={{
           a: MarkdownLink,
           code: MarkdownCode,
+          img: MarkdownImage,
         }}
       >
         {text}

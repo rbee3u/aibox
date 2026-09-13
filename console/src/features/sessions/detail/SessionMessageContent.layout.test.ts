@@ -30,3 +30,15 @@ describe("Session user prompt", () => {
     );
   });
 });
+
+describe("Agent Markdown", () => {
+  it("steps headings by size where a reader scans", () => {
+    expect(css).toMatch(/\.markdown h1\s*\{[^}]*font-size:\s*var\(--text-lg\)/s);
+    expect(css).toMatch(/\.markdown h2\s*\{[^}]*font-size:\s*var\(--text-md\)/s);
+  });
+  it("lets table cells wrap inside the measure", () => {
+    const cells = /\.markdown th,\s*\.markdown td\s*\{([^}]*)\}/s.exec(css);
+    expect(cells).not.toBeNull();
+    expect(cells![1]).not.toMatch(/white-space:\s*nowrap/);
+  });
+});

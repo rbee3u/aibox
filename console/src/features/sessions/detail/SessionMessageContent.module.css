@@ -88,8 +88,9 @@
 
 /*
  * Agent output is content, not chrome, so its headings carry their own scale
- * instead of the section and panel roles. A heading here must stay at least as
- * prominent as the prose it introduces.
+ * instead of the section and panel roles. The scale steps by size where a
+ * reader scans — a report's sections are its h2s — and by ink only at the
+ * bottom, where a heading is a label for the paragraph under it.
  */
 .markdown h1,
 .markdown h2,
@@ -103,12 +104,22 @@
 }
 
 .markdown h1 {
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   font-weight: var(--weight-bold);
 }
 
 .markdown h2 {
-  font-weight: var(--weight-bold);
+  font-size: var(--text-md);
+}
+
+.markdown h4 {
+  color: var(--ink-secondary);
+}
+
+.markdown hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--line-content);
 }
 
 .markdown blockquote {
@@ -124,6 +135,13 @@
   color: var(--code-text);
   background: var(--surface-inset);
   font: var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.imageReference {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: baseline;
 }
 
 .markdown a {
@@ -146,7 +164,7 @@
   border: 1px solid var(--line-content);
   padding: 6px 8px;
   text-align: left;
-  white-space: nowrap;
+  vertical-align: top;
 }
 
 .markdown th {
