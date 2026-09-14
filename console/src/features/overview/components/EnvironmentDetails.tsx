@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Clipboard } from "lucide-react";
 import { useEffect, useState } from "react";
 import { imageTitle, formatDuration } from "@/features/overview/components/runtimeImage";
 import type { OverviewData } from "@/api/overview";
@@ -49,7 +49,7 @@ export function EnvironmentDetails({
                 disabled={!value}
                 onClick={() => value && void copy(value, label!)}
               >
-                {copied === label ? <Check size={iconSize.xs} /> : <Copy size={iconSize.xs} />}
+                {copied === label ? <Check size={iconSize.xs} /> : <Clipboard size={iconSize.xs} />}
               </IconButton>
             </dd>
           </div>

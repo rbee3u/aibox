@@ -45,6 +45,11 @@ export function SessionDetails({
                 <dt>Transcript</dt>
                 <dd>
                   <SessionCopyValue label="Transcript path" value={meta.transcript_path} />
+                  <span className={styles.sessionDetailsCaption}>
+                    {session.source.tenant.kind === "host"
+                      ? "Inside the Host Home"
+                      : "Inside the Tenant Home"}
+                  </span>
                 </dd>
               </div>
             )}

@@ -21,15 +21,44 @@ describe("Session detail copy controls", () => {
   });
 
   /*
-   * Sizing the control from this stylesheet is what once dropped it to 24px on
-   * touch: a feature stylesheet loads after the primitive's, so an override
-   * here silently outranks the coarse-pointer floor rather than layering on it.
+   * Sizing or restyling the control from this stylesheet is what once dropped
+   * it to 24px on touch and later left it at 0.3 opacity while Overview and
+   * Tenants drew theirs at rest: a feature stylesheet loads after the
+   * primitive's, so an override here silently outranks it. The control now
+   * has no feature-side class at all.
    */
-  it("does not size the control from the feature stylesheet", () => {
-    const rule = /\.sessionCopyAction\s*\{([^}]*)\}/s.exec(css);
+  it("leaves the control's box and rest state to the primitive", () => {
+    const control = /<IconButton\b([^>]*)>/s.exec(component);
+    expect(control).not.toBeNull();
+    expect(control![1]).not.toMatch(/className/);
+    expect(css).not.toMatch(/\.sessionCopyAction\b/);
+  });
+
+  /*
+   * A path is read for its tail: the Transcript path ends in the file name.
+   * Truncating it left the copy control as the only way to read the value.
+   */
+  it("wraps a long value instead of truncating it", () => {
+    const rule = /\.sessionCopyValue code\s*\{([^}]*)\}/s.exec(css);
     expect(rule).not.toBeNull();
-    expect(rule![1]).not.toMatch(/(?:min-)?(?:width|height)\s*:/);
-    expect(rule![1]).not.toMatch(/flex\s*:/);
+    expect(rule![1]).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(rule![1]).not.toMatch(/nowrap|text-overflow/);
+  });
+});
+
+describe("Session detail fact grids", () => {
+  /*
+   * A line-coloured container showing through a gap paints the unfilled slot
+   * of an odd-count grid as a tile in the divider colour. Dividers are each
+   * cell's own edges instead, so that slot is plain surface.
+   */
+  it("draws dividers as cell edges, not as a gap over a line-coloured fill", () => {
+    const rule = /\.sessionDetailsGrid,\s*\.sessionDiagnosticsGrid\s*\{([^}]*)\}/s.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/background:\s*var\(--surface\)/);
+    expect(rule![1]).not.toMatch(/gap\s*:/);
+    expect(css).toMatch(/\.sessionDetailsGrid > div:nth-child\(n \+ 3\)[^{]*\{[^}]*border-top/s);
+    expect(css).toMatch(/\.sessionDetailsGrid > div:nth-child\(2n\)[^{]*\{[^}]*border-left/s);
   });
 });
 

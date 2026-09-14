@@ -70,6 +70,41 @@ fn summarize_prefers_the_last_non_empty_ai_title() {
 }
 
 #[test]
+fn summarize_keeps_the_first_cwd_and_version_the_transcript_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let path = write_jsonl(
+        home,
+        ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+        &[
+            r#"{"type":"mode","cwd":"","version":""}"#,
+            r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","cwd":"/work/app","version":"2.1.251","message":{"role":"user","content":"first"}}"#,
+            r#"{"timestamp":"2026-07-14T02:17:00Z","type":"assistant","cwd":"/work/other","version":"2.1.260","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}"#,
+        ],
+    );
+    let s = Claude.summarize(&path).unwrap();
+    assert_eq!(s.native_facts.cwd.as_deref(), Some("/work/app"));
+    assert_eq!(s.native_facts.cli_version.as_deref(), Some("2.1.251"));
+    assert_eq!(s.native_facts.model_provider, None);
+}
+
+#[test]
+fn summarize_reports_no_facts_when_the_transcript_stamps_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let path = write_jsonl(
+        home,
+        ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+        &[
+            r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","message":{"role":"user","content":"first"}}"#,
+        ],
+    );
+    let s = Claude.summarize(&path).unwrap();
+    assert_eq!(s.native_facts.cwd, None);
+    assert_eq!(s.native_facts.cli_version, None);
+}
+
+#[test]
 fn summarize_ignores_empty_timestamps() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_jsonl(

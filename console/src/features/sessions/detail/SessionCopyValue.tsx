@@ -12,7 +12,6 @@ export function SessionCopyValue({ label, value }: { label: string; value: strin
       <code>{value}</code>
       <IconButton
         size="sm"
-        className={styles.sessionCopyAction}
         label={copied ? `${label} copied` : `Copy ${label}`}
         onClick={() => void copy(value, true)}
       >

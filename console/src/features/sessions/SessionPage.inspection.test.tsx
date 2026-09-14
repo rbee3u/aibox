@@ -102,6 +102,7 @@ describe("SessionPage", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText("Observed span")).toBeInTheDocument();
     expect(screen.getByText("Session ID")).toBeInTheDocument();
+    expect(screen.getByText("Inside the Tenant Home")).toBeInTheDocument();
     expect(screen.queryByText("Tenant")).not.toBeInTheDocument();
     expect(screen.queryByText("Coding Agent")).not.toBeInTheDocument();
     expect(screen.queryByText("Started")).not.toBeInTheDocument();

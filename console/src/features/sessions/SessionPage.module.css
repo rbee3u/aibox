@@ -514,23 +514,36 @@
   font-size: var(--text-xs);
 }
 
+/*
+ * Dividers are each cell's own top and left edges rather than a line-coloured
+ * container showing through a gap: with an odd number of facts the unfilled
+ * slot is then plain surface, not a tile drawn in the divider colour.
+ */
 .sessionDetailsGrid,
 .sessionDiagnosticsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--line-content);
   border-radius: var(--radius-md);
-  background: var(--line-content);
+  background: var(--surface);
 }
 
 .sessionDetailsGrid > div,
 .sessionDiagnosticsGrid > div {
   min-width: 0;
   padding: 12px 14px;
-  background: var(--surface);
+}
+
+.sessionDetailsGrid > div:nth-child(n + 3),
+.sessionDiagnosticsGrid > div:nth-child(n + 3) {
+  border-top: 1px solid var(--line-content);
+}
+
+.sessionDetailsGrid > div:nth-child(2n),
+.sessionDiagnosticsGrid > div:nth-child(2n) {
+  border-left: 1px solid var(--line-content);
 }
 
 .sessionDetailsGrid dt,
@@ -561,32 +574,27 @@
 .sessionCopyValue {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
 }
 
+/*
+ * A path or an id is read for its tail, so it wraps rather than truncates:
+ * the Transcript path ends in the file name and a clipped tail would leave
+ * only the copy control as a way to read it.
+ */
 .sessionCopyValue code {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding-block: calc((var(--control-xs) - 1lh) / 2);
+  overflow-wrap: anywhere;
 }
 
-/*
- * Size comes from the primitive's own step, which keeps the coarse-pointer
- * floor. Overriding the box here is what put this control below the touch
- * target minimum: a feature stylesheet loads after the primitive's, so it
- * won on source order.
- */
-.sessionCopyAction {
-  border-color: transparent;
+/* Where a relative path is rooted, under the value it qualifies. */
+.sessionDetailsCaption {
+  display: block;
+  margin-top: 2px;
   color: var(--muted);
-  opacity: 0.3;
-}
-
-.sessionCopyValue:hover .sessionCopyAction,
-.sessionCopyAction:focus-visible {
-  opacity: 1;
+  font-size: var(--text-meta);
 }
 
 .sessionDiagnosticWarnings {
@@ -942,16 +950,6 @@
   padding: 7px 9px;
 }
 
-@media (pointer: coarse) {
-  .sessionCopyAction {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-    flex-basis: 44px;
-  }
-}
-
 @media (max-width: 760px) {
   .sessionRowMain {
     min-height: 56px;
@@ -1072,6 +1070,12 @@
   .sessionDetailsGrid,
   .sessionDiagnosticsGrid {
     grid-template-columns: 1fr;
+  }
+
+  .sessionDetailsGrid > div:nth-child(n + 2),
+  .sessionDiagnosticsGrid > div:nth-child(n + 2) {
+    border-top: 1px solid var(--line-content);
+    border-left: 0;
   }
 
   .sessionConversationWarning {

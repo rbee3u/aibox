@@ -236,8 +236,23 @@ impl SessionBackend for Claude {
         output
     }
 
-    fn native_facts(&self, value: &Value, _facts: &mut SessionNativeFacts) {
-        let _ = value;
+    /// Claude Code stamps `cwd` and `version` on every conversation line
+    /// rather than in one header, so the first non-empty value of each is
+    /// kept and later lines do not overwrite it.
+    fn native_facts(&self, value: &Value, facts: &mut SessionNativeFacts) {
+        let fact = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        };
+        if facts.cwd.is_none() {
+            facts.cwd = fact("cwd");
+        }
+        if facts.cli_version.is_none() {
+            facts.cli_version = fact("version");
+        }
     }
 
     /// Any line bearing a non-empty top-level `timestamp` is a candidate; the
