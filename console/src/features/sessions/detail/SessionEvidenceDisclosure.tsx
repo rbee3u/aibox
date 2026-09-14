@@ -1,12 +1,18 @@
 import { Check, Clipboard } from "lucide-react";
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { SessionApi, ToolActivity, TranscriptEvidence } from "@/api/sessions";
+import {
+  isTranscriptConflict,
+  type SessionApi,
+  type ToolActivity,
+  type TranscriptEvidence,
+} from "@/api/sessions";
 import { toolNeedsAttention } from "@/features/sessions/detail/sessionDetail";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { messageOf } from "@/shared/lib/errors";
-import { StatusBadge } from "@/shared/ui/StatusBadge";
+import { RefreshButton } from "@/shared/ui/RefreshButton";
+import { StatusBadge, type StatusTone } from "@/shared/ui/StatusBadge";
 import styles from "@/features/sessions/SessionPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
@@ -22,14 +28,22 @@ interface SessionEvidenceDisclosureProps {
   snapshot?: string;
   status: string;
   toolStatus?: ToolActivity["status"];
+  /** Re-reads the Session after the Transcript changed; resolves to the new snapshot. */
+  onTranscriptStale: () => Promise<string | null>;
 }
 
-const TOOL_STATUS_LABEL: Record<ToolActivity["status"], string> = {
-  started: "Running",
-  completed: "Completed",
-  failed: "Failed",
-  incomplete: "Incomplete",
-  unknown: "Unknown",
+/**
+ * Statuses a tool row states beside its label. A completed call says nothing;
+ * a call with no result is stated in the neutral tone because the Transcript
+ * cannot tell a call still running from one the CLI abandoned.
+ */
+const TOOL_STATUS_BADGE: Partial<
+  Record<ToolActivity["status"], { label: string; tone: StatusTone }>
+> = {
+  started: { label: "No result", tone: "neutral" },
+  incomplete: { label: "No result", tone: "neutral" },
+  failed: { label: "Failed", tone: "error" },
+  unknown: { label: "Unknown", tone: "error" },
 };
 
 function prettyEvidence(content: string): string {
@@ -40,41 +54,55 @@ function prettyEvidence(content: string): string {
   }
 }
 
-/** One raw Transcript Entry, loaded on demand and rendered indented. */
+/**
+ * One raw Transcript Entry, loaded on demand and rendered indented. An entry
+ * read is pinned to the snapshot the Session was read under, so on a Session
+ * still being written the file has usually grown by the time a reader opens
+ * one; the entry re-reads the Session once and retries before it says so.
+ */
 function RawEntry({
   api,
   entryId,
   label,
   session,
   snapshot,
+  onTranscriptStale,
 }: {
   api: SessionApi;
   entryId: string;
   label: string;
   session: SourcedSession;
   snapshot: string;
+  onTranscriptStale: () => Promise<string | null>;
 }) {
   const [evidence, setEvidence] = useState<TranscriptEvidence | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const [copied, copy] = useClipboardFeedback();
 
   async function load() {
     if (evidence || loading) return;
     setLoading(true);
     setError(null);
+    setStale(false);
+    const read = (at: string) =>
+      api.loadSessionEvidence(session.source.tenant, session.source.agent, session.id, entryId, at);
     try {
-      setEvidence(
-        await api.loadSessionEvidence(
-          session.source.tenant,
-          session.source.agent,
-          session.id,
-          entryId,
-          snapshot,
-        ),
-      );
+      setEvidence(await read(snapshot));
     } catch (cause) {
-      setError(messageOf(cause));
+      if (!isTranscriptConflict(cause)) {
+        setError(messageOf(cause));
+      } else {
+        try {
+          const current = await onTranscriptStale();
+          if (current === null) throw cause;
+          setEvidence(await read(current));
+        } catch (retryCause) {
+          if (isTranscriptConflict(retryCause)) setStale(true);
+          else setError(messageOf(retryCause));
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -90,6 +118,18 @@ function RawEntry({
       <summary>{label}</summary>
       {loading && <p>Loading Transcript Entry…</p>}
       {error && <p className={styles.sessionEvidenceError}>{error}</p>}
+      {stale && (
+        <p className={styles.sessionEvidenceStale}>
+          This Session has grown since it was opened.
+          <RefreshButton
+            label={`Retry ${label.toLowerCase()}`}
+            tone="secondary"
+            onClick={() => void load()}
+          >
+            Retry
+          </RefreshButton>
+        </p>
+      )}
       {evidence && (
         <>
           <button
@@ -127,18 +167,20 @@ export function SessionEvidenceDisclosure({
   snapshot,
   status,
   toolStatus,
+  onTranscriptStale,
 }: SessionEvidenceDisclosureProps) {
   const hidden = status === "hidden_internal";
   const isTool = status === "tool";
   const attention = toolStatus !== undefined && toolNeedsAttention(toolStatus);
+  const badge = toolStatus !== undefined ? TOOL_STATUS_BADGE[toolStatus] : undefined;
 
   return (
     <details className={isTool ? styles.sessionActivity : styles.sessionEvidence}>
       <summary>
         <span>{label}</span>
-        {attention && toolStatus && (
-          <StatusBadge tone="error" variant="inline" size="xs">
-            {TOOL_STATUS_LABEL[toolStatus]}
+        {badge && (
+          <StatusBadge tone={badge.tone} variant="inline" size="xs">
+            {badge.label}
           </StatusBadge>
         )}
         <span className={styles.sessionRowMeta}>{meta}</span>
@@ -157,7 +199,6 @@ export function SessionEvidenceDisclosure({
               <pre>{result.preview}</pre>
             </section>
           )}
-          {toolStatus === "started" && <p>No result recorded.</p>}
         </div>
       ) : (
         preview && <pre>{preview}</pre>
@@ -174,6 +215,7 @@ export function SessionEvidenceDisclosure({
             label={isTool ? "Raw call entry" : "Raw entry"}
             session={session}
             snapshot={snapshot}
+            onTranscriptStale={onTranscriptStale}
           />
           {isTool && result && (
             <RawEntry
@@ -182,6 +224,7 @@ export function SessionEvidenceDisclosure({
               label="Raw result entry"
               session={session}
               snapshot={snapshot}
+              onTranscriptStale={onTranscriptStale}
             />
           )}
         </div>

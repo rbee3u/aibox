@@ -12,6 +12,7 @@ import type {
   TranscriptEvidence,
   TranscriptEvidenceSummary,
 } from "@/api/generated/wire";
+import { HttpError } from "@/api/httpError";
 import { listTenantsRequest } from "@/api/tenants";
 import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
@@ -106,6 +107,14 @@ async function streamSessionDetail(
     signal,
   );
   if (!complete) throw new Error("Session detail stream ended before completion");
+}
+
+/**
+ * An evidence read is pinned to the snapshot its detail stream reported; the
+ * Service refuses it once the Transcript has changed, so the caller re-reads.
+ */
+export function isTranscriptConflict(cause: unknown): boolean {
+  return cause instanceof HttpError && cause.status === 409;
 }
 
 export function sessionsApi(client: ControlApi): SessionApi {

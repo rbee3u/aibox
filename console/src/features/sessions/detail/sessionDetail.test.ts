@@ -9,6 +9,8 @@ import {
   emptySessionDetail,
   isRoutineProjectionWarning,
   sessionDetailReducer,
+  sessionItemKey,
+  toolNeedsAttention,
   transcriptAttentionWarnings,
   transcriptAttentionNotice,
   type SessionActivityItem,
@@ -72,6 +74,13 @@ describe("Conversation attention", () => {
       true,
     );
     expect(activitySummary([{ kind: "tool", value: tool }]).hasIssue).toBe(false);
+    // A call with no result is stated, not flagged: the Transcript cannot say
+    // whether it is still running or was abandoned.
+    expect(
+      activitySummary([{ kind: "tool", value: { ...tool, status: "incomplete" } }]).hasIssue,
+    ).toBe(false);
+    expect(toolNeedsAttention("incomplete")).toBe(false);
+    expect(toolNeedsAttention("unknown")).toBe(true);
   });
 
   it("labels tool-bearing groups as tools and counts only diagnostics beside them", () => {
@@ -121,6 +130,47 @@ describe("Conversation attention", () => {
       kind: "activity",
       value: [{ kind: "tool", value: { status: "completed", summary: '{"cmd":"git status"}' } }],
     });
+  });
+
+  it("keeps no result for a call the stream ends as its own clone", () => {
+    const started: SessionActivityItem = {
+      kind: "tool",
+      value: { ...tool, status: "started", summary: "sleep 60" },
+    };
+    const unanswered: SessionActivityItem = {
+      kind: "tool",
+      value: { ...tool, status: "incomplete", summary: "sleep 60" },
+    };
+    const timeline = appendActivityItem(appendActivityItem([], started), unanswered);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      kind: "activity",
+      value: [{ kind: "tool", value: { status: "incomplete", entry_ids: ["tool-1"] } }],
+    });
+    const item = timeline[0];
+    if (item.kind === "activity" && item.value[0].kind === "tool") {
+      expect(item.value[0].result).toBeUndefined();
+    }
+  });
+
+  it("keys an item by where it starts so a growing group keeps its identity", () => {
+    const one = appendActivityItem([], { kind: "tool", value: tool });
+    const two = appendActivityItem(one, evidence("unsupported"));
+    const answered = appendActivityItem(two, {
+      kind: "tool",
+      value: { ...tool, entry_ids: ["tool-1-done"], status: "completed", summary: "ok" },
+    });
+    expect(sessionItemKey(one[0])).toBe("activity:tool-1");
+    expect(sessionItemKey(two[0])).toBe(sessionItemKey(one[0]));
+    expect(sessionItemKey(answered[0])).toBe(sessionItemKey(one[0]));
+    const reply = appendConversationMessage([], { ...message, role: "assistant" });
+    const merged = appendConversationMessage(reply, {
+      ...message,
+      entry_ids: ["message-2"],
+      role: "assistant",
+    });
+    expect(sessionItemKey(merged[0])).toBe(sessionItemKey(reply[0]));
+    expect(sessionItemKey(merged[0])).toBe("message:message-1");
   });
 
   it("promotes the first readable tool input onto the collapsed row", () => {

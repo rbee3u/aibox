@@ -24,21 +24,25 @@ export type SessionActivityItem =
     }
   | { kind: "evidence"; value: TranscriptEvidenceSummary };
 
+/**
+ * An item's identity is where it starts. A group that grows or a call that
+ * gets its result keeps the same key, so a disclosure the reader opened stays
+ * open across a refresh and fills in rather than remounting closed.
+ */
 export function sessionItemKey(item: SessionTimelineItem): string {
-  if (item.kind === "message") return `message:${item.value.entry_ids.join(",")}`;
-  return `activity:${item.value
-    .map((entry) =>
-      entry.kind === "tool"
-        ? `tool:${entry.value.entry_ids.join(",")}:${entry.value.status}`
-        : `evidence:${entry.value.entry_id}`,
-    )
-    .join(",")}`;
+  if (item.kind === "message") return `message:${item.value.entry_ids[0]}`;
+  const first = item.value[0];
+  return `activity:${first.kind === "tool" ? first.value.entry_ids[0] : first.value.entry_id}`;
 }
 
 /**
  * Appends one activity record. A terminal Tool Activity that names an earlier
  * call updates that entry in place so a tool appears once with its final status;
  * anything else extends the trailing activity group or opens a new one.
+ *
+ * A call the Transcript never answered ends the stream as a terminal record
+ * cloned from the call itself — same entries, same input. That is a status
+ * without a result, so nothing is kept as one.
  */
 export function appendActivityItem(
   current: SessionTimelineItem[],
@@ -56,14 +60,19 @@ export function appendActivityItem(
       const nextActivity = [...item.value];
       const existing = nextActivity[entryIndex];
       if (existing.kind === "tool") {
+        const answered = !entry.value.entry_ids.every((id) =>
+          existing.value.entry_ids.includes(id),
+        );
         nextActivity[entryIndex] = {
           kind: "tool",
           value: {
             ...existing.value,
-            entry_ids: [...existing.value.entry_ids, ...entry.value.entry_ids],
+            entry_ids: answered
+              ? [...existing.value.entry_ids, ...entry.value.entry_ids]
+              : existing.value.entry_ids,
             status: entry.value.status,
           },
-          result: entry.value,
+          result: answered ? entry.value : undefined,
         };
       }
       const next = [...current];
@@ -115,8 +124,14 @@ export function appendConversationMessage(
   return [...current, { kind: "message", value: message }];
 }
 
+/**
+ * A tool the reader should look at: one that returned an error, or one whose
+ * outcome the projection could not tell. A call with no result is neither —
+ * it is still running, or the CLI stopped before it answered — and the
+ * Transcript cannot say which, so it is stated, not flagged.
+ */
 export function toolNeedsAttention(status: ToolActivity["status"]): boolean {
-  return status === "failed" || status === "incomplete" || status === "unknown";
+  return status === "failed" || status === "unknown";
 }
 
 export function evidenceNeedsAttention(status: string): boolean {

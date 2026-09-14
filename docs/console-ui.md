@@ -398,10 +398,14 @@ groups Tool Activity separately from Transcript Evidence. Reasoning remains
 hidden.
 
 Projection quirks remain quiet. Warnings appear only when reading is impaired,
-such as malformed records, an incomplete stream, or failed Tool Activity.
-Streaming renders frames as they arrive; manual refresh preserves old content
-until replacement succeeds. Missing-message, tool-only, evidence-only, and
-partial states remain explicit.
+such as malformed records or an incomplete stream; a failed Tool Activity marks
+its own activity group. A call the Transcript never answered — still running,
+or abandoned — states `No result` in the neutral tone and carries no result
+section. Streaming renders frames as they arrive; manual refresh preserves old
+content until replacement succeeds and keeps the reader's place: position,
+open disclosures, and the navigator's current stop. An evidence read the
+Transcript has outrun re-reads the Session once in place before saying so.
+Missing-message, tool-only, evidence-only, and partial states remain explicit.
 
 Catalog summaries prefer meaningful human text over review boilerplate, raw
 approval JSON, markup, or skill paths. Each row states its start time and its

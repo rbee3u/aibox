@@ -45,8 +45,6 @@ interface SessionConversationProps {
   /** Why the reading below may be incomplete; `null` when it is not. */
   attentionNotice: string | null;
   snapshot?: string;
-  /** Changes whenever the Session reloads, collapsing activity disclosures. */
-  revision: number;
   showJumpLatest: boolean;
   scrollRef: RefObject<HTMLDivElement | null>;
   registerMessage: (entryId: string, element: HTMLElement | null) => void;
@@ -54,6 +52,8 @@ interface SessionConversationProps {
   onSelectMessage: (entryId: string) => void;
   onJumpLatest: () => void;
   onViewDiagnostics: () => void;
+  /** The Transcript grew under an evidence read; re-read it in place. */
+  onTranscriptStale: () => Promise<string | null>;
 }
 
 /** The Conversation tab: a centered reading stream with its message navigator. */
@@ -66,7 +66,6 @@ export function SessionConversation({
   loading,
   attentionNotice,
   snapshot,
-  revision,
   showJumpLatest,
   scrollRef,
   registerMessage,
@@ -74,6 +73,7 @@ export function SessionConversation({
   onSelectMessage,
   onJumpLatest,
   onViewDiagnostics,
+  onTranscriptStale,
 }: SessionConversationProps) {
   const readingTimeline = conversationReadingTimeline(timeline);
   return (
@@ -91,7 +91,7 @@ export function SessionConversation({
           onSelect={onSelectMessage}
         />
         <div ref={scrollRef} className={styles.sessionConversationScroll} onScroll={onScroll}>
-          <div key={revision} className={styles.sessionConversationContent}>
+          <div className={styles.sessionConversationContent}>
             {attentionNotice !== null && (
               <button
                 type="button"
@@ -157,9 +157,9 @@ export function SessionConversation({
                   key={sessionItemKey(item)}
                   api={api}
                   entries={item.value}
-                  reloadRevision={revision}
                   session={session}
                   snapshot={snapshot}
+                  onTranscriptStale={onTranscriptStale}
                 />
               );
             })}

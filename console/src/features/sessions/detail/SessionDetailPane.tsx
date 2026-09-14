@@ -32,13 +32,13 @@ export function SessionDetailPane({
     currentSession,
     detailHeadingRef,
     detailMeta,
-    detailRevision,
     detailStats,
     jumpToLatest,
     jumpToUserMessage,
     loadingDetail,
     onConversationScroll,
     openSession,
+    refreshTranscript,
     registerUserMessage,
     resolvedActiveUserMessage,
     sessionTab,
@@ -142,7 +142,6 @@ export function SessionDetailPane({
               loading={loadingDetail}
               attentionNotice={transcriptAttentionNotice}
               snapshot={detailStats?.snapshot}
-              revision={detailRevision}
               showJumpLatest={showJumpLatest}
               scrollRef={conversationScrollRef}
               registerMessage={registerUserMessage}
@@ -150,6 +149,7 @@ export function SessionDetailPane({
               onSelectMessage={jumpToUserMessage}
               onJumpLatest={jumpToLatest}
               onViewDiagnostics={() => updateSessionTab("details")}
+              onTranscriptStale={refreshTranscript}
             />
           )}
         </>

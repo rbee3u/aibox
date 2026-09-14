@@ -91,6 +91,11 @@ export interface SessionViewModel {
       updateLocation?: boolean,
       preserveContent?: boolean,
     ) => Promise<void>;
+    /**
+     * Re-reads the inspected Session in place, as Refresh does, and resolves
+     * to the snapshot the new read reported — `null` if it did not complete.
+     */
+    refreshTranscript: () => Promise<string | null>;
     resolvedActiveUserMessage: string | null;
     sessionTab: SessionTab;
     sessionWarnings: string[];
@@ -290,7 +295,8 @@ export function useSessionController({
   });
   const openSession = useCallback(
     async (row: SourcedSession, updateLocation = true, preserveContent = false) => {
-      clearConversation();
+      // A refresh keeps the reading where it is; only a new Session starts over.
+      if (!preserveContent) clearConversation();
       setError(null);
       if (updateLocation) {
         const nextSelection = {
@@ -313,6 +319,12 @@ export function useSessionController({
       updateSessionLocation,
     ],
   );
+  const refreshTranscript = useCallback(async () => {
+    const inspected = inspectedSession();
+    if (!inspected) return null;
+    const stats = await inspect(inspected, true);
+    return stats?.snapshot ?? null;
+  }, [inspect, inspectedSession]);
   const sessionDeletion = useSessionDeletion({
     abortDetailStream,
     api,
@@ -483,6 +495,7 @@ export function useSessionController({
       loadingDetail,
       onConversationScroll,
       openSession,
+      refreshTranscript,
       registerUserMessage,
       resolvedActiveUserMessage,
       sessionTab,

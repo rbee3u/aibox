@@ -27,8 +27,8 @@ export function useConversationNavigation({
     userMessageRefs.current.clear();
   }, []);
 
-  function onConversationScroll(event: UIEvent<HTMLDivElement>) {
-    const element = event.currentTarget;
+  /** Reads the scroll position into the navigator: latest-ness and the current stop. */
+  const syncToScroll = useCallback((element: HTMLDivElement) => {
     setShowJumpLatest(conversationIsAwayFromLatest(element));
     const threshold = element.scrollTop + Math.min(element.clientHeight * 0.28, 180);
     let current: string | null = null;
@@ -37,6 +37,10 @@ export function useConversationNavigation({
       else break;
     }
     if (current) setActiveUserMessage(current);
+  }, []);
+
+  function onConversationScroll(event: UIEvent<HTMLDivElement>) {
+    syncToScroll(event.currentTarget);
   }
 
   function jumpToLatest() {
@@ -82,14 +86,17 @@ export function useConversationNavigation({
     return () => window.cancelAnimationFrame(frame);
   }, [currentSessionKey]);
 
+  // Each completed read — the first, or a refresh that kept the reading in
+  // place — re-reads the position, so the navigator marks the stop the reader
+  // is actually at rather than resetting to the first.
   useEffect(() => {
     if (!currentSessionKey || !active || loading) return;
     const frame = window.requestAnimationFrame(() => {
       const element = conversationScrollRef.current;
-      if (element) setShowJumpLatest(conversationIsAwayFromLatest(element));
+      if (element) syncToScroll(element);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active, currentSessionKey, detailRevision, loading]);
+  }, [active, currentSessionKey, detailRevision, loading, syncToScroll]);
 
   return {
     activeUserMessage,

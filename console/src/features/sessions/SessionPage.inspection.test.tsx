@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
+import type { SessionApi, SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import type { SessionDetailHandlers } from "@/api/sessions";
+import { controlRefusal } from "@/test/controlApi";
 import { deferred } from "@/test/deferred";
 import { SessionPage, firstSession, list, fakeApi } from "@/features/sessions/testSupport";
 
@@ -286,6 +287,207 @@ describe("SessionPage", () => {
       "First prompt",
     );
   });
+  it("states a call the Transcript never answered without calling it a failure", async () => {
+    // The Service ends the stream by re-emitting an unanswered call as
+    // `incomplete`: same entry, same input, no result of its own.
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "started",
+        summary: "sleep 60",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "incomplete",
+        summary: "sleep 60",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
+    await user.click(screen.getByText("1 tool"));
+    const badge = screen.getByText("No result").closest("[data-status-tone]");
+    expect(badge).toHaveAttribute("data-status-tone", "neutral");
+    expect(screen.queryByText("Incomplete")).not.toBeInTheDocument();
+    await user.click(screen.getByText(/Bash · sleep 60/));
+    expect(screen.getByRole("heading", { name: "Input" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Result" })).not.toBeInTheDocument();
+    expect(screen.getByText("Raw call entry")).toBeInTheDocument();
+    expect(screen.queryByText("Raw result entry")).not.toBeInTheDocument();
+  });
+  it("re-reads the Session and retries an evidence read the Transcript outran", async () => {
+    let snapshot = "128:1";
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "response_item",
+        role: null,
+        content_types: [],
+        status: "unsupported",
+        preview: "evidence preview",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot,
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    // The file grows under the reader: the first read conflicts, the read
+    // against the snapshot the re-read reports succeeds.
+    const conflict = () =>
+      Promise.reject(
+        controlRefusal(
+          "Session Transcript changed since it was inspected; refresh the detail view",
+          409,
+        ),
+      );
+    const loadSessionEvidence = vi.fn<SessionApi["loadSessionEvidence"]>(
+      (_tenant, _agent, _id, entry, at) =>
+        at === snapshot
+          ? Promise.resolve({
+              entry_id: entry,
+              encoding: "utf-8",
+              content: '{"kept":true}',
+              snapshot: at,
+            })
+          : conflict(),
+    );
+    const { api } = fakeApi({
+      sessions: () => list([firstSession]),
+      streamSessionDetail,
+      loadSessionEvidence,
+    });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    await user.click(screen.getByText("Transcript activity"));
+    const disclosure = screen.getByText("response_item").closest("details");
+    await user.click(screen.getByText("response_item"));
+    snapshot = "256:2";
+    await user.click(screen.getByText("Raw entry"));
+    expect(await screen.findByText(/"kept": true/)).toBeInTheDocument();
+    expect(streamSessionDetail).toHaveBeenCalledTimes(2);
+    expect(loadSessionEvidence).toHaveBeenCalledTimes(2);
+    expect(loadSessionEvidence.mock.calls[1][4]).toBe("256:2");
+    // The re-read kept the page: the disclosure the reader opened is still open.
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.queryByText(/changed since it was inspected/)).not.toBeInTheDocument();
+  });
+  it("says the Session has grown when the retried evidence read conflicts again", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "response_item",
+        role: null,
+        content_types: [],
+        status: "unsupported",
+        preview: "evidence preview",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    const loadSessionEvidence = vi.fn<SessionApi["loadSessionEvidence"]>(() =>
+      Promise.reject(controlRefusal("Session Transcript changed since it was inspected", 409)),
+    );
+    const { api } = fakeApi({
+      sessions: () => list([firstSession]),
+      streamSessionDetail,
+      loadSessionEvidence,
+    });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    await user.click(screen.getByText("Transcript activity"));
+    await user.click(screen.getByText("response_item"));
+    await user.click(screen.getByText("Raw entry"));
+    expect(
+      await screen.findByText("This Session has grown since it was opened."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/changed since it was inspected/)).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry raw entry" });
+    expect(streamSessionDetail).toHaveBeenCalledTimes(2);
+    await user.click(retry);
+    await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(3));
+  });
   it("renders CLI-written lines as events, not speech", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
       handlers.onMessage({
@@ -418,7 +620,7 @@ describe("SessionPage", () => {
     expect(screen.getByText("Unsupported")).toBeInTheDocument();
     expect(screen.getByText("Transcript entries").closest("div")).toHaveTextContent("3");
   });
-  it("collapses Transcript activity when refreshing Session detail", async () => {
+  it("keeps an opened activity group open across a Session detail refresh", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
       handlers.onMessage({
         entry_ids: ["message-1"],
@@ -467,7 +669,10 @@ describe("SessionPage", () => {
     expect(activityDisclosure).toHaveAttribute("open");
     await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
     await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Transcript activity").closest("details")).not.toHaveAttribute("open");
+    // The refreshed group is the same group — same first entry — so the
+    // disclosure the reader opened is still the one on screen, still open.
+    expect(screen.getByText("Transcript activity").closest("details")).toBe(activityDisclosure);
+    expect(activityDisclosure).toHaveAttribute("open");
   });
   it("offers Jump to latest when a long Conversation finishes loading at the beginning", async () => {
     const completion = deferred<void>();
@@ -591,6 +796,72 @@ describe("SessionPage", () => {
     // The rail follows the current stop, so a long Session never hides it.
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
     expect(scrollIntoView.mock.instances).toContain(secondStop);
+  });
+  it("keeps the navigator on the reader's stop across a refresh", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      for (const [index, text] of ["First request", "Second request", "Third request"].entries()) {
+        handlers.onMessage({
+          entry_ids: [`user-${index + 1}`],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text,
+        });
+      }
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 1200,
+          message_count: 3,
+          tool_count: 0,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    // Opening a Session scrolls to its top and reads the position on the next
+    // frames; let those land before the reader moves.
+    const articles = await screen.findAllByRole("article");
+    await act(
+      () =>
+        new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+        ),
+    );
+    // Lay the reading out: the reader has scrolled to the second message.
+    const scrollContainer = articles[0].parentElement?.parentElement as HTMLDivElement;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, value: 3000 },
+      scrollTop: { configurable: true, value: 1000, writable: true },
+      clientHeight: { configurable: true, value: 800 },
+    });
+    articles.forEach((article, index) =>
+      Object.defineProperty(article, "offsetTop", { configurable: true, value: index * 1000 }),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    await user.click(screen.getAllByRole("button", { name: /Jump to message 2/ })[0]);
+    const current = () =>
+      screen
+        .getAllByRole("button", { name: /Jump to message/ })
+        .filter((button) => button.getAttribute("aria-current") === "location")
+        .map((button) => button.getAttribute("title"));
+    expect(current()).toEqual(["Second request", "Second request"]);
+    await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
+    await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
+    // The reading did not move, so neither does the mark: never back to 1.
+    await waitFor(() => expect(current()).toEqual(["Second request", "Second request"]));
   });
   it("reports an incomplete Transcript as a diagnostic", async () => {
     const streamSessionDetail = vi.fn().mockRejectedValue(new Error("truncated Transcript"));

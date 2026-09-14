@@ -37,8 +37,13 @@ export function useSessionInspection(
     dispatchDetail({ type: "reset" });
   }, [abort]);
 
+  /**
+   * Streams one Session's detail. Resolves to the completed stream's stats —
+   * whose snapshot pins later evidence reads — or `null` when the stream
+   * failed or a newer inspection superseded it.
+   */
   const inspect = useCallback(
-    async (row: SourcedSession, preserveContent = false) => {
+    async (row: SourcedSession, preserveContent = false): Promise<SessionDetailStats | null> => {
       abort();
       const controller = new AbortController();
       streamController.current = controller;
@@ -48,8 +53,8 @@ export function useSessionInspection(
       dispatchDetail({ type: "start", preserveContent });
       let nextTimeline: SessionTimelineItem[] = [];
       let nextMeta: SessionDetailMeta | null = null;
-      let nextStats: SessionDetailStats | null = null;
       let nextWarnings: string[] = [];
+      let completedStats: SessionDetailStats | null = null;
       try {
         await api.streamSessionDetail(
           row.source.tenant,
@@ -75,27 +80,27 @@ export function useSessionInspection(
               else dispatchDetail({ type: "activity", value: entry });
             },
             onComplete: (stats, warnings) => {
-              if (preserveContent) {
-                nextStats = stats;
-                nextWarnings = warnings;
-              } else {
-                dispatchDetail({ type: "complete", stats, warnings });
-              }
+              completedStats = stats;
+              if (preserveContent) nextWarnings = warnings;
+              else dispatchDetail({ type: "complete", stats, warnings });
             },
           },
           controller.signal,
         );
-        if (preserveContent && streamController.current === controller) {
+        if (streamController.current !== controller) return null;
+        if (preserveContent) {
           dispatchDetail({
             type: "replace",
             timeline: nextTimeline,
             meta: nextMeta,
-            stats: nextStats,
+            stats: completedStats,
             warnings: nextWarnings,
           });
         }
+        return completedStats;
       } catch (cause) {
         if (!requestCancelled(cause, controller.signal)) onFailure(row, cause);
+        return null;
       } finally {
         if (streamController.current === controller) {
           streamController.current = null;

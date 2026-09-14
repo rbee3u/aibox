@@ -1,5 +1,4 @@
 import { AlertTriangle, Wrench } from "lucide-react";
-import { useEffect, useRef } from "react";
 import type { SessionApi } from "@/api/sessions";
 import { SessionEvidenceDisclosure } from "@/features/sessions/detail/SessionEvidenceDisclosure";
 import {
@@ -18,34 +17,34 @@ import { iconSize } from "@/shared/icons/iconSizes";
 interface SessionActivityGroupProps {
   api: SessionApi;
   entries: SessionActivityItem[];
-  /** Reloading the Session collapses every activity disclosure again. */
-  reloadRevision: number;
   session: SourcedSession;
   snapshot?: string;
+  onTranscriptStale: () => Promise<string | null>;
 }
 
+/**
+ * One run of Tool Activity and Transcript Evidence between messages. The
+ * disclosure is uncontrolled: a group the reader opened stays open while the
+ * Session refreshes around it, and a call keyed by its own entry keeps its
+ * row when the result lands.
+ */
 export function SessionActivityGroup({
   api,
   entries,
-  reloadRevision,
   session,
   snapshot,
+  onTranscriptStale,
 }: SessionActivityGroupProps) {
-  const disclosureRef = useRef<HTMLDetailsElement>(null);
   const summary = activitySummary(entries);
   const routine = entries.filter(isRoutineEvidence);
   const shown = entries.filter((entry) => !isRoutineEvidence(entry));
-
-  useEffect(() => {
-    if (disclosureRef.current) disclosureRef.current.open = false;
-  }, [reloadRevision]);
 
   const renderEntry = (entry: SessionActivityItem) => {
     if (entry.kind === "tool") {
       const headline = toolActivityHeadline(entry.value.summary);
       return (
         <SessionEvidenceDisclosure
-          key={`tool:${entry.value.entry_ids.join(",")}`}
+          key={`tool:${entry.value.entry_ids[0]}`}
           api={api}
           entryId={entry.value.entry_ids[0]}
           label={
@@ -65,6 +64,7 @@ export function SessionActivityGroup({
           snapshot={snapshot}
           status="tool"
           toolStatus={entry.value.status}
+          onTranscriptStale={onTranscriptStale}
         />
       );
     }
@@ -79,12 +79,13 @@ export function SessionActivityGroup({
         session={session}
         snapshot={snapshot}
         status={entry.value.status}
+        onTranscriptStale={onTranscriptStale}
       />
     );
   };
 
   return (
-    <details ref={disclosureRef} className={styles.sessionActivityGroup}>
+    <details className={styles.sessionActivityGroup}>
       <summary>
         <span>
           {summary.toolCount > 0 ? <Wrench size={iconSize.xs} aria-hidden="true" /> : null}
