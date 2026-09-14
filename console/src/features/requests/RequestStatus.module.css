@@ -1,7 +1,7 @@
 .root,
 .value,
 .phase,
-.catalogIssue {
+.cell {
   display: inline-flex;
   align-items: center;
 }
@@ -36,29 +36,27 @@
 .phase {
   color: var(--accent);
 }
-.catalogIssue {
-  flex: 1;
+/* The status cell as a tooltip anchor: a bare wrapper, the badge inside draws. */
+.cell {
   min-width: 0;
   max-width: 100%;
-  min-height: 0;
   padding: 0;
   border: 0;
-  border-radius: 0;
   background: transparent;
   font: inherit;
-  text-align: left;
 }
-.catalogIssueText {
+.label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--weight-semibold);
 }
-.catalogWarning {
+.glyph {
+  flex: 0 0 auto;
+}
+.glyph.warning {
   color: var(--warning);
 }
-.catalogError {
+.glyph.error {
   color: var(--danger);
 }
 .phase {

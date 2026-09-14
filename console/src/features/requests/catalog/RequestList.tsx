@@ -15,11 +15,10 @@ import { compactDuration, formatTimestamp } from "@/shared/lib/format";
 import { requestUrl } from "@/features/requests/requestFormat";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/requests/catalog/RequestList.module.css";
-import { RequestCatalogIssue, RequestStatus } from "@/features/requests/RequestStatus";
+import { RequestStatus } from "@/features/requests/RequestStatus";
 import {
   assessmentIssueText,
   assessmentPresentation,
-  catalogAssessmentPresentation,
 } from "@/features/requests/statusPresentation";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
@@ -293,22 +292,19 @@ export function RequestList({
             const target = requestUrl(request);
             const active = request.state === "active";
             const checked = selected.has(request.id);
-            const model = resolveRequestedEffective(request.protocol?.model) ?? "—";
-            const reasoningEffort =
-              resolveRequestedEffective(request.protocol?.reasoning_effort) ?? "—";
-            const compactModel = reasoningEffort === "—" ? model : `${model} ${reasoningEffort}`;
+            const model = resolveRequestedEffective(request.protocol?.model);
+            const reasoningEffort = resolveRequestedEffective(request.protocol?.reasoning_effort);
+            // A missing model leaves the slot empty: a lone dash at the head of
+            // the line reads as a bullet, and the description still says "—".
+            const compactModel = [model, reasoningEffort].filter(Boolean).join(" ");
             const firstToken = compactDuration(elapsedNsMs(request.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(request.total_ms);
             const timestampKind = request.ended_at ? "Ended" : "Started";
             const timestampValue = request.ended_at ?? request.started_at;
             const timestamp = formatTimestamp(timestampValue);
-            const issue = assessmentPresentation(request.assessment);
-            const catalogIssue = catalogAssessmentPresentation(
-              request.assessment,
-              request.status,
-              request.state,
-            );
-            const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
+            const issue =
+              request.state === "active" ? null : assessmentPresentation(request.assessment);
+            const modelDescription = `Model ${model ?? "—"}; Reasoning effort ${reasoningEffort ?? "—"}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
               modelDescription,
@@ -366,21 +362,13 @@ export function RequestList({
                       assessment={request.assessment}
                     />
                   </span>
-                  <span
-                    className={styles.metadata}
-                    title={catalogIssue ? modelDescription : undefined}
-                  >
-                    {catalogIssue ? (
-                      <span className={styles.catalogIssueSlot}>
-                        <RequestCatalogIssue issue={catalogIssue} />
-                        <span id={metadataDescriptionId} className="srOnly">
-                          {metadataDescription}
-                        </span>
-                      </span>
-                    ) : (
+                  <span className={styles.metadata}>
+                    {compactModel ? (
                       <span className={styles.modelMetadata} title={modelDescription}>
                         {compactModel}
                       </span>
+                    ) : (
+                      <span />
                     )}
                     <span className={styles.timingMetadata}>
                       <span className={styles.timing} title={timingDescription}>
@@ -394,11 +382,9 @@ export function RequestList({
                         {timestamp}
                       </time>
                     </span>
-                    {!catalogIssue && (
-                      <span id={metadataDescriptionId} className="srOnly">
-                        {metadataDescription}
-                      </span>
-                    )}
+                    <span id={metadataDescriptionId} className="srOnly">
+                      {metadataDescription}
+                    </span>
                   </span>
                   {selectionMode && (
                     <span className={styles.selectionIndicator} aria-hidden="true">

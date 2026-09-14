@@ -426,6 +426,12 @@ ID, or diagnostics. HTTP status, Provider Error, transport findings, and
 warnings remain independent evidence. Follow the
 [Request diagnostics contract](sandbox.md#diagnostics).
 
+The catalog's status cell carries the Assessment. An HTTP status keeps its own
+tone and gains a level glyph only when the primary finding adds to it; a
+finding on a Request that never got a status becomes the cell's label. The
+cell explains its finding on hover, and the row's second line always holds
+model, timing, and timestamp.
+
 Body views provide Raw download, decoded Source, and browser-only Pretty
 representations. Raw preserves application-visible bytes; Pretty never changes
 or persists a Request. Values remain unredacted. Lossless JSON preserves large

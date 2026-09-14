@@ -43,9 +43,6 @@ describe("Requests page list", () => {
     expect(requestListCss).toMatch(
       /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-md\);[\s\S]*?white-space:\s*nowrap;/s,
     );
-    expect(requestListCss).toMatch(
-      /\.catalogIssueSlot\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/s,
-    );
   });
 
   it("preserves target prefixes, full URL titles, and status content for long URLs", async () => {
@@ -228,12 +225,14 @@ describe("Requests page list", () => {
       name: "POST api.example.test/requested",
     });
     expect(within(requestedRow).getByTitle("Model —; Reasoning effort medium")).toHaveTextContent(
-      "— medium",
+      /^medium$/,
     );
     expect(within(requestedRow).getByTitle("First token —; Duration —")).toHaveTextContent("— / —");
 
     const legacyRow = screen.getByRole("button", { name: "POST api.example.test/legacy" });
-    expect(within(legacyRow).getByTitle("Model —; Reasoning effort —")).toHaveTextContent(/^—$/);
+    expect(within(legacyRow).queryByTitle("Model —; Reasoning effort —")).not.toBeInTheDocument();
+    expect(within(legacyRow).queryByText("—", { exact: true })).not.toBeInTheDocument();
+    expect(legacyRow).toHaveAccessibleDescription(/Model —; Reasoning effort —/);
 
     const missingEffortRow = screen.getByRole("button", {
       name: "POST api.example.test/missing-effort",
@@ -250,7 +249,7 @@ describe("Requests page list", () => {
     ).toHaveTextContent("17m34s / 28m55s");
   });
 
-  it("includes a list issue in the request row's accessible description", async () => {
+  it("moves a finding into the status cell and keeps the model line", async () => {
     const message = "Our servers are currently overloaded. Please try again later.";
     const issueSummary = {
       ...completedSummary,
@@ -265,13 +264,13 @@ describe("Requests page list", () => {
     const row = await screen.findByRole("button", {
       name: "POST api.example.test/v1/responses",
     });
-    const issueMarker = within(row).getByRole("img", {
+    const statusCell = within(row).getByRole("img", {
       name: /Request error: Server error.*currently overloaded/,
     });
-    expect(issueMarker).not.toHaveAttribute("tabindex");
-    expect(within(row).getByText("Error: Server error")).toBeInTheDocument();
-    expect(within(row).queryByText("gpt-5.6-sol high")).not.toBeInTheDocument();
-    expect(within(row).getByTitle("Model gpt-5.6-sol; Reasoning effort high")).toBeInTheDocument();
+    expect(statusCell).not.toHaveAttribute("tabindex");
+    expect(statusCell).toHaveTextContent("200");
+    expect(within(row).queryByText("Server error")).not.toBeInTheDocument();
+    expect(within(row).getByText("gpt-5.6-sol high")).toBeInTheDocument();
     expect(within(row).queryByText(message)).not.toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
       /Request error: Server error\. Our servers are currently overloaded/,
@@ -279,7 +278,7 @@ describe("Requests page list", () => {
     expect(row).toHaveAccessibleDescription(/Model gpt-5.6-sol; Reasoning effort high/);
   });
 
-  it("does not repeat an HTTP status as a catalog issue label", async () => {
+  it("does not mark an HTTP status the assessment merely restates", async () => {
     const http401 = {
       ...completedSummary,
       status: 401,
@@ -299,7 +298,7 @@ describe("Requests page list", () => {
       name: "POST api.example.test/v1/responses",
     });
     expect(within(row).getByText("401")).toBeInTheDocument();
-    expect(within(row).queryByText("Error: HTTP 401")).not.toBeInTheDocument();
+    expect(within(row).queryByRole("img", { name: /HTTP 401/ })).not.toBeInTheDocument();
     expect(within(row).getByText("gpt-5.6-sol high")).toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(/Request error: HTTP 401/);
   });

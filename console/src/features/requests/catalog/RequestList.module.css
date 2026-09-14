@@ -264,13 +264,6 @@
   line-height: var(--catalog-row-secondary-line-height);
 }
 
-.catalogIssueSlot {
-  display: flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-}
-
 .modelMetadata,
 .timestamp,
 .timing {
