@@ -45,6 +45,66 @@ describe("Requests page list", () => {
     );
   });
 
+  it("opens the next page at its top and keeps focus on the page turn", async () => {
+    const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
+    const firstPage = requestListFor([completedSummary], {
+      total: 51,
+      deletable_count: 51,
+      has_next: true,
+    });
+    const secondPage = requestListFor([secondPageSummary], { total: 51, deletable_count: 51 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+    const user = userEvent.setup();
+    renderApp({ listRequests });
+
+    const panel = await screen.findByRole("complementary", { name: "Request list" });
+    const body = within(panel)
+      .getByRole("button", { name: "POST api.example.test/v1/responses" })
+      .closest("[aria-busy]") as HTMLElement;
+    body.scrollTop = 120;
+
+    const next = within(panel).getByRole("button", { name: "Next" });
+    next.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("button", { name: "POST second.example.test/v1/responses" });
+
+    expect(body.scrollTop).toBe(0);
+    expect(next).toHaveAttribute("disabled");
+    expect(within(panel).getByText("Page 2 of 2 · 1 shown · 51 total")).toHaveFocus();
+  });
+
+  it("keeps a busy page turn focusable instead of disabling it", async () => {
+    const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
+    const firstPage = requestListFor([completedSummary], { total: 101, has_next: true });
+    const secondPage = requestListFor([secondPageSummary], { total: 101, has_next: true });
+    const pending = deferred<typeof secondPage>();
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockReturnValueOnce(pending.promise);
+    renderApp({ listRequests });
+
+    const panel = await screen.findByRole("complementary", { name: "Request list" });
+    const next = within(panel).getByRole("button", { name: "Next" });
+    next.focus();
+    fireEvent.click(next);
+    await flushEffects();
+
+    expect(next).toHaveAttribute("aria-disabled", "true");
+    expect(next).not.toHaveAttribute("disabled");
+    expect(next).toHaveFocus();
+    fireEvent.click(next);
+    expect(listRequests).toHaveBeenCalledTimes(2);
+
+    pending.resolve(secondPage);
+    await flushEffects();
+    expect(next).not.toHaveAttribute("aria-disabled");
+    expect(next).toHaveFocus();
+  });
+
   it("preserves target prefixes, full URL titles, and status content for long URLs", async () => {
     const longHost = `gateway.${"regional-".repeat(7)}example.test`;
     const longPath = `/v1/${"organizations/".repeat(7)}responses`;

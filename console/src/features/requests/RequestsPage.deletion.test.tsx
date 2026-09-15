@@ -232,7 +232,8 @@ describe("Requests page selection and deletion", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(screen.getByRole("button", { name: "Refresh Requests" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await advanceTimers(10_000);
     expect(listRequests).toHaveBeenCalledTimes(1);
 

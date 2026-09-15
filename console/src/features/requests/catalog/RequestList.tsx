@@ -7,7 +7,8 @@ import {
   LoaderCircle,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import type { FocusEvent, FocusEventHandler } from "react";
 import { moduleIcons } from "@/shared/icons/consoleIcons";
 import { elapsedNsMs, resolveRequestedEffective } from "@/features/requests/summary";
 import type { RequestSummary } from "@/api/requests";
@@ -31,17 +32,39 @@ import { iconSize } from "@/shared/icons/iconSizes";
 
 const RequestIcon = moduleIcons.requests;
 
+/**
+ * A page turn that is unavailable because the page is loading stays
+ * focusable: `disabled` would blur the control the user just pressed (the
+ * Refresh seam, finding 27). Only a genuinely missing neighbour page — first
+ * or last — renders the real `disabled`, and by then the caller has moved
+ * focus off the button.
+ */
 function PageTurnButton({
   direction,
-  disabled,
+  unavailable,
+  busy,
   onClick,
+  onFocus,
+  onBlur,
 }: {
   direction: "previous" | "next";
-  disabled: boolean;
+  unavailable: boolean;
+  busy: boolean;
   onClick: () => void;
+  onFocus: FocusEventHandler<HTMLButtonElement>;
+  onBlur: FocusEventHandler<HTMLButtonElement>;
 }) {
+  const withheld = busy && !unavailable;
   return (
-    <button type="button" className={styles.pageTurn} onClick={onClick} disabled={disabled}>
+    <button
+      type="button"
+      className={styles.pageTurn}
+      onClick={withheld ? undefined : onClick}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      disabled={unavailable}
+      aria-disabled={withheld ? "true" : undefined}
+    >
       {direction === "previous" ? (
         <>
           <ChevronLeft size={iconSize.xs} aria-hidden="true" /> Previous
@@ -78,13 +101,52 @@ function RequestPagination({
   onPrevious: () => void;
   onNext: () => void;
 }) {
+  const counter = useRef<HTMLSpanElement>(null);
+  const focusedTurn = useRef<HTMLButtonElement | null>(null);
+
+  // Landing on the first or last page disables the button that brought the
+  // user there, and the browser blurs it to `<body>` the moment the attribute
+  // lands — before any effect runs. The button remembers that it held focus;
+  // the counter is the one element that still says where the user is, so
+  // focus parks on it.
+  useLayoutEffect(() => {
+    const turn = focusedTurn.current;
+    const active = document.activeElement;
+    if (!turn?.disabled || (active !== document.body && active !== turn)) return;
+    focusedTurn.current = null;
+    counter.current?.focus();
+  }, [hasNext, hasPrevious]);
+
+  const trackFocus = {
+    onFocus: (event: FocusEvent<HTMLButtonElement>) => {
+      focusedTurn.current = event.currentTarget;
+    },
+    onBlur: (event: FocusEvent<HTMLButtonElement>) => {
+      // A blur with somewhere to go is the user leaving; one with nowhere to
+      // go is the disable, which the layout effect above recovers.
+      if (event.relatedTarget !== null) focusedTurn.current = null;
+    },
+  };
+
   return (
     <nav className={className} aria-label="Request pages">
-      <PageTurnButton direction="previous" disabled={!hasPrevious || locked} onClick={onPrevious} />
-      <span>
+      <PageTurnButton
+        direction="previous"
+        unavailable={!hasPrevious}
+        busy={locked}
+        onClick={onPrevious}
+        {...trackFocus}
+      />
+      <span ref={counter} tabIndex={-1}>
         Page {page} of {totalPages} · {shown} shown · {total} total
       </span>
-      <PageTurnButton direction="next" disabled={!hasNext || locked} onClick={onNext} />
+      <PageTurnButton
+        direction="next"
+        unavailable={!hasNext}
+        busy={locked}
+        onClick={onNext}
+        {...trackFocus}
+      />
     </nav>
   );
 }
@@ -189,6 +251,14 @@ export function RequestList({
     onExit: onExitSelection,
   });
 
+  // A page turn reuses the scrolled list container, so without this the new
+  // page opens wherever the old one was left — from the bottom, where Next
+  // lives, that hid the first 36 rows of every page (finding 52).
+  const listBody = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (listBody.current) listBody.current.scrollTop = 0;
+  }, [page]);
+
   const pageTurnLocked = loading || deletionBusy;
   const paginationProps = {
     page,
@@ -275,7 +345,7 @@ export function RequestList({
           />
         )}
       </div>
-      <div className={styles.requests} aria-busy={loading}>
+      <div ref={listBody} className={styles.requests} aria-busy={loading}>
         {loading && requests.length === 0 ? (
           <div className={styles.loadingState} role="status" aria-live="polite">
             <LoaderCircle className="spin" size={iconSize.lg} aria-hidden="true" />
