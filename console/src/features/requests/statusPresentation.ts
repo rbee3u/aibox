@@ -163,11 +163,15 @@ export function requestHeadlinePresentation(
 ): RecordHeadlinePresentation {
   const active = state === "active";
   if (!response) {
-    return {
-      statusText: active ? null : "No response",
-      tone: active ? "active" : "neutral",
-      tag: active ? { label: "Waiting", tone: "active" } : assessmentPresentation(assessment),
-    };
+    if (active)
+      return { statusText: null, tone: "active", tag: { label: "Waiting", tone: "active" } };
+    // The failure kind is the status: the list already states it alone in
+    // the status column (finding 51), and "No response" beside it said the
+    // same thing twice with the grey half first.
+    const issue = assessmentPresentation(assessment);
+    return issue
+      ? { statusText: null, tone: issue.tone, tag: issue }
+      : { statusText: "No response", tone: "neutral", tag: null };
   }
   return {
     statusText: [response.http_version, response.status, response.reason_phrase]

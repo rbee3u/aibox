@@ -275,7 +275,8 @@ describe("RequestStatus", () => {
     rerender(
       <RecordHeadlineStatus response={null} state="completed" assessment={disconnectWarning} />,
     );
-    expect(screen.getByLabelText("No response")).toBeInTheDocument();
+    // The failure kind is the whole status: no grey "No response" beside it.
+    expect(screen.queryByLabelText("No response")).not.toBeInTheDocument();
     const warningTag = screen.getByText("Disconnected");
 
     const tooltip = showTooltip(warningTag);

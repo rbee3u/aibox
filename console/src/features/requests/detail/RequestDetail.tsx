@@ -71,6 +71,8 @@ export function RequestDetail({
   const response = detail.response;
   const [origin, path] = requestDetailUrl(request);
   const panelId = `request-panel-${request.id}`;
+  const timestampKind = detail.result ? "Ended" : "Started";
+  const timestampValue = detail.result?.ended_at ?? request.started_at;
 
   function selectAdjacentTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
@@ -87,20 +89,26 @@ export function RequestDetail({
 
   return (
     <section className={styles.panel} aria-label="Request details">
-      <div className={styles.header}>
-        <div className={styles.requestOverview}>
+      <header className={styles.header}>
+        <h2 className={styles.requestOverview}>
           <span className={styles.method}>{request.method}</span>
           <span className={styles.url}>
             <strong>{origin}</strong>
             <span>{path}</span>
           </span>
+        </h2>
+        <div className={styles.caption}>
+          <RecordHeadlineStatus
+            response={response}
+            state={detail.state}
+            assessment={detail.assessment}
+          />
+          <span className={styles.captionTime}>
+            <span aria-hidden="true">· </span>
+            {timestampKind} <time dateTime={timestampValue}>{formatTimestamp(timestampValue)}</time>
+          </span>
         </div>
-        <RecordHeadlineStatus
-          response={response}
-          state={detail.state}
-          assessment={detail.assessment}
-        />
-      </div>
+      </header>
       <SegmentedControl variant="tabs" role="tablist" aria-label="Request data">
         {TABS.map(({ value, label }, index) => (
           <button
