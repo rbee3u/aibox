@@ -9,23 +9,24 @@ repository = "https://github.com/rbee3u/aibox"
 publish = false
 
 [dependencies]
+anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", features = ["http2"] }
-base64 = "0.22"
+base64 = "0.23"
+brotli = "9"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = "0.3"
+libc = "0.2"
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
+rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = { version = "0.11", default-features = false }
+signal-hook = "0.4"
 socket2 = "0.6"
 tempfile = "3"
-signal-hook = "0.4"
-rustix = { version = "1", features = ["fs", "process"] }
-libc = "0.2"
-anyhow = "1"
-walkdir = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false }
@@ -33,16 +34,14 @@ tokio-util = { version = "0.7", features = ["io", "rt"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "v7"] }
-zstd = { version = "0.13", default-features = false }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-brotli = { version = "9", default-features = false, features = ["std"] }
-fs2 = "0.4"
+walkdir = "2"
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 http-body-util = "0.1"
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
-ts-rs = { version = "12", features = ["serde-compat", "serde-json-impl"] }
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 
 [profile.release]
 strip = true

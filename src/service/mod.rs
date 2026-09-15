@@ -20,7 +20,6 @@ use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::get;
-use fs2::FileExt as _;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::fs;
 use std::future::Future;
@@ -342,7 +341,7 @@ fn acquire_service_lock(root: &Path) -> Result<ServiceLock> {
             path.display()
         );
     }
-    file.try_lock_exclusive().with_context(|| {
+    file.try_lock().with_context(|| {
         format!(
             "another AIBox Service already manages Root {}",
             root.display()
