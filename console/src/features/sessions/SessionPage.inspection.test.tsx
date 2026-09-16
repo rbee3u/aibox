@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
+import type { SessionApi, SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import type { SessionDetailHandlers } from "@/api/sessions";
+import { controlRefusal } from "@/test/controlApi";
 import { deferred } from "@/test/deferred";
 import { SessionPage, firstSession, list, fakeApi } from "@/features/sessions/testSupport";
 
@@ -75,7 +76,8 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(screen.getByText(/· 1s · 2 messages · 0 tools/)).toBeInTheDocument();
+    expect(screen.getByText(/· 2 messages · 0 tools/)).toBeInTheDocument();
+    expect(screen.queryByText(/· 1s ·/)).not.toBeInTheDocument();
     const userMessage = (await screen.findAllByRole("article")).find((article) =>
       article.textContent?.includes("Please inspect this."),
     );
@@ -84,13 +86,276 @@ describe("SessionPage", () => {
     const agentHeading = screen.getByRole("heading", { name: "Done" });
     expect(agentHeading).toBeInTheDocument();
     expect(agentHeading.closest("article")?.className).not.toContain("undefined");
-    expect(screen.getByText("2 items · response_item, world_state")).toBeInTheDocument();
+    const activitySummary = screen.getByText("Transcript activity");
+    const activityGroup = activitySummary.closest("details");
+    const collapsedSummary = activitySummary.closest("summary");
+    expect(collapsedSummary).toHaveTextContent("1 unsupported");
+    expect(collapsedSummary).not.toHaveTextContent("response_item");
+    expect(collapsedSummary).not.toHaveTextContent("world_state");
+    expect(activityGroup?.querySelector("summary svg")).toBeNull();
+    expect(screen.queryByText("View Details")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText("Unsupported")).toBeInTheDocument();
     expect(
-      screen.getByText("Some transcript events could not be interpreted."),
-    ).toBeInTheDocument();
+      screen.queryByText("encountered 2 unsupported Transcript Entry projection(s)"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Observed span")).toBeInTheDocument();
+    expect(screen.getByText("Session ID")).toBeInTheDocument();
+    expect(screen.getByText("Inside the Tenant Home")).toBeInTheDocument();
+    expect(screen.queryByText("Tenant")).not.toBeInTheDocument();
+    expect(screen.queryByText("Coding Agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Started")).not.toBeInTheDocument();
+    expect(screen.getByTitle("First to last Transcript event")).toHaveTextContent("1s");
   });
-  it("collapses Transcript activity when refreshing Session detail", async () => {
+  it("labels tool-bearing groups as tools and shows the command on the row", async () => {
     const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "exec",
+        status: "started",
+        summary: '{"cmd":"git status --porcelain"}',
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 3,
+        timestamp: firstSession.start_ts,
+        native_type: "event_msg",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "token",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1-done"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Tool result",
+        status: "completed",
+        summary: "Script completed",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 1200,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.getByText("1 tool")).toBeInTheDocument();
+    expect(screen.getByText("1 tool").closest("summary")).toHaveTextContent(/^1 toolexec$/);
+    expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
+    await user.click(screen.getByText("1 tool"));
+    expect(screen.getByText(/exec · git status --porcelain/)).toBeInTheDocument();
+    // The event beside it is housekeeping: folded, not gone.
+    const routine = screen.getByText("1 routine entry").closest("details");
+    expect(routine).not.toHaveAttribute("open");
+    expect(screen.getByText("event_msg").closest("details")).toBe(
+      routine?.querySelector("details"),
+    );
+    await user.click(screen.getByText("1 routine entry"));
+    expect(routine).toHaveAttribute("open");
+    // The result rides on the call's row, under its own heading.
+    await user.click(screen.getByText(/exec · git status --porcelain/));
+    expect(screen.getByRole("heading", { name: "Input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Result" })).toBeInTheDocument();
+    expect(screen.getByText("Script completed")).toBeInTheDocument();
+    expect(screen.getByText("Raw call entry")).toBeInTheDocument();
+    expect(screen.getByText("Raw result entry")).toBeInTheDocument();
+  });
+  it("keeps Conversation alarms for malformed Transcript records", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "malformed",
+        role: null,
+        content_types: [],
+        status: "malformed",
+        preview: "broken line",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
+          malformed_count: 1,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        ["line 2: malformed JSONL (invalid)"],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.getByText("1 malformed entry could not be read.")).toBeInTheDocument();
+    expect(screen.queryByText("Transcript warning")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Transcript diagnostics")).toBeInTheDocument();
+    expect(screen.getByLabelText("Activity has diagnostics")).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Session views" })).getByRole("button", {
+        name: /Details/,
+      }),
+    );
+    expect(screen.getByText("Malformed")).toBeInTheDocument();
+    expect(screen.getByText("line 2: malformed JSONL (invalid)")).toBeInTheDocument();
+  });
+  it("keeps a failed tool on its activity group rather than the Session", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "failed",
+        summary: "grep: no matches",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(await screen.findByLabelText("Activity has diagnostics")).toBeInTheDocument();
+    expect(screen.queryByText("View Details")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "First prompt" })).toHaveAttribute(
+      "title",
+      "First prompt",
+    );
+  });
+  it("states a call the Transcript never answered without calling it a failure", async () => {
+    // The Service ends the stream by re-emitting an unanswered call as
+    // `incomplete`: same entry, same input, no result of its own.
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "started",
+        summary: "sleep 60",
+      });
+      handlers.onTool({
+        entry_ids: ["tool-1"],
+        call_id: "call-1",
+        timestamp: firstSession.start_ts,
+        name: "Bash",
+        status: "incomplete",
+        summary: "sleep 60",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 1,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
+    await user.click(screen.getByText("1 tool"));
+    const badge = screen.getByText("No result").closest("[data-status-tone]");
+    expect(badge).toHaveAttribute("data-status-tone", "neutral");
+    expect(screen.queryByText("Incomplete")).not.toBeInTheDocument();
+    await user.click(screen.getByText(/Bash · sleep 60/));
+    expect(screen.getByRole("heading", { name: "Input" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Result" })).not.toBeInTheDocument();
+    expect(screen.getByText("Raw call entry")).toBeInTheDocument();
+    expect(screen.queryByText("Raw result entry")).not.toBeInTheDocument();
+  });
+  it("re-reads the Session and retries an evidence read the Transcript outran", async () => {
+    let snapshot = "128:1";
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
       handlers.onEvidence({
         entry_id: "evidence-1",
         line: 2,
@@ -106,9 +371,281 @@ describe("SessionPage", () => {
           start_ts: firstSession.start_ts,
           last_event_ts: firstSession.start_ts,
           observed_duration_ms: 0,
-          message_count: 0,
+          message_count: 1,
           tool_count: 0,
-          entry_count: 1,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot,
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    // The file grows under the reader: the first read conflicts, the read
+    // against the snapshot the re-read reports succeeds.
+    const conflict = () =>
+      Promise.reject(
+        controlRefusal(
+          "Session Transcript changed since it was inspected; refresh the detail view",
+          409,
+        ),
+      );
+    const loadSessionEvidence = vi.fn<SessionApi["loadSessionEvidence"]>(
+      (_tenant, _agent, _id, entry, at) =>
+        at === snapshot
+          ? Promise.resolve({
+              entry_id: entry,
+              encoding: "utf-8",
+              content: '{"kept":true}',
+              snapshot: at,
+            })
+          : conflict(),
+    );
+    const { api } = fakeApi({
+      sessions: () => list([firstSession]),
+      streamSessionDetail,
+      loadSessionEvidence,
+    });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    await user.click(screen.getByText("Transcript activity"));
+    const disclosure = screen.getByText("response_item").closest("details");
+    await user.click(screen.getByText("response_item"));
+    snapshot = "256:2";
+    await user.click(screen.getByText("Raw entry"));
+    expect(await screen.findByText(/"kept": true/)).toBeInTheDocument();
+    expect(streamSessionDetail).toHaveBeenCalledTimes(2);
+    expect(loadSessionEvidence).toHaveBeenCalledTimes(2);
+    expect(loadSessionEvidence.mock.calls[1][4]).toBe("256:2");
+    // The re-read kept the page: the disclosure the reader opened is still open.
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.queryByText(/changed since it was inspected/)).not.toBeInTheDocument();
+  });
+  it("says the Session has grown when the retried evidence read conflicts again", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "response_item",
+        role: null,
+        content_types: [],
+        status: "unsupported",
+        preview: "evidence preview",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    const loadSessionEvidence = vi.fn<SessionApi["loadSessionEvidence"]>(() =>
+      Promise.reject(controlRefusal("Session Transcript changed since it was inspected", 409)),
+    );
+    const { api } = fakeApi({
+      sessions: () => list([firstSession]),
+      streamSessionDetail,
+      loadSessionEvidence,
+    });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    await user.click(screen.getByText("Transcript activity"));
+    await user.click(screen.getByText("response_item"));
+    await user.click(screen.getByText("Raw entry"));
+    expect(
+      await screen.findByText("This Session has grown since it was opened."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/changed since it was inspected/)).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry raw entry" });
+    expect(streamSessionDetail).toHaveBeenCalledTimes(2);
+    await user.click(retry);
+    await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(3));
+  });
+  it("renders CLI-written lines as events, not speech", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-2"],
+        role: "assistant",
+        timestamp: firstSession.start_ts,
+        text: "Starting.",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-3"],
+        role: "assistant",
+        timestamp: firstSession.start_ts,
+        text: "API Error: Request rejected (429)",
+        notice: "api_error",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-4"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "[Request interrupted by user]",
+        notice: "interrupted",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 4,
+          tool_count: 0,
+          entry_count: 4,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    const failure = await screen.findByRole("note", { name: "Request failed" });
+    expect(failure).toHaveTextContent("API Error: Request rejected (429)");
+    expect(screen.getByRole("note", { name: "Turn interrupted" })).toHaveTextContent(
+      "[Request interrupted by user]",
+    );
+    // The reply before the failure keeps its own text: the error is not merged in.
+    const reply = screen.getAllByRole("article").find((a) => a.textContent?.includes("Starting."));
+    expect(reply).not.toHaveTextContent("API Error");
+    expect(failure.closest("article")).toBeNull();
+    // Neither line is anyone's speech: no author, and the interruption is not a navigator stop.
+    expect(screen.queryByText("[Request interrupted by user]")?.closest("article")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /Jump to message/ })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /Jump to message 1: Please inspect/ }),
+    ).toHaveLength(2);
+  });
+  it("keeps routine-only groups off Conversation and on Details", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onEvidence({
+        entry_id: "leading-1",
+        line: 1,
+        timestamp: firstSession.start_ts,
+        native_type: "session_meta",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "session meta",
+      });
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "between-1",
+        line: 3,
+        timestamp: firstSession.start_ts,
+        native_type: "event_msg",
+        role: null,
+        content_types: [],
+        status: "filtered",
+        preview: "token",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 1,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    expect(screen.getByRole("article")).toHaveTextContent("Please inspect this.");
+    // Both groups hold only routine housekeeping, so neither reaches the reading stream.
+    expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("session_meta")).not.toBeInTheDocument();
+    expect(screen.queryByText("event_msg")).not.toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Session views" })).getByRole("button", {
+        name: /Details/,
+      }),
+    );
+    expect(screen.getByText("Transcript entries")).toBeInTheDocument();
+    expect(screen.getByText("Unsupported")).toBeInTheDocument();
+    expect(screen.getByText("Transcript entries").closest("div")).toHaveTextContent("3");
+  });
+  it("keeps an opened activity group open across a Session detail refresh", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      handlers.onMessage({
+        entry_ids: ["message-1"],
+        role: "user",
+        timestamp: firstSession.start_ts,
+        text: "Please inspect this.",
+      });
+      handlers.onEvidence({
+        entry_id: "evidence-1",
+        line: 2,
+        timestamp: firstSession.start_ts,
+        native_type: "response_item",
+        role: null,
+        content_types: [],
+        status: "unsupported",
+        preview: "evidence preview",
+      });
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 0,
+          message_count: 1,
+          tool_count: 0,
+          entry_count: 2,
           malformed_count: 0,
           unsupported_count: 1,
           hidden_internal_count: 0,
@@ -132,7 +669,10 @@ describe("SessionPage", () => {
     expect(activityDisclosure).toHaveAttribute("open");
     await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
     await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Transcript activity").closest("details")).not.toHaveAttribute("open");
+    // The refreshed group is the same group — same first entry — so the
+    // disclosure the reader opened is still the one on screen, still open.
+    expect(screen.getByText("Transcript activity").closest("details")).toBe(activityDisclosure);
+    expect(activityDisclosure).toHaveAttribute("open");
   });
   it("offers Jump to latest when a long Conversation finishes loading at the beginning", async () => {
     const completion = deferred<void>();
@@ -241,12 +781,87 @@ describe("SessionPage", () => {
     expect(
       screen.getAllByRole("button", { name: /Jump to message 2: Second request/ }),
     ).toHaveLength(2);
-    await user.click(screen.getAllByRole("button", { name: /Jump to message 2/ })[0]);
+    // Each stop carries its number; the text stays in the accessible name and title.
+    const secondStop = screen.getAllByRole("button", { name: /Jump to message 2/ })[0];
+    expect(secondStop.querySelector("[aria-hidden]")).toHaveTextContent("2");
+    expect(secondStop).toHaveAttribute("title", "Second request");
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await user.click(secondStop);
     expect(
       screen
         .getAllByRole("button", { name: /Jump to message 2/ })
         .every((button) => button.getAttribute("aria-current") === "location"),
     ).toBe(true);
+    // The rail follows the current stop, so a long Session never hides it.
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(scrollIntoView.mock.instances).toContain(secondStop);
+  });
+  it("keeps the navigator on the reader's stop across a refresh", async () => {
+    const streamSessionDetail = vi.fn((_tenant, _agent, _id, handlers: SessionDetailHandlers) => {
+      for (const [index, text] of ["First request", "Second request", "Third request"].entries()) {
+        handlers.onMessage({
+          entry_ids: [`user-${index + 1}`],
+          role: "user",
+          timestamp: firstSession.start_ts,
+          text,
+        });
+      }
+      handlers.onComplete(
+        {
+          start_ts: firstSession.start_ts,
+          last_event_ts: firstSession.start_ts,
+          observed_duration_ms: 1200,
+          message_count: 3,
+          tool_count: 0,
+          entry_count: 3,
+          malformed_count: 0,
+          unsupported_count: 0,
+          hidden_internal_count: 0,
+          file_size: 128,
+          snapshot: "128:1",
+        },
+        [],
+      );
+      return Promise.resolve();
+    });
+    const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
+    );
+    // Opening a Session scrolls to its top and reads the position on the next
+    // frames; let those land before the reader moves.
+    const articles = await screen.findAllByRole("article");
+    await act(
+      () =>
+        new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+        ),
+    );
+    // Lay the reading out: the reader has scrolled to the second message.
+    const scrollContainer = articles[0].parentElement?.parentElement as HTMLDivElement;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, value: 3000 },
+      scrollTop: { configurable: true, value: 1000, writable: true },
+      clientHeight: { configurable: true, value: 800 },
+    });
+    articles.forEach((article, index) =>
+      Object.defineProperty(article, "offsetTop", { configurable: true, value: index * 1000 }),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    await user.click(screen.getAllByRole("button", { name: /Jump to message 2/ })[0]);
+    const current = () =>
+      screen
+        .getAllByRole("button", { name: /Jump to message/ })
+        .filter((button) => button.getAttribute("aria-current") === "location")
+        .map((button) => button.getAttribute("title"));
+    expect(current()).toEqual(["Second request", "Second request"]);
+    await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
+    await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
+    // The reading did not move, so neither does the mark: never back to 1.
+    await waitFor(() => expect(current()).toEqual(["Second request", "Second request"]));
   });
   it("reports an incomplete Transcript as a diagnostic", async () => {
     const streamSessionDetail = vi.fn().mockRejectedValue(new Error("truncated Transcript"));
@@ -256,8 +871,11 @@ describe("SessionPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
     );
-    expect(await screen.findByText("Partial transcript")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Details/ }));
+    const notice = await screen.findByText(
+      "Transcript did not finish loading — content may be incomplete.",
+    );
+    expect(screen.queryByText("Partial transcript")).not.toBeInTheDocument();
+    await user.click(notice);
     expect(
       screen.getByText(
         "Transcript detail did not finish loading. Displayed content may be incomplete.",

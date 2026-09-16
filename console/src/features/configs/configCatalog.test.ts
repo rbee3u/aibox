@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigCatalogEntry } from "@/api/configs";
 import {
+  appliedConfigPresentation,
   comparableProvider,
   configIssuePresentation,
   configWarningPresentation,
+  driftCatalogLabel,
+  lastAppliedMeta,
   propagationDetail,
   propagationGroup,
+  propagationGroups,
+  propagationStatus,
   proxyValueIsValid,
   requestProxyRoute,
   splitRequestProxyValue,
@@ -14,6 +19,27 @@ import {
 function entry(overrides: Partial<ConfigCatalogEntry> = {}): ConfigCatalogEntry {
   return { name: "review", state: "ready", ...overrides };
 }
+
+describe("Last Application metadata", () => {
+  it("names the recorded source without calling it Active", () => {
+    expect(lastAppliedMeta("openai")).toBe("Last applied openai");
+    expect(lastAppliedMeta("openai", "clean")).toBe("Last applied openai");
+  });
+
+  it("says the Current Config differs without a Dirty badge", () => {
+    expect(lastAppliedMeta("openai", "dirty")).toBe("Last applied openai · differs");
+  });
+});
+
+describe("Named Config drift labels", () => {
+  it("uses Differs for dirty drift instead of Dirty", () => {
+    expect(driftCatalogLabel("dirty")).toBe("Differs");
+    expect(driftCatalogLabel("clean")).toBe("Clean");
+    expect(driftCatalogLabel("untracked")).toBe("Untracked");
+    expect(driftCatalogLabel("source-missing")).toBe("Source missing");
+    expect(driftCatalogLabel("comparison-error")).toBe("Comparison error");
+  });
+});
 
 describe("Named Config issue presentation", () => {
   it("stays silent for a ready Config without warnings", () => {
@@ -47,20 +73,41 @@ describe("Named Config issue presentation", () => {
 });
 
 describe("credential propagation outcomes", () => {
-  it("groups each outcome by what the reader must do", () => {
+  it("groups each outcome by what the reader must do, a failed write first", () => {
+    expect(propagationGroups[0]).toBe("failed");
+    expect(propagationGroup("failed")).toBe("failed");
     expect(propagationGroup("updated")).toBe("updated");
-    expect(propagationGroup("unchanged")).toBe("skipped");
-    for (const status of ["conflict", "newer", "invalid", "failed"] as const) {
+    for (const status of ["unchanged", "newer"] as const) {
+      expect(propagationGroup(status), status).toBe("skipped");
+    }
+    for (const status of ["conflict", "invalid"] as const) {
       expect(propagationGroup(status), status).toBe("attention");
     }
   });
 
-  it("explains only the outcomes that carry evidence", () => {
+  it("names every outcome in sentence case with a tone", () => {
+    expect(propagationStatus("updated", true)).toEqual({ tone: "good", label: "Will update" });
+    expect(propagationStatus("updated", false)).toEqual({ tone: "good", label: "Updated" });
+    expect(propagationStatus("newer", false)).toEqual({ tone: "neutral", label: "Target newer" });
+    expect(propagationStatus("conflict", false).tone).toBe("warning");
+    expect(propagationStatus("failed", false)).toEqual({ tone: "error", label: "Failed" });
+  });
+
+  it("explains each outcome as a sentence with formatted times", () => {
     expect(propagationDetail({ status: "updated" })).toBeNull();
-    expect(propagationDetail({ status: "conflict", last_refresh: "t1" })).toBe("last refresh t1");
+    expect(propagationDetail({ status: "updated" }, true)).toBe(
+      "Older credentials for the same account",
+    );
+    expect(propagationDetail({ status: "conflict", last_refresh: "2026-09-10T08:12:00Z" })).toBe(
+      "Different content with the same refresh time, 2026-09-10 16:12:00",
+    );
     expect(
-      propagationDetail({ status: "newer", source_last_refresh: "t2", target_last_refresh: "t3" }),
-    ).toBe("source t2 · target t3");
+      propagationDetail({
+        status: "newer",
+        source_last_refresh: "2026-09-10T08:12:00Z",
+        target_last_refresh: "2026-09-12T19:40:00Z",
+      }),
+    ).toBe("Refreshed 2026-09-13 03:40:00, after the source at 2026-09-10 16:12:00");
     expect(propagationDetail({ status: "failed", reason: "denied" })).toBe("denied");
   });
 });
@@ -114,5 +161,27 @@ describe("Request Proxy routing", () => {
         proxy_routed: true,
       }),
     ).toEqual({ included: true, name: "local", base_url: "http://api.test" });
+  });
+});
+
+describe("appliedConfigPresentation", () => {
+  it("reads Applied with nothing left to apply when the application is clean", () => {
+    expect(appliedConfigPresentation({ last_application: null, drift: "clean" })).toEqual({
+      label: "Applied",
+      tone: "good",
+      variant: "inline",
+      applicable: false,
+    });
+  });
+  it("keeps the shared drift label and an applicable Apply for every other state", () => {
+    expect(appliedConfigPresentation({ last_application: null, drift: "dirty" })).toEqual({
+      label: "Differs",
+      tone: "warning",
+      variant: "badge",
+      applicable: true,
+    });
+    expect(
+      appliedConfigPresentation({ last_application: null, drift: "comparison-error" }).label,
+    ).toBe("Comparison error");
   });
 });

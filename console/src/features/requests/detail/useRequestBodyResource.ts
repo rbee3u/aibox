@@ -100,7 +100,10 @@ export function useRequestBodyResource({
   const visibleBodyComplete =
     detail !== null && visibleBodyKind !== null ? bodyComplete(detail, visibleBodyKind) : false;
   const shouldLoadVisibleTimings =
-    visibleBodyKind === "response" && detail !== null && isSseResponse(detail);
+    visibleBodyKind === "response" &&
+    detail !== null &&
+    isSseResponse(detail) &&
+    !isEncodedContentCoding(visibleBodyCodingKind);
 
   useEffect(() => {
     controllerRef.current?.abort();

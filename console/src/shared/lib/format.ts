@@ -67,6 +67,14 @@ export function capitalize(value: string): string {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
 
+/** Catalog and topology label for Config Drift. Dirty drift reads Differs. */
+export function driftCatalogLabel(drift: string): string {
+  if (drift === "dirty") return "Differs";
+  if (drift === "source-missing") return "Source missing";
+  if (drift === "comparison-error") return "Comparison error";
+  return drift.split("-").map(capitalize).join(" ");
+}
+
 export function hex(bytesValue: Uint8Array): string {
   return Array.from(bytesValue, (value) => value.toString(16).padStart(2, "0")).join(" ");
 }

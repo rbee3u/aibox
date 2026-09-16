@@ -18,7 +18,8 @@
 
 use crate::session::{
     self, ConversationMessage, ConversationRole, DetailRecord, PromptRecord, SessionBackend,
-    SessionNativeFacts, ToolActivity, ToolActivityStatus, bounded_preview, evidence_for, ts_of,
+    SessionNativeFacts, ToolActivity, ToolActivityStatus, evidence_for, tool_input_preview,
+    tool_output_preview, ts_of,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -161,6 +162,7 @@ impl SessionBackend for Codex {
                 role: ConversationRole::User,
                 timestamp: ts_of(value),
                 text,
+                notice: None,
             })];
             if unsupported {
                 output.push(DetailRecord::Evidence(evidence_for(
@@ -184,6 +186,7 @@ impl SessionBackend for Codex {
                     role: ConversationRole::Assistant,
                     timestamp: ts_of(value),
                     text,
+                    notice: None,
                 })];
                 if unsupported {
                     output.push(DetailRecord::Evidence(evidence_for(
@@ -215,7 +218,7 @@ impl SessionBackend for Codex {
                 summary: payload
                     .get("arguments")
                     .or_else(|| payload.get("input"))
-                    .map(|input| bounded_preview(&input.to_string()))
+                    .map(codex_tool_input_preview)
                     .unwrap_or_default(),
             })];
         }
@@ -242,7 +245,7 @@ impl SessionBackend for Codex {
                 summary: payload
                     .get("output")
                     .or_else(|| payload.get("content"))
-                    .map(|output| bounded_preview(&output.to_string()))
+                    .map(tool_output_preview)
                     .unwrap_or_default(),
             })];
         }
@@ -301,6 +304,18 @@ impl SessionBackend for Codex {
     fn fallback_start_ts_of(&self, value: &Value) -> Option<String> {
         let timestamp = session::ts_of(value);
         (!timestamp.is_empty()).then_some(timestamp)
+    }
+}
+
+/// Codex serializes function-call arguments as a JSON string; read through it
+/// when it is one, so `{"cmd":…}` yields the command and not its quoting.
+fn codex_tool_input_preview(arguments: &Value) -> String {
+    match arguments {
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(parsed @ Value::Object(_)) => tool_input_preview(&parsed),
+            _ => tool_input_preview(arguments),
+        },
+        other => tool_input_preview(other),
     }
 }
 

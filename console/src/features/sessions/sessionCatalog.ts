@@ -80,3 +80,12 @@ export interface SessionDialogSource {
 export function sessionDialogSources(rows: readonly SourcedSession[]): SessionDialogSource[] {
   return groupSessionsForDeletion(rows).map(({ source, ids }) => ({ source, count: ids.length }));
 }
+
+/** Counts a row and its detail both state, so they must say them the same way. */
+export function messageCountLabel(count: number): string {
+  return `${count} message${count === 1 ? "" : "s"}`;
+}
+
+export function toolCountLabel(count: number): string {
+  return `${count} tool${count === 1 ? "" : "s"}`;
+}

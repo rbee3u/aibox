@@ -366,3 +366,38 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
     );
     assert!(stale.is_err());
 }
+
+#[test]
+fn tool_previews_carry_the_field_a_reader_wants_not_its_json_wrapper() {
+    let long = "x".repeat(300);
+    let bash = serde_json::json!({ "command": long, "description": "pad" });
+    let preview = tool_input_preview(&bash);
+    assert_eq!(
+        preview.len(),
+        240,
+        "bounded after extraction, in the command's own text"
+    );
+    assert!(
+        preview.starts_with("xxx"),
+        "no `{{\"command\":` wrapper: {preview}"
+    );
+
+    let read = serde_json::json!({ "file_path": "/tmp/after.png" });
+    assert_eq!(tool_input_preview(&read), "/tmp/after.png");
+
+    let argv = serde_json::json!({ "cmd": ["bash", "-lc", "ls -la"] });
+    assert_eq!(tool_input_preview(&argv), "bash -lc ls -la");
+
+    let opaque = serde_json::json!({ "old_string": "a", "new_string": "b" });
+    assert_eq!(
+        tool_input_preview(&opaque),
+        r#"{"new_string":"b","old_string":"a"}"#,
+        "an input without a primary field stays JSON"
+    );
+
+    let text = serde_json::json!("Exit code 1\nENOENT");
+    assert_eq!(tool_output_preview(&text), "Exit code 1\nENOENT");
+    let blocks =
+        serde_json::json!([{ "type": "text", "text": "one" }, { "type": "text", "text": "two" }]);
+    assert_eq!(tool_output_preview(&blocks), "one\ntwo");
+}

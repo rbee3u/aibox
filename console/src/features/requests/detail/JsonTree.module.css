@@ -23,14 +23,18 @@
 .jsonLine {
   display: flex;
   min-height: 24px;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   padding-right: 8px;
 }
 
-.jsonNode:focus > .jsonLine {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 var(--accent);
+/*
+ * Focus lands on the node, but the node wraps its whole expanded subtree, so
+ * the ring is drawn on the one line the user is actually on.
+ */
+.jsonNode:focus-visible > .jsonLine {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
 }
 
 .jsonChildren {
@@ -49,18 +53,35 @@
 
 .jsonToggle {
   display: inline-grid;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   place-items: center;
   padding: 0;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.jsonToggle:disabled {
-  opacity: 1;
+.jsonToggle:hover {
+  background: var(--surface-hover);
+  color: var(--code-text);
+}
+
+.jsonToggle:active {
+  background: var(--surface-pressed);
+  color: var(--code-text);
+}
+
+.jsonToggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .jsonIndent {
-  width: 20px;
+  width: 24px;
 }
 
 .jsonKey {
@@ -91,12 +112,19 @@
 
 .jsonCopy {
   display: inline-grid;
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   place-items: center;
   padding: 0;
+  border-radius: var(--radius-sm);
   opacity: 0.35;
+  transition:
+    opacity var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .jsonLine:hover .jsonCopy,
@@ -104,9 +132,67 @@
   opacity: 1;
 }
 
+.jsonCopy:hover {
+  background: var(--surface-hover);
+  color: var(--code-text);
+  opacity: 1;
+}
+
+.jsonCopy:active {
+  background: var(--surface-pressed);
+  color: var(--code-text);
+  opacity: 1;
+}
+
+.jsonCopy:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
 .jsonStringToggle {
   padding: 1px 4px;
+  border-radius: var(--radius-sm);
   color: var(--code-muted);
   font-size: var(--text-xs);
   text-decoration: underline;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.jsonStringToggle:hover {
+  background: var(--surface-hover);
+  color: var(--code-text);
+}
+
+.jsonStringToggle:active {
+  background: var(--surface-pressed);
+  color: var(--code-text);
+}
+
+.jsonStringToggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+@media (pointer: coarse) {
+  .jsonLine {
+    min-height: 44px;
+  }
+
+  .jsonToggle,
+  .jsonCopy {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .jsonCopy {
+    flex-basis: 44px;
+  }
+
+  .jsonIndent {
+    width: 44px;
+  }
 }

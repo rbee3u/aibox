@@ -70,6 +70,41 @@ fn summarize_prefers_the_last_non_empty_ai_title() {
 }
 
 #[test]
+fn summarize_keeps_the_first_cwd_and_version_the_transcript_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let path = write_jsonl(
+        home,
+        ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+        &[
+            r#"{"type":"mode","cwd":"","version":""}"#,
+            r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","cwd":"/work/app","version":"2.1.251","message":{"role":"user","content":"first"}}"#,
+            r#"{"timestamp":"2026-07-14T02:17:00Z","type":"assistant","cwd":"/work/other","version":"2.1.260","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}"#,
+        ],
+    );
+    let s = Claude.summarize(&path).unwrap();
+    assert_eq!(s.native_facts.cwd.as_deref(), Some("/work/app"));
+    assert_eq!(s.native_facts.cli_version.as_deref(), Some("2.1.251"));
+    assert_eq!(s.native_facts.model_provider, None);
+}
+
+#[test]
+fn summarize_reports_no_facts_when_the_transcript_stamps_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let path = write_jsonl(
+        home,
+        ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000000.jsonl",
+        &[
+            r#"{"timestamp":"2026-07-14T02:16:00Z","type":"user","message":{"role":"user","content":"first"}}"#,
+        ],
+    );
+    let s = Claude.summarize(&path).unwrap();
+    assert_eq!(s.native_facts.cwd, None);
+    assert_eq!(s.native_facts.cli_version, None);
+}
+
+#[test]
 fn summarize_ignores_empty_timestamps() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_jsonl(
@@ -251,5 +286,49 @@ fn typed_prompt_with_mixed_content_array_keeps_only_text() {
     assert_eq!(
         prompt.text, "what is this",
         "the image block contributes no text; only the typed text block remains"
+    );
+}
+
+#[test]
+fn cli_written_lines_carry_a_notice_and_spoken_ones_do_not() {
+    let home = tempfile::tempdir().unwrap();
+    write_jsonl(
+        home.path(),
+        ".claude/projects/p/3f2a1b6c-0000-0000-0000-000000000001.jsonl",
+        &[
+            r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T02:16:00Z","message":{"role":"user","content":"hello"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-07-14T02:16:01Z","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}"#,
+            r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-07-14T02:16:02Z","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: Request rejected (429)"}]}}"#,
+            r#"{"type":"user","promptSource":"typed","timestamp":"2026-07-14T02:16:03Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+        ],
+    );
+    let backend = crate::session::backend_for(crate::agent::AgentKind::Claude);
+    let records = crate::session::detail_records_for_test(
+        backend.as_ref(),
+        home.path(),
+        "3f2a1b6c-0000-0000-0000-000000000001",
+    )
+    .unwrap();
+    let notices = records
+        .into_iter()
+        .filter_map(|record| match record {
+            DetailRecord::Message(message) => Some((message.text, message.notice)),
+            DetailRecord::Tool(_) | DetailRecord::Evidence(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notices,
+        [
+            ("hello".to_string(), None),
+            ("working".to_string(), None),
+            (
+                "API Error: Request rejected (429)".to_string(),
+                Some(ConversationNotice::ApiError)
+            ),
+            (
+                "[Request interrupted by user for tool use]".to_string(),
+                Some(ConversationNotice::Interrupted)
+            ),
+        ]
     );
 }

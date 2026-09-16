@@ -13,7 +13,7 @@ describe("TenantPage", () => {
     ["not-installed", null, "Not installed", "Install", false],
     ["installed", null, "Installed", null, true],
     ["incomplete", null, "Incomplete", "Repair", true],
-    ["modified", null, "Modified", "Update", true],
+    ["modified", null, "Differs", "Update", true],
     ["unmanaged", null, "Unmanaged", null, false],
     [null, "unsafe component state", "Inspection error", "Retry inspection", false],
   ] as const)(
@@ -293,9 +293,16 @@ describe("TenantPage", () => {
     const checkUpdates = await screen.findByRole("button", { name: "Check for updates" });
     expect(checkUpdates).toHaveClass(actionButtonStyles.ghost);
     expect(checkUpdates).not.toHaveClass(actionButtonStyles.secondary);
+    expect(screen.getByLabelText("Component summary")).not.toHaveTextContent(/checked/i);
     await user.click(checkUpdates);
     expect(await screen.findByRole("listitem")).toHaveTextContent("Latest v24.19.0");
-    expect(screen.getByText(/Checked/)).toBeInTheDocument();
+    /*
+     * The freshness is drawn, not only announced. It used to reach the
+     * accessible name alone, so a sighted reader was invited to act on the
+     * Update controls below without being told how old the observation was.
+     */
+    expect(screen.getByText(/^Checked/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /Check for updates, checked/ })).toBeInTheDocument();
     expect(checkLatestComponents).toHaveBeenCalledWith();
     expect(listComponents).toHaveBeenCalledTimes(2);
 

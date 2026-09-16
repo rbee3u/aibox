@@ -7,7 +7,8 @@ import {
   LoaderCircle,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import type { FocusEvent, FocusEventHandler } from "react";
 import { moduleIcons } from "@/shared/icons/consoleIcons";
 import { elapsedNsMs, resolveRequestedEffective } from "@/features/requests/summary";
 import type { RequestSummary } from "@/api/requests";
@@ -22,30 +23,58 @@ import {
 } from "@/features/requests/statusPresentation";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { IconLabelButton } from "@/shared/ui/IconLabelButton";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const RequestIcon = moduleIcons.requests;
 
+/**
+ * A page turn that is unavailable because the page is loading stays
+ * focusable: `disabled` would blur the control the user just pressed (the
+ * Refresh seam, finding 27). Only a genuinely missing neighbour page — first
+ * or last — renders the real `disabled`, and by then the caller has moved
+ * focus off the button.
+ */
 function PageTurnButton({
   direction,
-  disabled,
+  unavailable,
+  busy,
   onClick,
+  onFocus,
+  onBlur,
 }: {
   direction: "previous" | "next";
-  disabled: boolean;
+  unavailable: boolean;
+  busy: boolean;
   onClick: () => void;
+  onFocus: FocusEventHandler<HTMLButtonElement>;
+  onBlur: FocusEventHandler<HTMLButtonElement>;
 }) {
+  const withheld = busy && !unavailable;
   return (
-    <button type="button" className={styles.pageTurn} onClick={onClick} disabled={disabled}>
+    <button
+      type="button"
+      className={styles.pageTurn}
+      onClick={withheld ? undefined : onClick}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      disabled={unavailable}
+      aria-disabled={withheld ? "true" : undefined}
+      aria-label={direction === "previous" ? "Previous" : "Next"}
+    >
       {direction === "previous" ? (
         <>
-          <ChevronLeft size={15} aria-hidden="true" /> Previous
+          <ChevronLeft size={iconSize.xs} aria-hidden="true" />
+          <span className={styles.pageTurnLabel}>Previous</span>
         </>
       ) : (
         <>
-          Next <ChevronRight size={15} aria-hidden="true" />
+          <span className={styles.pageTurnLabel}>Next</span>
+          <ChevronRight size={iconSize.xs} aria-hidden="true" />
         </>
       )}
     </button>
@@ -75,13 +104,52 @@ function RequestPagination({
   onPrevious: () => void;
   onNext: () => void;
 }) {
+  const counter = useRef<HTMLSpanElement>(null);
+  const focusedTurn = useRef<HTMLButtonElement | null>(null);
+
+  // Landing on the first or last page disables the button that brought the
+  // user there, and the browser blurs it to `<body>` the moment the attribute
+  // lands — before any effect runs. The button remembers that it held focus;
+  // the counter is the one element that still says where the user is, so
+  // focus parks on it.
+  useLayoutEffect(() => {
+    const turn = focusedTurn.current;
+    const active = document.activeElement;
+    if (!turn?.disabled || (active !== document.body && active !== turn)) return;
+    focusedTurn.current = null;
+    counter.current?.focus();
+  }, [hasNext, hasPrevious]);
+
+  const trackFocus = {
+    onFocus: (event: FocusEvent<HTMLButtonElement>) => {
+      focusedTurn.current = event.currentTarget;
+    },
+    onBlur: (event: FocusEvent<HTMLButtonElement>) => {
+      // A blur with somewhere to go is the user leaving; one with nowhere to
+      // go is the disable, which the layout effect above recovers.
+      if (event.relatedTarget !== null) focusedTurn.current = null;
+    },
+  };
+
   return (
     <nav className={className} aria-label="Request pages">
-      <PageTurnButton direction="previous" disabled={!hasPrevious || locked} onClick={onPrevious} />
-      <span>
-        Page {page} of {totalPages} · {shown} shown · {total} total
+      <PageTurnButton
+        direction="previous"
+        unavailable={!hasPrevious}
+        busy={locked}
+        onClick={onPrevious}
+        {...trackFocus}
+      />
+      <span ref={counter} tabIndex={-1}>
+        Page {page} of {totalPages} · {shown} shown · {total.toLocaleString()} total
       </span>
-      <PageTurnButton direction="next" disabled={!hasNext || locked} onClick={onNext} />
+      <PageTurnButton
+        direction="next"
+        unavailable={!hasNext}
+        busy={locked}
+        onClick={onNext}
+        {...trackFocus}
+      />
     </nav>
   );
 }
@@ -152,7 +220,6 @@ export function RequestList({
   const pageSelected = deletable.length > 0 && selectedOnPage === deletable.length;
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
-  const focusSelectAfterExit = useRef(false);
   const deleteButtons = useElementRegistry<HTMLButtonElement>();
   const requestButtons = useElementRegistry<HTMLButtonElement>();
 
@@ -178,11 +245,22 @@ export function RequestList({
     onFocusAfterInspection();
   }, [focusAfterInspection, onFocusAfterInspection, requestButtons, requests]);
 
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => deletable.some((request) => requestButtons.focus(request.id)),
+    onEnter: onEnterSelection,
+    onExit: onExitSelection,
+  });
+
+  // A page turn reuses the scrolled list container, so without this the new
+  // page opens wherever the old one was left — from the bottom, where Next
+  // lives, that hid the first 36 rows of every page (finding 52).
+  const listBody = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (selectionMode || !focusSelectAfterExit.current) return;
-    focusSelectAfterExit.current = false;
-    selectButton.current?.focus();
-  }, [selectionMode]);
+    if (listBody.current) listBody.current.scrollTop = 0;
+  }, [page]);
 
   const pageTurnLocked = loading || deletionBusy;
   const paginationProps = {
@@ -206,10 +284,7 @@ export function RequestList({
               <ActionButton
                 tone="ghost"
                 className={layout.selectionCancel}
-                onClick={() => {
-                  focusSelectAfterExit.current = true;
-                  onExitSelection();
-                }}
+                onClick={cancelSelection}
               >
                 Cancel
               </ActionButton>
@@ -234,7 +309,7 @@ export function RequestList({
                 disabled={selected.size === 0 || deletionBusy}
                 aria-label="Delete selected"
               >
-                <Trash2 size={14} aria-hidden="true" />
+                <Trash2 size={iconSize.xs} aria-hidden="true" />
                 Delete
               </ActionButton>
             </>
@@ -248,19 +323,21 @@ export function RequestList({
                 label="Refresh Requests"
                 busyLabel="Refreshing Requests"
                 busy={refreshing}
+                compactOnNarrow
               >
                 Refresh
               </RefreshButton>
-              <ActionButton
+              <IconLabelButton
                 ref={selectButton}
-                tone="ghost"
                 className={layout.selectionEnter}
                 aria-label="Select Requests"
-                onClick={onEnterSelection}
+                onClick={enterSelection}
                 disabled={deletableCount === 0 || loading || deletionBusy}
+                compactOnNarrow
+                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
               >
-                <ListChecks size={14} aria-hidden="true" /> Select
-              </ActionButton>
+                Select
+              </IconLabelButton>
             </div>
           )}
         </div>
@@ -271,16 +348,16 @@ export function RequestList({
           />
         )}
       </div>
-      <div className={styles.requests} aria-busy={loading}>
+      <div ref={listBody} className={styles.requests} aria-busy={loading}>
         {loading && requests.length === 0 ? (
           <div className={styles.loadingState} role="status" aria-live="polite">
-            <LoaderCircle className="spin" size={22} aria-hidden="true" />
+            <LoaderCircle className="spin" size={iconSize.lg} aria-hidden="true" />
             <p>Loading Requests…</p>
           </div>
         ) : requests.length === 0 ? (
           <EmptyState
             variant="list"
-            icon={<Inbox size={22} data-icon="request-empty" aria-hidden="true" />}
+            icon={<Inbox size={iconSize.lg} data-icon="request-empty" aria-hidden="true" />}
             title="No request recorded yet."
           />
         ) : (
@@ -288,17 +365,19 @@ export function RequestList({
             const target = requestUrl(request);
             const active = request.state === "active";
             const checked = selected.has(request.id);
-            const model = resolveRequestedEffective(request.protocol?.model) ?? "—";
-            const reasoningEffort =
-              resolveRequestedEffective(request.protocol?.reasoning_effort) ?? "—";
-            const compactModel = reasoningEffort === "—" ? model : `${model} ${reasoningEffort}`;
+            const model = resolveRequestedEffective(request.protocol?.model);
+            const reasoningEffort = resolveRequestedEffective(request.protocol?.reasoning_effort);
+            // A missing model leaves the slot empty: a lone dash at the head of
+            // the line reads as a bullet, and the description still says "—".
+            const compactModel = [model, reasoningEffort].filter(Boolean).join(" ");
             const firstToken = compactDuration(elapsedNsMs(request.protocol?.first_token_at_ns));
             const totalDuration = compactDuration(request.total_ms);
             const timestampKind = request.ended_at ? "Ended" : "Started";
             const timestampValue = request.ended_at ?? request.started_at;
             const timestamp = formatTimestamp(timestampValue);
-            const issue = assessmentPresentation(request.assessment);
-            const modelDescription = `Model ${model}; Reasoning effort ${reasoningEffort}`;
+            const issue =
+              request.state === "active" ? null : assessmentPresentation(request.assessment);
+            const modelDescription = `Model ${model ?? "—"}; Reasoning effort ${reasoningEffort ?? "—"}`;
             const timingDescription = `First token ${firstToken}; Duration ${totalDuration}`;
             const metadataDescription = [
               modelDescription,
@@ -321,6 +400,7 @@ export function RequestList({
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                title={selectionMode && active ? "Active requests cannot be deleted" : undefined}
               >
                 <button
                   ref={(element) => {
@@ -329,6 +409,7 @@ export function RequestList({
                   type="button"
                   className={styles.rowButton}
                   disabled={selectionMode && active}
+                  title={selectionMode && active ? "Active requests cannot be deleted" : undefined}
                   aria-label={
                     selectionMode
                       ? `${checked ? "Deselect" : "Select"} ${request.method} ${target.label}`
@@ -340,7 +421,7 @@ export function RequestList({
                 >
                   <RequestIcon
                     className={styles.requestIcon}
-                    size={16}
+                    size={iconSize.sm}
                     data-icon="request-row"
                     aria-hidden="true"
                   />
@@ -357,9 +438,13 @@ export function RequestList({
                     />
                   </span>
                   <span className={styles.metadata}>
-                    <span className={styles.modelMetadata} title={modelDescription}>
-                      {compactModel}
-                    </span>
+                    {compactModel ? (
+                      <span className={styles.modelMetadata} title={modelDescription}>
+                        {compactModel}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
                     <span className={styles.timingMetadata}>
                       <span className={styles.timing} title={timingDescription}>
                         {firstToken} / {totalDuration}
@@ -378,7 +463,7 @@ export function RequestList({
                   </span>
                   {selectionMode && (
                     <span className={styles.selectionIndicator} aria-hidden="true">
-                      {checked && <Check size={16} strokeWidth={3} />}
+                      {checked && <Check size={iconSize.xs} strokeWidth={3} />}
                     </span>
                   )}
                 </button>
@@ -405,9 +490,9 @@ export function RequestList({
                       aria-busy={deletingRequestId === request.id}
                     >
                       {deletingRequestId === request.id ? (
-                        <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                        <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
                       ) : (
-                        <Trash2 size={15} aria-hidden="true" />
+                        <Trash2 size={iconSize.xs} aria-hidden="true" />
                       )}
                     </IconButton>
                   </span>

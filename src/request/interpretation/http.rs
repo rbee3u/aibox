@@ -13,6 +13,8 @@ pub(crate) enum BodyContentCoding {
     Identity,
     Zstd,
     Gzip,
+    Deflate,
+    Brotli,
 }
 
 impl BodyContentCoding {
@@ -37,6 +39,8 @@ pub(crate) fn body_reader(file: File, coding: BodyContentCoding) -> Result<Box<d
             Ok(Box::new(decoder))
         }
         BodyContentCoding::Gzip => Ok(Box::new(flate2::read::GzDecoder::new(file))),
+        BodyContentCoding::Deflate => Ok(Box::new(flate2::read::ZlibDecoder::new(file))),
+        BodyContentCoding::Brotli => Ok(Box::new(brotli::Decompressor::new(file, 16 * 1024))),
     }
 }
 
@@ -65,6 +69,8 @@ pub(crate) fn body_content_coding(headers: &[RecordedHeader]) -> Result<BodyCont
         [coding] if coding == "identity" => Ok(BodyContentCoding::Identity),
         [coding] if coding == "zstd" => Ok(BodyContentCoding::Zstd),
         [coding] if coding == "gzip" => Ok(BodyContentCoding::Gzip),
+        [coding] if coding == "deflate" => Ok(BodyContentCoding::Deflate),
+        [coding] if coding == "br" => Ok(BodyContentCoding::Brotli),
         _ => bail!("unsupported Content-Encoding {:?}", codings.join(", ")),
     }
 }

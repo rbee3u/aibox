@@ -9,48 +9,58 @@
 }
 .header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: 16px;
-  min-height: 50px;
-  padding: 13px 24px 8px var(--request-header-padding-left, 24px);
+  gap: 3px;
+  min-height: 62px;
+  padding: 10px 24px 8px var(--request-header-padding-left, 24px);
   background: var(--bg-shell);
 }
+/*
+ * The pane's title sits on the panel step like the other three detail panes;
+ * the URL keeps its monospace and its host / path split from the list.
+ */
 .requestOverview {
   display: flex;
   min-width: 0;
   align-items: baseline;
-  gap: 9px;
+  gap: 10px;
+  margin: 0;
   font-family: var(--font-mono);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
 }
 .method {
   flex: 0 0 auto;
   color: var(--accent);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: var(--weight-bold);
 }
 .url {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0;
+  display: inline;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: var(--text-row-title);
-  font-weight: var(--weight-row-title);
-  line-height: var(--line-height-row-title);
 }
 .url strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
   font: inherit;
 }
 .url > span {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+.caption {
+  display: flex;
   min-width: 0;
-  overflow-wrap: anywhere;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 10px;
   color: var(--muted);
   font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
+}
+.captionTime {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .tabPanel {
   min-width: 0;
@@ -89,11 +99,13 @@
 }
 .summary {
   display: grid;
-  gap: 18px;
+  max-width: var(--measure-data);
+  gap: var(--space-section);
 }
 .summary h2,
 .sectionTitle h2 {
   margin: 0;
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -105,9 +117,8 @@
   line-height: var(--line-height-panel-title);
 }
 .modelSummary {
-  padding: 0 0 14px;
+  padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--line-content);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -115,7 +126,6 @@
 .modelHeadline {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 12px;
   margin-top: 8px;
 }
@@ -129,16 +139,19 @@
   overflow-wrap: anywhere;
   font-family: var(--font-sans);
 }
+/*
+ * A field value, sized like the Request it belongs to rather than like the
+ * panel around it. Borrowing the panel title step put the model name above the
+ * URL that is the actual subject of the page.
+ */
 .modelValue {
   color: var(--ink);
-  font-size: var(--text-panel-title);
+  font-size: var(--text-sm);
   font-weight: var(--weight-bold);
   line-height: 1.35;
 }
 .modelEffort {
   color: var(--muted);
-}
-.modelEffort {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   line-height: 1.35;
@@ -179,97 +192,129 @@
 .sessionValue {
   min-width: 0;
   overflow-wrap: anywhere;
-  color: var(--muted);
+  color: var(--code-muted);
   font: var(--weight-medium) var(--text-xs) / 1.5 var(--font-mono);
 }
-.copySession {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border-color: transparent;
-  padding: 0;
-  background: transparent;
-  color: var(--muted);
-}
-.copySession:hover:not(:disabled) {
-  border-color: var(--line-control-strong);
-  background: var(--surface-hover);
-  color: var(--muted);
-}
-.metricGrid {
+.timingMetrics {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   min-width: 0;
+  margin-top: 8px;
   overflow: hidden;
   border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
   background: var(--line-content);
 }
-.metric {
+.timingMetrics .metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
-  padding: 11px 12px;
+  padding: 10px 14px;
   background: var(--surface-raised);
 }
-.metric dt {
+.timingMetrics .metric dt {
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
-.metric dd {
-  display: grid;
-  gap: 3px;
+.timingMetrics .metric dd {
+  display: block;
   min-width: 0;
-  margin: 4px 0 0;
+  margin: 0;
 }
 .metricValue {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font: var(--weight-bold) 15px/1.35 var(--font-mono);
+  font: var(--weight-bold) var(--text-sm) / 1.35 var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.timingMetrics {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 8px;
-}
-.timingMetrics .metric {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 11px;
-}
-.timingMetrics .metric dd {
-  display: block;
-  margin: 0;
-  text-align: right;
-}
-.timingMetrics .metric:last-child .metricValue {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-.timeline {
-  display: grid;
-  gap: 9px;
+.timelineContainer {
   margin-top: 15px;
 }
-.timelineRow {
+.timelineRulerRow {
   display: grid;
-  grid-template-columns: minmax(112px, 0.25fr) minmax(140px, 1fr) minmax(108px, auto);
+  grid-template-columns: minmax(112px, 0.25fr) minmax(140px, 1fr) 7.5rem;
   align-items: center;
   gap: 12px;
   min-width: 0;
+  padding: 0 6px;
+  margin-inline: -6px;
+  margin-bottom: 6px;
+}
+.timelineRuler {
+  position: relative;
+  height: 14px;
+  min-width: 0;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.rulerTick {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+.rulerTickStart {
+  left: 0;
+}
+.rulerTickQuarter {
+  left: 25%;
+  transform: translateX(-50%);
+}
+.rulerTickHalf {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.rulerTickThreeQuarter {
+  left: 75%;
+  transform: translateX(-50%);
+}
+.rulerTickEnd {
+  right: 0;
+}
+.timeline {
+  display: grid;
+  gap: 4px;
+}
+.timelineRow {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.25fr) minmax(140px, 1fr) 7.5rem;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 3px 6px;
+  margin-inline: -6px;
+  border-radius: var(--radius-xs);
+  transition: background-color var(--transition-fast);
+}
+.timelineRow:hover {
+  background: var(--surface-hover);
+}
+.timelineRow:active {
+  background: var(--surface-pressed);
 }
 .timelineLabel,
 .timelineValue {
   font-size: var(--text-xs);
 }
 .timelineLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--ink);
   font-weight: var(--weight-semibold);
+}
+.stageDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
 }
 .timelineValue {
   color: var(--muted);
@@ -280,18 +325,47 @@
 .timelineTrack {
   position: relative;
   display: block;
-  height: 9px;
+  height: 10px;
   min-width: 0;
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: var(--surface-inset);
 }
+.timelineTrack::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  right: 0;
+  background-image:
+    linear-gradient(
+      to right,
+      transparent calc(25% - 0.5px),
+      var(--line-subtle) calc(25% - 0.5px),
+      var(--line-subtle) calc(25% + 0.5px),
+      transparent calc(25% + 0.5px)
+    ),
+    linear-gradient(
+      to right,
+      transparent calc(50% - 0.5px),
+      var(--line-subtle) calc(50% - 0.5px),
+      var(--line-subtle) calc(50% + 0.5px),
+      transparent calc(50% + 0.5px)
+    ),
+    linear-gradient(
+      to right,
+      transparent calc(75% - 0.5px),
+      var(--line-subtle) calc(75% - 0.5px),
+      var(--line-subtle) calc(75% + 0.5px),
+      transparent calc(75% + 0.5px)
+    );
+  pointer-events: none;
+}
 .timelineBar {
   position: absolute;
-  top: 1px;
-  bottom: 1px;
+  inset-block: 0;
   left: var(--stage-start);
-  width: max(2px, var(--stage-width));
+  width: max(5px, var(--stage-width));
   border-radius: var(--radius-pill);
 }
 .toneRequest {
@@ -315,185 +389,135 @@
     transparent 8px
   );
 }
-.usageGroup {
-  margin-top: 13px;
-  border-top: 1px solid var(--line-content);
-  padding-top: 12px;
-}
-.usageHeading {
-  margin: 0;
+.timelineLegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-subtle);
   font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
+  color: var(--muted);
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .tokenUsageGrid {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 1px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
   min-width: 0;
-  margin: 9px 0 0;
+  margin-top: 8px;
+}
+.tokenCard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line-content);
   border-radius: var(--radius-sm);
-  background: var(--line-content);
-}
-.tokenInputBlock,
-.tokenOutput {
-  min-width: 0;
-}
-.tokenInputBlock {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 1px;
-  background: var(--line-content);
-}
-.tokenInputMetrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  min-width: 0;
-  background: var(--line-content);
-}
-.tokenInputCell {
-  display: grid;
-  min-width: 0;
-  align-content: center;
-  padding: 8px 10px;
   background: var(--surface-raised);
 }
-.tokenInputCellDetailed {
-  grid-template-rows: minmax(0, 1fr) auto;
-  align-content: stretch;
-}
-.tokenInputCellDetailed .tokenInputPrimary {
-  align-self: center;
-}
-.tokenInputPrimary {
-  min-width: 0;
+.tokenCardHeader {
   margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-content);
+  background: var(--surface-raised);
 }
-.tokenInputPrimary > div,
-.tokenTotal > div,
-.tokenReasoning {
+.tokenMetricPrimary {
   display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 6px;
-}
-.tokenInputPrimary dt,
-.tokenTotal dt,
-.tokenOutputPrimary dt,
-.tokenReasoning dt,
-.tokenCacheDetail dt {
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
+}
+.tokenMetricPrimary dt {
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
-.tokenInputPrimary dd,
-.tokenTotal dd,
-.tokenOutputPrimary dd,
-.tokenReasoning dd,
-.tokenCacheDetail dd {
+.tokenMetricPrimary dd {
   margin: 0;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-.tokenInputPrimary dd {
   color: var(--ink);
+  font: var(--weight-bold) var(--text-md) / 1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tokenSubMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: var(--line-content);
+}
+.tokenCard:last-child .tokenSubMetrics {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tokenSubCell {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+.tokenSubCellDetailed {
+  justify-content: space-between;
+}
+.tokenSubCellEmpty {
+  min-width: 0;
+  background: var(--surface);
+}
+.tokenSubDl {
+  margin: 0;
+  min-width: 0;
+}
+.tokenSubDl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tokenSubDl dt {
+  color: var(--muted);
   font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  line-height: 1.35;
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+}
+.tokenSubDl dd {
+  margin: 0;
+  color: var(--ink-secondary);
+  font: var(--weight-bold) var(--text-xs) / 1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 .tokenCacheBreakdown {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  min-width: 0;
-  margin: 7px -10px -8px;
-  border-top: 1px solid var(--line-content);
-  background: var(--line-content);
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line-content);
 }
 .tokenCacheDetail {
   display: flex;
   align-items: baseline;
-  justify-content: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 5px 7px;
-  background: var(--surface-inset);
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 .tokenCacheDetail dt {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
 }
 .tokenCacheDetail dd {
-  color: var(--ink-secondary);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  line-height: 1.3;
-}
-.tokenTotal {
-  min-width: 0;
   margin: 0;
-  padding: 7px 10px;
-  background: var(--surface-inset);
-}
-.tokenTotal dd {
   color: var(--ink-secondary);
-  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-weight: var(--weight-semibold);
-  line-height: 1.35;
-}
-.tokenOutput {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  min-width: 0;
-  margin: 0;
-  padding: 10px 11px;
-  background: var(--surface-raised);
-}
-.tokenOutputPrimary {
-  display: flex;
-  grid-row: 1;
-  align-items: baseline;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  text-align: center;
-}
-.tokenOutputPrimary dd {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-  font-size: 16px;
-  font-weight: var(--weight-bold);
-  line-height: 1.35;
-}
-.tokenReasoning {
-  grid-row: 2;
-  justify-self: end;
-  width: 54%;
-  margin-top: 10px;
-  border: 1px solid var(--line-content);
-  border-radius: var(--radius-sm);
-  padding: 6px 7px;
-  background: var(--surface-inset);
-}
-.tokenReasoning dt {
-  font-size: var(--text-xs);
-}
-.tokenReasoning dd {
-  color: var(--ink-secondary);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  line-height: 1.3;
-}
-.usageMessage {
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
 }
 .sectionState {
   margin: 10px 0 0;
@@ -531,6 +555,16 @@
   background: var(--surface-inset);
   font-size: var(--text-meta);
 }
+.errorDiagnostics h3 span {
+  border-color: var(--danger-line);
+  color: var(--danger-strong);
+  background: var(--danger-soft);
+}
+.warningDiagnostics h3 span {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
 .diagnosticList {
   display: grid;
   gap: 6px;
@@ -538,35 +572,65 @@
 .diagnosticItem {
   min-width: 0;
   padding: 10px 12px;
-  border-left: 3px solid var(--line-content);
+  border: 1px solid var(--line-content);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
 .errorDiagnostics .diagnosticItem {
+  border-color: var(--danger-line);
   border-left-color: var(--danger);
   background: var(--danger-soft);
 }
 .warningDiagnostics .diagnosticItem {
+  border-color: var(--warning-line);
   border-left-color: var(--warning);
   background: var(--warning-soft);
 }
 .diagnosticMeta {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   color: var(--muted);
   font-size: var(--text-xs);
+}
+.diagnosticIcon {
+  flex-shrink: 0;
+}
+.errorDiagnostics .diagnosticIcon {
+  color: var(--danger);
+}
+.warningDiagnostics .diagnosticIcon {
+  color: var(--warning);
 }
 .diagnosticMeta strong {
   color: var(--ink);
   font-size: var(--text-xs);
 }
-.diagnosticItem p {
-  margin: 5px 0 0;
-  overflow-wrap: anywhere;
+.diagnosticPhase {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
+  color: var(--muted);
+}
+.diagnosticTime {
   font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--muted);
+}
+.diagnosticItem p {
+  margin: 6px 0 0 23px;
+  overflow-wrap: anywhere;
+  font-family: inherit;
   font-size: var(--text-xs);
   line-height: 1.55;
+  color: var(--ink);
 }
 .messageData {
   min-width: 0;
@@ -576,11 +640,11 @@
   min-height: 31px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 8px;
+  gap: var(--space-lg);
+  margin: 0 0 var(--space-section-title);
 }
 .sectionTitle:not(:first-child) {
-  margin-top: 18px;
+  margin-top: var(--space-section);
 }
 .sectionTitle h2 {
   display: flex;
@@ -590,6 +654,28 @@
 .sectionTitle h2 span {
   color: var(--muted);
   font-weight: var(--weight-regular);
+}
+.headersToggle {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.headersToggle:hover {
+  color: var(--ink);
+}
+.headersToggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .headers {
   width: 100%;
@@ -611,20 +697,6 @@
   margin: 8px 0 16px;
   color: var(--muted);
 }
-.noResponse {
-  display: grid;
-  min-height: 220px;
-  place-content: center;
-  justify-items: center;
-  color: var(--muted);
-  text-align: center;
-}
-.noResponse h2 {
-  color: var(--ink);
-}
-.noResponse p {
-  margin: 5px 0 0;
-}
 @container (max-width: 560px) {
   .header {
     grid-template-columns: minmax(0, 1fr);
@@ -640,14 +712,18 @@
   .tokenUsageGrid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .timingMetrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .timelineRulerRow {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .timingMetrics .metric:last-child {
+  .timelineRuler {
     grid-column: 1 / -1;
   }
+  .rulerTickQuarter,
+  .rulerTickThreeQuarter {
+    display: none;
+  }
   .timelineRow {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 7.5rem;
     gap: 6px 12px;
   }
   .timelineTrack {
@@ -660,22 +736,10 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 3px;
   }
-  .tokenUsageGrid {
+  .tokenSubMetrics {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .tokenInputMetrics {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .tokenInputCell {
-    min-height: 35px;
-  }
-  .tokenCacheBreakdown {
-    margin-top: 7px;
   }
   .timingMetrics {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .timingMetrics .metric:last-child {
-    grid-column: auto;
   }
 }

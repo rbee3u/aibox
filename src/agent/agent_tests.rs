@@ -31,6 +31,14 @@ fn agent_kind_carries_agent_contracts() {
                     MainConfigValueKind::String,
                 ),
                 (
+                    &["permissions", "defaultMode"][..],
+                    MainConfigValueKind::String,
+                ),
+                (
+                    &["skipDangerousModePermissionPrompt"][..],
+                    MainConfigValueKind::Bool,
+                ),
+                (
                     &["env", "ANTHROPIC_DEFAULT_HAIKU_MODEL"][..],
                     MainConfigValueKind::String,
                 ),
@@ -46,14 +54,6 @@ fn agent_kind_carries_agent_contracts() {
                     &["env", "ANTHROPIC_DEFAULT_FABLE_MODEL"][..],
                     MainConfigValueKind::String,
                 ),
-                (
-                    &["permissions", "defaultMode"][..],
-                    MainConfigValueKind::String,
-                ),
-                (
-                    &["skipDangerousModePermissionPrompt"][..],
-                    MainConfigValueKind::Bool,
-                ),
             ][..],
             None,
         ),
@@ -68,12 +68,12 @@ fn agent_kind_carries_agent_contracts() {
             &[
                 (&["approval_policy"][..], MainConfigValueKind::String),
                 (&["sandbox_mode"][..], MainConfigValueKind::String),
+                (&["model"][..], MainConfigValueKind::String),
                 (&["model_reasoning_effort"][..], MainConfigValueKind::String),
                 (
                     &["plan_mode_reasoning_effort"][..],
                     MainConfigValueKind::String,
                 ),
-                (&["model"][..], MainConfigValueKind::String),
                 (&["model_provider"][..], MainConfigValueKind::String),
                 (
                     &["model_providers", "custom", "name"][..],

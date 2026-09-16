@@ -65,19 +65,19 @@
   padding: var(--catalog-row-roomy-padding);
   border-bottom: 1px solid var(--line-content);
   background: var(--surface);
-}
-
-.sessionRow::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
+  transition: background-color var(--transition-fast);
 }
 
 .sessionRow:hover {
   background: var(--surface-hover);
+}
+
+.sessionRow:active {
+  background: var(--surface-pressed);
+}
+
+.currentSessionRow {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
 }
 
 .currentSessionRow,
@@ -86,27 +86,41 @@
   background: var(--surface-selected);
 }
 
+.currentSessionRow:active {
+  background: var(--surface-pressed);
+}
+
 .sessionRowSelected,
 .sessionRowSelected:hover,
 .sessionRowSelected:focus-within {
   background: var(--surface-selected);
 }
 
-.currentSessionRow .sessionRowMain,
-.sessionRowSelected .sessionRowMain {
-  color: var(--accent);
+.sessionRowSelected:active {
+  background: var(--surface-pressed);
 }
 
-.currentSessionRow::before {
-  background: var(--accent);
+.currentSessionRow .sessionRowMain,
+.sessionRowSelected .sessionRowMain {
+  color: var(--ink);
+}
+
+/* In selection mode only a ticked row is filled; the current one keeps its bar. */
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected) {
+  background: var(--surface);
+}
+
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):hover,
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):focus-within {
+  background: var(--surface-hover);
+}
+
+.sessionSelectionRow.currentSessionRow:active:not(.sessionRowSelected) {
+  background: var(--surface-pressed);
 }
 
 .sessionSelectionRow {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.sessionSelectionRow.currentSessionRow::before {
-  background: transparent;
 }
 
 .sessionRowMain {
@@ -177,15 +191,10 @@
   line-height: var(--catalog-row-secondary-line-height);
 }
 
+/* One left-aligned line: source when several are listed, start time, counts. */
 .sessionRowMetadata {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  column-gap: 9px;
-}
-
-.sessionRowMetadata > span,
-.sessionRowMetadata time {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -194,8 +203,6 @@
 
 .sessionRowMetadata time {
   font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .sessionRowWarning {
@@ -234,22 +241,11 @@
 
 .sessionDetailActions {
   display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
-}
-
-.sessionDetailStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.sessionStatusWarning {
-  color: var(--warning);
 }
 
 .sessionDetailHeading {
@@ -313,9 +309,17 @@
   background: var(--surface-hover);
 }
 
+.sessionTabs button:active {
+  background: var(--surface-pressed);
+}
+
 .sessionTabActive {
-  color: var(--accent) !important;
+  color: var(--ink) !important;
   background: var(--surface-selected) !important;
+}
+
+.sessionTabActive:active {
+  background: var(--surface-pressed);
 }
 
 .sessionTabActive::after {
@@ -325,19 +329,21 @@
   left: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
-  background: var(--accent);
+  background: transparent;
   content: "";
 }
 
+/* The count sits at the floor of the ladder, and the disc grows to hold it. */
 .sessionTabIssue {
   display: inline-grid;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   place-items: center;
   border-radius: 50%;
   color: var(--warning);
   background: var(--warning-soft);
-  font-size: 10px;
+  font-size: var(--text-xs);
+  line-height: 1;
 }
 
 .sessionConversationScroll,
@@ -367,16 +373,22 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  /* The rail may render empty; the reading never falls into its column. */
+  grid-column: 2;
 }
 
 .sessionConversationRail {
   position: relative;
   display: flex;
   min-height: 0;
+  align-items: flex-start;
   justify-content: center;
   overflow: auto;
   border-right: 1px solid var(--line-content);
   background: var(--bg-canvas);
+  scrollbar-width: none;
+  /* Following the current stop keeps it a stop away from the rail's edge. */
+  scroll-padding-block: 38px;
 }
 
 .sessionConversationRail .sessionConversationNavItems {
@@ -387,10 +399,11 @@
   padding: 22px 0;
 }
 
+/* The connector runs from the first stop's center to the last's, no further. */
 .sessionConversationRail .sessionConversationNavItems::before {
   position: absolute;
-  top: 28px;
-  bottom: 28px;
+  top: 38px;
+  bottom: 38px;
   left: 50%;
   width: 1px;
   background: var(--line-strong);
@@ -411,53 +424,48 @@
 
 .sessionConversationRail button {
   width: 48px;
-  height: 30px;
+  height: 32px;
 }
 
 .sessionConversationRail button:hover,
 .sessionConversationMobileNav button:hover {
   border-color: transparent;
-  color: var(--muted);
+  color: var(--ink);
   background: var(--surface-hover);
 }
 
-.sessionConversationNavActive {
-  color: var(--accent);
-  background: var(--surface-selected);
+.sessionConversationRail button:active,
+.sessionConversationMobileNav button:active {
+  background: var(--surface-pressed);
 }
 
-.sessionConversationNavDot {
-  position: relative;
+.sessionConversationNavActive {
+  color: var(--ink);
+}
+
+.sessionConversationNavActive:active {
+  background: var(--surface-pressed);
+}
+
+.sessionConversationNavMarker {
   display: grid;
-  width: 12px;
-  height: 12px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   border: 1px solid var(--line-control-strong);
   border-radius: 50%;
+  color: inherit;
   background: var(--bg-canvas);
+  font: var(--text-meta) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.sessionConversationNavDot span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
+.sessionConversationNavActive .sessionConversationNavMarker {
+  border-color: var(--ink);
+  color: var(--bg-canvas);
+  background: var(--ink);
 }
 
-.sessionConversationNavActive .sessionConversationNavDot {
-  width: 16px;
-  height: 16px;
-  border-color: var(--accent);
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.sessionConversationNavActive .sessionConversationNavDot span {
-  width: 6px;
-  height: 6px;
-}
-
-.sessionConversationNavIndex,
 .sessionConversationNavLabel {
   display: none;
 }
@@ -468,8 +476,8 @@
 
 .sessionConversationContent,
 .sessionDetailsContent {
-  width: min(100%, 920px);
-  margin: 0 auto;
+  min-width: 0;
+  width: min(100%, var(--measure-text));
 }
 
 .sessionConversationContent {
@@ -484,12 +492,12 @@
 }
 
 .sessionDetailsSection + .sessionDetailsSection {
-  margin-top: 24px;
+  margin-top: var(--space-section);
 }
 
 .sessionDetailsSection h3 {
-  margin: 0 0 12px;
-  color: var(--ink);
+  margin: 0 0 var(--space-section-title);
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -498,7 +506,6 @@
 .sessionDetailsSectionHeading {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 12px;
 }
 
@@ -507,23 +514,36 @@
   font-size: var(--text-xs);
 }
 
+/*
+ * Dividers are each cell's own top and left edges rather than a line-coloured
+ * container showing through a gap: with an odd number of facts the unfilled
+ * slot is then plain surface, not a tile drawn in the divider colour.
+ */
 .sessionDetailsGrid,
 .sessionDiagnosticsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--line-content);
   border-radius: var(--radius-md);
-  background: var(--line-content);
+  background: var(--surface);
 }
 
 .sessionDetailsGrid > div,
 .sessionDiagnosticsGrid > div {
   min-width: 0;
   padding: 12px 14px;
-  background: var(--surface);
+}
+
+.sessionDetailsGrid > div:nth-child(n + 3),
+.sessionDiagnosticsGrid > div:nth-child(n + 3) {
+  border-top: 1px solid var(--line-content);
+}
+
+.sessionDetailsGrid > div:nth-child(2n),
+.sessionDiagnosticsGrid > div:nth-child(2n) {
+  border-left: 1px solid var(--line-content);
 }
 
 .sessionDetailsGrid dt,
@@ -532,7 +552,6 @@
   color: var(--muted);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
 }
 
 .sessionDetailsGrid dd,
@@ -547,6 +566,7 @@
 .sessionDetailsGrid dd time,
 .sessionDetailsGrid dd > code,
 .sessionDiagnosticsGrid dd {
+  color: var(--code-muted);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -554,30 +574,27 @@
 .sessionCopyValue {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
 }
 
+/*
+ * A path or an id is read for its tail, so it wraps rather than truncates:
+ * the Transcript path ends in the file name and a clipped tail would leave
+ * only the copy control as a way to read it.
+ */
 .sessionCopyValue code {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding-block: calc((var(--control-xs) - 1lh) / 2);
+  overflow-wrap: anywhere;
 }
 
-.sessionCopyAction {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  flex-basis: 24px;
-  border-color: transparent;
+/* Where a relative path is rooted, under the value it qualifies. */
+.sessionDetailsCaption {
+  display: block;
+  margin-top: 2px;
   color: var(--muted);
-  opacity: 0.3;
-}
-
-.sessionCopyValue:hover .sessionCopyAction,
-.sessionCopyAction:focus-visible {
-  opacity: 1;
+  font-size: var(--text-meta);
 }
 
 .sessionDiagnosticWarnings {
@@ -601,7 +618,6 @@
 }
 
 .sessionConversationWarning span:nth-of-type(2) {
-  margin-left: auto;
   color: var(--accent);
   font-weight: var(--weight-semibold);
 }
@@ -618,7 +634,8 @@
 }
 
 .sessionMessage {
-  width: min(100%, 900px);
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
   margin: 0;
   border: 0;
@@ -630,21 +647,60 @@
   align-self: flex-start;
 }
 
+/* User messages stay inset from the measure so the left/right offset remains
+ * the fastest cue for who is speaking. */
 .sessionMessageUser {
-  width: min(100%, 720px);
+  width: min(100%, calc(var(--measure-text) * 0.82));
   align-self: flex-end;
   border: 1px solid var(--info-line);
   border-radius: var(--radius-md);
   background: var(--surface-inset);
   box-shadow: none;
 }
+/* A CLI-written event sits in the Agent's column without an author: icon,
+ * verbatim text, and time on one line, toned by what happened. */
+.sessionNotice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.sessionNotice svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.sessionNotice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sessionNotice time {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionNoticeError {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionNoticeMuted {
+  color: var(--muted);
+}
+
+/* Author and timestamp, or title and count, are one metadata group: they stay
+ * adjacent instead of tracking the two edges of the measure. */
 .sessionMessage header,
 .sessionActivity summary,
 .sessionEvidence summary,
 .sessionActivityGroup summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 0 0 5px;
   border-bottom: 0;
@@ -693,14 +749,14 @@
 .sessionActivity,
 .sessionEvidence,
 .sessionActivityGroup {
-  width: min(100%, 760px);
+  min-width: 0;
+  width: 100%;
   border: 1px solid var(--line-control);
   border-radius: var(--radius-sm);
   background: var(--surface-inset);
 }
 
 .sessionActivityGroup {
-  width: min(100%, 900px);
   align-self: flex-start;
   background: transparent;
 }
@@ -723,22 +779,35 @@
   gap: 6px;
 }
 
-.sessionActivityGroup > summary span:first-of-type svg:last-child {
+.sessionActivityGroup > summary span:first-of-type svg[aria-label="Activity has diagnostics"] {
   color: var(--warning);
 }
-.sessionActivity summary span:first-of-type,
-.sessionEvidence summary span:first-of-type,
-.sessionActivityGroup summary span:first-of-type {
+.sessionActivity summary > span:first-of-type,
+.sessionEvidence summary > span:first-of-type,
+.sessionActivityGroup summary > span:first-of-type {
+  min-width: 0;
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
 }
-.sessionActivity summary span:nth-of-type(2),
-.sessionEvidence summary span:nth-of-type(2),
-.sessionActivityGroup summary span:nth-of-type(2) {
-  margin-left: auto;
+
+.sessionActivity summary > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row's time keeps one line and its own width; the label gives way. */
+.sessionRowMeta {
+  flex-shrink: 0;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.sessionActivityGroup > summary .sessionRowMeta {
+  flex-shrink: 1;
+  white-space: normal;
 }
 .sessionActivity[open] summary,
 .sessionEvidence[open] summary,
@@ -754,17 +823,97 @@
   font-size: var(--text-xs);
 }
 
-.sessionEvidenceRaw {
-  border-top: 1px solid var(--line-content);
+.sessionActivity summary > [data-status-tone] {
+  flex-shrink: 0;
 }
 
-.sessionEvidenceRaw button {
+.sessionEvidenceRawList {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line-content);
+  padding: 6px 8px;
+}
+
+.sessionEvidenceRaw > summary {
+  display: block;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.sessionEvidenceRaw > summary:hover {
+  color: var(--ink-secondary);
+  background: var(--surface-hover);
+}
+
+.sessionEvidenceRaw > summary:active {
+  background: var(--surface-pressed);
+}
+
+.sessionEvidenceRaw > button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin: 9px 12px 0;
+  margin: 6px 6px 0;
   color: var(--accent);
   font-size: var(--text-xs);
+}
+
+.sessionEvidenceRaw pre {
+  max-height: 360px;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+/* A tool row reads as an exchange: what was asked, then what came back. */
+.sessionToolExchange section + section {
+  border-top: 1px solid var(--line-content);
+}
+
+.sessionToolExchange h4 {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sessionToolExchange pre {
+  padding-top: 6px;
+}
+
+.sessionToolResultFailed h4,
+.sessionToolResultFailed pre {
+  color: var(--danger);
+}
+
+/* Housekeeping the CLI writes around every call folds behind one line. */
+.sessionRoutineEntries > summary {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.sessionRoutineEntries > summary:hover {
+  background: var(--surface-hover);
+}
+
+.sessionRoutineEntries > summary:active {
+  background: var(--surface-pressed);
+}
+
+.sessionRoutineEntries > div {
+  padding: 6px 0 0;
+  border-top: 0;
 }
 
 .sessionActivity p,
@@ -777,6 +926,14 @@
 
 .sessionEvidenceError {
   color: var(--danger) !important;
+}
+
+/* The Transcript outran the read: a condition with its recovery beside it, not a failure. */
+.sessionEvidenceStale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
 }
 .sessionActivityGroupItems {
   display: grid;
@@ -817,10 +974,6 @@
     position: relative;
     min-height: 66px;
     padding: 10px 14px;
-  }
-
-  .sessionDetailHeader .sessionDetailStatus {
-    display: none;
   }
 
   .sessionDetailHeader .sessionDetailHeading {
@@ -884,28 +1037,18 @@
   }
 
   .sessionConversationMobileNav .sessionConversationNavActive {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--line);
+    color: var(--ink);
     background: var(--surface-selected);
   }
 
-  .sessionConversationMobileNav .sessionConversationNavDot {
-    width: 10px;
-    height: 10px;
+  .sessionConversationMobileNav .sessionConversationNavActive:active {
+    background: var(--surface-pressed);
+  }
+
+  .sessionConversationMobileNav .sessionConversationNavMarker {
     flex: 0 0 auto;
     background: var(--surface);
-  }
-
-  .sessionConversationMobileNav .sessionConversationNavActive .sessionConversationNavDot {
-    width: 12px;
-    height: 12px;
-    box-shadow: none;
-  }
-
-  .sessionConversationNavIndex {
-    display: inline;
-    color: var(--muted);
-    font: var(--text-meta) / 1 var(--font-mono);
   }
 
   .sessionConversationNavLabel {
@@ -935,6 +1078,12 @@
   .sessionDetailsGrid,
   .sessionDiagnosticsGrid {
     grid-template-columns: 1fr;
+  }
+
+  .sessionDetailsGrid > div:nth-child(n + 2),
+  .sessionDiagnosticsGrid > div:nth-child(n + 2) {
+    border-top: 1px solid var(--line-content);
+    border-left: 0;
   }
 
   .sessionConversationWarning {

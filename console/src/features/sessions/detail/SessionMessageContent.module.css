@@ -8,7 +8,55 @@
   overflow-wrap: anywhere;
 }
 
+/* Verbatim means line breaks and spacing survive, not that a prompt reads as
+ * code: the card, not the face, says who is speaking. */
 .plainText {
+  font-family: inherit;
+  white-space: pre-wrap;
+}
+
+.skillLabel {
+  display: inline-block;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  color: var(--code-text);
+  background: var(--surface-inset);
+  font: var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.plainRest {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.assessmentFacts {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.assessmentRationale {
+  margin-top: 6px;
+}
+
+.reviewDump {
+  margin-top: 8px;
+  border-top: 1px solid var(--line-content);
+  padding-top: 6px;
+}
+
+.reviewDump > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.reviewDump pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--ink-secondary);
+  font: var(--text-xs) / 1.5 var(--font-mono);
   white-space: pre-wrap;
 }
 
@@ -38,6 +86,12 @@
   margin-top: 4px;
 }
 
+/*
+ * Agent output is content, not chrome, so its headings carry their own scale
+ * instead of the section and panel roles. The scale steps by size where a
+ * reader scans — a report's sections are its h2s — and by ink only at the
+ * bottom, where a heading is a label for the paragraph under it.
+ */
 .markdown h1,
 .markdown h2,
 .markdown h3,
@@ -45,16 +99,27 @@
   margin: 18px 0 8px;
   color: var(--ink);
   font-size: var(--text-sm);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 
 .markdown h1 {
-  font-size: var(--text-panel-title);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
 }
 
 .markdown h2 {
-  font-size: var(--text-section-title);
+  font-size: var(--text-md);
+}
+
+.markdown h4 {
+  color: var(--ink-secondary);
+}
+
+.markdown hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--line-content);
 }
 
 .markdown blockquote {
@@ -70,6 +135,13 @@
   color: var(--code-text);
   background: var(--surface-inset);
   font: var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.imageReference {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: baseline;
 }
 
 .markdown a {
@@ -92,7 +164,7 @@
   border: 1px solid var(--line-content);
   padding: 6px 8px;
   text-align: left;
-  white-space: nowrap;
+  vertical-align: top;
 }
 
 .markdown th {
@@ -125,8 +197,10 @@
 
 .copyCode {
   display: inline-grid;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   place-items: center;
   border-color: transparent;
   padding: 0;
@@ -138,6 +212,10 @@
   border-color: var(--line-control-strong);
   color: var(--muted);
   background: var(--surface-hover);
+}
+
+.copyCode:active {
+  background: var(--surface-pressed);
 }
 
 .codeBlock pre {
@@ -177,4 +255,13 @@
 .role {
   color: var(--ink-secondary);
   font-weight: var(--weight-semibold);
+}
+
+@media (pointer: coarse) {
+  .copyCode {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

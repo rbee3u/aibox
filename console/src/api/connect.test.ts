@@ -43,17 +43,12 @@ describe("Control API endpoints", () => {
   it("owns semantic paths and Tenant encoding for scoped reads", async () => {
     const { api, fetchMock } = connected();
 
-    await api.overview.loadSessionSummary(tenant, "codex");
     await api.tenants.listComponents(tenant);
     await api.tenants.latestComponents();
     await api.tenants.checkLatestComponents();
     await api.sessions.loadSessionEvidence(tenant, "codex", "session/1", "entry 1", "10:2");
 
     expectRouteCalls(fetchMock, [
-      {
-        key: "sessions_summary",
-        path: controlRoute("sessions_summary", {}, "tenant=managed%3Awork&agent=codex"),
-      },
       {
         key: "components_list",
         path: controlRoute("components_list", {}, "tenant=managed%3Awork"),
@@ -72,7 +67,7 @@ describe("Control API endpoints", () => {
         ),
       },
     ]);
-    expect(JSON.parse(fetchMock.mock.calls[3][1]?.body as string)).toEqual({});
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({});
   });
 
   it("sends the Config file selector and native wire fields", async () => {
@@ -380,5 +375,34 @@ describe("Control API endpoints", () => {
         onComplete: () => undefined,
       }),
     ).rejects.toThrow("Session detail stream ended before completion");
+  });
+});
+
+it("encodes all Config comparison drafts in one scoped read-only request", async () => {
+  const { api, fetchMock } = connected();
+  await api.configs.compareConfigs(target, [
+    {
+      file: "config.toml",
+      revision: "r1",
+      originalBase64: "b3JpZw==",
+      contentBase64: "ZHJhZnQ=",
+      visualOptions: [{ path: "model", included: true, value: "draft" }],
+    },
+  ]);
+  expectRouteCalls(fetchMock, [{ key: "configs_compare", path: "/_aibox/api/configs/compare" }]);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+    tenant: "managed:work",
+    agent: "codex",
+    current: false,
+    config: "review",
+    files: [
+      {
+        file: "config.toml",
+        revision: "r1",
+        original_base64: "b3JpZw==",
+        content_base64: "ZHJhZnQ=",
+        visual_options: [{ path: "model", included: true, value: "draft" }],
+      },
+    ],
   });
 });

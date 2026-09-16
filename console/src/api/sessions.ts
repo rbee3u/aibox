@@ -2,9 +2,9 @@ import type { TenantRow } from "@/api/core";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
   ConversationMessage,
+  ConversationNotice,
   SessionDetailMeta,
   SessionDetailStats,
-  SessionDiscoverySummary,
   SessionDetailFrame,
   SessionListData,
   SessionListRow,
@@ -12,15 +12,16 @@ import type {
   TranscriptEvidence,
   TranscriptEvidenceSummary,
 } from "@/api/generated/wire";
+import { HttpError } from "@/api/httpError";
 import { listTenantsRequest } from "@/api/tenants";
 import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
 export type SessionRow = SessionListRow;
-export type SessionSummaryData = SessionDiscoverySummary;
 export type {
   ConversationMessage,
+  ConversationNotice,
   SessionDetailMeta,
   SessionDetailStats,
   SessionListData,
@@ -108,6 +109,14 @@ async function streamSessionDetail(
   if (!complete) throw new Error("Session detail stream ended before completion");
 }
 
+/**
+ * An evidence read is pinned to the snapshot its detail stream reported; the
+ * Service refuses it once the Transcript has changed, so the caller re-reads.
+ */
+export function isTranscriptConflict(cause: unknown): boolean {
+  return cause instanceof HttpError && cause.status === 409;
+}
+
 export function sessionsApi(client: ControlApi): SessionApi {
   return {
     listTenants: listTenantsRequest(client),
@@ -133,12 +142,4 @@ export function sessionsApi(client: ControlApi): SessionApi {
         confirmation: "",
       }),
   };
-}
-
-export function sessionSummaryRequest(client: ControlApi) {
-  return (tenant: TenantSelection, agent: CodingAgentKind, signal?: AbortSignal) =>
-    client.get<SessionSummaryData>(
-      `/_aibox/api/sessions/summary?${sessionSourceQuery(tenant, agent)}`,
-      signal,
-    );
 }

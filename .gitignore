@@ -1,3 +1,7 @@
 .DS_Store
 /.idea/
+/assets/index.html
+/assets/console.html
+/assets/console.css
+/assets/console.js
 /target/

@@ -20,7 +20,6 @@ use axum::http::{HeaderValue, Method, Response, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::get;
-use fs2::FileExt as _;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::fs;
 use std::future::Future;
@@ -56,6 +55,7 @@ pub(crate) fn dispatch(command: ConsoleCommand) -> Result<i32> {
     if command.listen.port() == 0 {
         bail!("AIBox Service listener port must not be 0");
     }
+    crate::foundation::platform::raise_nofile_limit();
     let root = tenant::aibox_root()?;
     let host_home = tenant::host_home()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -341,7 +341,7 @@ fn acquire_service_lock(root: &Path) -> Result<ServiceLock> {
             path.display()
         );
     }
-    file.try_lock_exclusive().with_context(|| {
+    file.try_lock().with_context(|| {
         format!(
             "another AIBox Service already manages Root {}",
             root.display()

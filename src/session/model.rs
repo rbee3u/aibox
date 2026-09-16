@@ -1,6 +1,6 @@
 //! Session, conversation, tool, and evidence projection types.
 
-use super::filesystem::terminal_safe;
+use super::filesystem::terminal_safe_with;
 use serde_json::Value;
 
 /// A line's top-level timestamp, shared by both transcript formats, or empty.
@@ -94,6 +94,18 @@ pub(crate) enum ConversationRole {
     Assistant,
 }
 
+/// A Transcript line the Coding Agent CLI wrote in a speaker's slot without
+/// anyone having said it. The Console renders these as events, not speech.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConversationNotice {
+    /// The model request failed; the text is the CLI's error line.
+    ApiError,
+    /// The user cut the turn short; the text is the CLI's marker.
+    Interrupted,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ConversationMessage {
@@ -101,6 +113,9 @@ pub(crate) struct ConversationMessage {
     pub(crate) role: ConversationRole,
     pub(crate) timestamp: String,
     pub(crate) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) notice: Option<ConversationNotice>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -199,9 +214,80 @@ pub(crate) struct TranscriptEvidence {
     pub(crate) snapshot: String,
 }
 
+/// The one field a tool call is about, in the order the Agents name it —
+/// a shell command, a file, a search, a question — so a row can carry the
+/// command rather than the JSON wrapper around it.
+const TOOL_INPUT_KEYS: [&str; 14] = [
+    "command",
+    "cmd",
+    "cmd_string",
+    "file_path",
+    "notebook_path",
+    "path",
+    "file",
+    "pattern",
+    "query",
+    "url",
+    "prompt",
+    "description",
+    "skill",
+    "input",
+];
+
+/// A tool's input as a reader wants it: the primary field's own text when the
+/// input carries one, otherwise the input's JSON. Bounded after extraction,
+/// so a long command is cut in its own text rather than mid-JSON.
+pub(crate) fn tool_input_preview(input: &Value) -> String {
+    let readable = match input {
+        Value::String(text) => Some(text.clone()),
+        Value::Object(fields) => TOOL_INPUT_KEYS.iter().find_map(|key| {
+            let field = fields.get(*key)?;
+            let text = match field {
+                Value::String(text) => text.clone(),
+                // Codex spells a command as its argv.
+                Value::Array(argv) if argv.iter().all(Value::is_string) => argv
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                _ => return None,
+            };
+            (!text.trim().is_empty()).then_some(text)
+        }),
+        _ => None,
+    };
+    match readable {
+        Some(text) => bounded_preview(&text),
+        None => bounded_preview(&input.to_string()),
+    }
+}
+
+/// A tool's output as a reader wants it: a plain string as itself, anything
+/// else as its JSON.
+pub(crate) fn tool_output_preview(output: &Value) -> String {
+    match output {
+        Value::String(text) => bounded_preview(text),
+        Value::Array(items) => {
+            // Claude wraps text results as `[{"type":"text","text":…}]`.
+            let texts = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>();
+            if texts.is_empty() {
+                bounded_preview(&output.to_string())
+            } else {
+                bounded_preview(&texts.join("\n"))
+            }
+        }
+        _ => bounded_preview(&output.to_string()),
+    }
+}
+
+/// Previews travel only to the Console, which renders them preformatted, so
+/// line and tab structure survives; every other control character is escaped.
 pub(crate) fn bounded_preview(value: &str) -> String {
     const MAX: usize = 240;
-    let safe = terminal_safe(value);
+    let safe = terminal_safe_with(value, |character| matches!(character, '\n' | '\t'));
     safe.chars().take(MAX).collect()
 }
 

@@ -1,7 +1,11 @@
 import type { Bootstrap, TenantRow } from "@/api/core";
 import type { CodingAgentKind } from "@/domain/codingAgent";
 import type {
+  ConfigComparison,
+  ConfigComparisonFile,
+  ConfigDifference,
   ApplicationStatus,
+  ConfigDrift,
   AuthPropagationPreviewResponse,
   AuthPropagationReport,
   ConfigCatalogEntry,
@@ -20,7 +24,16 @@ import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
-export type { ApplicationStatus, ConfigCatalogEntry, LastApplication, PropagationOutcome };
+export type {
+  ConfigComparison,
+  ConfigComparisonFile,
+  ConfigDifference,
+  ApplicationStatus,
+  ConfigCatalogEntry,
+  ConfigDrift,
+  LastApplication,
+  PropagationOutcome,
+};
 
 export type ConfigListData = GeneratedConfigListResponse;
 
@@ -72,6 +85,11 @@ export type PropagationPreview = AuthPropagationPreviewResponse;
 
 export type PropagationReport = AuthPropagationReport;
 
+export interface ConfigComparisonInput extends ConfigFileInput {
+  file: string;
+  originalBase64: string;
+}
+
 export interface ConfigApi {
   bootstrap: Bootstrap;
   listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
@@ -85,6 +103,10 @@ export interface ConfigApi {
     target: ConfigFileTarget,
     contentBase64: string,
   ): Promise<ConfigFileDiagnostics>;
+  compareConfigs(
+    target: Omit<ConfigFileTarget, "file">,
+    files: ConfigComparisonInput[],
+  ): Promise<ConfigComparison>;
   saveConfigFile(target: ConfigFileTarget, input: ConfigFileInput): Promise<ConfigFileData>;
   createConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
   applyConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
@@ -163,6 +185,22 @@ export function configsApi(client: ControlApi): ConfigApi {
       client.post<DiagnoseConfigResponse>("/_aibox/api/configs/diagnose", {
         ...configTargetBody(target),
         content_base64: contentBase64,
+      }),
+    compareConfigs: (target, files) =>
+      client.post<ConfigComparison>("/_aibox/api/configs/compare", {
+        ...tenantBody(target.tenant),
+        agent: target.agent,
+        current: target.current,
+        config: target.config,
+        files: files.map((input) => ({
+          file: input.file,
+          revision: input.revision,
+          original_base64: input.originalBase64,
+          content_base64: input.contentBase64,
+          visual_options: input.visualOptions,
+          custom_provider: input.customProvider,
+          visual_auth: input.visualAuth,
+        })),
       }),
     saveConfigFile: (target, input) =>
       client

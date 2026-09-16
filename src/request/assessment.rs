@@ -153,6 +153,7 @@ fn collect_protocol_findings(summary: &SummaryMetadata, findings: &mut Vec<Asses
         && protocol.family != ProtocolFamily::Unknown
         && streaming
         && !protocol.response_terminal
+        && !response_interpretation_failed(summary)
     {
         push_finding(
             findings,
@@ -170,6 +171,19 @@ fn collect_protocol_findings(summary: &SummaryMetadata, findings: &mut Vec<Asses
             },
         );
     }
+}
+
+fn response_interpretation_failed(summary: &SummaryMetadata) -> bool {
+    summary
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "response_interpretation_failed")
+        || summary.protocol.as_ref().is_some_and(|protocol| {
+            protocol
+                .warnings
+                .iter()
+                .any(|warning| warning.kind == "response_interpretation_failed")
+        })
 }
 
 fn collect_diagnostic_warnings(summary: &SummaryMetadata, findings: &mut Vec<AssessmentFinding>) {

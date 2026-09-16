@@ -4,8 +4,8 @@ use super::response_stream::*;
 use super::target::*;
 use super::*;
 use crate::request::model::{
-    ErrorMetadata, ProtocolFamily, ProtocolSummary, RecordedHeader, ResponseModeValue,
-    SummaryMetadata, TimingMetadata,
+    AssessmentLevel, ErrorMetadata, ProtocolFamily, ProtocolSummary, RecordedHeader,
+    ResponseModeValue, SummaryMetadata, TimingMetadata,
 };
 use crate::request::sse::{PrefixSniff, SseIndexer, SsePrefixSniffer, is_first_token_data};
 use crate::request::store::{RequestStore, SummaryHandle};
@@ -942,6 +942,176 @@ data: {"type":"error","error":{"type":"service_unavailable_error","message":"ove
     );
 }
 
+fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
+    let mut input = bytes;
+    let mut output = Vec::new();
+    brotli::BrotliCompress(
+        &mut input,
+        &mut output,
+        &brotli::enc::BrotliEncoderParams::default(),
+    )
+    .unwrap();
+    output
+}
+
+#[tokio::test]
+async fn brotli_sse_is_interpreted_only_after_eof_without_event_timing() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    let upstream_url = "https://example.com/v1/messages";
+    let (captured_request, _) = store
+        .begin(ObservedRequest {
+            upstream_url: Some(upstream_url),
+            host_hint: Some("example.com"),
+            ..ObservedRequest::test("POST", upstream_url)
+        })
+        .unwrap();
+    let id = captured_request.id.clone();
+    let headers = vec![
+        RecordedHeader {
+            name: "content-type".to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
+        },
+        RecordedHeader {
+            name: "content-encoding".to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode("br"),
+        },
+    ];
+    let guard = RequestAttempt::new(
+        store.clone(),
+        captured_request,
+        Arc::new(Mutex::new(RuntimeMeasurements::default())),
+        Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
+    );
+    guard
+        .observe_response_headers(&headers, Some(true))
+        .unwrap();
+    let body = brotli_encode(
+        br#"event: message_stop
+data: {"type":"message_stop"}
+
+"#,
+    );
+    let response_file = tokio::fs::File::from_std(guard.clone_response_body().unwrap());
+    let (sender, mut receiver) = mpsc::channel(2);
+    let task = tokio::spawn(async move {
+        let mut guard = guard;
+        record_response_stream_with_index(
+            CancellationToken::new(),
+            futures_util::stream::iter([Ok(Bytes::from(body))]),
+            response_file,
+            sender,
+            ResponseStreamConfig {
+                mode: ResponseStreamMode::OpaqueEventStream,
+                status: 200,
+                headers,
+            },
+            &mut guard,
+        )
+        .await;
+    });
+    while receiver.recv().await.is_some() {}
+    task.await.unwrap();
+
+    let captured_request = store.find(&id).unwrap();
+    let protocol = captured_request.summary.protocol.unwrap();
+    assert!(protocol.response_terminal);
+    assert!(captured_request.summary.warnings.is_empty());
+    assert_eq!(
+        captured_request.summary.assessment.level,
+        AssessmentLevel::Ok
+    );
+    assert!(
+        !captured_request
+            .directory
+            .join("response.events.jsonl")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn unsupported_sse_content_encoding_warns_without_claiming_a_missing_terminal() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    let upstream_url = "https://example.com/v1/messages";
+    let (captured_request, _) = store
+        .begin(ObservedRequest {
+            upstream_url: Some(upstream_url),
+            host_hint: Some("example.com"),
+            ..ObservedRequest::test("POST", upstream_url)
+        })
+        .unwrap();
+    let id = captured_request.id.clone();
+    let headers = vec![
+        RecordedHeader {
+            name: "content-type".to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
+        },
+        RecordedHeader {
+            name: "content-encoding".to_string(),
+            value_base64: base64::engine::general_purpose::STANDARD.encode("compress"),
+        },
+    ];
+    let guard = RequestAttempt::new(
+        store.clone(),
+        captured_request,
+        Arc::new(Mutex::new(RuntimeMeasurements::default())),
+        Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
+    );
+    guard
+        .observe_response_headers(&headers, Some(true))
+        .unwrap();
+    let response_file = tokio::fs::File::from_std(guard.clone_response_body().unwrap());
+    let (sender, mut receiver) = mpsc::channel(2);
+    let task = tokio::spawn(async move {
+        let mut guard = guard;
+        record_response_stream_with_index(
+            CancellationToken::new(),
+            futures_util::stream::iter([Ok(Bytes::from_static(b"not-sse"))]),
+            response_file,
+            sender,
+            ResponseStreamConfig {
+                mode: ResponseStreamMode::OpaqueEventStream,
+                status: 200,
+                headers,
+            },
+            &mut guard,
+        )
+        .await;
+    });
+    while receiver.recv().await.is_some() {}
+    task.await.unwrap();
+
+    let captured_request = store.find(&id).unwrap();
+    assert_eq!(
+        captured_request.summary.warnings[0].kind,
+        "response_interpretation_failed"
+    );
+    assert_eq!(
+        captured_request.summary.warnings[0].message,
+        "unsupported Content-Encoding \"compress\""
+    );
+    assert!(
+        !captured_request
+            .summary
+            .protocol
+            .as_ref()
+            .unwrap()
+            .response_terminal
+    );
+    assert_eq!(
+        captured_request
+            .summary
+            .assessment
+            .primary
+            .as_ref()
+            .unwrap()
+            .kind,
+        "response_interpretation_failed"
+    );
+    assert_eq!(captured_request.summary.assessment.issue_count, 1);
+}
+
 #[tokio::test]
 async fn client_close_before_sse_terminal_event_is_disconnected() {
     let (outcome, protocol, timing) = run_client_close_after_response(
@@ -1092,6 +1262,21 @@ fn response_stream_mode_only_sniffs_successful_requested_streams_without_content
         ResponseStreamMode::EventStream
     );
     headers.insert(header::CONTENT_ENCODING, "zstd".parse().unwrap());
+    assert_eq!(
+        response_stream_mode(&headers, StatusCode::OK, &protocol),
+        ResponseStreamMode::OpaqueEventStream
+    );
+    headers.insert(header::CONTENT_ENCODING, "br".parse().unwrap());
+    assert_eq!(
+        response_stream_mode(&headers, StatusCode::OK, &protocol),
+        ResponseStreamMode::OpaqueEventStream
+    );
+    headers.insert(header::CONTENT_ENCODING, "deflate".parse().unwrap());
+    assert_eq!(
+        response_stream_mode(&headers, StatusCode::OK, &protocol),
+        ResponseStreamMode::OpaqueEventStream
+    );
+    headers.insert(header::CONTENT_ENCODING, "compress".parse().unwrap());
     assert_eq!(
         response_stream_mode(&headers, StatusCode::OK, &protocol),
         ResponseStreamMode::OpaqueEventStream

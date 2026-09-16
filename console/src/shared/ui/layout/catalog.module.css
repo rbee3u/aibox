@@ -60,6 +60,7 @@
 
 .sectionHeader h2 {
   margin: 0;
+  color: var(--ink-section-title);
   font-size: var(--text-section-title);
   font-weight: var(--weight-section-title);
   line-height: var(--line-height-section-title);
@@ -142,6 +143,10 @@
   padding: var(--catalog-toolbar-padding);
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
+}
+
+.toolbar:not(.selectionBar) {
+  flex-wrap: wrap;
 }
 
 .toolbarFilters,
@@ -249,10 +254,6 @@
   transform: translateY(-50%);
 }
 
-.refreshAction {
-  composes: button from "@/shared/ui/RefreshButton.module.css";
-}
-
 .list {
   min-height: 0;
   overflow: auto;
@@ -275,19 +276,25 @@
   padding: var(--catalog-row-padding);
   border-bottom: 1px solid var(--line-content);
   background: var(--surface);
-}
-
-.row::before {
-  position: absolute;
-  inset: var(--catalog-row-accent-inset) auto var(--catalog-row-accent-inset) 0;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  content: "";
+  transition: background-color var(--transition-fast);
 }
 
 .row:hover {
   background: var(--surface-hover);
+}
+
+.row:active {
+  background: var(--surface-pressed);
+}
+
+.inspectedMarker::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
 }
 
 .rowInspected,
@@ -296,28 +303,55 @@
   background: var(--surface-selected);
 }
 
+.rowInspected:active {
+  background: var(--surface-pressed);
+}
+
+.rowInspected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
 .rowSelected,
 .rowSelected:hover,
 .rowSelected:focus-within {
   background: var(--surface-selected);
 }
 
-.rowInspected::before {
-  background: var(--accent);
+.rowSelected:active {
+  background: var(--surface-pressed);
 }
 
 .rowInspected .rowMain,
 .rowSelected .rowMain {
-  color: var(--accent);
+  color: var(--ink);
+}
+
+/*
+ * In selection mode the fill means "ticked". The inspected row keeps only
+ * its bar, so a reader scanning for grey rows counts exactly the selection.
+ */
+.rowSelectable.rowInspected:not(.rowSelected) {
+  background: var(--surface);
+}
+
+.rowSelectable.rowInspected:not(.rowSelected):hover,
+.rowSelectable.rowInspected:not(.rowSelected):focus-within {
+  background: var(--surface-hover);
+}
+
+.rowSelectable.rowInspected:active:not(.rowSelected) {
+  background: var(--surface-pressed);
 }
 
 .rowSelectable,
 .rowProtected {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.rowSelectable.rowInspected::before {
-  background: transparent;
 }
 
 .rowProtected {
@@ -405,23 +439,31 @@
   gap: 8px;
   padding: var(--catalog-divider-padding);
   border-bottom: 1px solid var(--line-content);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  color: var(--ink-section-title);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
   letter-spacing: 0;
 }
 
+/*
+ * One dialog surface. Form dialogs and ConfirmDialog differ in width and in
+ * what they hold, not in material: radius, padding, and backdrop match
+ * ConfirmDialog.module.css so two dialogs opened in a row read as one thing.
+ */
 .dialog {
-  width: min(430px, 100%);
-  padding: 16px;
+  /* A feature widens a dialog through the property, never by outranking this rule. */
+  width: min(var(--dialog-width, 430px), calc(100vw - 40px));
+  padding: 18px;
   border: 1px solid var(--line-control-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+  color: var(--ink);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
 }
 
 .dialog::backdrop {
-  background: rgb(10 15 24 / 0.52);
+  background: rgb(7 11 18 / 0.58);
+  backdrop-filter: blur(2px);
 }
 
 .dialog label {
@@ -508,6 +550,22 @@
 
   .showsDetail .detailPane {
     display: flex;
+  }
+
+  /*
+   * Protection is the missing delete control. An inset wash on the one-pane
+   * picker looks like a preselected row.
+   */
+  .splitLayout:not(.showsDetail) .rowProtected:not(.rowSelected):not(.rowInspected) {
+    background: var(--surface);
+  }
+
+  .splitLayout:not(.showsDetail) .rowProtected:not(.rowSelected):not(.rowInspected):hover {
+    background: var(--surface-hover);
+  }
+
+  .splitLayout:not(.showsDetail) .rowProtected:active:not(.rowSelected):not(.rowInspected) {
+    background: var(--surface-pressed);
   }
 
   .detailHeader > [data-icon-button]:first-child {

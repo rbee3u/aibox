@@ -40,6 +40,12 @@ newly created in Visual mode. Codex custom-provider fields form one optional
 aggregate; enabling one supplies safe placeholders without overwriting
 credentials.
 
+Claude's Skip dangerous mode prompt is available in Visual mode only when Default
+permission mode is `bypassPermissions`. Leaving that mode clears its inclusion;
+returning requires enabling it again. Visual saves remove the field whenever the
+condition is unmet, including from existing non-bypass configurations. Opening a
+Config does not write files; Raw editing retains its native-content behavior.
+
 **Raw Editor** remains available for every Named Config and is the only editor
 for Current Config. Named Config writes validate the selected file. Current
 Config writes preserve arbitrary bytes without syntax validation and may
@@ -83,6 +89,18 @@ The Console reports:
 | `dirty` | One or more fixed fields differ |
 | `source-missing` | The recorded Named Config no longer exists |
 | `comparison-error` | Source or Current Config cannot be compared safely |
+
+The Console can explain these differences for Current Config and the recorded
+Named Config. Comparison observes the source's current saved definition, not a
+historical application snapshot. Main-file differences follow Application
+projection semantics, including omitted fields and blocking parent structures;
+unrelated native content and formatting do not count. Codex auth remains one
+complete Config Field, with internal property differences available for inspection.
+
+Read-only comparison accepts the visible editor drafts without saving or
+initializing state. Each file can independently report that comparison is
+unavailable. Draft comparison does not predict linked-file writes performed by
+Save, and the catalog's Config Drift continues to describe saved files.
 
 ## Credential Propagation
 

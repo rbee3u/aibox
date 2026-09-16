@@ -1,0 +1,24 @@
+.button > svg {
+  flex-shrink: 0;
+}
+
+@media (max-width: 760px) {
+  .button.compact {
+    width: var(--control-md);
+    height: var(--control-md);
+    min-width: var(--control-md);
+    padding: 0;
+  }
+
+  .compact .label {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) and (pointer: coarse) {
+  .button.compact {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}

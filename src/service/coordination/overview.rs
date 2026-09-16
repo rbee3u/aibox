@@ -16,6 +16,7 @@ use crate::config;
 use crate::docker;
 use crate::foundation::safe_fs;
 use crate::service::state::ServiceState;
+use crate::session;
 use crate::tenant::{self, Tenant};
 use anyhow::Result;
 
@@ -50,12 +51,16 @@ pub(crate) struct TopologyTenantSnapshot {
     pub(crate) components: Result<Vec<ComponentInspection>, String>,
 }
 
-/// One Coding Agent's Config state within a Topology Tenant row.
+/// One Coding Agent's Config and Session state within a Topology Tenant row.
 pub(crate) struct TopologyAgentSnapshot {
     pub(crate) agent: AgentKind,
     pub(crate) current_config: Result<config::CurrentConfigInspection, String>,
     pub(crate) named_configs: Result<Vec<config::ConfigCatalogEntry>, String>,
     pub(crate) application: config::ApplicationStatus,
+    /// Discovered Transcript count, or why the Home could not be walked. This
+    /// is the discovery count only: it names no Session and parses no
+    /// Transcript, matching what the Sessions summary route already reports.
+    pub(crate) sessions: Result<usize, String>,
 }
 
 impl OverviewCoordinator {
@@ -123,5 +128,13 @@ fn agent_snapshot(tenant: &Tenant, agent: AgentKind) -> TopologyAgentSnapshot {
         named_configs: config::inspect_named_configs(&selected)
             .map_err(|error| format!("{error:#}")),
         application: config::application_status(&selected),
+        sessions: session_count(tenant, agent),
     }
+}
+
+fn session_count(tenant: &Tenant, agent: AgentKind) -> Result<usize, String> {
+    let backend = session::backend_for(agent);
+    session::session_discovery_summary(backend.as_ref(), tenant.home_dir())
+        .map(|summary| summary.count)
+        .map_err(|error| format!("{error:#}"))
 }

@@ -1,4 +1,13 @@
-import { Check, Clipboard, FileText } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CircleOff,
+  Clipboard,
+  FileText,
+  TriangleAlert,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import type {
@@ -8,7 +17,11 @@ import type {
   RequestDetail as RequestDetailData,
 } from "@/api/requests";
 import type { BodyLoadStatus, DecodedBodyState, DetailTab } from "@/features/requests/viewTypes";
-import { bodyHeaders } from "@/features/requests/detail/bodyPresentation";
+import {
+  bodyHeaders,
+  headerListSummary,
+  headerListToggleLabel,
+} from "@/features/requests/detail/bodyPresentation";
 import {
   createBodyViewMemory,
   type BodyViewMemory,
@@ -27,6 +40,9 @@ import styles from "@/features/requests/detail/RequestDetail.module.css";
 import { RecordHeadlineStatus } from "@/features/requests/RequestStatus";
 import { assessmentPrimaryLabel } from "@/features/requests/statusPresentation";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import { IconButton } from "@/shared/ui/IconButton";
+import { EmptyState } from "@/shared/ui/EmptyState";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const TABS: Array<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
@@ -66,6 +82,8 @@ export function RequestDetail({
   const response = detail.response;
   const [origin, path] = requestDetailUrl(request);
   const panelId = `request-panel-${request.id}`;
+  const timestampKind = detail.result ? "Ended" : "Started";
+  const timestampValue = detail.result?.ended_at ?? request.started_at;
 
   function selectAdjacentTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
@@ -82,20 +100,26 @@ export function RequestDetail({
 
   return (
     <section className={styles.panel} aria-label="Request details">
-      <div className={styles.header}>
-        <div className={styles.requestOverview}>
+      <header className={styles.header}>
+        <h2 className={styles.requestOverview}>
           <span className={styles.method}>{request.method}</span>
           <span className={styles.url}>
             <strong>{origin}</strong>
             <span>{path}</span>
           </span>
+        </h2>
+        <div className={styles.caption}>
+          <RecordHeadlineStatus
+            response={response}
+            state={detail.state}
+            assessment={detail.assessment}
+          />
+          <span className={styles.captionTime}>
+            <span aria-hidden="true">· </span>
+            {timestampKind} <time dateTime={timestampValue}>{formatTimestamp(timestampValue)}</time>
+          </span>
         </div>
-        <RecordHeadlineStatus
-          response={response}
-          state={detail.state}
-          assessment={detail.assessment}
-        />
-      </div>
+      </header>
       <SegmentedControl variant="tabs" role="tablist" aria-label="Request data">
         {TABS.map(({ value, label }, index) => (
           <button
@@ -125,10 +149,12 @@ export function RequestDetail({
         {tab === "summary" ? (
           <Summary detail={detail} />
         ) : tab === "response" && !response ? (
-          <div className={styles.noResponse}>
-            <h2>No response received</h2>
-            <p>The Request does not contain response metadata.</p>
-          </div>
+          <EmptyState
+            variant="detail"
+            icon={<CircleOff size={iconSize.xl} aria-hidden="true" />}
+            title="No response received"
+            description="The Request does not contain response metadata."
+          />
         ) : (
           <MessageData
             kind={tab}
@@ -151,6 +177,7 @@ export function RequestDetail({
 function Summary({ detail }: { detail: RequestDetailData }) {
   const [copiedSessionId, copySessionIdText] = useClipboardFeedback<string>();
   const total = detail.result?.total_ms ?? detail.live_total_ms;
+  const axisMs = elapsedNsMs(detail.timeline_end_at_ns) ?? total ?? 0;
   const protocol = detail.summary.protocol;
   const model =
     resolveRequestedEffective(protocol?.model) ??
@@ -161,7 +188,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
   const stages = timingStages(detail);
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
   const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
-  const responseMode = mode === "stream" ? "Streaming" : mode === "normal" ? "Non-streaming" : null;
+  const responseMode = mode === "stream" ? "Stream" : mode === "normal" ? "Non-stream" : null;
   const diagnostics = detail.diagnostics;
   const hasDiagnostics = Object.values(diagnostics).some((entries) => entries.length > 0);
 
@@ -191,87 +218,129 @@ function Summary({ detail }: { detail: RequestDetailData }) {
             <dd>
               <span className={styles.sessionValue}>{sessionId ?? "Not reported"}</span>
               {sessionId && (
-                <button
-                  className={styles.copySession}
-                  type="button"
+                <IconButton
+                  size="sm"
+                  label={
+                    sessionCopied
+                      ? "Coding Agent Session ID copied"
+                      : "Copy Coding Agent Session ID"
+                  }
                   onClick={copySessionId}
-                  aria-label={
-                    sessionCopied
-                      ? "Coding Agent Session ID copied"
-                      : "Copy Coding Agent Session ID"
-                  }
-                  title={
-                    sessionCopied
-                      ? "Coding Agent Session ID copied"
-                      : "Copy Coding Agent Session ID"
-                  }
                 >
                   {sessionCopied ? (
-                    <Check size={14} aria-hidden="true" />
+                    <Check size={iconSize.xs} aria-hidden="true" />
                   ) : (
-                    <Clipboard size={14} aria-hidden="true" />
+                    <Clipboard size={iconSize.xs} aria-hidden="true" />
                   )}
-                </button>
+                </IconButton>
               )}
             </dd>
           </div>
         </dl>
-        <TokenUsageGroup detail={detail} />
       </section>
+      <TokenUsageGroup detail={detail} />
       <section aria-labelledby="request-timing-title">
         <h2 id="request-timing-title">Timing</h2>
-        <dl className={`${styles.metricGrid} ${styles.timingMetrics}`}>
+        <dl className={styles.timingMetrics}>
           <Metric label="First token" value={duration(firstToken)} />
           <Metric label="Duration" value={duration(total)} />
-          <Metric label="Ended" value={formatTimestamp(detail.result?.ended_at ?? "")} />
         </dl>
         {stages.length > 0 ? (
-          <div className={styles.timeline} role="list" aria-label="Timing stages">
-            {stages.map((stage) => {
-              const status = stage.status === "complete" ? "" : ` · ${stage.status}`;
-              const value = `${duration(stage.durationMs)}${status}`;
-              const style = {
-                "--stage-start": `${stage.startPercent}%`,
-                "--stage-width": `${stage.widthPercent}%`,
-              } as CSSProperties;
-              return (
-                <div
-                  key={stage.label}
-                  className={styles.timelineRow}
-                  role="listitem"
-                  aria-label={`${stage.label}: ${value}`}
-                >
-                  <span className={styles.timelineLabel}>{stage.label}</span>
-                  <span className={styles.timelineTrack} aria-hidden="true">
-                    <span
-                      className={`${styles.timelineBar} ${styles[`tone${capitalize(stage.tone)}`]} ${
-                        stage.status !== "complete" ? styles.timelinePartial : ""
-                      }`}
-                      style={style}
-                    />
+          <div className={styles.timelineContainer}>
+            {axisMs > 0 && (
+              <div className={styles.timelineRulerRow} aria-hidden="true">
+                <span />
+                <div className={styles.timelineRuler}>
+                  <span className={`${styles.rulerTick} ${styles.rulerTickStart}`}>0 ms</span>
+                  <span className={`${styles.rulerTick} ${styles.rulerTickQuarter}`}>
+                    {duration(axisMs * 0.25)}
                   </span>
-                  <span className={styles.timelineValue}>{value}</span>
+                  <span className={`${styles.rulerTick} ${styles.rulerTickHalf}`}>
+                    {duration(axisMs * 0.5)}
+                  </span>
+                  <span className={`${styles.rulerTick} ${styles.rulerTickThreeQuarter}`}>
+                    {duration(axisMs * 0.75)}
+                  </span>
+                  <span className={`${styles.rulerTick} ${styles.rulerTickEnd}`}>
+                    {duration(axisMs)}
+                  </span>
                 </div>
-              );
-            })}
+                <span />
+              </div>
+            )}
+            <div className={styles.timeline} role="list" aria-label="Timing stages">
+              {stages.map((stage) => {
+                const status = stage.status === "complete" ? "" : ` · ${stage.status}`;
+                const value = `${duration(stage.durationMs)}${status}`;
+                const startMs = (axisMs * stage.startPercent) / 100;
+                const pct = stage.widthPercent.toFixed(1);
+                const detailTitle = `${stage.label}: ${value} (${pct}%) · Started at +${duration(startMs)}`;
+                const style = {
+                  "--stage-start": `${stage.startPercent}%`,
+                  "--stage-width": `${stage.widthPercent}%`,
+                } as CSSProperties;
+                return (
+                  <div
+                    key={stage.label}
+                    className={styles.timelineRow}
+                    role="listitem"
+                    title={detailTitle}
+                    aria-label={detailTitle}
+                  >
+                    <span className={styles.timelineLabel}>
+                      <span
+                        className={`${styles.stageDot} ${styles[`tone${capitalize(stage.tone)}`]}`}
+                        aria-hidden="true"
+                      />
+                      {stage.label}
+                    </span>
+                    <span className={styles.timelineTrack} aria-hidden="true">
+                      <span
+                        className={`${styles.timelineBar} ${styles[`tone${capitalize(stage.tone)}`]} ${
+                          stage.status !== "complete" ? styles.timelinePartial : ""
+                        }`}
+                        style={style}
+                      />
+                    </span>
+                    <span className={styles.timelineValue}>{value}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className={styles.timelineLegend} aria-label="Timing stage legend">
+              <span className={styles.legendItem}>
+                <span className={`${styles.stageDot} ${styles.toneRequest}`} aria-hidden="true" />
+                <span>Request</span>
+              </span>
+              <span className={styles.legendItem}>
+                <span className={`${styles.stageDot} ${styles.toneWait}`} aria-hidden="true" />
+                <span>Waiting (TTFB)</span>
+              </span>
+              <span className={styles.legendItem}>
+                <span className={`${styles.stageDot} ${styles.toneModel}`} aria-hidden="true" />
+                <span>Response stream / body</span>
+              </span>
+              <span className={styles.legendItem}>
+                <span className={`${styles.stageDot} ${styles.toneFinalize}`} aria-hidden="true" />
+                <span>Finalization</span>
+              </span>
+            </div>
           </div>
         ) : (
           <p className={styles.sectionState}>Timing stages are not available yet.</p>
         )}
       </section>
-      <section className={styles.diagnostics} aria-labelledby="request-diagnostics-title">
-        <h2 id="request-diagnostics-title">Diagnostics</h2>
-        {hasDiagnostics ? (
+      {hasDiagnostics && (
+        <section className={styles.diagnostics} aria-labelledby="request-diagnostics-title">
+          <h2 id="request-diagnostics-title">Diagnostics</h2>
           <div className={styles.diagnosticGroups}>
             <DiagnosticGroup title="Proxy / transport" entries={diagnostics.request} tone="error" />
             <DiagnosticGroup title="HTTP response" entries={diagnostics.http} tone="error" />
             <DiagnosticGroup title="Model API" entries={diagnostics.provider} tone="error" />
             <DiagnosticGroup title="Warnings" entries={diagnostics.warnings} tone="warning" />
           </div>
-        ) : (
-          <p className={styles.sectionState}>No diagnostics.</p>
-        )}
-      </section>
+        </section>
+      )}
     </div>
   );
 }
@@ -322,24 +391,28 @@ function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
     usage?.output_tokens,
   ].some((value) => value != null);
   return (
-    <section className={styles.usageGroup} aria-labelledby="request-token-title">
-      <h3 id="request-token-title" className={styles.usageHeading}>
-        Token usage
-      </h3>
+    <section aria-labelledby="request-token-title">
+      <h2 id="request-token-title">Token usage</h2>
       {hasUsageData ? (
         <div className={styles.tokenUsageGrid}>
-          <div className={styles.tokenInputBlock}>
-            <div className={styles.tokenInputMetrics} role="group" aria-label="Input tokens">
+          <div className={styles.tokenCard} role="group" aria-label="Input tokens container">
+            <dl className={styles.tokenCardHeader} role="group" aria-label="Total input tokens">
+              <div className={styles.tokenMetricPrimary}>
+                <dt>Total input</dt>
+                <dd>{displayTokenCount(totalInput)}</dd>
+              </div>
+            </dl>
+            <div className={styles.tokenSubMetrics} role="group" aria-label="Input tokens">
               {inputMetrics.map((metric) => (
                 <div
-                  className={`${styles.tokenInputCell} ${
-                    metric.details ? styles.tokenInputCellDetailed : ""
+                  className={`${styles.tokenSubCell} ${
+                    metric.details ? styles.tokenSubCellDetailed : ""
                   }`}
                   role="group"
                   aria-label={`${metric.label} billing category`}
                   key={metric.label}
                 >
-                  <dl className={styles.tokenInputPrimary}>
+                  <dl className={styles.tokenSubDl}>
                     <div>
                       <dt>{metric.label}</dt>
                       <dd>{displayTokenCount(metric.value)}</dd>
@@ -362,35 +435,54 @@ function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
                 </div>
               ))}
             </div>
-            <dl className={styles.tokenTotal} role="group" aria-label="Total input tokens">
-              <div>
-                <dt>Total input</dt>
-                <dd>{displayTokenCount(totalInput)}</dd>
+          </div>
+          <div className={styles.tokenCard} role="group" aria-label="Output tokens">
+            <dl className={styles.tokenCardHeader}>
+              <div className={styles.tokenMetricPrimary}>
+                <dt>Output</dt>
+                <dd>{displayTokenCount(output)}</dd>
               </div>
             </dl>
-          </div>
-          <dl className={styles.tokenOutput} role="group" aria-label="Output tokens">
-            <div className={styles.tokenOutputPrimary}>
-              <dt>Output</dt>
-              <dd>{displayTokenCount(output)}</dd>
+            <div className={styles.tokenSubMetrics}>
+              {reasoning !== null ? (
+                <div
+                  className={styles.tokenSubCell}
+                  role="group"
+                  aria-label={`Output includes ${tokenCount(reasoning)} reasoning tokens`}
+                >
+                  <dl className={styles.tokenSubDl}>
+                    <div>
+                      <dt>Reasoning</dt>
+                      <dd>{tokenCount(reasoning)}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ) : (
+                <div className={styles.tokenSubCellEmpty} aria-hidden="true" />
+              )}
             </div>
-            {reasoning !== null && (
-              <div
-                className={styles.tokenReasoning}
-                role="group"
-                aria-label={`Output includes ${tokenCount(reasoning)} reasoning tokens`}
-              >
-                <dt>Reasoning</dt>
-                <dd>{tokenCount(reasoning)}</dd>
-              </div>
-            )}
-          </dl>
+          </div>
         </div>
       ) : (
         <p className={styles.usageMessage}>{usageStateMessage(detail)}</p>
       )}
     </section>
   );
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  request: "Request",
+  response: "Response",
+  model_api: "Model API",
+  recording: "Recording",
+  transport: "Transport",
+  proxy: "Proxy",
+};
+
+function formatPhase(phase: string): string {
+  const normalized = phase.trim().toLowerCase();
+  if (PHASE_LABELS[normalized]) return PHASE_LABELS[normalized];
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function DiagnosticGroup({
@@ -403,6 +495,7 @@ function DiagnosticGroup({
   tone: "error" | "warning";
 }) {
   if (entries.length === 0) return null;
+  const Icon = tone === "error" ? CircleAlert : TriangleAlert;
   return (
     <section
       className={`${styles.diagnosticGroup} ${
@@ -420,9 +513,14 @@ function DiagnosticGroup({
             key={`${entry.source}-${entry.kind}-${entry.at_ns}-${index}`}
           >
             <div className={styles.diagnosticMeta}>
+              <Icon className={styles.diagnosticIcon} size={iconSize.xs} aria-hidden="true" />
               <strong>{assessmentPrimaryLabel(entry)}</strong>
-              {entry.phase && <span>{entry.phase}</span>}
-              {entry.at_ns && <span>{duration(elapsedNsMs(entry.at_ns))}</span>}
+              {entry.phase && (
+                <span className={styles.diagnosticPhase}>{formatPhase(entry.phase)}</span>
+              )}
+              {entry.at_ns && (
+                <span className={styles.diagnosticTime}>+{duration(elapsedNsMs(entry.at_ns))}</span>
+              )}
             </div>
             <p>{entry.message}</p>
           </article>
@@ -478,26 +576,50 @@ function MessageData({
   onDownload: () => void;
 }) {
   const headers = bodyHeaders(detail, kind);
+  const headersOpen = memory.headersExpanded;
+  const headerSummary = headerListSummary(headers);
 
   return (
     <div className={styles.messageData}>
       <div className={styles.sectionTitle}>
         <h2>
-          <FileText size={15} aria-hidden="true" /> Headers
+          {headers.length > 0 ? (
+            <button
+              type="button"
+              className={styles.headersToggle}
+              aria-expanded={headersOpen}
+              aria-label={headerListToggleLabel(kind, headers)}
+              onClick={() => onMemoryChange({ ...memory, headersExpanded: !headersOpen })}
+            >
+              {headersOpen ? (
+                <ChevronDown size={iconSize.xs} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={iconSize.xs} aria-hidden="true" />
+              )}
+              <FileText size={iconSize.xs} aria-hidden="true" /> Headers
+              <span>{headerSummary}</span>
+            </button>
+          ) : (
+            <>
+              <FileText size={iconSize.xs} aria-hidden="true" /> Headers
+            </>
+          )}
         </h2>
       </div>
       {headers.length > 0 ? (
-        <table className={styles.headers}>
-          <caption className="srOnly">{kind} headers</caption>
-          <tbody>
-            {headers.map((header, index) => (
-              <tr key={`${header.name}-${index}`}>
-                <td>{header.name}</td>
-                <td>{decodeHeader(header)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        headersOpen ? (
+          <table className={styles.headers}>
+            <caption className="srOnly">{kind} headers</caption>
+            <tbody>
+              {headers.map((header, index) => (
+                <tr key={`${header.name}-${index}`}>
+                  <td>{header.name}</td>
+                  <td>{decodeHeader(header)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null
       ) : (
         <p className={styles.empty}>No headers.</p>
       )}

@@ -32,6 +32,8 @@ export type ConfigApplyTarget = {
 };
 export type ConfigPendingAction = {
   run: () => void | Promise<void>;
+  /** A mode switch stays on the file; anything else leaves it. */
+  kind: "leave" | { switchTo: "visual" | "raw" };
 };
 export function configTenantSelectionValue(tenant: TenantSelection): TenantSelectionValue {
   return tenantSelectionValue(tenant);

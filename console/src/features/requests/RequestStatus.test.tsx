@@ -75,22 +75,77 @@ describe("request status presentation", () => {
       label: "Waiting",
       tone: "active",
       issue: null,
+      marker: null,
       phase: null,
     });
     expect(presentation(200, active, "active")).toEqual({
       label: "200",
       tone: "success",
       issue: null,
+      marker: null,
       phase: "Streaming",
     });
   });
 
-  it("keeps a missing HTTP response neutral while exposing its assessment", () => {
+  it("names the finding when a completed Request never got an HTTP status", () => {
     expect(presentation(null, disconnectWarning)).toMatchObject({
+      label: "Disconnected",
+      tone: "warning",
+      issue: { label: "Disconnected", tone: "warning" },
+      marker: null,
+    });
+    expect(presentation(null, providerError)).toMatchObject({
+      label: "Server error",
+      tone: "error",
+      marker: null,
+    });
+    expect(presentation(null)).toMatchObject({
       label: "No response",
       tone: "neutral",
-      issue: { label: "Client disconnected", tone: "warning" },
+      issue: null,
+      marker: null,
     });
+  });
+
+  it("hangs a level marker on an HTTP status the assessment adds to", () => {
+    expect(presentation(200, providerError)).toMatchObject({
+      label: "200",
+      tone: "error",
+      issue: { label: "Server error" },
+      marker: "error",
+    });
+    expect(presentation(200, disconnectWarning)).toMatchObject({
+      label: "200",
+      tone: "success",
+      marker: "warning",
+    });
+    expect(presentation(400, disconnectWarning)).toMatchObject({
+      label: "400",
+      tone: "error",
+      marker: "warning",
+    });
+  });
+
+  it("carries no marker or hover reason when the assessment restates the HTTP status", () => {
+    const http401: RequestAssessment = {
+      level: "error",
+      primary: { source: "http", kind: "http_401", message: "Upstream returned HTTP 401" },
+      issue_count: 1,
+    };
+    expect(presentation(401, http401)).toEqual({
+      label: "401",
+      tone: "error",
+      issue: null,
+      marker: null,
+      phase: null,
+    });
+    expect(presentation(200, http401)).toMatchObject({
+      label: "200",
+      tone: "error",
+      issue: { label: "HTTP 401" },
+      marker: "error",
+    });
+    expect(presentation(200, providerError, "active").issue).toBeNull();
   });
 
   it("maps known and future finding kinds and formats HTTP findings", () => {
@@ -99,6 +154,7 @@ describe("request status presentation", () => {
     expect(
       assessmentPrimaryLabel({ source: "http", kind: "http_401", message: "Unauthorized" }),
     ).toBe("HTTP 401");
+    expect(errorKindLabel("upstream_request_failed")).toBe("Upstream failed");
   });
 
   it("keeps HTTP 200 and a Provider Error separate", () => {
@@ -111,6 +167,33 @@ describe("request status presentation", () => {
         tone: "error",
         additionalIssues: 1,
       },
+    });
+  });
+
+  it("does not hang a headline tag that only restates the HTTP status", () => {
+    const http401: RequestAssessment = {
+      level: "error",
+      primary: {
+        source: "http",
+        kind: "http_401",
+        message: "Upstream returned HTTP 401",
+      },
+      issue_count: 1,
+    };
+    expect(
+      requestHeadlinePresentation(
+        { ...response, status: 401, reason_phrase: "Unauthorized" },
+        "completed",
+        http401,
+      ),
+    ).toEqual({
+      statusText: "HTTP/2 401 Unauthorized",
+      tone: "error",
+      tag: null,
+    });
+    expect(requestHeadlinePresentation(response, "completed", http401).tag).toMatchObject({
+      label: "HTTP 401",
+      tone: "error",
     });
   });
 });
@@ -126,42 +209,57 @@ describe("RequestStatus", () => {
     expect(screen.getByText("Streaming")).toBeInTheDocument();
   });
 
-  it("renders accessible list issues and opens their tooltips", () => {
+  it("explains a finding from the whole status cell and keeps the model line free", () => {
     vi.useFakeTimers();
     const { rerender } = render(
       <RequestStatus status={200} state="completed" assessment={providerError} />,
     );
     expect(screen.getByText("200")).toBeInTheDocument();
-    const errorMarker = screen.getByRole("img", {
+    expect(screen.queryByText("Server error")).not.toBeInTheDocument();
+    const errorCell = screen.getByRole("img", {
       name: /Request error: Server error.*currently overloaded/,
     });
-    expect(screen.queryByText("Server error")).not.toBeInTheDocument();
-    expect(errorMarker).not.toHaveAttribute("title");
+    expect(errorCell).not.toHaveAttribute("title");
+    expect(errorCell.querySelector("[data-status-tone]")).toHaveAttribute(
+      "data-status-tone",
+      "error",
+    );
 
-    fireEvent.pointerEnter(errorMarker);
+    fireEvent.pointerEnter(errorCell);
     fireEvent.scroll(window);
     act(() => {
       vi.runOnlyPendingTimers();
     });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    const errorTooltip = showTooltip(errorMarker);
-    expect(errorMarker).toHaveAttribute("aria-describedby", errorTooltip.id);
+    const errorTooltip = showTooltip(errorCell);
+    expect(errorCell).toHaveAttribute("aria-describedby", errorTooltip.id);
     expect(errorTooltip).toHaveTextContent("Error · Server error");
     expect(errorTooltip).toHaveTextContent(providerError.primary!.message);
 
-    fireEvent.pointerLeave(errorMarker);
+    fireEvent.pointerLeave(errorCell);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
     rerender(<RequestStatus status={null} state="completed" assessment={disconnectWarning} />);
-    const warningMarker = screen.getByRole("img", {
-      name: /Request warning: Client disconnected/,
-    });
-    expect(screen.queryByText("Client disconnected")).not.toBeInTheDocument();
-    expect(within(showTooltip(warningMarker)).getByText("Warning")).toBeInTheDocument();
+    const warningCell = screen.getByRole("img", { name: /Request warning: Disconnected/ });
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.queryByText("No response")).not.toBeInTheDocument();
+    expect(screen.queryByText(disconnectWarning.primary!.message)).not.toBeInTheDocument();
+    expect(within(showTooltip(warningCell)).getByText("Warning")).toBeInTheDocument();
 
     fireEvent.scroll(window);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("shows a restated HTTP status as a plain cell with nothing to explain", () => {
+    const http401: RequestAssessment = {
+      level: "error",
+      primary: { source: "http", kind: "http_401", message: "Upstream returned HTTP 401" },
+      issue_count: 1,
+    };
+    render(<RequestStatus status={401} state="completed" assessment={http401} />);
+    expect(screen.getByText("401")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   it("opens headline issue tooltips", () => {
@@ -177,11 +275,12 @@ describe("RequestStatus", () => {
     rerender(
       <RecordHeadlineStatus response={null} state="completed" assessment={disconnectWarning} />,
     );
-    expect(screen.getByLabelText("No response")).toBeInTheDocument();
-    const warningTag = screen.getByText("Client disconnected");
+    // The failure kind is the whole status: no grey "No response" beside it.
+    expect(screen.queryByLabelText("No response")).not.toBeInTheDocument();
+    const warningTag = screen.getByText("Disconnected");
 
     const tooltip = showTooltip(warningTag);
-    expect(tooltip).toHaveTextContent("Warning · Client disconnected");
+    expect(tooltip).toHaveTextContent("Warning · Disconnected");
     expect(tooltip).toHaveTextContent(disconnectWarning.primary!.message);
 
     fireEvent.pointerLeave(warningTag);
@@ -192,7 +291,7 @@ describe("RequestStatus", () => {
     render(
       <RecordHeadlineStatus response={null} state="completed" assessment={disconnectWarning} />,
     );
-    const trigger = screen.getByRole("button", { name: /Warning: Client disconnected/ });
+    const trigger = screen.getByRole("button", { name: /Warning: Disconnected/ });
 
     fireEvent.focus(trigger);
     expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);
@@ -207,8 +306,8 @@ describe("RequestStatus", () => {
   });
 
   it("opens compact diagnostics on touch-style click and closes outside", () => {
-    render(<RequestStatus status={200} state="completed" assessment={disconnectWarning} />);
-    const trigger = screen.getByRole("img", { name: /Client disconnected/ });
+    render(<RequestStatus status={null} state="completed" assessment={disconnectWarning} />);
+    const trigger = screen.getByRole("img", { name: /Disconnected/ });
 
     fireEvent.click(trigger);
     expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);

@@ -11,6 +11,7 @@ import {
   completedSummary,
   withIncompleteRequestBody,
   withRequestEncoding,
+  withResponseEncoding,
 } from "@/features/requests/testFixtures";
 import {
   advanceTimers,
@@ -57,6 +58,29 @@ describe("Requests page body inspection", () => {
     await user.click(await screen.findByRole("button", { name: /message/ }));
     expect(screen.getByText("response body")).toBeInTheDocument();
     expect(loadEventTimings).toHaveBeenCalledWith(completedSummary.id, 0, expect.any(AbortSignal));
+  });
+
+  it("does not load Event timings for a compressed SSE response", async () => {
+    const decoded = new TextEncoder().encode('data: {"type":"message_stop"}\n\n');
+    const encoded = new Uint8Array([0x8b, 0x03]);
+    const detail = {
+      ...withResponseEncoding(completedDetail, "br"),
+      response_body_bytes: encoded.length,
+    };
+    const loadEventTimings = vi.fn<RequestsApi["loadEventTimings"]>();
+    const user = userEvent.setup();
+    renderApp({
+      getRequest: vi.fn().mockResolvedValue(detail),
+      loadBody: vi.fn().mockResolvedValue({ bytes: encoded, nextOffset: encoded.length }),
+      loadDecodedBody: vi.fn().mockResolvedValue(decoded),
+      loadEventTimings,
+    });
+
+    await openCompletedRequest(user);
+    await user.click(screen.getByRole("tab", { name: "Response" }));
+    await screen.findByRole("button", { name: /message_stop/ });
+    expect(loadEventTimings).not.toHaveBeenCalled();
+    expect(screen.queryByText("SSE Event timing index is unavailable")).not.toBeInTheDocument();
   });
 
   it("keeps the detail view and retries a body read failure from its current offset", async () => {

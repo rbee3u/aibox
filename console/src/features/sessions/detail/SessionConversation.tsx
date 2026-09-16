@@ -1,20 +1,38 @@
-import { AlertTriangle, ArrowDown } from "lucide-react";
+import { AlertTriangle, ArrowDown, Ban, type LucideIcon } from "lucide-react";
 import type { RefObject, UIEvent } from "react";
-import type { ConversationMessage, SessionApi } from "@/api/sessions";
+import type { ConversationMessage, ConversationNotice, SessionApi } from "@/api/sessions";
 import { SessionActivityGroup } from "@/features/sessions/detail/SessionActivityGroup";
 import { SessionConversationNav } from "@/features/sessions/detail/SessionConversationNav";
 import { SessionMessageContent } from "@/features/sessions/detail/SessionMessageContent";
-import { sessionItemKey, type SessionTimelineItem } from "@/features/sessions/detail/sessionDetail";
+import {
+  conversationReadingTimeline,
+  sessionItemKey,
+  type SessionTimelineItem,
+} from "@/features/sessions/detail/sessionDetail";
 import { compactMessageTimestamp, messageAnchorId } from "@/features/sessions/detail/sessionFormat";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
-import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { resourceIcons, toneIcons } from "@/shared/icons/consoleIcons";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
+
+/**
+ * A notice is a line the CLI wrote in a speaker's slot. It keeps its verbatim
+ * text but drops the author, so a failed request never reads as the Agent's
+ * last sentence and an interruption never reads as something the user typed.
+ */
+const conversationNotices: Record<
+  ConversationNotice,
+  { icon: LucideIcon; label: string; className: "sessionNoticeError" | "sessionNoticeMuted" }
+> = {
+  api_error: { icon: toneIcons.error, label: "Request failed", className: "sessionNoticeError" },
+  interrupted: { icon: Ban, label: "Turn interrupted", className: "sessionNoticeMuted" },
+};
 
 interface SessionConversationProps {
   api: SessionApi;
@@ -24,10 +42,9 @@ interface SessionConversationProps {
   /** Anchor the navigator marks as current. */
   activeUserMessage: string | null;
   loading: boolean;
-  warnings: string[];
+  /** Why the reading below may be incomplete; `null` when it is not. */
+  attentionNotice: string | null;
   snapshot?: string;
-  /** Changes whenever the Session reloads, collapsing activity disclosures. */
-  revision: number;
   showJumpLatest: boolean;
   scrollRef: RefObject<HTMLDivElement | null>;
   registerMessage: (entryId: string, element: HTMLElement | null) => void;
@@ -35,6 +52,8 @@ interface SessionConversationProps {
   onSelectMessage: (entryId: string) => void;
   onJumpLatest: () => void;
   onViewDiagnostics: () => void;
+  /** The Transcript grew under an evidence read; re-read it in place. */
+  onTranscriptStale: () => Promise<string | null>;
 }
 
 /** The Conversation tab: a centered reading stream with its message navigator. */
@@ -45,9 +64,8 @@ export function SessionConversation({
   userMessages,
   activeUserMessage,
   loading,
-  warnings,
+  attentionNotice,
   snapshot,
-  revision,
   showJumpLatest,
   scrollRef,
   registerMessage,
@@ -55,7 +73,9 @@ export function SessionConversation({
   onSelectMessage,
   onJumpLatest,
   onViewDiagnostics,
+  onTranscriptStale,
 }: SessionConversationProps) {
+  const readingTimeline = conversationReadingTimeline(timeline);
   return (
     <div className={styles.sessionConversationLayout}>
       <SessionConversationNav
@@ -71,19 +91,40 @@ export function SessionConversation({
           onSelect={onSelectMessage}
         />
         <div ref={scrollRef} className={styles.sessionConversationScroll} onScroll={onScroll}>
-          <div key={revision} className={styles.sessionConversationContent}>
-            {warnings.length > 0 && (
+          <div className={styles.sessionConversationContent}>
+            {attentionNotice !== null && (
               <button
                 type="button"
                 className={styles.sessionConversationWarning}
                 onClick={onViewDiagnostics}
               >
-                <AlertTriangle size={14} aria-hidden="true" />
-                <span>Some transcript events could not be interpreted.</span>
+                <AlertTriangle size={iconSize.xs} aria-hidden="true" />
+                <span>{attentionNotice}</span>
                 <span>View Details</span>
               </button>
             )}
-            {timeline.map((item) => {
+            {readingTimeline.map((item) => {
+              if (item.kind === "message" && item.value.notice) {
+                const notice = conversationNotices[item.value.notice];
+                const NoticeIcon = notice.icon;
+                return (
+                  <div
+                    key={sessionItemKey(item)}
+                    className={`${styles.sessionNotice} ${styles[notice.className]}`}
+                    role="note"
+                    aria-label={notice.label}
+                  >
+                    <NoticeIcon size={iconSize.xs} aria-hidden="true" />
+                    <span>{item.value.text}</span>
+                    <time
+                      dateTime={item.value.timestamp}
+                      title={formatTimestamp(item.value.timestamp)}
+                    >
+                      {compactMessageTimestamp(item.value.timestamp, session.start_ts)}
+                    </time>
+                  </div>
+                );
+              }
               if (item.kind === "message") {
                 const label = item.value.role === "user" ? "You" : session.source.agentLabel;
                 const timestamp = compactMessageTimestamp(item.value.timestamp, session.start_ts);
@@ -116,26 +157,26 @@ export function SessionConversation({
                   key={sessionItemKey(item)}
                   api={api}
                   entries={item.value}
-                  reloadRevision={revision}
                   session={session}
                   snapshot={snapshot}
+                  onTranscriptStale={onTranscriptStale}
                 />
               );
             })}
             {loading && <Loading />}
-            {!loading && timeline.length === 0 && (
+            {!loading && readingTimeline.length === 0 && (
               <EmptyState
                 className={styles.promptEmptyState}
                 variant="detail"
-                icon={<SessionIcon size={26} aria-hidden="true" />}
+                icon={<SessionIcon size={iconSize.xl} aria-hidden="true" />}
                 title="No readable conversation"
-                description="This Transcript contains no supported user or Coding Agent messages. Transcript events remain available below when present."
+                description="This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details."
               />
             )}
           </div>
           {showJumpLatest && (
             <IconButton className={styles.jumpLatest} label="Jump to latest" onClick={onJumpLatest}>
-              <ArrowDown size={16} aria-hidden="true" />
+              <ArrowDown size={iconSize.sm} aria-hidden="true" />
             </IconButton>
           )}
         </div>

@@ -1,12 +1,13 @@
 import type { RequestAssessment, RequestState, ResponseMetadata } from "@/api/requests";
 import styles from "@/features/requests/RequestStatus.module.css";
-import { IssueIndicator, IssueTooltip } from "@/shared/ui/IssueIndicator";
+import { IssueTooltip } from "@/shared/ui/IssueIndicator";
 import { StatusBadge, type StatusTone } from "@/shared/ui/StatusBadge";
+import { iconSize } from "@/shared/icons/iconSizes";
+import { toneIcons } from "@/shared/icons/consoleIcons";
 import {
   assessmentIssueText,
   requestHeadlinePresentation,
   requestStatusPresentation,
-  type AssessmentPresentation,
   type RequestStatusTone,
 } from "@/features/requests/statusPresentation";
 
@@ -32,34 +33,56 @@ const STATUS_BADGE_TONE: Record<RequestStatusTone, StatusTone> = {
   warning: "warning",
 };
 
+/**
+ * Catalog status cell. An HTTP code wears the dot and, when the Assessment
+ * adds a finding the code does not state, a level glyph after it; a finding on
+ * a Request that never got a status wears its level glyph in the dot's place.
+ * Whichever it is, the whole cell explains the finding on hover.
+ */
 export function RequestStatus({ status, state, assessment }: RequestStatusProps) {
   const presentation = requestStatusPresentation({ status, state, assessment });
+  const namedFinding = presentation.issue !== null && presentation.marker === null;
+  const LeadIcon = namedFinding ? toneIcons[presentation.issue!.tone] : null;
+  const MarkerIcon = presentation.marker ? toneIcons[presentation.marker] : null;
 
-  return (
+  const cell = (
     <span className={styles.root}>
-      <StatusBadge tone={STATUS_BADGE_TONE[presentation.tone]} variant="inline">
-        {presentation.label}
+      <StatusBadge
+        tone={STATUS_BADGE_TONE[presentation.tone]}
+        variant="inline"
+        dot={LeadIcon === null}
+        wrapLabel={false}
+      >
+        {LeadIcon && <LeadIcon className={styles.glyph} size={iconSize.xs} aria-hidden="true" />}
+        <span className={styles.label}>{presentation.label}</span>
+        {MarkerIcon && (
+          <MarkerIcon
+            className={`${styles.glyph} ${styles[presentation.marker!]}`}
+            size={iconSize.xs}
+            aria-hidden="true"
+          />
+        )}
       </StatusBadge>
       {presentation.phase && (
         <StatusBadge tone="active" variant="inline">
           {presentation.phase}
         </StatusBadge>
       )}
-      {presentation.issue && <CompactIssue issue={presentation.issue} />}
     </span>
   );
-}
 
-function CompactIssue({ issue }: { issue: AssessmentPresentation }) {
+  if (!presentation.issue) return cell;
   return (
-    <span className={styles.compactIssue}>
-      <IssueIndicator
-        tone={issue.tone}
-        label={issue.label}
-        message={issue.message}
-        ariaLabel={assessmentIssueText(issue)}
-      />
-    </span>
+    <IssueTooltip
+      tone={presentation.issue.tone}
+      label={presentation.issue.label}
+      message={presentation.issue.message}
+      className={styles.cell}
+      ariaLabel={assessmentIssueText(presentation.issue)}
+      interactive={false}
+    >
+      {cell}
+    </IssueTooltip>
   );
 }
 
@@ -97,6 +120,7 @@ export function RecordHeadlineStatus({ response, state, assessment }: RecordHead
             presentation.tag.tone === "warning" ? styles.warningTag : styles.errorTag
           }`}
         >
+          <span className={styles.dot} aria-hidden="true" />
           <span className={styles.tagLabel}>{presentation.tag.label}</span>
           {presentation.tag.additionalIssues > 0 && (
             <span className={styles.issueCount}>+{presentation.tag.additionalIssues}</span>

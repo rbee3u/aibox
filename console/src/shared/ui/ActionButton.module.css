@@ -14,6 +14,11 @@
   font-weight: var(--weight-regular);
   box-shadow: none;
   white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .dangerPrimary {
@@ -27,6 +32,19 @@
   border-color: var(--action-danger-strong);
   color: var(--action-danger-strong);
   background: var(--danger-soft);
+}
+
+.primary {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-surface);
+  font-weight: var(--weight-medium);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--action-primary-ink);
+  background: var(--action-primary-hover-surface);
 }
 
 .primarySoft {
@@ -90,40 +108,65 @@
   background: var(--danger-soft);
 }
 
+/*
+ * Every variant answers a press the same way. The pressed ink goes on as a
+ * layer rather than a fill because a Primary and a Danger button already own
+ * their background, and a single flat token cannot darken all seven of them.
+ */
 .button:active:not(:disabled) {
   transform: translateY(1px);
+  background-image: linear-gradient(var(--surface-pressed), var(--surface-pressed));
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .button:disabled {
   opacity: 1;
 }
 
-.primarySoft:disabled {
+/*
+ * `aria-disabled` is the disabled look without the focus loss: a control that
+ * is busy with the press it just took keeps focus, but answers nothing else.
+ * Pointer events are off so hover and press never reach it; the keyboard
+ * still can, and the component ignores the click.
+ */
+.button[aria-disabled="true"] {
+  pointer-events: none;
+  cursor: default;
+}
+
+.primary:disabled,
+.primary[aria-disabled="true"],
+.primarySoft:disabled,
+.primarySoft[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);
   background: var(--control-disabled-surface);
 }
 
-.dangerPrimary:disabled {
+.dangerPrimary:disabled,
+.dangerPrimary[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-danger-ink);
   background: var(--control-disabled-danger-surface);
 }
 
-.secondary:disabled {
+.secondary:disabled,
+.secondary[aria-disabled="true"] {
   border-color: var(--control-disabled-line);
   color: var(--control-disabled-ink);
   background: var(--control-disabled-surface);
 }
 
 .ghost:disabled,
+.ghost[aria-disabled="true"],
 .dangerQuiet:disabled,
-.danger:disabled {
+.dangerQuiet[aria-disabled="true"],
+.danger:disabled,
+.danger[aria-disabled="true"] {
   border-color: transparent;
   color: var(--control-disabled-ink);
   background: transparent;
@@ -133,11 +176,5 @@
   .button {
     min-width: 44px;
     min-height: 44px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .button {
-    transition-duration: 0.01ms;
   }
 }

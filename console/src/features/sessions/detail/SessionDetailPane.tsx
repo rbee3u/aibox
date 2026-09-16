@@ -3,15 +3,17 @@ import { AlertTriangle, ChevronLeft } from "lucide-react";
 import type { SessionApi } from "@/api/sessions";
 import { SessionConversation } from "@/features/sessions/detail/SessionConversation";
 import { SessionDetails } from "@/features/sessions/detail/SessionDetails";
-import { messageCountLabel, toolCountLabel } from "@/features/sessions/detail/sessionFormat";
+import { messageCountLabel, toolCountLabel } from "@/features/sessions/sessionCatalog";
+import { sessionListCopy } from "@/features/sessions/sessionListCopy";
 import { visibleSessionListSource } from "@/features/sessions/sessionSource";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
-import { compactDuration, formatTimestamp } from "@/shared/lib/format";
+import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
 
@@ -30,13 +32,13 @@ export function SessionDetailPane({
     currentSession,
     detailHeadingRef,
     detailMeta,
-    detailRevision,
     detailStats,
     jumpToLatest,
     jumpToUserMessage,
     loadingDetail,
     onConversationScroll,
     openSession,
+    refreshTranscript,
     registerUserMessage,
     resolvedActiveUserMessage,
     sessionTab,
@@ -44,57 +46,53 @@ export function SessionDetailPane({
     showJumpLatest,
     timeline,
     transcriptHasDiagnostics,
+    transcriptAttentionNotice,
     transcriptIsPartial,
     updateSessionTab,
     userMessages,
   } = detail;
+  const headline = currentSession
+    ? sessionListCopy(currentSession.title, currentSession.latest_message).headline
+    : "";
   return (
     <section className={styles.detailPane}>
       {currentSession ? (
         <>
           <header className={`${styles.detailHeader} ${styles.sessionDetailHeader}`}>
             <IconButton label="Back to Sessions" onClick={closeSessionInspection}>
-              <ChevronLeft size={17} />
+              <ChevronLeft size={iconSize.md} />
             </IconButton>
             <div className={styles.sessionDetailHeading}>
-              <h2 ref={detailHeadingRef} tabIndex={-1}>
-                {currentSession.title || "Untitled Session"}
+              <h2 ref={detailHeadingRef} tabIndex={-1} title={headline}>
+                {headline}
               </h2>
               <span className={styles.sessionDetailSource}>
                 {visibleSessionListSource(currentSession.source)} ·{" "}
                 <time dateTime={currentSession.start_ts}>
                   {formatTimestamp(currentSession.start_ts)}
                 </time>{" "}
-                · {compactDuration(detailStats?.observed_duration_ms)} ·{" "}
+                ·{" "}
                 {messageCountLabel(detailStats?.message_count ?? currentSession.message_count ?? 0)}{" "}
                 · {toolCountLabel(detailStats?.tool_count ?? currentSession.tool_count ?? 0)}
               </span>
             </div>
             <div className={styles.sessionDetailActions}>
               {loadingDetail && (
-                <span className={styles.sessionDetailStatus} role="status">
+                <span className="srOnly" role="status">
                   Reading Transcript…
-                </span>
-              )}
-              {!loadingDetail && !detailStats && (
-                <span className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}>
-                  Partial transcript
-                </span>
-              )}
-              {!loadingDetail && detailStats && sessionWarnings.length > 0 && (
-                <span className={`${styles.sessionDetailStatus} ${styles.sessionStatusWarning}`}>
-                  <AlertTriangle size={13} aria-hidden="true" /> Transcript warning
                 </span>
               )}
               <RefreshButton
                 label="Refresh Session detail"
                 busyLabel="Refreshing Session detail"
                 busy={loadingDetail}
-                iconOnly
+                compactOnNarrow
                 iconSize={15}
                 disabled={mutations.deletionBusy}
                 onClick={() => void openSession(currentSession, false, true)}
-              />
+              >
+                Refresh
+              </RefreshButton>
             </div>
           </header>
           <nav className={styles.sessionTabs} aria-label="Session views">
@@ -113,13 +111,13 @@ export function SessionDetailPane({
               onClick={() => updateSessionTab("details")}
             >
               Details
-              {transcriptHasDiagnostics && (
+              {transcriptAttentionNotice !== null && (
                 <span
                   className={styles.sessionTabIssue}
                   aria-label="Transcript diagnostics"
                   title="Transcript diagnostics"
                 >
-                  <AlertTriangle size={11} aria-hidden="true" />
+                  <AlertTriangle size={iconSize.xs} aria-hidden="true" />
                 </span>
               )}
             </button>
@@ -142,9 +140,8 @@ export function SessionDetailPane({
               userMessages={userMessages}
               activeUserMessage={resolvedActiveUserMessage}
               loading={loadingDetail}
-              warnings={sessionWarnings}
+              attentionNotice={transcriptAttentionNotice}
               snapshot={detailStats?.snapshot}
-              revision={detailRevision}
               showJumpLatest={showJumpLatest}
               scrollRef={conversationScrollRef}
               registerMessage={registerUserMessage}
@@ -152,13 +149,14 @@ export function SessionDetailPane({
               onSelectMessage={jumpToUserMessage}
               onJumpLatest={jumpToLatest}
               onViewDiagnostics={() => updateSessionTab("details")}
+              onTranscriptStale={refreshTranscript}
             />
           )}
         </>
       ) : (
         <EmptyState
           variant="detail"
-          icon={<SessionIcon size={26} data-icon="session-empty" aria-hidden="true" />}
+          icon={<SessionIcon size={iconSize.xl} data-icon="session-empty" aria-hidden="true" />}
           title="Select a Session"
           description="Choose a Session to inspect its conversation and Transcript."
         />

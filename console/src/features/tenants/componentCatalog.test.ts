@@ -6,7 +6,10 @@ import {
   componentProgressLabel,
   componentRowModel,
   hasComponentAttention,
+  hasComponentUpdate,
   latestInfoFor,
+  parseComponentKind,
+  updateOverwritesLocalEdits,
 } from "@/features/tenants/componentCatalog";
 
 function row(overrides: Partial<ComponentRow> = {}): ComponentRow {
@@ -117,11 +120,31 @@ describe("component row model", () => {
     expect(model.diagnostic).toBe("permission denied");
   });
 
-  it("restores a modified versioned Component but updates an unversioned one", () => {
-    expect(componentRowModel(row({ status: "modified" }), null).primaryAction).toBe("Restore");
-    expect(
-      componentRowModel(row({ status: "modified", supports_version: false }), null).primaryAction,
-    ).toBe("Update");
+  /*
+   * Only statuslines report `modified`, and the Console cannot tell a hand
+   * edit from a definition that changed upstream, so the row says neither:
+   * it says the two differ, and that Update rewrites it.
+   */
+  it("says a differing statusline differs and that Update overwrites it", () => {
+    const model = componentRowModel(row({ status: "modified", supports_version: false }), null);
+    expect(model.primaryAction).toBe("Update");
+    expect(model.presentation.stateBadge).toBe("Differs");
+    expect(model.diagnostic).toContain("Edited here, or changed in a newer AIBox");
+    expect(model.diagnostic).toContain("Update rewrites the statusline");
+    expect(updateOverwritesLocalEdits(row({ status: "modified", supports_version: false }))).toBe(
+      true,
+    );
+    expect(updateOverwritesLocalEdits(row({ status: "installed" }))).toBe(false);
+    expect(updateOverwritesLocalEdits(row({ status: "incomplete" }))).toBe(false);
+  });
+});
+
+describe("parseComponentKind", () => {
+  it("accepts known kinds and ignores everything else", () => {
+    expect(parseComponentKind("claude-statusline")).toBe("claude-statusline");
+    expect(parseComponentKind("rust")).toBe("rust");
+    expect(parseComponentKind("nope")).toBeNull();
+    expect(parseComponentKind(null)).toBeNull();
   });
 });
 
@@ -134,13 +157,33 @@ describe("component row labels", () => {
   it("describes the running Operation", () => {
     expect(componentProgressLabel(row({ status: "not-installed" }), true)).toBe("Installing…");
     expect(componentProgressLabel(row({ status: "incomplete" }), true)).toBe("Repairing…");
-    expect(componentProgressLabel(row({ status: "modified" }), true)).toBe("Restoring…");
+    expect(componentProgressLabel(row({ status: "modified" }), true)).toBe("Updating…");
     expect(componentProgressLabel(row(), false)).toBe("Removing…");
   });
 
-  it("flags rows that need attention", () => {
-    expect(hasComponentAttention(row({ status: "incomplete" }), null)).toBe(true);
-    expect(hasComponentAttention(row(), snapshot("24.2.0"))).toBe(true);
-    expect(hasComponentAttention(row(), snapshot("24.1.0"))).toBe(false);
+  /*
+   * The two used to be one predicate, so a Tenant whose Components were all
+   * healthy but had newer releases upstream reported them as issues — in the
+   * warning colour, and disagreeing with Overview for the same Tenant.
+   */
+  it("flags rows that need attention, which an available update is not", () => {
+    expect(hasComponentAttention(row({ status: "incomplete" }))).toBe(true);
+    expect(hasComponentAttention(row({ status: "modified" }))).toBe(true);
+    expect(hasComponentAttention(row({ status: "unmanaged" }))).toBe(true);
+    expect(hasComponentAttention(row({ error: "boom" }))).toBe(true);
+    expect(hasComponentAttention(row())).toBe(false);
+  });
+
+  it("reports an available update separately, and never for a row already in trouble", () => {
+    expect(hasComponentUpdate(row(), snapshot("24.2.0"))).toBe(true);
+    expect(hasComponentUpdate(row(), snapshot("24.1.0"))).toBe(false);
+    expect(hasComponentUpdate(row(), null)).toBe(false);
+    /*
+     * An installed row whose inspection failed is already an issue, and a newer
+     * release is still observable for it — without the guard the same Component
+     * would be counted in both numbers at once.
+     */
+    expect(hasComponentAttention(row({ error: "boom" }))).toBe(true);
+    expect(hasComponentUpdate(row({ error: "boom" }), snapshot("24.2.0"))).toBe(false);
   });
 });

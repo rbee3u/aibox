@@ -12,6 +12,7 @@ import {
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { capitalize } from "@/shared/lib/format";
 import styles from "@/features/requests/detail/JsonTree.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface JsonTreeProps {
   value: JsonValue;
@@ -83,12 +84,12 @@ export function JsonTree({
         break;
       }
       case "ArrowLeft":
-        if (current.container && current.open && path !== pathPrefix) onToggle(path);
+        if (current.container && current.open) onToggle(path);
         else destination = current.parentPath;
         break;
       case "Enter":
       case " ":
-        if (current.container && path !== pathPrefix) onToggle(path);
+        if (current.container) onToggle(path);
         break;
       default:
         return;
@@ -146,7 +147,7 @@ function JsonNode(props: JsonNodeProps) {
   const { value, path, depth, name, expanded, expandedStrings, copiedPath } = props;
   const container = isJsonContainer(value);
   const entries = container ? jsonEntries(value) : [];
-  const open = depth === 0 || expanded.has(path);
+  const open = depth === 0 ? !expanded.has(path) : expanded.has(path);
   const stringPreview = typeof value === "string" ? jsonStringPreview(value) : null;
   const stringOpen = expandedStrings.has(path);
 
@@ -166,16 +167,15 @@ function JsonNode(props: JsonNodeProps) {
           <button
             type="button"
             className={styles.jsonToggle}
-            onClick={() => depth > 0 && props.onToggle(path)}
-            disabled={depth === 0}
+            onClick={() => props.onToggle(path)}
             tabIndex={-1}
             aria-label={`${open ? "Collapse" : "Expand"} ${name ?? "JSON root"}`}
             aria-expanded={open}
           >
             {open ? (
-              <ChevronDown size={14} aria-hidden="true" />
+              <ChevronDown size={iconSize.xs} aria-hidden="true" />
             ) : (
-              <ChevronRight size={14} aria-hidden="true" />
+              <ChevronRight size={iconSize.xs} aria-hidden="true" />
             )}
           </button>
         ) : (
@@ -209,9 +209,9 @@ function JsonNode(props: JsonNodeProps) {
           title={copiedPath === path ? "JSON value copied" : "Copy JSON value"}
         >
           {copiedPath === path ? (
-            <Check size={13} aria-hidden="true" />
+            <Check size={iconSize.xs} aria-hidden="true" />
           ) : (
-            <Clipboard size={13} aria-hidden="true" />
+            <Clipboard size={iconSize.xs} aria-hidden="true" />
           )}
         </button>
       </div>
@@ -248,7 +248,7 @@ function collectVisibleNodes(
   depth = 0,
 ): VisibleJsonNode[] {
   const container = isJsonContainer(value);
-  const open = container && (depth === 0 || expanded.has(path));
+  const open = container && (depth === 0 ? !expanded.has(path) : expanded.has(path));
   const nodes: VisibleJsonNode[] = [{ path, parentPath, container, open }];
   if (!open) return nodes;
   for (const [key, child] of jsonEntries(value)) {

@@ -2,10 +2,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::AgentKind;
+    use crate::agent::{AgentKind, MainConfigCondition};
     use crate::component::{ComponentKind, LatestEntry, LatestEntryState, LatestSnapshot};
     use crate::config::{
-        ApplicationStatus, ConfigCatalogEntry, ConfigCatalogState, ConfigDrift, LastApplication,
+        ApplicationStatus, ConfigCatalogEntry, ConfigCatalogState, ConfigComparison,
+        ConfigComparisonFile, ConfigComparisonSide, ConfigDifference, ConfigDrift, LastApplication,
     };
     use crate::config::{
         AuthPropagationPreview, AuthPropagationReport, PropagationEntry, PropagationOutcome,
@@ -28,11 +29,11 @@ mod tests {
         InstalledComponentResponse, RemovedComponentResponse,
     };
     use crate::service::control::configs::{
-        AuthPropagationPreviewResponse, ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest,
-        ConfigFileResponse, ConfigListResponse, ConfigMutationBase, CreatedConfigResponse,
-        DeleteConfigsRequest, DeletedConfigsResponse, DiagnoseConfigRequest,
-        DiagnoseConfigResponse, ExecuteAuthPropagationRequest, LinkedConfigFileResponse,
-        SaveConfigFileRequest,
+        AuthPropagationPreviewResponse, CompareConfigDraft, CompareConfigsRequest,
+        ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest, ConfigFileResponse,
+        ConfigListResponse, ConfigMutationBase, CreatedConfigResponse, DeleteConfigsRequest,
+        DeletedConfigsResponse, DiagnoseConfigRequest, DiagnoseConfigResponse,
+        ExecuteAuthPropagationRequest, LinkedConfigFileResponse, SaveConfigFileRequest,
     };
     use crate::service::control::operations::{
         BuildRequest, CancelledOperationResponse, OperationEnvelope, OperationQuery,
@@ -40,7 +41,8 @@ mod tests {
     use crate::service::control::overview::{
         BootstrapResponse, DockerOverview, DockerStatus, OverviewResponse, RuntimeImageOverview,
         RuntimeImageStatus, ServiceOverview, TopologyAgent, TopologyComponents,
-        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologyTenant,
+        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologySessions,
+        TopologyTenant,
     };
     use crate::service::control::requests::{
         BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
@@ -59,9 +61,10 @@ mod tests {
     use crate::service::control::{AgentTenantQuery, ControlErrorResponse};
     use crate::service::operation::{OperationLog, OperationSnapshot, OperationState};
     use crate::session::{
-        ConversationMessage, ConversationRole, EvidenceEncoding, SessionDetailMeta,
-        SessionDetailStats, SessionDiscoverySummary, SessionListData, SessionListRow, ToolActivity,
-        ToolActivityStatus, TranscriptEvidence, TranscriptEvidenceSummary,
+        ConversationMessage, ConversationNotice, ConversationRole, EvidenceEncoding,
+        SessionDetailMeta, SessionDetailStats, SessionDiscoverySummary, SessionListData,
+        SessionListRow, ToolActivity, ToolActivityStatus, TranscriptEvidence,
+        TranscriptEvidenceSummary,
     };
     use serde::Serialize;
     use std::collections::VecDeque;
@@ -106,6 +109,12 @@ mod tests {
             LinkedConfigFileResponse,
             ConfigAuthResponse,
             SaveConfigFileRequest,
+            CompareConfigsRequest,
+            CompareConfigDraft,
+            ConfigComparison,
+            ConfigComparisonFile,
+            ConfigComparisonSide,
+            ConfigDifference,
             DiagnoseConfigRequest,
             ConfigDiagnostic,
             DiagnoseConfigResponse,
@@ -127,6 +136,7 @@ mod tests {
             TopologyAgent,
             TopologyCurrentConfig,
             TopologyNamedConfigs,
+            TopologySessions,
             TopologyComponents,
             SessionDetailQuery,
             SessionEvidenceQuery,
@@ -179,6 +189,7 @@ mod tests {
             VisualConfigOptionInput,
             CustomProviderInput,
             VisualAuthInput,
+            MainConfigCondition,
             VisualConfigOptionState,
             CustomProviderState,
             VisualConfigState,
@@ -202,6 +213,7 @@ mod tests {
             SessionListRow,
             SessionListData,
             ConversationMessage,
+            ConversationNotice,
             ConversationRole,
             ToolActivity,
             ToolActivityStatus,
@@ -350,6 +362,16 @@ mod tests {
                         role: ConversationRole::User,
                         timestamp: "2026-08-27T00:00:00Z".to_string(),
                         text: "hello".to_string(),
+                        notice: None,
+                    },
+                },
+                SessionDetailFrame::Message {
+                    message: ConversationMessage {
+                        entry_ids: vec!["entry-1b".to_string()],
+                        role: ConversationRole::Assistant,
+                        timestamp: "2026-08-27T00:00:01Z".to_string(),
+                        text: "API Error: Request rejected (429)".to_string(),
+                        notice: Some(ConversationNotice::ApiError),
                     },
                 },
                 SessionDetailFrame::ToolActivity {

@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
-import { ConfigPage, configApi } from "@/features/configs/testHarness";
+import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
+import actionStyles from "@/shared/ui/ActionButton.module.css";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -32,12 +33,12 @@ describe("ConfigPage", () => {
     ]);
   });
   it.each([
-    ["clean", true, "Clean"],
-    ["dirty", false, "Dirty"],
-    ["comparison-error", false, "Comparison error"],
+    ["clean", false, "Applied", "inline"],
+    ["dirty", true, "Differs", "badge"],
+    ["comparison-error", true, "Comparison error", "badge"],
   ] as const)(
-    "keeps Apply visible and sets its disabled state for %s drift",
-    async (drift, disabled, label) => {
+    "marks the Last Application source and offers Apply only while drift leaves work for %s",
+    async (drift, applicable, label, variant) => {
       const catalog = {
         configs: [{ name: "custom", state: "ready" }],
         files: ["config.toml", "auth.json"],
@@ -56,19 +57,70 @@ describe("ConfigPage", () => {
         revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
       });
       render(<ConfigPage api={api} />);
-      const statusElement = (await screen.findByText(label)).closest("[data-status-variant]");
-      expect(statusElement).toHaveAttribute(
-        "data-status-variant",
-        drift === "clean" ? "inline" : "badge",
-      );
-      const apply = screen.getByRole("button", {
+      const row = await screen.findByRole("button", { name: "custom" });
+      const status = within(row).getByText(label).closest("[data-status-variant]");
+      expect(status).toHaveAttribute("data-status-variant", variant);
+      expect(status).toHaveAttribute("data-status-tone", drift === "clean" ? "good" : "warning");
+      expect(screen.queryByText("Clean")).not.toBeInTheDocument();
+      const rowApply = screen.queryByRole("button", {
         name: "Apply Named Config custom to Current Config",
       });
-      if (disabled) expect(apply).toBeDisabled();
-      else expect(apply).toBeEnabled();
-      expect(screen.queryByText("Applied")).not.toBeInTheDocument();
+      if (applicable) expect(rowApply).toBeEnabled();
+      else expect(rowApply).not.toBeInTheDocument();
     },
   );
+  it("gives the inspected Named Config one primary Apply and marks the applied one", async () => {
+    const catalog = {
+      configs: [
+        { name: "custom", state: "ready" },
+        { name: "other", state: "ready" },
+      ],
+      files: ["config.toml", "auth.json"],
+      application: {
+        last_application: { applied: "custom", applied_at: "2026-08-17T00:00:00Z" },
+        drift: "clean",
+      },
+      credential_propagation_available: false,
+    } satisfies ConfigListData;
+    const { api, applyConfig } = configApi({
+      listConfigs: () => Promise.resolve(catalog),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+      applyConfig: () => Promise.resolve(),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    // Current Config offers nothing to apply, and every row Apply stays quiet.
+    await screen.findByRole("heading", { name: "Current Config" });
+    expect(screen.queryByRole("button", { name: "Apply to Current Config" })).toBeNull();
+    const rowApply = screen.getByRole("button", {
+      name: "Apply Named Config other to Current Config",
+    });
+    expect(rowApply).toHaveClass(actionStyles.secondary);
+    expect(rowApply).not.toHaveClass(actionStyles.primarySoft);
+    // The applied, clean Named Config reads Applied in its header instead of a button.
+    await user.click(screen.getByRole("button", { name: "custom" }));
+    const header = await screen.findByRole("heading", { name: "Named Config custom" });
+    const headerArea = header.closest<HTMLElement>("[class*=configEditorHeader]")!;
+    expect(within(headerArea).getByText("Applied")).toBeInTheDocument();
+    expect(
+      within(headerArea).queryByRole("button", { name: "Apply to Current Config" }),
+    ).toBeNull();
+    // Another Named Config gets the pane's one primary action, wired to the same dialog.
+    await user.click(screen.getByRole("button", { name: "other" }));
+    await screen.findByRole("heading", { name: "Named Config other" });
+    const apply = screen.getByRole("button", { name: "Apply to Current Config" });
+    expect(apply).toHaveClass(actionStyles.primarySoft);
+    await user.click(apply);
+    const dialog = screen.getByRole("dialog", { name: "Apply other to Current Config?" });
+    await user.click(within(dialog).getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(applyConfig).toHaveBeenCalledWith(
+        { kind: "managed", name: "default" },
+        "codex",
+        "other",
+      ),
+    );
+  });
   it("summarizes Config Application and requires typed Host Tenant confirmation", async () => {
     const catalog = {
       configs: [{ name: "custom", state: "ready" }],
@@ -138,6 +190,7 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
+    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "old content",
     );
@@ -200,9 +253,17 @@ describe("ConfigPage", () => {
       screen.queryByRole("button", { name: "Select multiple tenants" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: "Host Tenant" }));
-    const propagate = await screen.findByRole("button", { name: "Propagate credentials" });
-    expect(propagate).toHaveTextContent(/^Propagate credentials$/);
-    expect(propagate.querySelector("svg")).not.toBeInTheDocument();
+    // Offered twice like Apply: the row keeps the verb, the header the full name.
+    const [rowAction, headerAction] = await screen.findAllByRole("button", {
+      name: "Propagate credentials",
+    });
+    expect(rowAction).toHaveTextContent(/^Propagate$/);
+    expect(headerAction).toHaveTextContent(/^Propagate credentials$/);
+    for (const action of [rowAction, headerAction]) {
+      expect(action.querySelector("svg")).toBeInTheDocument();
+      expect(action).toHaveClass(actionStyles.secondary);
+      expect(action).not.toHaveClass(actionStyles.ghost);
+    }
     await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
     expect(
       screen.queryByRole("button", { name: "Select multiple Coding Agents" }),
@@ -262,19 +323,58 @@ describe("ConfigPage", () => {
     render(<ConfigPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "Tenant: default" }));
     await user.click(screen.getByRole("option", { name: "Host Tenant" }));
-    await user.click(await screen.findByRole("button", { name: "Propagate credentials" }));
-    let dialog = screen.getByRole("dialog", { name: "Credential Propagation preview" });
-    expect(within(dialog).getByRole("heading", { name: "Updated 2" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "Needs attention 1" })).toBeInTheDocument();
-    await user.click(
-      within(dialog).getByRole("button", { name: "Propagate 2 credential updates" }),
+    const opener = screen.getAllByRole("button", { name: "Propagate credentials" })[0];
+    await user.click(opener);
+    let dialog = screen.getByRole("dialog", { name: "Propagate credentials?" });
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "2 targets will receive the source credentials.",
     );
+    expect(within(dialog).getByRole("heading", { name: "Will update 2" })).toBeInTheDocument();
+    // A target already fresher than the source is a skip by rule, not a task.
+    expect(within(dialog).getByRole("heading", { name: "Skipped 1" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: /Needs attention/ })).toBeNull();
+    expect(dialog).toHaveTextContent("Target newer");
+    expect(dialog).not.toHaveTextContent("2026-08-19T00:00:00Z");
+    await user.click(within(dialog).getByRole("button", { name: "Propagate to 2 targets" }));
     dialog = await screen.findByRole("dialog", { name: "Credential Propagation result" });
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Partially completed");
-    expect(within(dialog).getByRole("heading", { name: "Updated 1" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "Skipped 1" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "Needs attention 1" })).toBeInTheDocument();
+    const headings = within(dialog)
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual(["Failed 1", "Updated 1", "Skipped 1"]);
     expect(dialog).toHaveTextContent("target changed during propagation");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+  it("says so when no target needs the credentials", async () => {
+    const { api } = configApi({
+      listConfigs: () =>
+        Promise.resolve({
+          configs: [],
+          files: ["config.toml", "auth.json"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: true,
+        } satisfies ConfigListData),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+      previewCredentialPropagation: () =>
+        Promise.resolve({
+          plan_id: "plan-1",
+          preview: {
+            updates: 0,
+            entries: [{ label: "work · team", outcome: { status: "unchanged" } }],
+          },
+        }),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Tenant: default" }));
+    await user.click(screen.getByRole("option", { name: "Host Tenant" }));
+    await user.click(screen.getAllByRole("button", { name: "Propagate credentials" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "Propagate credentials?" });
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "No target needs these credentials. Nothing will be written.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Propagate to 0 targets" })).toBeDisabled();
   });
   it("creates a DNS-label Named Config and opens its detail", async () => {
     let configs: ConfigListData["configs"] = [];
@@ -294,7 +394,10 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await user.click(await screen.findByRole("button", { name: "Create Named Config" }));
+    const create = await screen.findByRole("button", { name: "Create Named Config" });
+    expect(create).toHaveClass(actionStyles.ghost);
+    expect(create).not.toHaveClass(actionStyles.primary);
+    await user.click(create);
     const dialog = screen.getByRole("dialog", { name: "Create Named Config" });
     const input = within(dialog).getByRole("textbox", { name: "Named Config name" });
     await user.type(input, "Bad Name");
@@ -314,6 +417,55 @@ describe("ConfigPage", () => {
       "true",
     );
     expect(screen.queryByRole("dialog", { name: "Create Named Config" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply Named Config new-config to Current Config" }),
+    ).toHaveClass(actionStyles.secondary);
+    expect(screen.getByRole("button", { name: "Apply to Current Config" })).toHaveClass(
+      actionStyles.primarySoft,
+    );
+  });
+  it("keeps Create disabled when the Named Config name already exists", async () => {
+    const { api, createConfig } = configApi({
+      listConfigs: () =>
+        Promise.resolve({
+          configs: [{ name: "custom", state: "ready" }],
+          files: ["config.toml", "auth.json"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: false,
+        } satisfies ConfigListData),
+      revealConfigFile: (target) => Promise.resolve(configFile(target.file, "")),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Create Named Config" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Named Config" });
+    const input = within(dialog).getByRole("textbox", { name: "Named Config name" });
+    await user.type(input, "custom");
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+    expect(dialog).toHaveTextContent("Named Config custom already exists.");
+    await user.keyboard("{Enter}");
+    expect(createConfig).not.toHaveBeenCalled();
+  });
+  it("moves focus onto the first Named Config on enter and back to Select on cancel", async () => {
+    const { api } = configApi({
+      listConfigs: () =>
+        Promise.resolve({
+          configs: [
+            { name: "first", state: "ready" },
+            { name: "second", state: "ready" },
+          ],
+          files: ["config.toml", "auth.json"],
+          application: { last_application: null, drift: "untracked" },
+          credential_propagation_available: false,
+        } satisfies ConfigListData),
+    });
+    const user = userEvent.setup();
+    render(<ConfigPage api={api} />);
+    await screen.findByRole("button", { name: "first" });
+    await user.click(screen.getByRole("button", { name: "Select Configs" }));
+    expect(screen.getByRole("button", { name: "Select first" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Select Configs" })).toHaveFocus();
   });
   it("reconciles surviving selections after a non-transactional batch deletion failure", async () => {
     let configs: ConfigListData["configs"] = [

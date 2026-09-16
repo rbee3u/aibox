@@ -50,6 +50,6 @@ describe("SegmentedControl", () => {
     expect(css).toMatch(
       /\.filled > button\[aria-pressed="true"\][\s\S]*?background:\s*var\(--surface-selected\)/,
     );
-    expect(css).toMatch(/\.filled > button\[aria-pressed="true"\][\s\S]*?color:\s*var\(--accent\)/);
+    expect(css).toMatch(/\.filled > button\[aria-pressed="true"\][\s\S]*?color:\s*var\(--ink\)/);
   });
 });

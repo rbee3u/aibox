@@ -1,7 +1,7 @@
 import type { Mock } from "vitest";
 import { composeControlApi, type ConnectedControlApi } from "@/api/connect";
 import type { Bootstrap } from "@/api/core";
-import { ControlApi } from "@/api/transport";
+import { ApiError, ControlApi } from "@/api/transport";
 
 export interface TestControlApi {
   bootstrap?: Partial<Bootstrap>;
@@ -21,6 +21,11 @@ export function materializeControlApi(testApi: TestControlApi): ControlApi {
 
 export function composeTestApi(testApi: TestControlApi): ConnectedControlApi {
   return composeControlApi(materializeControlApi(testApi));
+}
+
+/** A refused Control request as the transport raises it: message plus HTTP status. */
+export function controlRefusal(message: string, status: number): Error {
+  return new ApiError(message, status);
 }
 
 export { ControlApi };

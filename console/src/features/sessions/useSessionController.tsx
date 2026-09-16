@@ -13,7 +13,11 @@ import type { CodingAgentKind } from "@/domain/codingAgent";
 import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common/tenantOptions";
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
-import type { SessionTimelineItem } from "@/features/sessions/detail/sessionDetail";
+import {
+  isConversationNotice,
+  transcriptAttentionNotice,
+  type SessionTimelineItem,
+} from "@/features/sessions/detail/sessionDetail";
 import {
   SESSION_AGENT_OPTIONS,
   sessionSource,
@@ -34,6 +38,7 @@ import {
 } from "@/features/sessions/mutation/useSessionDeletion";
 import type { TenantSelectionValue } from "@/domain/tenant";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
+import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
 import { useAsyncResource } from "@/shared/hooks/useAsyncResource";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
@@ -86,12 +91,19 @@ export interface SessionViewModel {
       updateLocation?: boolean,
       preserveContent?: boolean,
     ) => Promise<void>;
+    /**
+     * Re-reads the inspected Session in place, as Refresh does, and resolves
+     * to the snapshot the new read reported — `null` if it did not complete.
+     */
+    refreshTranscript: () => Promise<string | null>;
     resolvedActiveUserMessage: string | null;
     sessionTab: SessionTab;
     sessionWarnings: string[];
     showJumpLatest: boolean;
     timeline: SessionTimelineItem[];
     transcriptHasDiagnostics: boolean;
+    /** Why Conversation reading is impaired; `null` when the Transcript reads cleanly. */
+    transcriptAttentionNotice: string | null;
     transcriptIsPartial: boolean;
     unsafeView: boolean;
     updateSessionTab: (next: SessionTab) => void;
@@ -199,7 +211,6 @@ export function useSessionController({
   });
   const refreshButton = useRef<HTMLButtonElement>(null);
   const selectButton = useRef<HTMLButtonElement>(null);
-  const focusSelectAfterExit = useRef(false);
   const sessionRows = useElementRegistry<HTMLButtonElement>();
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
@@ -284,7 +295,8 @@ export function useSessionController({
   });
   const openSession = useCallback(
     async (row: SourcedSession, updateLocation = true, preserveContent = false) => {
-      clearConversation();
+      // A refresh keeps the reading where it is; only a new Session starts over.
+      if (!preserveContent) clearConversation();
       setError(null);
       if (updateLocation) {
         const nextSelection = {
@@ -307,6 +319,12 @@ export function useSessionController({
       updateSessionLocation,
     ],
   );
+  const refreshTranscript = useCallback(async () => {
+    const inspected = inspectedSession();
+    if (!inspected) return null;
+    const stats = await inspect(inspected, true);
+    return stats?.snapshot ?? null;
+  }, [inspect, inspectedSession]);
   const sessionDeletion = useSessionDeletion({
     abortDetailStream,
     api,
@@ -368,14 +386,14 @@ export function useSessionController({
     selectedTenants,
     updateSessionLocation,
   ]);
-  useEffect(() => {
-    if (selectionMode || !focusSelectAfterExit.current) return;
-    focusSelectAfterExit.current = false;
-    const target = selectButton.current;
-    if (target && !target.disabled) target.focus();
-    else if (refreshButton.current && !refreshButton.current.disabled)
-      refreshButton.current.focus();
-  }, [selectionMode]);
+  const { enterSelection, cancelSelection } = useSelectionModeFocus({
+    selectionMode,
+    selectButton,
+    fallbackButton: refreshButton,
+    focusFirstSelectable: () => (data?.sessions ?? []).some((row) => sessionRows.focus(row.key)),
+    onEnter: () => dispatchWorkflow({ type: "selection_enter" }),
+    onExit: () => dispatchWorkflow({ type: "selection_cancel" }),
+  });
   function toggleSession(key: string) {
     dispatchWorkflow({ type: "selection_toggle", key });
   }
@@ -383,10 +401,6 @@ export function useSessionController({
     const keys = data?.sessions.map((row) => row.key) ?? [];
     const allSelected = keys.length > 0 && keys.every((key) => selectedKeys.has(key));
     dispatchWorkflow({ type: "selection_toggle_all", keys, clear: allSelected });
-  }
-  function cancelSelection() {
-    focusSelectAfterExit.current = true;
-    dispatchWorkflow({ type: "selection_cancel" });
   }
   function commitTenants(values: ReadonlySet<TenantSelectionValue>) {
     const next = new Set(values);
@@ -421,10 +435,17 @@ export function useSessionController({
     (detailStats?.malformed_count ?? 0) > 0 ||
     (detailStats?.unsupported_count ?? 0) > 0 ||
     (detailStats?.hidden_internal_count ?? 0) > 0;
+  const attentionNotice = transcriptAttentionNotice({
+    partial: transcriptIsPartial,
+    malformedCount: detailStats?.malformed_count ?? 0,
+    listWarnings: sessionWarnings,
+  });
   const userMessages = useMemo(
     () =>
       timeline.flatMap((item) =>
-        item.kind === "message" && item.value.role === "user" ? [item.value] : [],
+        item.kind === "message" && item.value.role === "user" && !isConversationNotice(item.value)
+          ? [item.value]
+          : [],
       ),
     [timeline],
   );
@@ -474,6 +495,7 @@ export function useSessionController({
       loadingDetail,
       onConversationScroll,
       openSession,
+      refreshTranscript,
       registerUserMessage,
       resolvedActiveUserMessage,
       sessionTab,
@@ -481,6 +503,7 @@ export function useSessionController({
       showJumpLatest,
       timeline,
       transcriptHasDiagnostics,
+      transcriptAttentionNotice: attentionNotice,
       transcriptIsPartial,
       unsafeView,
       updateSessionTab,
@@ -492,7 +515,7 @@ export function useSessionController({
       selectedKeys,
       selectionMode,
       registerSessionRow: sessionRows.register,
-      enterSelection: () => dispatchWorkflow({ type: "selection_enter" }),
+      enterSelection,
       toggleAllSessions,
       toggleSession,
     },

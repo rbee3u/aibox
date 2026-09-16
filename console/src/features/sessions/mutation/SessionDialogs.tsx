@@ -1,4 +1,5 @@
 import type { Operation } from "@/api/operations";
+import { sessionDeletionFacts } from "@/features/sessions/sessionDeletion";
 import { visibleSessionSource } from "@/features/sessions/sessionSource";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
@@ -29,6 +30,7 @@ export function SessionDialogs({
       {singleDeleteTarget && (
         <ConfirmDialog
           title={`Delete Session ${singleDeleteTarget.display_id}?`}
+          facts={sessionDeletionFacts(singleDeleteTarget)}
           message={`Permanently deletes its Transcript from ${visibleSessionSource(singleDeleteTarget.source)}.`}
           confirmLabel="Delete"
           busy={deletion?.kind === "record" || operation?.state === "running"}

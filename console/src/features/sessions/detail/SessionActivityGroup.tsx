@@ -1,88 +1,110 @@
 import { AlertTriangle, Wrench } from "lucide-react";
-import { useEffect, useRef } from "react";
 import type { SessionApi } from "@/api/sessions";
 import { SessionEvidenceDisclosure } from "@/features/sessions/detail/SessionEvidenceDisclosure";
 import {
   activitySummary,
+  isRoutineEvidence,
   type SessionActivityItem,
 } from "@/features/sessions/detail/sessionDetail";
-import { compactMessageTimestamp } from "@/features/sessions/detail/sessionFormat";
+import {
+  compactMessageTimestamp,
+  toolActivityHeadline,
+} from "@/features/sessions/detail/sessionFormat";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import styles from "@/features/sessions/SessionPage.module.css";
+import { iconSize } from "@/shared/icons/iconSizes";
 
 interface SessionActivityGroupProps {
   api: SessionApi;
   entries: SessionActivityItem[];
-  /** Reloading the Session collapses every activity disclosure again. */
-  reloadRevision: number;
   session: SourcedSession;
   snapshot?: string;
+  onTranscriptStale: () => Promise<string | null>;
 }
 
+/**
+ * One run of Tool Activity and Transcript Evidence between messages. The
+ * disclosure is uncontrolled: a group the reader opened stays open while the
+ * Session refreshes around it, and a call keyed by its own entry keeps its
+ * row when the result lands.
+ */
 export function SessionActivityGroup({
   api,
   entries,
-  reloadRevision,
   session,
   snapshot,
+  onTranscriptStale,
 }: SessionActivityGroupProps) {
-  const disclosureRef = useRef<HTMLDetailsElement>(null);
   const summary = activitySummary(entries);
-  const activityLabels =
-    summary.labels.length > 0
-      ? `${summary.labels.slice(0, 3).join(", ")}${summary.labels.length > 3 ? ` +${summary.labels.length - 3}` : ""}`
-      : "Transcript events";
+  const routine = entries.filter(isRoutineEvidence);
+  const shown = entries.filter((entry) => !isRoutineEvidence(entry));
 
-  useEffect(() => {
-    if (disclosureRef.current) disclosureRef.current.open = false;
-  }, [reloadRevision]);
+  const renderEntry = (entry: SessionActivityItem) => {
+    if (entry.kind === "tool") {
+      const headline = toolActivityHeadline(entry.value.summary);
+      return (
+        <SessionEvidenceDisclosure
+          key={`tool:${entry.value.entry_ids[0]}`}
+          api={api}
+          entryId={entry.value.entry_ids[0]}
+          label={
+            <>
+              <Wrench size={iconSize.xs} aria-hidden="true" /> {entry.value.name}
+              {headline ? ` · ${headline}` : ""}
+            </>
+          }
+          meta={compactMessageTimestamp(entry.value.timestamp, session.start_ts)}
+          preview={entry.value.summary}
+          result={
+            entry.result
+              ? { entryId: entry.result.entry_ids[0], preview: entry.result.summary }
+              : undefined
+          }
+          session={session}
+          snapshot={snapshot}
+          status="tool"
+          toolStatus={entry.value.status}
+          onTranscriptStale={onTranscriptStale}
+        />
+      );
+    }
+    return (
+      <SessionEvidenceDisclosure
+        key={entry.value.entry_id}
+        api={api}
+        entryId={entry.value.entry_id}
+        label={entry.value.native_type}
+        meta={`${entry.value.status} · ${compactMessageTimestamp(entry.value.timestamp, session.start_ts)}`}
+        preview={entry.value.preview}
+        session={session}
+        snapshot={snapshot}
+        status={entry.value.status}
+        onTranscriptStale={onTranscriptStale}
+      />
+    );
+  };
 
   return (
-    <details ref={disclosureRef} className={styles.sessionActivityGroup}>
+    <details className={styles.sessionActivityGroup}>
       <summary>
         <span>
-          <Wrench size={13} aria-hidden="true" /> Transcript activity
-          {summary.hasIssue && <AlertTriangle size={13} aria-label="Activity has diagnostics" />}
+          {summary.toolCount > 0 ? <Wrench size={iconSize.xs} aria-hidden="true" /> : null}
+          {summary.title}
+          {summary.hasIssue && (
+            <AlertTriangle size={iconSize.xs} aria-label="Activity has diagnostics" />
+          )}
         </span>
-        <span>
-          {summary.count} {summary.count === 1 ? "item" : "items"} · {activityLabels}
-        </span>
+        {summary.detail && <span className={styles.sessionRowMeta}>{summary.detail}</span>}
       </summary>
       <div className={styles.sessionActivityGroupItems}>
-        {entries.map((entry) =>
-          entry.kind === "tool" ? (
-            <SessionEvidenceDisclosure
-              key={`tool:${entry.value.entry_ids.join(",")}`}
-              api={api}
-              entryId={entry.value.entry_ids[0]}
-              label={
-                <>
-                  <Wrench size={13} aria-hidden="true" /> {entry.value.name}
-                </>
-              }
-              meta={
-                ["started", "completed"].includes(entry.value.status)
-                  ? compactMessageTimestamp(entry.value.timestamp, session.start_ts)
-                  : entry.value.status
-              }
-              preview={entry.value.summary}
-              session={session}
-              snapshot={snapshot}
-              status="tool"
-            />
-          ) : (
-            <SessionEvidenceDisclosure
-              key={entry.value.entry_id}
-              api={api}
-              entryId={entry.value.entry_id}
-              label={entry.value.native_type}
-              meta={`${entry.value.status} · ${compactMessageTimestamp(entry.value.timestamp, session.start_ts)}`}
-              preview={entry.value.preview}
-              session={session}
-              snapshot={snapshot}
-              status={entry.value.status}
-            />
-          ),
+        {shown.map(renderEntry)}
+        {routine.length > 0 && (
+          <details className={styles.sessionRoutineEntries}>
+            <summary>
+              {routine.length} routine {routine.length === 1 ? "entry" : "entries"}
+            </summary>
+            <div className={styles.sessionActivityGroupItems}>{routine.map(renderEntry)}</div>
+          </details>
         )}
       </div>
     </details>

@@ -14,6 +14,27 @@ describe("StatusBadge", () => {
     expect(badge).toHaveClass(styles.badge, styles.good);
     expect(badge).toHaveAttribute("data-status-tone", "good");
     expect(badge).toHaveAttribute("data-status-variant", "badge");
+    expect(badge.querySelector(`.${styles.dot}`)).toBeInTheDocument();
+  });
+
+  it("keeps the ladder floor unless a caller asks for the step above", () => {
+    const { rerender } = render(
+      <StatusBadge tone="neutral" variant="inline">
+        Checking
+      </StatusBadge>,
+    );
+    const floor = screen.getByText("Checking").parentElement!;
+    expect(floor).toHaveClass(styles.xs);
+    expect(floor).toHaveAttribute("data-status-size", "xs");
+
+    rerender(
+      <StatusBadge tone="good" variant="inline" size="sm">
+        Running
+      </StatusBadge>,
+    );
+    const raised = screen.getByText("Running").parentElement!;
+    expect(raised).toHaveClass(styles.sm);
+    expect(raised).not.toHaveClass(styles.xs);
   });
 
   it("uses a dot for lightweight inline statuses", () => {

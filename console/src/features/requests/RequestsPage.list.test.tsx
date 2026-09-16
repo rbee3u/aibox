@@ -41,8 +41,68 @@ describe("Requests page list", () => {
       /\.target\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow:\s*hidden;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/s,
     );
     expect(requestListCss).toMatch(
-      /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-2\);[\s\S]*?white-space:\s*nowrap;/s,
+      /\.status\s*\{[\s\S]*?min-width:\s*max-content;[\s\S]*?padding-left:\s*var\(--space-md\);[\s\S]*?white-space:\s*nowrap;/s,
     );
+  });
+
+  it("opens the next page at its top and keeps focus on the page turn", async () => {
+    const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
+    const firstPage = requestListFor([completedSummary], {
+      total: 51,
+      deletable_count: 51,
+      has_next: true,
+    });
+    const secondPage = requestListFor([secondPageSummary], { total: 51, deletable_count: 51 });
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+    const user = userEvent.setup();
+    renderApp({ listRequests });
+
+    const panel = await screen.findByRole("complementary", { name: "Request list" });
+    const body = within(panel)
+      .getByRole("button", { name: "POST api.example.test/v1/responses" })
+      .closest("[aria-busy]") as HTMLElement;
+    body.scrollTop = 120;
+
+    const next = within(panel).getByRole("button", { name: "Next" });
+    next.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("button", { name: "POST second.example.test/v1/responses" });
+
+    expect(body.scrollTop).toBe(0);
+    expect(next).toHaveAttribute("disabled");
+    expect(within(panel).getByText("Page 2 of 2 · 1 shown · 51 total")).toHaveFocus();
+  });
+
+  it("keeps a busy page turn focusable instead of disabling it", async () => {
+    const secondPageSummary = completedSummaryFor("0198-demo-second-page", "second.example.test");
+    const firstPage = requestListFor([completedSummary], { total: 101, has_next: true });
+    const secondPage = requestListFor([secondPageSummary], { total: 101, has_next: true });
+    const pending = deferred<typeof secondPage>();
+    const listRequests = vi
+      .fn<RequestsApi["listRequests"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockReturnValueOnce(pending.promise);
+    renderApp({ listRequests });
+
+    const panel = await screen.findByRole("complementary", { name: "Request list" });
+    const next = within(panel).getByRole("button", { name: "Next" });
+    next.focus();
+    fireEvent.click(next);
+    await flushEffects();
+
+    expect(next).toHaveAttribute("aria-disabled", "true");
+    expect(next).not.toHaveAttribute("disabled");
+    expect(next).toHaveFocus();
+    fireEvent.click(next);
+    expect(listRequests).toHaveBeenCalledTimes(2);
+
+    pending.resolve(secondPage);
+    await flushEffects();
+    expect(next).not.toHaveAttribute("aria-disabled");
+    expect(next).toHaveFocus();
   });
 
   it("preserves target prefixes, full URL titles, and status content for long URLs", async () => {
@@ -101,7 +161,13 @@ describe("Requests page list", () => {
     expect(
       within(requestListPanel).getByRole("button", { name: "Refresh Requests" }),
     ).toBeEnabled();
+    expect(
+      within(requestListPanel).getByRole("button", { name: "Refresh Requests" }),
+    ).toHaveTextContent("Refresh");
     expect(within(requestListPanel).getByRole("button", { name: "Select Requests" })).toBeEnabled();
+    expect(
+      within(requestListPanel).getByRole("button", { name: "Select Requests" }),
+    ).toHaveTextContent("Select");
     expect(within(requestListPanel).queryByRole("button", { name: "Delete all" })).toBeNull();
     const completedRow = within(requestListPanel).getByRole("button", {
       name: "POST api.example.test/v1/responses",
@@ -219,12 +285,14 @@ describe("Requests page list", () => {
       name: "POST api.example.test/requested",
     });
     expect(within(requestedRow).getByTitle("Model —; Reasoning effort medium")).toHaveTextContent(
-      "— medium",
+      /^medium$/,
     );
     expect(within(requestedRow).getByTitle("First token —; Duration —")).toHaveTextContent("— / —");
 
     const legacyRow = screen.getByRole("button", { name: "POST api.example.test/legacy" });
-    expect(within(legacyRow).getByTitle("Model —; Reasoning effort —")).toHaveTextContent(/^—$/);
+    expect(within(legacyRow).queryByTitle("Model —; Reasoning effort —")).not.toBeInTheDocument();
+    expect(within(legacyRow).queryByText("—", { exact: true })).not.toBeInTheDocument();
+    expect(legacyRow).toHaveAccessibleDescription(/Model —; Reasoning effort —/);
 
     const missingEffortRow = screen.getByRole("button", {
       name: "POST api.example.test/missing-effort",
@@ -241,7 +309,7 @@ describe("Requests page list", () => {
     ).toHaveTextContent("17m34s / 28m55s");
   });
 
-  it("includes a list issue in the request row's accessible description", async () => {
+  it("moves a finding into the status cell and keeps the model line", async () => {
     const message = "Our servers are currently overloaded. Please try again later.";
     const issueSummary = {
       ...completedSummary,
@@ -256,14 +324,43 @@ describe("Requests page list", () => {
     const row = await screen.findByRole("button", {
       name: "POST api.example.test/v1/responses",
     });
-    const issueMarker = within(row).getByRole("img", {
+    const statusCell = within(row).getByRole("img", {
       name: /Request error: Server error.*currently overloaded/,
     });
-    expect(issueMarker).not.toHaveAttribute("tabindex");
+    expect(statusCell).not.toHaveAttribute("tabindex");
+    expect(statusCell).toHaveTextContent("200");
     expect(within(row).queryByText("Server error")).not.toBeInTheDocument();
+    expect(within(row).getByText("gpt-5.6-sol high")).toBeInTheDocument();
+    expect(within(row).queryByText(message)).not.toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
       /Request error: Server error\. Our servers are currently overloaded/,
     );
+    expect(row).toHaveAccessibleDescription(/Model gpt-5.6-sol; Reasoning effort high/);
+  });
+
+  it("does not mark an HTTP status the assessment merely restates", async () => {
+    const http401 = {
+      ...completedSummary,
+      status: 401,
+      assessment: {
+        level: "error" as const,
+        primary: {
+          source: "http" as const,
+          kind: "http_401",
+          message: "Upstream returned HTTP 401",
+        },
+        issue_count: 1,
+      },
+    };
+    renderApp({ listRequests: vi.fn().mockResolvedValue(requestListFor([http401])) });
+
+    const row = await screen.findByRole("button", {
+      name: "POST api.example.test/v1/responses",
+    });
+    expect(within(row).getByText("401")).toBeInTheDocument();
+    expect(within(row).queryByRole("img", { name: /HTTP 401/ })).not.toBeInTheDocument();
+    expect(within(row).getByText("gpt-5.6-sol high")).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(/Request error: HTTP 401/);
   });
 
   it("keeps Refresh enabled while a background list load is pending", async () => {
@@ -292,7 +389,11 @@ describe("Requests page list", () => {
     });
     await user.click(refreshButton);
 
-    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "Refreshing Requests" })).toHaveAttribute(
       "aria-busy",
       "true",
