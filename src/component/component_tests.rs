@@ -635,6 +635,7 @@ fn node_installer_contains_architecture_and_checksum_guards() {
     assert!(NODE_INSTALLER.contains("SHASUMS256.txt"));
     assert!(NODE_INSTALLER.contains("sha256sum"));
     assert!(NODE_INSTALLER.contains("mv -Tf"));
+    assert!(NODE_INSTALLER.contains(".lts"));
 }
 
 #[test]

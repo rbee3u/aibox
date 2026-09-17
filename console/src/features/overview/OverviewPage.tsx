@@ -80,7 +80,7 @@ export function OverviewPage(props: OverviewPageProps) {
       <section className={styles.statusSection} aria-label="Service status">
         <div className={styles.systemStatusBar}>
           <div className={styles.systemStatusMain}>
-            <span className={styles.systemStatusTitle}>System Health</span>
+            <span className={styles.systemStatusTitle}>System health</span>
             <div className={styles.statusMain}>
               <RuntimeStatus
                 icon={<Server size={iconSize.xs} />}

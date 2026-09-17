@@ -1109,8 +1109,6 @@
   font-family: var(--font-sans);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .sessionToolExchange pre {
@@ -1377,8 +1375,6 @@
   padding: 1px 7px;
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);

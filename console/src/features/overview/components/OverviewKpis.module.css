@@ -63,8 +63,6 @@
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   color: var(--muted);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .kpiIcon {

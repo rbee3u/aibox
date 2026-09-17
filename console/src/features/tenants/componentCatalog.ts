@@ -29,7 +29,22 @@ const COMPONENT_LABELS: Record<ComponentKind, string> = {
   go: "Go",
 };
 
-/** Presentation-only grouping; a Managed catalog shows all three sections. */
+/** Presentation-only grouping; a Managed catalog shows Agents and Runtimes & Toolchains (with Statuslines merged into Agents). */
+export const MANAGED_COMPONENT_GROUPS: readonly ComponentGroup[] = [
+  { id: "agents", label: "Agents", kinds: ["codex", "claude"] },
+  {
+    id: "runtimes-toolchains",
+    label: "Runtimes & Toolchains",
+    kinds: ["node", "python", "rust", "go"],
+  },
+];
+
+/** Host Tenant only manages host-level Statuslines. */
+export const HOST_COMPONENT_GROUPS: readonly ComponentGroup[] = [
+  { id: "statuslines", label: "Statuslines", kinds: ["codex-statusline", "claude-statusline"] },
+];
+
+/** All recognized presentation groups across Managed and Host tenants. */
 export const COMPONENT_GROUPS: readonly ComponentGroup[] = [
   { id: "agents", label: "Agents", kinds: ["codex", "claude"] },
   { id: "statuslines", label: "Statuslines", kinds: ["codex-statusline", "claude-statusline"] },
@@ -39,6 +54,14 @@ export const COMPONENT_GROUPS: readonly ComponentGroup[] = [
     kinds: ["node", "python", "rust", "go"],
   },
 ];
+
+export const AGENT_STATUSLINE_KIND: Record<
+  "codex" | "claude",
+  "codex-statusline" | "claude-statusline"
+> = {
+  codex: "codex-statusline",
+  claude: "claude-statusline",
+};
 
 export const COMPONENT_ACTION_MENU_WIDTHS: Record<"install" | "update", number> = {
   install: 136,
@@ -224,9 +247,6 @@ export interface ComponentPresentation {
   diagnostic: string | null;
 }
 
-const COMPONENT_DIFFERS_DIAGNOSTIC =
-  "Edited here, or changed in a newer AIBox — Update rewrites the statusline to the current AIBox definition.";
-
 /**
  * Whether the row's Update overwrites state the Tenant may have edited by hand,
  * which is the one Component action that discards something without a way back.
@@ -242,7 +262,7 @@ export function updateOverwritesLocalEdits(row: ComponentRow): boolean {
  *
  * `modified` is reported only by statuslines, and the Console cannot tell a
  * hand edit from a definition that changed in a newer AIBox, so the row says
- * "Differs" — true of both — and states what Update will do to it.
+ * "Differs" — true of both.
  */
 export function componentPresentation(row: ComponentRow): ComponentPresentation {
   if (row.error || !row.status) {
@@ -290,7 +310,7 @@ export function componentPresentation(row: ComponentRow): ComponentPresentation 
         badgeTone: "warn",
         primaryAction: "Update",
         canRemove: true,
-        diagnostic: COMPONENT_DIFFERS_DIAGNOSTIC,
+        diagnostic: null,
       };
     case "unmanaged":
       return {

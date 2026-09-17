@@ -75,32 +75,36 @@
   flex: 0 0 32px;
   place-items: center;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-  color: #ffffff;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--line-control);
+  color: var(--accent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 6%, transparent);
   transition:
     transform var(--transition-fast),
+    border-color var(--transition-fast),
     box-shadow var(--transition-fast);
 }
 
 .mark:hover {
   transform: scale(1.04);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-control));
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 :root[data-resolved-theme="dark"] .mark {
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-  color: var(--accent-contrast);
-  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--surface-inset);
+  border-color: var(--line-control);
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
 }
 
 .brand strong {
   flex: 0 0 auto;
   color: var(--ink);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   font-weight: var(--weight-bold);
-  line-height: var(--line-height-sm);
-  letter-spacing: -0.01em;
+  line-height: var(--line-height-md);
+  letter-spacing: -0.02em;
   white-space: nowrap;
   transition: opacity var(--transition-fast);
 }
@@ -140,13 +144,14 @@
 }
 
 .moduleNav a {
+  position: relative;
   display: flex;
   width: 100%;
   min-width: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 11px 12px;
+  gap: 12px;
+  padding: 11px 14px;
   border: 1px solid transparent;
   color: var(--ink-secondary);
   background: transparent;
@@ -187,11 +192,14 @@
   color: var(--accent-strong);
   background: var(--surface-selected);
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    0 1px 2px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .moduleNav a[aria-current="page"]:hover {
   background: var(--surface-selected);
+  transform: none;
 }
 
 .moduleNav a[aria-current="page"]:active {
@@ -209,15 +217,18 @@
 :root[data-resolved-theme="dark"] .moduleNav a[aria-current="page"] {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    0 1px 3px rgb(0 0 0 / 0.25);
 }
 
 .moduleNav strong {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--text-row-title);
-  font-weight: var(--weight-row-title);
-  line-height: var(--line-height-row-title);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-md);
+  letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: opacity var(--transition-fast);
@@ -241,8 +252,6 @@
   color: var(--faint);
   font-size: var(--text-xs);
   font-weight: var(--weight-bold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .resourceRow {

@@ -48,7 +48,8 @@
 }
 
 .good .dot,
-.active .dot {
+.active .dot,
+.warning .dot {
   box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 25%, transparent);
 }
 

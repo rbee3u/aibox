@@ -1,8 +1,12 @@
-import { Check, ChevronLeft, Clipboard, House } from "lucide-react";
+import { ChevronLeft, House } from "lucide-react";
 
 import { ComponentCatalogSkeleton } from "@/features/tenants/detail/ComponentCatalogSkeleton";
-import { ComponentRowItem } from "@/features/tenants/detail/ComponentRowItem";
-import { componentRowModel, relativeTimeLabel } from "@/features/tenants/componentCatalog";
+import { ComponentAgentCard, ComponentRowItem } from "@/features/tenants/detail/ComponentRowItem";
+import {
+  AGENT_STATUSLINE_KIND,
+  componentRowModel,
+  relativeTimeLabel,
+} from "@/features/tenants/componentCatalog";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
@@ -24,7 +28,7 @@ export function TenantDetailPane({
   onLocationChange: ModuleLocationChange;
 }) {
   const {
-    attentionComponentCount,
+    allComponents,
     attentionKind,
     checkingLatest,
     checkForUpdates,
@@ -35,9 +39,11 @@ export function TenantDetailPane({
     componentMenuPosition,
     componentMenuRef,
     componentTotalCount,
+    differingComponentCount,
     installedComponentCount,
     installComponent,
-    updatableComponentCount,
+    issueComponentCount,
+    outdatedComponentCount,
     latestSnapshot,
     loadComponents,
     openComponentMenu,
@@ -47,15 +53,7 @@ export function TenantDetailPane({
     registerComponentMenuItem,
     toggleComponentMenu,
   } = components;
-  const {
-    copiedHome,
-    copyHome,
-    detailHeadingRef,
-    selected,
-    selectedHome,
-    selectedKey,
-    tenantKindLabel,
-  } = detail;
+  const { detailHeadingRef, selected, selectedKey, tenantKindLabel } = detail;
   const { requestComponentRemove } = dialogs;
   const { busy, mutationBusy } = mutations;
   const { focusTenantRow } = selection;
@@ -80,45 +78,18 @@ export function TenantDetailPane({
               >
                 <ChevronLeft size={iconSize.md} />
               </IconButton>
-              <div className={styles.componentHeaderIdentity}>
-                <div className={styles.componentEyebrowRow}>
-                  <h2 ref={detailHeadingRef} tabIndex={-1} className={styles.componentEyebrow}>
-                    Components
-                  </h2>
-                </div>
+              <div className="srOnly">
+                <h2 ref={detailHeadingRef} tabIndex={-1}>
+                  Components
+                </h2>
                 <div
-                  className={styles.componentHeaderContext}
                   aria-label={
                     selected.kind === "host"
                       ? "Selected Tenant: Host Tenant"
                       : `Selected Tenant: ${selected.display_name}, ${tenantKindLabel}`
                   }
                 >
-                  <span className={styles.componentTenant}>{selected.display_name}</span>
-                  {selected.kind === "host" ? (
-                    <span className={styles.tenantKindBadge}>host</span>
-                  ) : selected.name === "default" ? (
-                    <span className={styles.tenantKindBadge}>protected</span>
-                  ) : (
-                    <span className={styles.tenantKindBadge}>managed</span>
-                  )}
-                  <div className={styles.componentHome}>
-                    <span aria-hidden="true">·</span>
-                    <code title={selected.home}>{selectedHome}</code>
-                    <IconButton
-                      className={styles.componentHomeCopy}
-                      label={
-                        copiedHome === selected.home ? "Tenant Home copied" : "Copy Tenant Home"
-                      }
-                      onClick={() => void copyHome(selected.home, selected.home)}
-                    >
-                      {copiedHome === selected.home ? (
-                        <Check size={iconSize.xs} />
-                      ) : (
-                        <Clipboard size={iconSize.xs} />
-                      )}
-                    </IconButton>
-                  </div>
+                  <span>{selected.display_name}</span>
                 </div>
               </div>
               <div className={styles.componentHeaderMeta}>
@@ -130,23 +101,30 @@ export function TenantDetailPane({
                       <span
                         className={styles.componentInstalledSummary}
                         data-status={
-                          installedComponentCount === componentTotalCount ? "all" : "partial"
+                          installedComponentCount === 0
+                            ? "none"
+                            : installedComponentCount === componentTotalCount
+                              ? "all"
+                              : "partial"
                         }
                       >
                         <span>
                           <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
                         </span>
                       </span>
-                      {attentionComponentCount > 0 && (
-                        <span className={styles.componentSummaryAttention}>
-                          {attentionComponentCount}{" "}
-                          {attentionComponentCount === 1 ? "issue" : "issues"}
+                      {outdatedComponentCount > 0 && (
+                        <span className={styles.componentSummaryOutdated}>
+                          {outdatedComponentCount} outdated
                         </span>
                       )}
-                      {updatableComponentCount > 0 && (
-                        <span className={styles.componentSummaryUpdates}>
-                          {updatableComponentCount}{" "}
-                          {updatableComponentCount === 1 ? "update" : "updates"}
+                      {differingComponentCount > 0 && (
+                        <span className={styles.componentSummaryDiffers}>
+                          {differingComponentCount} differs
+                        </span>
+                      )}
+                      {issueComponentCount > 0 && (
+                        <span className={styles.componentSummaryIssue}>
+                          {issueComponentCount} {issueComponentCount === 1 ? "issue" : "issues"}
                         </span>
                       )}
                     </>
@@ -191,63 +169,187 @@ export function TenantDetailPane({
                 <ComponentCatalogSkeleton host={selected.kind === "host"} />
               ) : (
                 <div className={styles.componentCatalog} aria-label="Components">
-                  {componentGroups.map((group) => (
-                    <section
-                      className={styles.componentGroup}
-                      aria-labelledby={`component-group-${group.id}`}
-                      key={group.id}
-                    >
-                      <div className={styles.componentGroupHeader}>
-                        <h3 id={`component-group-${group.id}`}>{group.label}</h3>
-                        <span className={styles.componentGroupCount}>
-                          {group.rows.length} {group.rows.length === 1 ? "component" : "components"}
-                        </span>
-                      </div>
-                      <div role="list" aria-label={`${group.label} Components`}>
-                        {group.rows.map((row) => {
-                          const model = componentRowModel(row, latestSnapshot);
-                          const rowProgress =
-                            componentActionProgress?.tenantSelectionValue === selectedKey &&
-                            componentActionProgress.kind === row.kind
-                              ? componentActionProgress.label
-                              : null;
-                          return (
-                            <ComponentRowItem
-                              key={row.kind}
-                              row={row}
-                              model={model}
-                              highlighted={attentionKind === row.kind}
-                              progressLabel={rowProgress}
-                              busy={busy}
-                              mutationBusy={mutationBusy}
-                              openMenu={openMenu}
-                              menuPosition={componentMenuPosition}
-                              menuRef={componentMenuRef}
-                              onRetryInspection={() => void loadComponents(selected)}
-                              onInstall={() => installComponent(row)}
-                              onRemove={() => requestComponentRemove(row, selected.display_name)}
-                              onOpenSpecificVersion={() =>
-                                openSpecificVersion(row, model.specificVersionMode)
-                              }
-                              onCloseMenu={closeComponentMenu}
-                              onOpenMenu={(anchor) =>
-                                openComponentMenu(row.kind, anchor, model.menuWidth)
-                              }
-                              onToggleMenu={(anchor) =>
-                                toggleComponentMenu(row.kind, anchor, model.menuWidth)
-                              }
-                              registerMenuButton={(element) =>
-                                registerComponentMenuButton(row.kind, element)
-                              }
-                              registerMenuItem={(element) =>
-                                registerComponentMenuItem(row.kind, element)
-                              }
-                            />
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
+                  {componentGroups.map((group) => {
+                    const groupCount =
+                      group.id === "agents" ? group.rows.length * 2 : group.rows.length;
+                    return (
+                      <section
+                        className={styles.componentGroup}
+                        aria-labelledby={`component-group-${group.id}`}
+                        key={group.id}
+                      >
+                        <div className={styles.componentGroupHeader}>
+                          <h3 id={`component-group-${group.id}`}>{group.label}</h3>
+                          <span className={styles.componentGroupCount}>
+                            {groupCount} {groupCount === 1 ? "component" : "components"}
+                          </span>
+                        </div>
+                        <div
+                          role="list"
+                          aria-label={`${group.label} Components`}
+                          className={styles.componentGrid}
+                        >
+                          {group.id === "agents"
+                            ? group.rows.map((row) => {
+                                const model = componentRowModel(row, latestSnapshot);
+                                const rowProgress =
+                                  componentActionProgress?.tenantSelectionValue === selectedKey &&
+                                  componentActionProgress.kind === row.kind
+                                    ? componentActionProgress.label
+                                    : null;
+                                const statuslineKind =
+                                  row.kind in AGENT_STATUSLINE_KIND
+                                    ? AGENT_STATUSLINE_KIND[row.kind as "codex" | "claude"]
+                                    : null;
+                                const statuslineRow = statuslineKind
+                                  ? (allComponents.find((r) => r.kind === statuslineKind) ?? null)
+                                  : null;
+                                const statuslineModel = statuslineRow
+                                  ? componentRowModel(statuslineRow, latestSnapshot)
+                                  : null;
+                                const statuslineProgress =
+                                  statuslineRow &&
+                                  componentActionProgress?.tenantSelectionValue === selectedKey &&
+                                  componentActionProgress.kind === statuslineRow.kind
+                                    ? componentActionProgress.label
+                                    : null;
+
+                                if (row.kind !== "codex" && row.kind !== "claude") {
+                                  return (
+                                    <ComponentRowItem
+                                      key={row.kind}
+                                      row={row}
+                                      model={model}
+                                      highlighted={attentionKind === row.kind}
+                                      progressLabel={rowProgress}
+                                      busy={busy}
+                                      mutationBusy={mutationBusy}
+                                      openMenu={openMenu}
+                                      menuPosition={componentMenuPosition}
+                                      menuRef={componentMenuRef}
+                                      onRetryInspection={() => void loadComponents(selected)}
+                                      onInstall={(version) => installComponent(row, version)}
+                                      onRemove={() =>
+                                        requestComponentRemove(row, selected.display_name)
+                                      }
+                                      onOpenSpecificVersion={() =>
+                                        openSpecificVersion(row, model.specificVersionMode)
+                                      }
+                                      onCloseMenu={closeComponentMenu}
+                                      onOpenMenu={(anchor) =>
+                                        openComponentMenu(row.kind, anchor, model.menuWidth)
+                                      }
+                                      onToggleMenu={(anchor) =>
+                                        toggleComponentMenu(row.kind, anchor, model.menuWidth)
+                                      }
+                                      registerMenuButton={(element) =>
+                                        registerComponentMenuButton(row.kind, element)
+                                      }
+                                      registerMenuItem={(element) =>
+                                        registerComponentMenuItem(row.kind, element)
+                                      }
+                                    />
+                                  );
+                                }
+
+                                return (
+                                  <ComponentAgentCard
+                                    key={row.kind}
+                                    agent={{
+                                      row,
+                                      model,
+                                      highlighted: attentionKind === row.kind,
+                                      progressLabel: rowProgress,
+                                      busy,
+                                      mutationBusy,
+                                      openMenu,
+                                      menuPosition: componentMenuPosition,
+                                      menuRef: componentMenuRef,
+                                      onRetryInspection: () => void loadComponents(selected),
+                                      onInstall: (version) => installComponent(row, version),
+                                      onRemove: () =>
+                                        requestComponentRemove(row, selected.display_name),
+                                      onOpenSpecificVersion: () =>
+                                        openSpecificVersion(row, model.specificVersionMode),
+                                      onCloseMenu: closeComponentMenu,
+                                      onOpenMenu: (anchor) =>
+                                        openComponentMenu(row.kind, anchor, model.menuWidth),
+                                      onToggleMenu: (anchor) =>
+                                        toggleComponentMenu(row.kind, anchor, model.menuWidth),
+                                      registerMenuButton: (element) =>
+                                        registerComponentMenuButton(row.kind, element),
+                                      registerMenuItem: (element) =>
+                                        registerComponentMenuItem(row.kind, element),
+                                    }}
+                                    statusline={
+                                      statuslineRow && statuslineModel
+                                        ? {
+                                            row: statuslineRow,
+                                            model: statuslineModel,
+                                            progressLabel: statuslineProgress,
+                                            busy,
+                                            mutationBusy,
+                                            highlighted: attentionKind === statuslineRow.kind,
+                                            onRetryInspection: () => void loadComponents(selected),
+                                            onInstall: () => installComponent(statuslineRow),
+                                            onRemove: () =>
+                                              requestComponentRemove(
+                                                statuslineRow,
+                                                selected.display_name,
+                                              ),
+                                          }
+                                        : null
+                                    }
+                                  />
+                                );
+                              })
+                            : group.rows.map((row) => {
+                                const model = componentRowModel(row, latestSnapshot);
+                                const rowProgress =
+                                  componentActionProgress?.tenantSelectionValue === selectedKey &&
+                                  componentActionProgress.kind === row.kind
+                                    ? componentActionProgress.label
+                                    : null;
+                                return (
+                                  <ComponentRowItem
+                                    key={row.kind}
+                                    row={row}
+                                    model={model}
+                                    highlighted={attentionKind === row.kind}
+                                    progressLabel={rowProgress}
+                                    busy={busy}
+                                    mutationBusy={mutationBusy}
+                                    openMenu={openMenu}
+                                    menuPosition={componentMenuPosition}
+                                    menuRef={componentMenuRef}
+                                    onRetryInspection={() => void loadComponents(selected)}
+                                    onInstall={(version) => installComponent(row, version)}
+                                    onRemove={() =>
+                                      requestComponentRemove(row, selected.display_name)
+                                    }
+                                    onOpenSpecificVersion={() =>
+                                      openSpecificVersion(row, model.specificVersionMode)
+                                    }
+                                    onCloseMenu={closeComponentMenu}
+                                    onOpenMenu={(anchor) =>
+                                      openComponentMenu(row.kind, anchor, model.menuWidth)
+                                    }
+                                    onToggleMenu={(anchor) =>
+                                      toggleComponentMenu(row.kind, anchor, model.menuWidth)
+                                    }
+                                    registerMenuButton={(element) =>
+                                      registerComponentMenuButton(row.kind, element)
+                                    }
+                                    registerMenuItem={(element) =>
+                                      registerComponentMenuItem(row.kind, element)
+                                    }
+                                  />
+                                );
+                              })}
+                        </div>
+                      </section>
+                    );
+                  })}
                 </div>
               )}
               {!componentCatalogLoading && selected.kind === "host" && (

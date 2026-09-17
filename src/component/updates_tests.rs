@@ -21,8 +21,9 @@ fn numeric_version_ordering_does_not_use_lexical_order() {
 #[test]
 fn official_source_fixtures_reject_prereleases_and_normalize_prefixes() {
     let node = serde_json::json!([
-        {"version": "v25.0.0-rc.1"},
-        {"version": "v24.19.0"}
+        {"version": "v25.0.0-rc.1", "lts": false},
+        {"version": "v25.0.0", "lts": false},
+        {"version": "v24.19.0", "lts": "Iron"}
     ]);
     assert_eq!(parse_node_releases(&node).unwrap(), "24.19.0");
 

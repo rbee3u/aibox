@@ -156,7 +156,7 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
 
     expect(await screen.findByRole("region", { name: "Agents" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Statuslines" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Statuslines" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Runtimes & Toolchains" })).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(8);
     for (const label of [

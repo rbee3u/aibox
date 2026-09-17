@@ -203,7 +203,7 @@ export function RequestsPage(props: RequestsPageProps) {
                   <div className={styles.emptyStateCardHeader}>
                     <Activity size={iconSize.sm} />
                     <strong>Traffic & Token Metrics</strong>
-                    <span className={styles.emptyStateBadge}>Tokens & Latency</span>
+                    <span className={styles.emptyStateBadge}>Tokens & latency</span>
                   </div>
                   <p>
                     Track input, output, and reasoning token consumption, cache hit ratios,
@@ -214,7 +214,7 @@ export function RequestsPage(props: RequestsPageProps) {
                   <div className={styles.emptyStateCardHeader}>
                     <ShieldCheck size={iconSize.sm} />
                     <strong>Wire & Security Audit</strong>
-                    <span className={styles.emptyStateBadge}>Wire & Proxy</span>
+                    <span className={styles.emptyStateBadge}>Wire & proxy</span>
                   </div>
                   <p>
                     Inspect sanitized HTTP request/response headers, raw JSON bodies, streaming

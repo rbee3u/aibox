@@ -227,13 +227,18 @@ fn parse_node_releases(value: &Value) -> Result<String> {
         .context("Node.js release source is not an array")?;
     releases
         .iter()
+        .filter(|release| {
+            release
+                .get("lts")
+                .is_some_and(|lts| lts.is_string() || lts.as_bool() == Some(true))
+        })
         .filter_map(|release| release.get("version").and_then(Value::as_str))
         .find_map(|version| {
             version
                 .strip_prefix('v')
                 .and_then(|value| validate_stable_version(value).ok())
         })
-        .context("Node.js release source has no stable release")
+        .context("Node.js release source has no stable LTS release")
 }
 
 #[derive(Deserialize)]

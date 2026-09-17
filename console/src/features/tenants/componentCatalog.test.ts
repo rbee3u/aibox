@@ -129,8 +129,7 @@ describe("component row model", () => {
     const model = componentRowModel(row({ status: "modified", supports_version: false }), null);
     expect(model.primaryAction).toBe("Update");
     expect(model.presentation.stateBadge).toBe("Differs");
-    expect(model.diagnostic).toContain("Edited here, or changed in a newer AIBox");
-    expect(model.diagnostic).toContain("Update rewrites the statusline");
+    expect(model.diagnostic).toBeNull();
     expect(updateOverwritesLocalEdits(row({ status: "modified", supports_version: false }))).toBe(
       true,
     );
