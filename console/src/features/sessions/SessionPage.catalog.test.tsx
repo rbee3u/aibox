@@ -111,7 +111,7 @@ describe("SessionPage", () => {
             ...firstSession,
             title:
               "[$improve-unit-tests](/Users/rbee3u/.agents/skills/code-craft-skills/improve-unit-tests/SKILL.md)",
-            latest_message: "已完善 SSE 观察上限相关单元测试",
+            latest_message: "Added unit tests for the SSE observation limit",
           },
           {
             ...secondSession,
@@ -122,10 +122,12 @@ describe("SessionPage", () => {
     });
     render(<SessionPage api={api} />);
     const skill = await screen.findByRole("button", {
-      name: "已完善 SSE 观察上限相关单元测试, Tenant default · Codex",
+      name: "Added unit tests for the SSE observation limit, Tenant default · Codex",
     });
     expect(
-      within(skill).getByText("已完善 SSE 观察上限相关单元测试", { selector: "strong" }),
+      within(skill).getByText("Added unit tests for the SSE observation limit", {
+        selector: "strong",
+      }),
     ).toBeInTheDocument();
     expect(within(skill).getByText("improve-unit-tests")).toBeInTheDocument();
     const review = screen.getByRole("button", {

@@ -16,6 +16,7 @@ import styles from "@/features/sessions/SessionPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
+const HostTenantIcon = resourceIcons.hostTenant;
 const ManagedTenantIcon = resourceIcons.managedTenant;
 
 export function SessionCatalogPane({
@@ -102,7 +103,13 @@ export function SessionCatalogPane({
                 options={tenantOptions}
                 pluralLabel="tenants"
                 selected={selectedTenants}
-                triggerIcon={<ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />}
+                triggerIcon={
+                  selectedTenants.size === 1 && selectedTenants.has("host") ? (
+                    <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  )
+                }
                 unavailableSummary={
                   loadingTenants ? "Loading" : sessionTenantMissing ? "Not found" : "Unavailable"
                 }

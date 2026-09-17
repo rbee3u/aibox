@@ -31,3 +31,12 @@ describe("catalog create dialogs", () => {
     expect(css).toMatch(/\.dialog\s*\{[^}]*color:\s*var\(--ink\)/s);
   });
 });
+
+describe("catalog selection indicator", () => {
+  it("uses refined 18px checkbox styling with comfortable right inset", () => {
+    expect(css).toMatch(
+      /\.selectionIndicator\s*\{[^}]*right:\s*12px;[^}]*width:\s*18px;[^}]*height:\s*18px/s,
+    );
+    expect(css).toMatch(/\.rowSelectable \.rowMain\s*\{[^}]*padding-right:\s*38px/s);
+  });
+});

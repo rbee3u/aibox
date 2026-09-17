@@ -314,31 +314,37 @@ export function RequestList({
               </ActionButton>
             </>
           ) : (
-            <div className={styles.headerActions}>
-              <RefreshButton
-                ref={refreshButton}
-                data-dialog-focus-fallback="true"
-                onClick={onRefresh}
-                disabled={refreshing || deletionBusy}
-                label="Refresh Requests"
-                busyLabel="Refreshing Requests"
-                busy={refreshing}
-                compactOnNarrow
-              >
-                Refresh
-              </RefreshButton>
-              <IconLabelButton
-                ref={selectButton}
-                className={layout.selectionEnter}
-                aria-label="Select Requests"
-                onClick={enterSelection}
-                disabled={deletableCount === 0 || loading || deletionBusy}
-                compactOnNarrow
-                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
-              >
-                Select
-              </IconLabelButton>
-            </div>
+            <>
+              <div className={styles.catalogHeading}>
+                <span className={styles.catalogTitle}>Requests</span>
+                <span className={styles.catalogCount}>{total.toLocaleString()}</span>
+              </div>
+              <div className={styles.headerActions}>
+                <RefreshButton
+                  ref={refreshButton}
+                  data-dialog-focus-fallback="true"
+                  onClick={onRefresh}
+                  disabled={refreshing || deletionBusy}
+                  label="Refresh Requests"
+                  busyLabel="Refreshing Requests"
+                  busy={refreshing}
+                  compactOnNarrow
+                >
+                  Refresh
+                </RefreshButton>
+                <IconLabelButton
+                  ref={selectButton}
+                  className={layout.selectionEnter}
+                  aria-label="Select Requests"
+                  onClick={enterSelection}
+                  disabled={deletableCount === 0 || loading || deletionBusy}
+                  compactOnNarrow
+                  icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
+                >
+                  Select
+                </IconLabelButton>
+              </div>
+            </>
           )}
         </div>
         {selectionMode && (

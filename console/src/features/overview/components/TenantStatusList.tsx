@@ -1,19 +1,19 @@
-import { Box, House } from "lucide-react";
+import { Boxes } from "lucide-react";
 import type { ReactNode } from "react";
 import { OverviewLink } from "@/features/overview/OverviewLink";
 import type { TopologyNode } from "@/features/overview/resourceTree";
 import type { Tone } from "@/features/overview/viewTypes";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import styles from "@/features/overview/components/TenantStatusList.module.css";
-import { toneIcons } from "@/shared/icons/consoleIcons";
+import { resourceIcons, toneIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
+
+const HostTenantIcon = resourceIcons.hostTenant;
+const ManagedTenantIcon = resourceIcons.managedTenant;
 
 /**
  * The mark for a tone that needs work, or nothing when it does not.
- *
- * A warning and an error differ in shape here for the same reason they do in
- * the attention panel: the two tones are a hue apart, which is no difference
- * at all for a red-green colour deficiency, and this table renders both.
  */
 function ToneMark({ tone }: { tone: Tone }) {
   if (tone !== "warning" && tone !== "error") return null;
@@ -47,16 +47,15 @@ function ResourceLink({
 }
 
 /**
- * A status fact stated in place, not a second way to reach the same page.
- *
- * This used to wrap itself in a link to the node it describes — the same node
- * the cell's own link already targets, so "Current Config: Differs" and
- * "Home unavailable" were duplicate tab stops landing where their neighbour
- * landed. A fact is not an action; the action stays one per destination.
+ * A status fact stated in place.
  */
 function Issue({ node }: { node: TopologyNode }) {
   return (
-    <span className={`${styles.fact} ${node.tone === "error" ? styles.error : styles.warning}`}>
+    <span
+      className={`${styles.issueBanner} ${
+        node.tone === "error" ? styles.issueError : styles.issueWarning
+      }`}
+    >
       <ToneMark tone={node.tone} />
       <span>
         {node.label}: {node.detail}
@@ -65,42 +64,87 @@ function Issue({ node }: { node: TopologyNode }) {
   );
 }
 
-function AgentSummary({ node, onNavigate }: { node?: TopologyNode; onNavigate: ConsoleNavigate }) {
-  if (!node) return <span className={styles.secondary}>Not reported</span>;
+function AgentSummary({
+  agent,
+  node,
+  onNavigate,
+}: {
+  agent: "codex" | "claude";
+  node?: TopologyNode;
+  onNavigate: ConsoleNavigate;
+}) {
+  if (!node) {
+    return (
+      <div className={styles.sectionContainer}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.headerTitleGroup}>
+            <BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />
+            <span className={styles.agentName}>{agent === "codex" ? "Codex" : "Claude"}</span>
+          </span>
+        </div>
+        <span className={styles.emptyStatusText}>Not reported</span>
+      </div>
+    );
+  }
+
   const current = node.children.find((child) => child.icon === "current")!;
   const configs = node.children.find((child) => child.icon === "configs")!;
   const sessions = node.children.find((child) => child.icon === "sessions")!;
+
   return (
-    <div className={styles.summary}>
-      <ResourceLink
-        node={current}
-        onNavigate={onNavigate}
-        ariaLabel={node.detail ?? "Current Config"}
-      >
-        <span className={styles.primaryLink}>Current Config →</span>
-        <span className={styles.secondary}>{node.detail ?? "No recorded application"}</span>
-      </ResourceLink>
-      <span
-        className={
-          configs.tone === "error"
-            ? styles.error
-            : configs.tone === "warning"
-              ? styles.warning
-              : styles.secondary
-        }
-      >
+    <div className={styles.sectionContainer}>
+      <div className={styles.sectionHeader}>
+        <span className={styles.headerTitleGroup}>
+          <BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />
+          <span className={styles.agentName}>{agent === "codex" ? "Codex" : "Claude"}</span>
+        </span>
+      </div>
+
+      <div className={styles.agentConfigRow}>
+        <ResourceLink
+          node={current}
+          onNavigate={onNavigate}
+          ariaLabel={node.detail ?? "Current Config"}
+        >
+          <span className={styles.currentConfigLink}>
+            <span className={styles.currentConfigLabel}>Current Config</span>
+            <span className={styles.currentConfigValue}>
+              {node.detail ?? "No recorded application"}
+            </span>
+          </span>
+        </ResourceLink>
+      </div>
+
+      <div className={styles.agentChipsRow}>
         <ResourceLink node={configs} onNavigate={onNavigate}>
-          <ToneMark tone={configs.tone} />
-          <span className={styles.secondaryLink}>{configs.detail}</span>
+          <span
+            className={`${styles.actionPill} ${
+              configs.tone === "error"
+                ? styles.pillError
+                : configs.tone === "warning"
+                  ? styles.pillWarning
+                  : ""
+            }`}
+          >
+            <ToneMark tone={configs.tone} />
+            <span>{configs.detail}</span>
+          </span>
         </ResourceLink>
-      </span>
-      <span className={sessions.tone === "error" ? styles.error : styles.secondary}>
         <ResourceLink node={sessions} onNavigate={onNavigate}>
-          <ToneMark tone={sessions.tone} />
-          <span className={styles.secondaryLink}>{sessions.detail}</span>
+          <span
+            className={`${styles.actionPill} ${sessions.tone === "error" ? styles.pillError : ""}`}
+          >
+            <ToneMark tone={sessions.tone} />
+            <span>{sessions.detail}</span>
+          </span>
         </ResourceLink>
-      </span>
-      {current.tone !== "neutral" && <Issue node={current} />}
+      </div>
+
+      {current.tone !== "neutral" && (
+        <div className={styles.issueRow}>
+          <Issue node={current} />
+        </div>
+      )}
     </div>
   );
 }
@@ -117,62 +161,82 @@ export function TenantStatusList({
       <thead>
         <tr>
           <th scope="col">Tenant</th>
+          <th scope="col">Components</th>
           <th scope="col">Codex</th>
           <th scope="col">Claude</th>
-          <th scope="col">Components</th>
         </tr>
       </thead>
       <tbody>
         {root.children.map((tenant) => {
           const components = tenant.children.find((child) => child.icon === "components")!;
-          const Icon = tenant.icon === "host" ? House : Box;
+          const Icon = tenant.icon === "host" ? HostTenantIcon : ManagedTenantIcon;
+          const isHost = tenant.icon === "host";
           return (
-            <tr key={tenant.id}>
-              <th scope="row">
-                <div className={styles.summary}>
+            <tr key={tenant.id} className={styles.tenantCard}>
+              <th scope="row" className={styles.tenantHeaderCell}>
+                <div className={styles.tenantIdentity}>
                   <ResourceLink node={tenant} onNavigate={onNavigate}>
-                    <Icon size={iconSize.md} aria-hidden="true" />
+                    <span
+                      className={`${styles.tenantIconWrapper} ${
+                        isHost ? styles.hostIconWrapper : ""
+                      }`}
+                    >
+                      <Icon size={iconSize.md} aria-hidden="true" />
+                    </span>
                     <strong>{tenant.label}</strong>
                   </ResourceLink>
                   <span className={styles.secondary}>
-                    {tenant.icon === "host" ? "Host · Management only" : "Managed Tenant"}
+                    {isHost ? "Host · Management only" : "Managed Tenant"}
                   </span>
                   {tenant.detail && <Issue node={tenant} />}
                 </div>
               </th>
+              <td className={styles.componentsCell}>
+                <span className={styles.mobileLabel} aria-hidden="true">
+                  Components
+                </span>
+                <div className={styles.sectionContainer}>
+                  <div className={styles.sectionHeader}>
+                    <span className={styles.headerTitleGroup}>
+                      <Boxes size={iconSize.xs} className={styles.headerIcon} aria-hidden="true" />
+                      <span className={styles.sectionTitle}>Components</span>
+                    </span>
+                  </div>
+                  <div className={styles.componentsFactRow}>
+                    <span
+                      className={`${styles.fact} ${
+                        components.tone === "error"
+                          ? styles.error
+                          : components.tone === "warning"
+                            ? styles.warning
+                            : ""
+                      }`}
+                    >
+                      <ToneMark tone={components.tone} />
+                      <span className={styles.componentDetailText}>{components.detail}</span>
+                    </span>
+                  </div>
+                  <div className={styles.componentsActionRow}>
+                    <ResourceLink node={components} onNavigate={onNavigate}>
+                      <span className={styles.primaryLink}>
+                        Manage components <span className={styles.arrowIcon}>→</span>
+                      </span>
+                    </ResourceLink>
+                  </div>
+                </div>
+              </td>
               {(["codex", "claude"] as const).map((agent) => (
-                <td key={agent}>
+                <td key={agent} className={styles.agentCell}>
                   <span className={styles.mobileLabel} aria-hidden="true">
                     {agent === "codex" ? "Codex" : "Claude"}
                   </span>
                   <AgentSummary
+                    agent={agent}
                     node={tenant.children.find((child) => child.icon === agent)}
                     onNavigate={onNavigate}
                   />
                 </td>
               ))}
-              <td>
-                <span className={styles.mobileLabel} aria-hidden="true">
-                  Components
-                </span>
-                <div className={styles.summary}>
-                  <span
-                    className={`${styles.fact} ${
-                      components.tone === "error"
-                        ? styles.error
-                        : components.tone === "warning"
-                          ? styles.warning
-                          : ""
-                    }`}
-                  >
-                    <ToneMark tone={components.tone} />
-                    <span>{components.detail}</span>
-                  </span>
-                  <ResourceLink node={components} onNavigate={onNavigate}>
-                    <span className={styles.primaryLink}>Manage components →</span>
-                  </ResourceLink>
-                </div>
-              </td>
             </tr>
           );
         })}

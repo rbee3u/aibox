@@ -1,12 +1,13 @@
-import { AlertTriangle, ChevronLeft } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Wrench } from "lucide-react";
 
 import type { SessionApi } from "@/api/sessions";
 import { SessionConversation } from "@/features/sessions/detail/SessionConversation";
 import { SessionDetails } from "@/features/sessions/detail/SessionDetails";
 import { messageCountLabel, toolCountLabel } from "@/features/sessions/sessionCatalog";
 import { sessionListCopy } from "@/features/sessions/sessionListCopy";
-import { visibleSessionListSource } from "@/features/sessions/sessionSource";
+import { sessionListTenantLabel } from "@/features/sessions/sessionSource";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
@@ -16,6 +17,8 @@ import styles from "@/features/sessions/SessionPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
+const HostTenantIcon = resourceIcons.hostTenant;
+const ManagedTenantIcon = resourceIcons.managedTenant;
 
 export function SessionDetailPane({
   api,
@@ -66,15 +69,33 @@ export function SessionDetailPane({
               <h2 ref={detailHeadingRef} tabIndex={-1} title={headline}>
                 {headline}
               </h2>
-              <span className={styles.sessionDetailSource}>
-                {visibleSessionListSource(currentSession.source)} ·{" "}
-                <time dateTime={currentSession.start_ts}>
-                  {formatTimestamp(currentSession.start_ts)}
-                </time>{" "}
-                ·{" "}
-                {messageCountLabel(detailStats?.message_count ?? currentSession.message_count ?? 0)}{" "}
-                · {toolCountLabel(detailStats?.tool_count ?? currentSession.tool_count ?? 0)}
-              </span>
+              <div className={styles.sessionDetailSource}>
+                <span className={styles.contextPill}>
+                  {currentSession.source.tenant.kind === "host" ? (
+                    <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  )}
+                  <small>Tenant: </small>
+                  <strong>
+                    {sessionListTenantLabel(currentSession.source.tenantSelectionValue)}
+                  </strong>
+                </span>
+                <span className={styles.contextPill}>
+                  <BrandIcon
+                    brand={brandForAgent(currentSession.source.agent)}
+                    size={iconSize.xs}
+                  />
+                  <small>Agent: </small>
+                  <strong>{currentSession.source.agentLabel}</strong>
+                </span>
+                <span className={styles.contextPill}>
+                  <time dateTime={currentSession.start_ts}>
+                    {formatTimestamp(currentSession.start_ts)}
+                  </time>
+                  {` · ${messageCountLabel(detailStats?.message_count ?? currentSession.message_count ?? 0)} · ${toolCountLabel(detailStats?.tool_count ?? currentSession.tool_count ?? 0)}`}
+                </span>
+              </div>
             </div>
             <div className={styles.sessionDetailActions}>
               {loadingDetail && (
@@ -159,7 +180,32 @@ export function SessionDetailPane({
           icon={<SessionIcon size={iconSize.xl} data-icon="session-empty" aria-hidden="true" />}
           title="Select a Session"
           description="Choose a Session to inspect its conversation and Transcript."
-        />
+        >
+          <div className={styles.emptyStateGuide}>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <SessionIcon size={iconSize.sm} />
+                <strong>Session Transcripts</strong>
+                <span className={styles.emptyStateBadge}>Full Audit</span>
+              </div>
+              <p>
+                Complete record of multi-turn interactions between users and Coding Agents. Review
+                prompts, model reasoning, and historical dialogue progression.
+              </p>
+            </div>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <Wrench size={iconSize.sm} />
+                <strong>Interactive Evidence</strong>
+                <span className={styles.emptyStateBadge}>Tools & Calls</span>
+              </div>
+              <p>
+                Drill down into individual tool invocations, shell command executions, file
+                read/write operations, and diagnostic logs with raw payload disclosures.
+              </p>
+            </div>
+          </div>
+        </EmptyState>
       )}
     </section>
   );

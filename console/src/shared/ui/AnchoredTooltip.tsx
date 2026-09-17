@@ -158,12 +158,13 @@ export function AnchoredTooltip<T extends HTMLElement>({
       if (!disabled) scheduleOpen();
     },
     onPointerLeave: (event) => {
-      if (event.pointerType !== "touch" && document.activeElement !== triggerRef.current) close();
+      if (event.pointerType !== "touch") close();
     },
     onPointerDown: (event) => {
       if (!disabled && event.pointerType !== "mouse") openImmediately();
     },
     onFocus: () => {
+      if (triggerRef.current?.getAttribute("data-dialog-restoring-focus") === "true") return;
       if (!disabled) openImmediately();
     },
     onBlur: () => close(),

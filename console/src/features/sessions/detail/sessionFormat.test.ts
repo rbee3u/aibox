@@ -22,10 +22,10 @@ describe("messageNavigationLabel", () => {
           "",
           ">>> TRANSCRIPT START",
           "",
-          "[1] user: 编译的时候好像要报这个问题，你看看能如何解决",
+          "[1] user: The build seems to fail; please investigate",
         ].join("\n"),
       ),
-    ).toBe("编译的时候好像要报这个问题，你看看能如何解决");
+    ).toBe("The build seems to fail; please investigate");
     expect(
       messageNavigationLabel(
         "The following is the Codex agent history added since your last approval assessment. Continue the same review conversation.",

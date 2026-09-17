@@ -41,6 +41,150 @@
   container-type: inline-size;
 }
 
+.tenantCatalog > div:first-child {
+  height: 56px;
+  min-height: 56px;
+  padding: 0 16px;
+}
+
+.catalogHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.catalogTitle {
+  margin: 0;
+  color: var(--ink-section-title);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
+}
+
+.catalogCount {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-content);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.tenantRow {
+  margin: 3px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.tenantRow:not([class*="rowInspected"]):not([class*="rowSelected"]):hover {
+  background: var(--surface-hover);
+}
+
+.tenantRow:active:not([class*="rowInspected"]):not([class*="rowSelected"]) {
+  background: var(--surface-pressed);
+}
+
+.tenantRow[class*="rowInspected"] {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface)) !important;
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent) !important;
+  box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+:root[data-resolved-theme="dark"] .tenantRow[class*="rowInspected"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised)) !important;
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent) !important;
+}
+
+.tenantRow[class*="rowInspected"]::before {
+  display: none;
+}
+
+.tenantRowIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color var(--transition-fast);
+}
+
+.hostRowIcon,
+.managedRowIcon {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+}
+
+.tenantRow:hover .hostRowIcon,
+.tenantRow:hover .managedRowIcon {
+  color: var(--ink);
+}
+
+.tenantRow[class*="rowInspected"] .hostRowIcon,
+.tenantRow[class*="rowInspected"] .managedRowIcon {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+}
+
+.managedDivider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 6px;
+  background: transparent;
+  border: 0;
+  height: auto;
+}
+
+.managedDivider span {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tenantRow [class*="rowDeleteAction"] {
+  opacity: 0.45;
+  margin-right: 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    opacity var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.tenantRow:hover [class*="rowDeleteAction"],
+.tenantRow:focus-within [class*="rowDeleteAction"] {
+  opacity: 0.75;
+}
+
+.tenantRow [class*="rowDeleteAction"]:hover,
+.tenantRow [class*="rowDeleteAction"]:focus-visible {
+  opacity: 1;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (pointer: coarse) {
+  .tenantRow [class*="rowDeleteAction"] {
+    opacity: 0.7;
+  }
+}
+
 .tenantRowText {
   display: grid;
   min-width: 0;
@@ -54,37 +198,79 @@
   line-height: var(--catalog-row-primary-line-height);
 }
 
+.tenantRowHeading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tenantKindBadge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-content);
+  color: var(--muted);
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
+  font-weight: var(--weight-medium);
+  text-transform: lowercase;
+}
+
+.tenantKindBadge[data-kind="protected"] {
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
+.tenantKindBadge[data-kind="host"] {
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  color: var(--ink-secondary);
+  border-color: var(--line-soft);
+}
+
 .tenantPath {
   min-width: 0;
   overflow: hidden;
-  color: var(--code-muted);
+  color: var(--ink-secondary);
   font: var(--weight-regular) var(--catalog-row-secondary-size) /
     var(--catalog-row-secondary-line-height) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+  opacity: 0.85;
 }
+
+.tenantRow:hover .tenantPath,
+.tenantRow[class*="rowInspected"] .tenantPath {
+  color: var(--ink);
+  opacity: 1;
+}
+
 .detailHeader {
-  min-height: 54px;
-  padding: 8px 18px;
+  height: 56px;
+  min-height: 56px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line-structural);
   background: var(--bg-shell);
 }
 
 .tenantDetailHeader {
-  height: 64px;
-  min-height: 64px;
+  height: 56px;
+  min-height: 56px;
   padding: 0 24px;
 }
 
 .componentHeaderInner {
-  display: grid;
+  display: flex;
   height: 100%;
   width: 100%;
   min-width: 0;
-  grid-template-columns: minmax(220px, 1fr) auto;
   align-items: center;
-  gap: 20px;
-  padding: 7px 0;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0;
 }
 
 .componentHeaderInner > [data-icon-button]:first-child {
@@ -92,50 +278,67 @@
 }
 
 .componentHeaderIdentity {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   min-width: 0;
-  gap: 1px;
+  flex: 1 1 auto;
+  gap: 2px;
 }
 
-.componentHeaderIdentity h2 {
+.componentEyebrowRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.componentEyebrow {
   margin: 0;
-  font-size: var(--text-panel-title);
-  font-weight: var(--weight-panel-title);
-  line-height: var(--line-height-panel-title);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  line-height: var(--line-height-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .componentHeaderContext {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-xs);
   white-space: nowrap;
 }
 
 .componentTenant {
-  overflow: hidden;
-  color: var(--ink-secondary);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  line-height: var(--line-height-lg);
+  letter-spacing: -0.01em;
 }
 
 .componentHome {
   display: flex;
   min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
   gap: 5px;
+  overflow: hidden;
   color: var(--muted);
 }
 
 .componentHome > span:first-child {
   color: var(--faint);
+  flex-shrink: 0;
 }
 
 .componentHome code {
-  min-width: 0;
+  min-width: 40px;
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--text-xs);
@@ -153,7 +356,7 @@
 
 .componentHeaderMeta {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -166,7 +369,33 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.componentInstalledSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-content);
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.componentInstalledSummary::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.componentInstalledSummary[data-status="all"]::before {
+  background: var(--success);
 }
 
 .componentInstalledSummary strong {
@@ -175,16 +404,28 @@
 }
 
 .componentSummaryAttention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-line);
   color: var(--warning);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
 }
 
-/*
- * An available update is routine, so it stays in the muted voice the rest of
- * the strip speaks in. Only `componentSummaryAttention` spends a colour.
- */
 .componentSummaryUpdates {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-content);
   color: var(--muted);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
 }
 
@@ -194,6 +435,28 @@
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
+}
+
+.componentCheckButton {
+  min-height: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-structural);
+  background: var(--surface);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.componentCheckButton:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--line-soft);
+}
+
+.componentCheckButton:active:not(:disabled) {
+  background: var(--surface-pressed);
 }
 
 .componentCheckButton:disabled {
@@ -227,33 +490,28 @@
   gap: var(--space-section);
 }
 
-.componentRow {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  grid-template-areas:
-    "icon content actions"
-    ". diagnostic diagnostic";
-  align-items: center;
-  gap: 0 11px;
-}
-
 .componentGroup {
   min-width: 0;
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 .componentGroupHeader {
   display: flex;
-  min-height: 28px;
+  min-height: 40px;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-md);
-  padding: 0 var(--space-md) var(--space-section-title);
+  padding: 8px 18px;
+  background: var(--surface-inset);
+  border-bottom: 1px solid var(--line-structural);
 }
 
 .componentGroupHeader::after {
-  height: 1px;
-  flex: 1;
-  background: var(--line-content);
-  content: "";
+  display: none;
 }
 
 .componentGroupHeader h3 {
@@ -264,14 +522,41 @@
   line-height: var(--line-height-section-title);
 }
 
+.componentGroupCount {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line-structural);
+  color: var(--muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
 .componentRow {
-  min-height: 52px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--line-content);
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "icon content actions"
+    ". diagnostic diagnostic";
+  align-items: center;
+  gap: 0 14px;
+  min-height: 58px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line-structural);
   background: var(--surface);
   transition:
     background-color var(--transition-fast),
     box-shadow var(--transition-fast);
+}
+
+.componentRow:hover {
+  background: var(--surface-hover);
+}
+
+.componentRow:active {
+  background: var(--surface-pressed);
 }
 
 .componentRow:last-child {
@@ -309,10 +594,205 @@
 .componentIconTile {
   display: grid;
   grid-area: icon;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
   color: var(--ink-secondary);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.componentRow:hover .componentIconTile {
+  border-color: var(--line-content);
+}
+
+.componentIconTile[data-component-icon="claude"] {
+  color: #c25e2e;
+  background: color-mix(in srgb, #c25e2e 8%, var(--surface-inset));
+  border-color: color-mix(in srgb, #c25e2e 22%, var(--line-structural));
+}
+
+:root[data-resolved-theme="dark"] .componentIconTile[data-component-icon="claude"] {
+  color: #ea7c49;
+  background: color-mix(in srgb, #ea7c49 14%, var(--surface-inset));
+  border-color: color-mix(in srgb, #ea7c49 28%, var(--line-structural));
+}
+
+.componentIconTile[data-component-icon="codex"] {
+  color: #059669;
+  background: color-mix(in srgb, #059669 8%, var(--surface-inset));
+  border-color: color-mix(in srgb, #059669 22%, var(--line-structural));
+}
+
+:root[data-resolved-theme="dark"] .componentIconTile[data-component-icon="codex"] {
+  color: #10a37f;
+  background: color-mix(in srgb, #10a37f 14%, var(--surface-inset));
+  border-color: color-mix(in srgb, #10a37f 28%, var(--line-structural));
+}
+
+.componentIconTile[data-component-icon="claude-statusline"],
+.componentIconTile[data-component-icon="codex-statusline"] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line-structural));
+}
+
+.versionTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-content);
+  background: var(--surface-inset);
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.versionUpToDate {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--line-structural));
+  color: var(--ink);
+}
+
+.versionCheckIcon {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.hostEnvironmentNotice {
+  margin-top: var(--space-lg);
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  box-shadow: var(--shadow-sm);
+}
+
+.hostNoticeHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.hostNoticeHeader strong {
+  font-weight: var(--weight-semibold);
+}
+
+.hostNoticeIcon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.hostEnvironmentNotice p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.dialogHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.dialogIconContainer {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface-inset));
+  border: 1px solid var(--line-soft);
+  color: var(--ink-secondary);
+}
+
+.dialogTitle {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
+}
+
+.dialogSubtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.dialogField {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.fieldLabel {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.pathPreview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  font-size: var(--text-meta);
+  overflow: hidden;
+}
+
+.pathPreviewLabel {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.pathPreview code {
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batchDeletePlan {
+  margin-top: 12px;
+}
+
+.batchDeleteCount {
+  margin-bottom: 8px;
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+
+.batchDeleteRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+}
+
+.batchDeleteRow code {
+  font-family: var(--font-mono);
+  color: var(--ink);
 }
 
 .componentIdentity strong {
@@ -359,6 +839,12 @@
 
 .componentStateValue strong,
 .componentReleaseValue strong {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-content);
+  background: var(--surface-raised);
   color: var(--code-muted);
   font-family: var(--font-mono);
   font-size: var(--text-meta);
@@ -386,6 +872,34 @@
   flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 4px;
+}
+
+.componentRemoveButton {
+  opacity: 0.45;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.componentRow:hover .componentRemoveButton,
+.componentRow:focus-within .componentRemoveButton {
+  opacity: 0.75;
+}
+
+.componentRemoveButton:hover,
+.componentRemoveButton:focus-visible {
+  opacity: 1;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (pointer: coarse) {
+  .componentRemoveButton {
+    opacity: 0.7;
+  }
 }
 
 .componentSplitAction {
@@ -501,8 +1015,9 @@
 
 .skeletonIcon {
   grid-area: icon;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
 }
 
 .skeletonLine {
@@ -557,7 +1072,6 @@
 
 @container (max-width: 720px) {
   .componentHeaderInner {
-    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 10px;
   }
 }
@@ -569,7 +1083,7 @@
  * beside the freshness until about 775px — a band covering exactly the 1440px
  * pane, where the check control wrapped inside a fixed-height header.
  */
-@container (max-width: 780px) {
+@container (max-width: 540px) {
   .componentInstalledSummary {
     display: none;
   }
@@ -582,6 +1096,18 @@
  */
 @container (max-width: 700px) {
   .componentSummaryUpdates {
+    display: none;
+  }
+}
+
+@container (max-width: 680px) {
+  .componentCheckButton {
+    width: var(--control-sm);
+    min-width: var(--control-sm);
+    padding: 0;
+  }
+
+  .componentCheckButton > span:last-child {
     display: none;
   }
 }

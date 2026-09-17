@@ -25,6 +25,7 @@ export interface OverviewApi {
   loadOverview(signal?: AbortSignal): Promise<OverviewData>;
   loadTopology(signal?: AbortSignal): Promise<TopologyData>;
   buildImage(force: boolean): Promise<Operation>;
+  loadRequestsCount?(signal?: AbortSignal): Promise<number>;
 }
 
 export function overviewApi(client: ControlApi): OverviewApi {
@@ -32,5 +33,9 @@ export function overviewApi(client: ControlApi): OverviewApi {
     loadOverview: (signal) => client.get<OverviewData>("/_aibox/api/overview", signal),
     loadTopology: (signal) => client.get<TopologyData>("/_aibox/api/topology", signal),
     buildImage: (force) => client.post<Operation>("/_aibox/api/operations/build", { force }),
+    loadRequestsCount: (signal) =>
+      client
+        .get<{ total: number }>("/_aibox/api/requests?limit=1", signal)
+        .then((res) => res.total),
   };
 }

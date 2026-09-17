@@ -76,19 +76,24 @@ export function SidebarUtilities({
   return (
     <footer className={styles.sidebarUtilities}>
       <nav className={styles.resourceLinks} aria-label="Resources">
-        {resources.map((resource) => (
-          <a
-            className={styles.resourceLink}
-            href={resource.href}
-            key={resource.label}
-            aria-label={resource.label}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={resource.label}
-          >
-            <BrandIcon brand={resource.brand} size={iconSize.md} />
-          </a>
-        ))}
+        <div className={styles.resourceSection}>
+          {!collapsed && <span className={styles.resourceHeader}>Resources</span>}
+          <div className={styles.resourceRow}>
+            {resources.map((resource) => (
+              <a
+                className={styles.resourceLink}
+                href={resource.href}
+                key={resource.label}
+                aria-label={resource.label}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={resource.label}
+              >
+                <BrandIcon brand={resource.brand} size={iconSize.md} />
+              </a>
+            ))}
+          </div>
+        </div>
       </nav>
       <div className={styles.utilityDivider} />
       <ThemeMenu collapsed={collapsed} onChange={onThemeChange} value={theme} />

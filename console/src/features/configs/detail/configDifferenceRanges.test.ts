@@ -3,7 +3,7 @@ import { jsonPathRange } from "@/features/configs/detail/configDifferenceRanges"
 
 describe("JSON difference locations", () => {
   it("locates escaped keys and multiline values after non-ASCII text", () => {
-    const text = '{"😀":"前置", "a\\u002eb": {"token":\n "different"}}';
+    const text = '{"😀":"prefix", "a\\u002eb": {"token":\n "different"}}';
     const range = jsonPathRange(text, ["a.b", "token"]);
     expect(range && text.slice(...range)).toBe('"different"');
     expect(jsonPathRange(text, ["a", "b"])).toBeNull();

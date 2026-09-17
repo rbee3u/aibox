@@ -1,4 +1,12 @@
-import { ArrowLeftRight, ChevronLeft, CircleAlert, ListChecks, LoaderCircle } from "lucide-react";
+import {
+  Activity,
+  ArrowLeftRight,
+  ChevronLeft,
+  CircleAlert,
+  ListChecks,
+  LoaderCircle,
+  ShieldCheck,
+} from "lucide-react";
 
 import type { RequestsApi } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
@@ -189,7 +197,32 @@ export function RequestsPage(props: RequestsPageProps) {
               }
               title="Select a Request"
               description="Choose a Request to inspect its summary and raw data."
-            />
+            >
+              <div className={styles.emptyStateGuide}>
+                <div className={styles.emptyStateCard}>
+                  <div className={styles.emptyStateCardHeader}>
+                    <Activity size={iconSize.sm} />
+                    <strong>Traffic & Token Metrics</strong>
+                    <span className={styles.emptyStateBadge}>Tokens & Latency</span>
+                  </div>
+                  <p>
+                    Track input, output, and reasoning token consumption, cache hit ratios,
+                    time-to-first-token (TTFB), and millisecond-level network stage waterfalls.
+                  </p>
+                </div>
+                <div className={styles.emptyStateCard}>
+                  <div className={styles.emptyStateCardHeader}>
+                    <ShieldCheck size={iconSize.sm} />
+                    <strong>Wire & Security Audit</strong>
+                    <span className={styles.emptyStateBadge}>Wire & Proxy</span>
+                  </div>
+                  <p>
+                    Inspect sanitized HTTP request/response headers, raw JSON bodies, streaming
+                    Server-Sent Events (SSE), and AIBox transparent proxy inspection assessments.
+                  </p>
+                </div>
+              </div>
+            </EmptyState>
           )}
         </div>
       </div>

@@ -109,3 +109,64 @@
     background: var(--surface-pressed);
   }
 }
+
+.emptyStateGuide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  max-width: 620px;
+  width: 100%;
+  margin: 24px auto 0;
+  text-align: left;
+}
+
+.emptyStateCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.emptyStateCard:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.emptyStateCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emptyStateCardHeader strong {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  margin-right: auto;
+}
+
+.emptyStateBadge {
+  padding: 1px 7px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: var(--radius-pill);
+}
+
+.emptyStateCard p {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--muted);
+  flex: 1;
+}

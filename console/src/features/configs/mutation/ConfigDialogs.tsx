@@ -17,7 +17,10 @@ import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import { StatusBadge } from "@/shared/ui/StatusBadge";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
+
+const NamedConfigIcon = resourceIcons.namedConfig;
 
 /**
  * A mode switch keeps the reader on the file, so it must not read as leaving:
@@ -134,18 +137,39 @@ export function ConfigDialogs({
               if (createNameValid && !createNameTaken && !mutationBusy) void createConfig(newName);
             }}
           >
-            <h2 id={createTitleId}>Create Named Config</h2>
-            <label>
-              Name
+            <div className={styles.dialogHeader}>
+              <div className={styles.dialogIconContainer}>
+                <NamedConfigIcon size={iconSize.md} aria-hidden="true" />
+              </div>
+              <div>
+                <h2 id={createTitleId} className={styles.dialogTitle}>
+                  Create Named Config
+                </h2>
+                <p className={styles.dialogSubtitle}>
+                  Create a reusable configuration profile template for{" "}
+                  {agent === "codex" ? "Codex" : "Claude"}.
+                </p>
+              </div>
+            </div>
+            <div className={styles.dialogField}>
+              <label htmlFor="create-config-name" className={styles.fieldLabel}>
+                Config Name
+              </label>
               <TextInput
+                id="create-config-name"
                 autoFocus
                 aria-label="Named Config name"
+                placeholder="e.g. team-staging, dev-fast"
                 value={newName}
                 onChange={(event) => changeNewName(event.target.value)}
                 aria-invalid={newName.length > 0 && (!createNameValid || createNameTaken)}
                 aria-describedby={createHelpId}
               />
-            </label>
+              <div className={styles.pathPreview}>
+                <span className={styles.pathPreviewLabel}>Storage Path:</span>
+                <code>{`~/.aibox/${agent}/${tenant.kind === "host" ? "host" : tenant.name}/${newName.trim() || "<name>"}`}</code>
+              </div>
+            </div>
             <p id={createHelpId} className={layout.dialogDescription}>
               Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or
               number.

@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDown, Ban, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowDown, Ban, User, type LucideIcon } from "lucide-react";
 import type { RefObject, UIEvent } from "react";
 import type { ConversationMessage, ConversationNotice, SessionApi } from "@/api/sessions";
 import { SessionActivityGroup } from "@/features/sessions/detail/SessionActivityGroup";
@@ -15,6 +15,7 @@ import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons, toneIcons } from "@/shared/icons/consoleIcons";
 import styles from "@/features/sessions/SessionPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
@@ -76,8 +77,11 @@ export function SessionConversation({
   onTranscriptStale,
 }: SessionConversationProps) {
   const readingTimeline = conversationReadingTimeline(timeline);
+  const singleTurn = userMessages.length <= 1;
   return (
-    <div className={styles.sessionConversationLayout}>
+    <div
+      className={`${styles.sessionConversationLayout} ${singleTurn ? styles.singleTurnLayout : ""}`}
+    >
       <SessionConversationNav
         messages={userMessages}
         activeEntryId={activeUserMessage}
@@ -126,21 +130,34 @@ export function SessionConversation({
                 );
               }
               if (item.kind === "message") {
-                const label = item.value.role === "user" ? "You" : session.source.agentLabel;
+                const isUser = item.value.role === "user";
+                const label = isUser ? "You" : session.source.agentLabel;
                 const timestamp = compactMessageTimestamp(item.value.timestamp, session.start_ts);
                 return (
                   <article
                     key={sessionItemKey(item)}
-                    id={item.value.role === "user" ? messageAnchorId(item.value) : undefined}
+                    id={isUser ? messageAnchorId(item.value) : undefined}
                     ref={(element) => {
-                      if (item.value.role !== "user") return;
+                      if (!isUser) return;
                       const entryId = item.value.entry_ids[0];
                       if (entryId) registerMessage(entryId, element);
                     }}
-                    className={`${styles.sessionMessage} ${item.value.role === "user" ? styles.sessionMessageUser : styles.sessionMessageAssistant}`}
+                    className={`${styles.sessionMessage} ${isUser ? styles.sessionMessageUser : styles.sessionMessageAssistant}`}
                   >
                     <header>
-                      <span>{label}</span>
+                      <div className={styles.sessionMessageSender}>
+                        <span className={styles.sessionMessageAvatar} aria-hidden="true">
+                          {isUser ? (
+                            <User size={iconSize.xs} />
+                          ) : (
+                            <BrandIcon
+                              brand={brandForAgent(session.source.agent)}
+                              size={iconSize.xs}
+                            />
+                          )}
+                        </span>
+                        <span>{label}</span>
+                      </div>
                       <time
                         dateTime={item.value.timestamp}
                         title={formatTimestamp(item.value.timestamp)}

@@ -33,7 +33,7 @@ import {
   tokenCount,
 } from "@/features/requests/summary";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
-import { capitalize, duration, formatTimestamp } from "@/shared/lib/format";
+import { capitalize, compactDuration, duration, formatTimestamp } from "@/shared/lib/format";
 import { decodeHeader, requestDetailUrl } from "@/features/requests/requestFormat";
 import { BodyViewer } from "@/features/requests/detail/BodyViewer";
 import styles from "@/features/requests/detail/RequestDetail.module.css";
@@ -109,14 +109,24 @@ export function RequestDetail({
           </span>
         </h2>
         <div className={styles.caption}>
-          <RecordHeadlineStatus
-            response={response}
-            state={detail.state}
-            assessment={detail.assessment}
-          />
-          <span className={styles.captionTime}>
-            <span aria-hidden="true">· </span>
-            {timestampKind} <time dateTime={timestampValue}>{formatTimestamp(timestampValue)}</time>
+          <span className={styles.contextPill}>
+            <RecordHeadlineStatus
+              response={response}
+              state={detail.state}
+              assessment={detail.assessment}
+            />
+          </span>
+          {detail.result?.total_ms !== undefined && (
+            <span className={styles.contextPill}>
+              <small>Duration: </small>
+              <strong>{compactDuration(detail.result.total_ms)}</strong>
+            </span>
+          )}
+          <span className={styles.contextPill}>
+            <span className={styles.captionTime}>
+              {timestampKind}{" "}
+              <time dateTime={timestampValue}>{formatTimestamp(timestampValue)}</time>
+            </span>
           </span>
         </div>
       </header>
@@ -239,7 +249,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
         </dl>
       </section>
       <TokenUsageGroup detail={detail} />
-      <section aria-labelledby="request-timing-title">
+      <section className={styles.timingSection} aria-labelledby="request-timing-title">
         <h2 id="request-timing-title">Timing</h2>
         <dl className={styles.timingMetrics}>
           <Metric label="First token" value={duration(firstToken)} />
@@ -252,14 +262,8 @@ function Summary({ detail }: { detail: RequestDetailData }) {
                 <span />
                 <div className={styles.timelineRuler}>
                   <span className={`${styles.rulerTick} ${styles.rulerTickStart}`}>0 ms</span>
-                  <span className={`${styles.rulerTick} ${styles.rulerTickQuarter}`}>
-                    {duration(axisMs * 0.25)}
-                  </span>
                   <span className={`${styles.rulerTick} ${styles.rulerTickHalf}`}>
                     {duration(axisMs * 0.5)}
-                  </span>
-                  <span className={`${styles.rulerTick} ${styles.rulerTickThreeQuarter}`}>
-                    {duration(axisMs * 0.75)}
                   </span>
                   <span className={`${styles.rulerTick} ${styles.rulerTickEnd}`}>
                     {duration(axisMs)}
@@ -391,7 +395,7 @@ function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
     usage?.output_tokens,
   ].some((value) => value != null);
   return (
-    <section aria-labelledby="request-token-title">
+    <section className={styles.tokenSection} aria-labelledby="request-token-title">
       <h2 id="request-token-title">Token usage</h2>
       {hasUsageData ? (
         <div className={styles.tokenUsageGrid}>
@@ -443,8 +447,8 @@ function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
                 <dd>{displayTokenCount(output)}</dd>
               </div>
             </dl>
-            <div className={styles.tokenSubMetrics}>
-              {reasoning !== null ? (
+            {reasoning !== null && (
+              <div className={styles.tokenSubMetrics}>
                 <div
                   className={styles.tokenSubCell}
                   role="group"
@@ -457,10 +461,8 @@ function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
                     </div>
                   </dl>
                 </div>
-              ) : (
-                <div className={styles.tokenSubCellEmpty} aria-hidden="true" />
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (

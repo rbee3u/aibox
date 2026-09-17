@@ -101,30 +101,38 @@ export function TenantCatalogPane({
             </ActionButton>
           </>
         ) : (
-          <div className={layout.toolbarActions}>
-            <RefreshButton
-              ref={refreshButton}
-              label="Refresh Tenants"
-              busyLabel="Refreshing Tenants"
-              busy={refreshing}
-              disabled={refreshing || loadingTenants}
-              compactOnNarrow
-              onClick={() => void refreshTenants()}
-            >
-              Refresh
-            </RefreshButton>
-            <IconLabelButton
-              ref={selectButton}
-              className={layout.selectionEnter}
-              aria-label="Select Tenants"
-              disabled={selectableKeys.length === 0 || refreshing || loadingTenants || busy}
-              onClick={enterSelection}
-              compactOnNarrow
-              icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
-            >
-              Select
-            </IconLabelButton>
-          </div>
+          <>
+            <div className={styles.catalogHeading}>
+              <h2 className={styles.catalogTitle}>Tenants</h2>
+              <span className={styles.catalogCount}>
+                {managedTenants.length + (hostTenant ? 1 : 0)}
+              </span>
+            </div>
+            <div className={layout.toolbarActions}>
+              <RefreshButton
+                ref={refreshButton}
+                label="Refresh Tenants"
+                busyLabel="Refreshing Tenants"
+                busy={refreshing}
+                disabled={refreshing || loadingTenants}
+                compactOnNarrow
+                onClick={() => void refreshTenants()}
+              >
+                Refresh
+              </RefreshButton>
+              <IconLabelButton
+                ref={selectButton}
+                className={layout.selectionEnter}
+                aria-label="Select Tenants"
+                disabled={selectableKeys.length === 0 || refreshing || loadingTenants || busy}
+                onClick={enterSelection}
+                compactOnNarrow
+                icon={<ListChecks size={iconSize.xs} aria-hidden="true" />}
+              >
+                Select
+              </IconLabelButton>
+            </div>
+          </>
         )}
       </div>
       <div className={layout.list} aria-busy={refreshing || loadingTenants}>
@@ -147,9 +155,16 @@ export function TenantCatalogPane({
                     onLocationChange(tenantLocation("host"));
                   }}
                 >
-                  <HostTenantIcon size={iconSize.sm} data-icon="host-tenant" />
+                  <span className={`${styles.tenantRowIcon} ${styles.hostRowIcon}`}>
+                    <HostTenantIcon size={iconSize.sm} data-icon="host-tenant" />
+                  </span>
                   <span className={styles.tenantRowText}>
-                    <strong>Host Tenant</strong>
+                    <span className={styles.tenantRowHeading}>
+                      <strong>Host Tenant</strong>
+                      <span className={styles.tenantKindBadge} data-kind="host">
+                        host
+                      </span>
+                    </span>
                     <small className={styles.tenantPath} title={hostTenant.home}>
                       {abbreviateTenantHome(hostTenant.home, hostTenant.home)}
                     </small>
@@ -157,7 +172,7 @@ export function TenantCatalogPane({
                 </button>
               </div>
             )}
-            <div className={layout.divider}>
+            <div className={`${layout.divider} ${styles.managedDivider}`}>
               <span>Managed Tenants</span>
               <IconButton
                 className={layout.addAction}
@@ -198,9 +213,18 @@ export function TenantCatalogPane({
                       }
                     }}
                   >
-                    <ManagedTenantIcon size={iconSize.sm} data-icon="managed-tenant" />
+                    <span className={`${styles.tenantRowIcon} ${styles.managedRowIcon}`}>
+                      <ManagedTenantIcon size={iconSize.sm} data-icon="managed-tenant" />
+                    </span>
                     <span className={styles.tenantRowText}>
-                      <strong>{row.display_name}</strong>
+                      <span className={styles.tenantRowHeading}>
+                        <strong>{row.display_name}</strong>
+                        {isDefault && (
+                          <span className={styles.tenantKindBadge} data-kind="protected">
+                            {row.display_name === "default" ? "protected" : "default"}
+                          </span>
+                        )}
+                      </span>
                       <small className={styles.tenantPath} title={row.home}>
                         {abbreviateTenantHome(row.home, hostTenant?.home ?? null)}
                       </small>

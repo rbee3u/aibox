@@ -218,7 +218,12 @@ export function conversationReadingTimeline(
   timeline: readonly SessionTimelineItem[],
 ): SessionTimelineItem[] {
   return timeline.filter((item) => {
-    if (item.kind === "message") return true;
+    if (item.kind === "message") {
+      if (item.value.role === "assistant" && !item.value.notice && !item.value.text.trim()) {
+        return false;
+      }
+      return true;
+    }
     const summary = activitySummary(item.value);
     return summary.toolCount > 0 || summary.diagnosticCount > 0;
   });

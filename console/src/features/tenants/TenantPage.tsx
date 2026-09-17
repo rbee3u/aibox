@@ -53,7 +53,12 @@ export function TenantPage(props: PageProps) {
         onAction={() => undefined}
         onDismiss={feedback.dismissNotification}
       />
-      <TenantDialogs components={components} dialogs={dialogs} mutations={mutations} />
+      <TenantDialogs
+        catalog={catalog}
+        components={components}
+        dialogs={dialogs}
+        mutations={mutations}
+      />
     </div>
   );
 }

@@ -20,49 +20,53 @@ describe("Session catalog copy", () => {
   });
 
   it("keeps an ordinary title as the headline", () => {
-    expect(sessionListCopy("江南逢李龟年，改一字使其更好", "可将“好”改为“旧”")).toEqual({
-      headline: "江南逢李龟年，改一字使其更好",
-      supporting: "可将“好”改为“旧”",
+    expect(
+      sessionListCopy("Improve the poem by changing one word", 'Replace "bright" with "old"'),
+    ).toEqual({
+      headline: "Improve the poem by changing one word",
+      supporting: 'Replace "bright" with "old"',
       emptyPreview: false,
     });
   });
 
   it("strips catalog supporting Markdown markers without rendering GFM", () => {
     expect(
-      sessionCatalogPlainText("可将“好”改为“旧”： > 正是江南**旧**风景，落花时节又逢君。"),
-    ).toBe("可将“好”改为“旧”： 正是江南旧风景，落花时节又逢君。");
-    expect(sessionCatalogPlainText("仅修改 `#[cfg(test)]` 测试模块")).toBe(
-      "仅修改 #[cfg(test)] 测试模块",
+      sessionCatalogPlainText('Replace "bright" with "old": > The **old** landscape remains.'),
+    ).toBe('Replace "bright" with "old": The old landscape remains.');
+    expect(sessionCatalogPlainText("Only change the `#[cfg(test)]` test module")).toBe(
+      "Only change the #[cfg(test)] test module",
     );
-    expect(sessionCatalogPlainText("- “好了好了，这下坏了。")).toBe("“好了好了，这下坏了。");
+    expect(sessionCatalogPlainText('- "Everything is fine now."')).toBe(
+      '"Everything is fine now."',
+    );
     expect(sessionCatalogPlainText("* leftover bullet")).toBe("leftover bullet");
-    expect(sessionCatalogPlainText("答案是 \\(x=8\\)。")).toBe("答案是 x=8。");
+    expect(sessionCatalogPlainText("The answer is \\(x=8\\).")).toBe("The answer is x=8.");
     expect(sessionCatalogPlainText("Let \\[a + b\\] hold and $n$ stay")).toBe(
       "Let a + b hold and n stay",
     );
     expect(
       sessionListCopy(
-        "江南逢李龟年，改一字使其更好",
-        "可将“好”改为“旧”： > 正是江南**旧**风景，落花时节又逢君。",
+        "Improve the poem by changing one word",
+        'Replace "bright" with "old": > The **old** landscape remains.',
       ),
     ).toEqual({
-      headline: "江南逢李龟年，改一字使其更好",
-      supporting: "可将“好”改为“旧”： 正是江南旧风景，落花时节又逢君。",
+      headline: "Improve the poem by changing one word",
+      supporting: 'Replace "bright" with "old": The old landscape remains.',
       emptyPreview: false,
     });
-    expect(sessionListCopy("有一个水杯配对游戏。", "答案是 \\(x=8\\)。")).toEqual({
-      headline: "有一个水杯配对游戏。",
-      supporting: "答案是 x=8。",
+    expect(sessionListCopy("Solve the cup-matching game.", "The answer is \\(x=8\\).")).toEqual({
+      headline: "Solve the cup-matching game.",
+      supporting: "The answer is x=8.",
       emptyPreview: false,
     });
     expect(
       sessionListCopy(
-        "请把 “好了好了，这下坏了。” 和 “坏了坏了，这下好了。” 这两句话翻译成英语",
-        "- “好了好了，这下坏了。",
+        'Compare "Everything is fine" with "Something went wrong"',
+        '- "Everything is fine"',
       ),
     ).toEqual({
-      headline: "请把 “好了好了，这下坏了。” 和 “坏了坏了，这下好了。” 这两句话翻译成英语",
-      supporting: "“好了好了，这下坏了。",
+      headline: 'Compare "Everything is fine" with "Something went wrong"',
+      supporting: '"Everything is fine"',
       emptyPreview: false,
     });
   });
@@ -71,10 +75,10 @@ describe("Session catalog copy", () => {
     expect(
       sessionListCopy(
         "[$improve-unit-tests](/Users/rbee3u/.agents/skills/code-craft-skills/improve-unit-tests/SKILL.md)",
-        "已完善 SSE 观察上限相关单元测试",
+        "Added unit tests for the SSE observation limit",
       ),
     ).toEqual({
-      headline: "已完善 SSE 观察上限相关单元测试",
+      headline: "Added unit tests for the SSE observation limit",
       supporting: "improve-unit-tests",
       emptyPreview: false,
     });
@@ -84,42 +88,44 @@ describe("Session catalog copy", () => {
     const skill =
       "[$improve-unit-tests](/Users/rbee3u/.agents/skills/code-craft-skills/improve-unit-tests/SKILL.md)";
     const expected = {
-      headline: "已完善 SSE 观察上限相关单元测试，仅修改 `#[cfg(test)]` 测试模块，未改生产逻辑。",
+      headline:
+        "Added unit tests for the SSE observation limit; only the `#[cfg(test)]` module changed.",
       supporting: "improve-unit-tests",
       emptyPreview: false,
     };
     expect(
       sessionListCopy(
         skill,
-        "已完善 SSE 观察上限相关单元测试，仅修改 `#[cfg(test)]` 测试模块，未改生产逻辑。\n\n- **High** — src/traffic_sse.rs:514：补充回归测试",
+        "Added unit tests for the SSE observation limit; only the `#[cfg(test)]` module changed.\n\n- **High** — src/traffic_sse.rs:514: add a regression test",
       ),
     ).toEqual(expected);
     expect(
       sessionListCopy(
         skill,
-        "已完善 SSE 观察上限相关单元测试，仅修改 `#[cfg(test)]` 测试模块，未改生产逻辑。 - **High** — src/traffic_sse.rs:514：补充回归测试",
+        "Added unit tests for the SSE observation limit; only the `#[cfg(test)]` module changed. - **High** — src/traffic_sse.rs:514: add a regression test",
       ),
     ).toEqual(expected);
   });
 
   it("promotes only the first CJK sentence of a collapsed latest message", () => {
+    const cjkFullStop = "\u3002";
     const cases = [
       [
         "[$improve-code-logic](/Users/rbee3u/.agents/skills/x/SKILL.md)",
-        "已完成一项中等严重度的代理逻辑修复。 - 位置：[traffic_store.rs](/Users/rbee3u/easymat",
-        "已完成一项中等严重度的代理逻辑修复。",
+        `Completed a medium-severity proxy logic fix${cjkFullStop} - Location: [traffic_store.rs](/Users/rbee3u/easymat`,
+        `Completed a medium-severity proxy logic fix${cjkFullStop}`,
         "improve-code-logic",
       ],
       [
         "[$improve-documents](/Users/rbee3u/.agents/skills/x/SKILL.md)",
-        "已完成，本次完善了 9 个文件，未修改业务逻辑。 主要修正： - **Medium** — [README.md](/Users",
-        "已完成，本次完善了 9 个文件，未修改业务逻辑。",
+        `Updated nine files without changing business logic${cjkFullStop} Main changes: - **Medium** — [README.md](/Users`,
+        `Updated nine files without changing business logic${cjkFullStop}`,
         "improve-documents",
       ],
       [
         "[$improve-code-style](/Users/rbee3u/.agents/skills/x/SKILL.md)",
-        "已完成代码风格改进，保持原有行为不变。 - `Medium` — [completion.rs](/Users/rbee3u/e",
-        "已完成代码风格改进，保持原有行为不变。",
+        `Improved code style without changing behavior${cjkFullStop} - \`Medium\` — [completion.rs](/Users/rbee3u/e`,
+        `Improved code style without changing behavior${cjkFullStop}`,
         "improve-code-style",
       ],
     ] as const;
@@ -172,7 +178,7 @@ describe("Session catalog copy", () => {
       false,
     );
     expect(isHumanReadableSessionText("[$improve-documents](/tmp/SKILL.md)")).toBe(false);
-    expect(isHumanReadableSessionText("已完善测试")).toBe(true);
+    expect(isHumanReadableSessionText("Tests are complete")).toBe(true);
     expect(sessionSkillName("[$improve-documents](/tmp/SKILL.md)")).toBe("improve-documents");
   });
 
@@ -185,9 +191,11 @@ describe("Session catalog copy", () => {
       rest: "",
     });
     expect(userMessageReadingText(only)).toBe("$improve-unit-tests");
-    expect(userMessageReadingText(`${only}\n\n请补测试`)).toBe("$improve-unit-tests\n请补测试");
-    expect(parseLeadingSkillLink("请使用 [$improve-unit-tests](/tmp/SKILL.md)")).toBeNull();
-    expect(userMessageReadingText("普通用户消息")).toBe("普通用户消息");
+    expect(userMessageReadingText(`${only}\n\nPlease add tests`)).toBe(
+      "$improve-unit-tests\nPlease add tests",
+    );
+    expect(parseLeadingSkillLink("Please use [$improve-unit-tests](/tmp/SKILL.md)")).toBeNull();
+    expect(userMessageReadingText("Ordinary user message")).toBe("Ordinary user message");
   });
 
   it("reads a request-review prompt as the first embedded user line", () => {
@@ -196,27 +204,27 @@ describe("Session catalog copy", () => {
       "",
       ">>> TRANSCRIPT START",
       "",
-      "[1] user: 编译的时候好像要报这个问题，你看看能如何解决",
-      "[2] assistant: 我先看构建日志",
+      "[1] user: The build seems to fail; please investigate",
+      "[2] assistant: I will inspect the build log",
     ].join("\n");
     const continuation = [
       "The following is the Codex agent history added since your last approval assessment. Continue the same review conversation.",
       "",
       ">>> TRANSCRIPT START",
       "",
-      "[40] user: 再跑一次测试",
+      "[40] user: Run the tests again",
     ].join("\n");
     expect(parseReviewPrompt(initial)).toEqual({
       kind: "initial",
-      headline: "编译的时候好像要报这个问题，你看看能如何解决",
+      headline: "The build seems to fail; please investigate",
     });
-    expect(userMessageReadingText(initial)).toBe("编译的时候好像要报这个问题，你看看能如何解决");
+    expect(userMessageReadingText(initial)).toBe("The build seems to fail; please investigate");
     expect(parseReviewPrompt(continuation)).toEqual({
       kind: "continuation",
       headline: "Review continuation",
     });
     expect(userMessageReadingText(continuation)).toBe("Review continuation");
-    expect(parseReviewPrompt("普通用户消息")).toBeNull();
+    expect(parseReviewPrompt("Ordinary user message")).toBeNull();
   });
 
   it("reads a whole-message approval JSON as review assessment fields", () => {
@@ -237,6 +245,6 @@ describe("Session catalog copy", () => {
       rationale: null,
     });
     expect(parseReviewAssessment('{"foo":"bar"}')).toBeNull();
-    expect(parseReviewAssessment("已完善测试")).toBeNull();
+    expect(parseReviewAssessment("Tests are complete")).toBeNull();
   });
 });

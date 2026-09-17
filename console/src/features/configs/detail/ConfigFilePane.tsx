@@ -200,20 +200,22 @@ export function ConfigFilePane({
                   <div className={styles.visualFieldMeta}>
                     <VisualOptionLabel label="OpenAI API key" path="OPENAI_API_KEY" />
                   </div>
-                  <div className={`${styles.visualFieldControl} ${styles.visualTextControl}`}>
-                    <TextInput
-                      id="config-option-openai-api-key"
-                      type={revealed ? "text" : "password"}
-                      value={authKey}
-                      onChange={(event) => setAuthKey(event.target.value)}
-                      aria-label="OpenAI API key"
-                    />
-                    <IconButton
-                      label={revealed ? "Hide OpenAI API key" : "Show OpenAI API key"}
-                      onClick={() => setRevealed((value) => !value)}
-                    >
-                      {revealed ? <EyeOff size={iconSize.xs} /> : <Eye size={iconSize.xs} />}
-                    </IconButton>
+                  <div className={styles.visualFieldControl}>
+                    <div className={styles.visualTextControl}>
+                      <TextInput
+                        id="config-option-openai-api-key"
+                        type={revealed ? "text" : "password"}
+                        value={authKey}
+                        onChange={(event) => setAuthKey(event.target.value)}
+                        aria-label="OpenAI API key"
+                      />
+                      <IconButton
+                        label={revealed ? "Hide OpenAI API key" : "Show OpenAI API key"}
+                        onClick={() => setRevealed((value) => !value)}
+                      >
+                        {revealed ? <EyeOff size={iconSize.xs} /> : <Eye size={iconSize.xs} />}
+                      </IconButton>
+                    </div>
                   </div>
                 </div>
               )}

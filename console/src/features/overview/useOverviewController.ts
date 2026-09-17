@@ -31,9 +31,11 @@ interface OverviewViewModel {
     buildUnavailableReason: string | null;
     elapsedUptime: number;
     loadOverview: (visibleRefresh?: boolean) => Promise<void>;
+    loadRequestsTotal: () => Promise<void>;
     overview: OverviewData | null;
     overviewError: string | null;
     overviewRefreshing: boolean;
+    requestsTotal: number | null;
   };
   topology: {
     pageRef: RefObject<HTMLDivElement | null>;
@@ -62,6 +64,8 @@ export function useOverviewController({
     elapsedUptime,
     loadOverview,
     loadTopology,
+    loadRequestsTotal,
+    requestsTotal,
     overview,
     overviewError,
     overviewRefreshing,
@@ -174,9 +178,11 @@ export function useOverviewController({
       buildUnavailableReason,
       elapsedUptime,
       loadOverview,
+      loadRequestsTotal,
       overview,
       overviewError,
       overviewRefreshing,
+      requestsTotal,
     },
     topology: {
       pageRef,

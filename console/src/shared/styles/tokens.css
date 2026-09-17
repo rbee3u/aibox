@@ -155,10 +155,12 @@
   --text-sm: 14px;
   --text-md: 16px;
   --text-lg: 18px;
+  --text-xl: 24px;
   --line-height-xs: 18px;
   --line-height-sm: 20px;
   --line-height-md: 22px;
   --line-height-lg: 24px;
+  --line-height-xl: 28px;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
@@ -218,8 +220,8 @@
   --status-height: 23px;
   --radius-pill: 999px;
   --catalog-panel-width: clamp(360px, 31vw, 460px);
-  --catalog-toolbar-min-height: var(--toolbar-height);
-  --catalog-toolbar-padding: 5px 10px 5px 14px;
+  --catalog-toolbar-min-height: 56px;
+  --catalog-toolbar-padding: 0 14px;
   --catalog-divider-min-height: 38px;
   --catalog-divider-padding: 5px 7px 5px 14px;
   --catalog-row-padding: var(--space-md);
@@ -345,6 +347,26 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-control) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: var(--line-control);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--line-control-strong);
 }
 
 html,

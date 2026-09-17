@@ -20,7 +20,19 @@ describe("RequestList layout and responsive behaviors", () => {
     expect(css).toMatch(/\.pageTurnLabel\s*\{[^}]*display:\s*none/s);
   });
 
+  it("distributes timing and timestamp across full width with space-between on narrow containers", () => {
+    expect(css).toMatch(/\.timingMetadata\s*\{[^}]*justify-content:\s*space-between/s);
+    expect(css).toMatch(/\.timingMetadata\s*\{[^}]*justify-self:\s*stretch/s);
+  });
+
   it("provides fullWidthFact rule spanning all grid columns in ConfirmDialog", () => {
     expect(confirmDialogCss).toMatch(/\.fullWidthFact\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/s);
+  });
+
+  it("uses refined 18px checkbox styling with comfortable right inset", () => {
+    expect(css).toMatch(
+      /\.selectionIndicator\s*\{[^}]*right:\s*12px;[^}]*width:\s*18px;[^}]*height:\s*18px/s,
+    );
+    expect(css).toMatch(/\.selectionRecord \.rowButton\s*\{[^}]*padding-right:\s*38px/s);
   });
 });

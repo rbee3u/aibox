@@ -1,4 +1,11 @@
-import { ChevronDown, ChevronRight, ChevronUp, LoaderCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  LoaderCircle,
+} from "lucide-react";
 import { useState } from "react";
 
 import type { AttentionItem } from "@/features/overview/resourceTree";
@@ -52,19 +59,29 @@ export function AttentionPanel({
         Needs attention
       </h2>
       {panel === "pending" ? (
-        <p className={styles.quiet} role="status">
+        <div className={styles.pendingBanner} role="status">
           <LoaderCircle className="spin" size={iconSize.xs} aria-hidden="true" />
-          Inspecting service and topology
-        </p>
+          <span>Inspecting service and topology</span>
+        </div>
       ) : panel === "healthy" ? (
-        <p className={styles.quiet} role="status">
-          No warnings or errors are currently reported.
-        </p>
+        <div className={styles.healthyBanner} role="status">
+          <CheckCircle2 size={iconSize.xs} className={styles.healthyIcon} aria-hidden="true" />
+          <span>No warnings or errors are currently reported.</span>
+        </div>
       ) : (
-        <>
-          <p className={styles.count} role="status">
-            Needs attention · {items.length}
-          </p>
+        <div className={styles.alertCard}>
+          <div className={styles.cardHeader}>
+            <div className={styles.countWrapper}>
+              <AlertTriangle
+                size={iconSize.xs}
+                className={styles.headerAlertIcon}
+                aria-hidden="true"
+              />
+              <p className={styles.count} role="status">
+                Needs attention · {items.length}
+              </p>
+            </div>
+          </div>
           <ul className={styles.list}>
             {visible.map((item) => (
               <AttentionRow
@@ -91,7 +108,7 @@ export function AttentionPanel({
               {showAll ? "Show fewer" : `Show ${overflow} more`}
             </button>
           )}
-        </>
+        </div>
       )}
     </section>
   );
@@ -104,6 +121,33 @@ interface AttentionRowProps {
   retrying: boolean;
 }
 
+function DetailText({ detail }: { detail: string }) {
+  const parts = detail.split(" · ");
+  if (parts.length === 3) {
+    const [tenant, agent, issue] = parts;
+    return (
+      <span className={styles.detail}>
+        <strong className={styles.detailTenant}>{tenant}</strong>
+        <span className={styles.detailSep}> · </span>
+        <span className={styles.detailAgent}>{agent}</span>
+        <span className={styles.detailSep}> · </span>
+        <span className={styles.detailIssue}>{issue}</span>
+      </span>
+    );
+  }
+  if (parts.length === 2) {
+    const [scope, issue] = parts;
+    return (
+      <span className={styles.detail}>
+        <strong className={styles.detailTenant}>{scope}</strong>
+        <span className={styles.detailSep}> · </span>
+        <span className={styles.detailIssue}>{issue}</span>
+      </span>
+    );
+  }
+  return <span className={styles.detail}>{detail}</span>;
+}
+
 function AttentionRow({ item, onNavigate, onRetry, retrying }: AttentionRowProps) {
   const ToneIcon = toneIcons[item.tone];
   const content = (
@@ -112,7 +156,7 @@ function AttentionRow({ item, onNavigate, onRetry, retrying }: AttentionRowProps
         <ToneIcon size={iconSize.xs} aria-hidden="true" />
       </span>
       <span className={styles.label}>{item.label}</span>
-      <span className={styles.detail}>{item.detail}</span>
+      <DetailText detail={item.detail} />
     </>
   );
   /*

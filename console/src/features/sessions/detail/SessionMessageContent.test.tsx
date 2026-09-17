@@ -46,11 +46,11 @@ it("shows a request-review prompt as the embedded user line", () => {
     "",
     ">>> TRANSCRIPT START",
     "",
-    "[1] user: 编译的时候好像要报这个问题，你看看能如何解决",
-    "[2] assistant: 我先看构建日志",
+    "[1] user: The build seems to fail; please investigate",
+    "[2] assistant: I will inspect the build log",
   ].join("\n");
   render(<SessionMessageContent role="user" text={prompt} />);
-  expect(screen.getByText("编译的时候好像要报这个问题，你看看能如何解决")).toBeInTheDocument();
+  expect(screen.getByText("The build seems to fail; please investigate")).toBeInTheDocument();
   const dump = screen.getByText("Review prompt").closest("details");
   expect(dump).not.toHaveAttribute("open");
   expect(dump).toHaveTextContent("The following is the Codex agent history");
@@ -59,7 +59,7 @@ it("shows a review continuation without the delta dump", () => {
   render(
     <SessionMessageContent
       role="user"
-      text="The following is the Codex agent history added since your last approval assessment. Continue the same review conversation.\n\n>>> TRANSCRIPT START\n\n[40] user: 再跑一次测试"
+      text="The following is the Codex agent history added since your last approval assessment. Continue the same review conversation.\n\n>>> TRANSCRIPT START\n\n[40] user: Run the tests again"
     />,
   );
   expect(screen.getByText("Review continuation")).toBeInTheDocument();
@@ -85,10 +85,15 @@ it("keeps non-assessment assistant JSON as Markdown text", () => {
 });
 it("shows a leading skill file link as $name with the path on the title", () => {
   const path = "/Users/rbee3u/.agents/skills/code-craft-skills/improve-unit-tests/SKILL.md";
-  render(<SessionMessageContent role="user" text={`[$improve-unit-tests](${path})\n\n请补测试`} />);
+  render(
+    <SessionMessageContent
+      role="user"
+      text={`[$improve-unit-tests](${path})\n\nPlease add tests`}
+    />,
+  );
   const label = screen.getByText("$improve-unit-tests");
   expect(label).toHaveAttribute("title", path);
-  expect(screen.getByText("请补测试")).toBeInTheDocument();
+  expect(screen.getByText("Please add tests")).toBeInTheDocument();
   expect(screen.queryByText(/\[\$improve-unit-tests\]/)).not.toBeInTheDocument();
 });
 it("offers a copy button for fenced code blocks and labels them by language alone", () => {

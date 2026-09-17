@@ -8,16 +8,16 @@
   padding: 0;
   color: var(--ink);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .dialog::backdrop {
-  background: rgb(7 11 18 / 0.58);
-  backdrop-filter: blur(2px);
+  background: rgb(7 11 18 / 0.65);
+  backdrop-filter: blur(4px);
 }
 
 .content {
-  padding: 18px;
+  padding: 22px 24px;
 }
 
 .icon {
@@ -115,9 +115,11 @@
   max-width: 100%;
   border-radius: var(--radius-sm);
   padding: 1px 6px;
+  border: 1px solid var(--line-content);
   color: var(--code-text);
   font-family: var(--font-mono);
   font-size: inherit;
+  font-weight: var(--weight-semibold);
   background: var(--surface-inset);
 }
 

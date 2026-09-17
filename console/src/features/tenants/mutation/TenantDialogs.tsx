@@ -1,5 +1,5 @@
 import { AlertTriangle, Download, LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { canonicalComponentStatus, componentLabel } from "@/features/tenants/componentCatalog";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
@@ -11,12 +11,19 @@ import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/tenants/TenantPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
+import { abbreviateTenantHome } from "@/shared/lib/hostHome";
+import { resourceIcons } from "@/shared/icons/consoleIcons";
+
+const ManagedTenantIcon = resourceIcons.managedTenant;
 
 export function TenantDialogs({
+  catalog,
   components,
   dialogs,
   mutations,
-}: Pick<TenantViewModel, "components" | "dialogs" | "mutations">) {
+}: Pick<TenantViewModel, "components" | "dialogs" | "mutations"> & {
+  catalog?: TenantViewModel["catalog"];
+}) {
   const { submitSpecificVersion } = components;
   const {
     cancelComponentRemove,
@@ -64,26 +71,52 @@ export function TenantDialogs({
           newName={newName}
         />
       )}
-      {deleteTarget?.names.length === 1 && (
-        <ConfirmDialog
-          title={`Delete Tenant ${deleteTarget.names[0]}?`}
-          message="Permanently deletes Tenant Home, Sessions, Components state, and Named Configs."
-          confirmation={deleteTarget.names[0]}
-          confirmLabel="Delete"
-          busy={mutationBusy}
-          onCancel={cancelDeleteDialog}
-          onConfirm={() => void deleteTenants()}
-        />
-      )}
+      {deleteTarget?.names.length === 1 &&
+        (() => {
+          const targetName = deleteTarget.names[0];
+          const targetTenant = catalog?.managedTenants.find((t) => t.name === targetName);
+          const homePath = targetTenant
+            ? abbreviateTenantHome(targetTenant.home, catalog?.hostTenant?.home ?? null)
+            : `~/.aibox/tenants/${targetName}`;
+          return (
+            <ConfirmDialog
+              title={`Delete Tenant ${targetName}?`}
+              facts={[
+                { label: "Target", value: <code>{targetName}</code> },
+                { label: "Type", value: "Managed Tenant" },
+                {
+                  label: "Tenant Home",
+                  value: <code title={targetTenant?.home ?? undefined}>{homePath}</code>,
+                  fullWidth: true,
+                },
+              ]}
+              message="Permanently deletes Tenant Home, Sessions, Components state, and Named Configs."
+              confirmation={targetName}
+              confirmLabel="Delete"
+              busy={mutationBusy}
+              onCancel={cancelDeleteDialog}
+              onConfirm={() => void deleteTenants()}
+            />
+          );
+        })()}
       {deleteTarget && deleteTarget.names.length > 1 && (
         <ConfirmDialog
           title="Delete selected Managed Tenants?"
           message="Permanently deletes each Tenant Home, Sessions, Components state, and Named Configs."
           description={
-            <div className={layout.planList}>
-              {deleteTarget.names.map((name) => (
-                <code key={name}>{name}</code>
-              ))}
+            <div className={styles.batchDeletePlan}>
+              <div className={styles.batchDeleteCount}>
+                <strong>{deleteTarget.names.length}</strong> Managed Tenants will be permanently
+                removed:
+              </div>
+              <div className={layout.planList}>
+                {deleteTarget.names.map((name) => (
+                  <div key={name} className={styles.batchDeleteRow}>
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                    <code>{name}</code>
+                  </div>
+                ))}
+              </div>
             </div>
           }
           confirmLabel="Delete"
@@ -252,6 +285,7 @@ function CreateTenantDialog({
   mutationBusy,
   newName,
 }: CreateTenantDialogProps) {
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [nameTouched, setNameTouched] = useState(false);
   return (
     <Dialog
@@ -267,15 +301,35 @@ function CreateTenantDialog({
           if (createNameValid && !createNameTaken && !mutationBusy) void createTenant();
         }}
       >
-        <h2 id={createTitleId}>Create Managed Tenant</h2>
-        <label>
-          Name
+        <div className={styles.dialogHeader}>
+          <div className={styles.dialogIconContainer}>
+            <ManagedTenantIcon size={iconSize.md} aria-hidden="true" />
+          </div>
+          <div>
+            <h2 id={createTitleId} className={styles.dialogTitle}>
+              Create Managed Tenant
+            </h2>
+            <p className={styles.dialogSubtitle}>
+              Provision an isolated filesystem sandbox environment for Coding Agents.
+            </p>
+          </div>
+        </div>
+        <div className={styles.dialogField}>
+          <label htmlFor="create-tenant-name" className={styles.fieldLabel}>
+            Tenant Name
+          </label>
           <TextInput
+            id="create-tenant-name"
             autoFocus
             aria-label="Tenant name"
+            placeholder="e.g. project-dev, task-sandbox"
             value={newName}
             onChange={(event) => changeNewName(event.target.value)}
-            onBlur={() => setNameTouched(true)}
+            onBlur={(event) => {
+              if (event.relatedTarget !== cancelButtonRef.current && newName.trim().length > 0) {
+                setNameTouched(true);
+              }
+            }}
             onKeyDown={(event) => {
               // A disabled Create blocks implicit submission, so Enter reveals why.
               if (event.key === "Enter") setNameTouched(true);
@@ -283,7 +337,11 @@ function CreateTenantDialog({
             aria-invalid={(nameTouched && !createNameValid) || createNameTaken}
             aria-describedby={createHelpId}
           />
-        </label>
+          <div className={styles.pathPreview}>
+            <span className={styles.pathPreviewLabel}>Filesystem Sandbox:</span>
+            <code>~/.aibox/tenants/{newName.trim() || "<name>"}</code>
+          </div>
+        </div>
         <p id={createHelpId} className={layout.dialogDescription}>
           Use 1–63 lowercase letters, numbers, or hyphens; start and end with a letter or number.
         </p>
@@ -315,7 +373,13 @@ function CreateTenantDialog({
           </AlertBanner>
         )}
         <div className={styles.dialogActions}>
-          <ActionButton type="button" tone="secondary" onClick={closeCreateDialog} disabled={busy}>
+          <ActionButton
+            ref={cancelButtonRef}
+            type="button"
+            tone="secondary"
+            onClick={closeCreateDialog}
+            disabled={busy}
+          >
             Cancel
           </ActionButton>
           <ActionButton

@@ -2,6 +2,27 @@
   flex-shrink: 0;
 }
 
+@container (max-width: 440px) {
+  .button.compact {
+    width: var(--control-md);
+    height: var(--control-md);
+    min-width: var(--control-md);
+    padding: 0;
+  }
+
+  .compact .label {
+    display: none;
+  }
+}
+
+@container (max-width: 440px) and (pointer: coarse) {
+  .button.compact {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}
+
 @media (max-width: 760px) {
   .button.compact {
     width: var(--control-md);

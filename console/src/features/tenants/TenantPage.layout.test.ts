@@ -33,3 +33,12 @@ describe("Tenant home copy", () => {
     expect(css).toMatch(/\.componentHome\s*\{[^}]*display:\s*flex/s);
   });
 });
+
+describe("Tenant header alignment", () => {
+  it("aligns catalog toolbar and detail header heights to 56px", () => {
+    expect(css).toMatch(
+      /\.tenantCatalog\s*>\s*div:first-child\s*\{[^}]*height:\s*56px;[^}]*min-height:\s*56px/s,
+    );
+    expect(css).toMatch(/\.tenantDetailHeader\s*\{[^}]*height:\s*56px;[^}]*min-height:\s*56px/s);
+  });
+});

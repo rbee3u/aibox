@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Clipboard } from "lucide-react";
+import { Check, ChevronLeft, Clipboard, House } from "lucide-react";
 
 import { ComponentCatalogSkeleton } from "@/features/tenants/detail/ComponentCatalogSkeleton";
 import { ComponentRowItem } from "@/features/tenants/detail/ComponentRowItem";
@@ -81,9 +81,11 @@ export function TenantDetailPane({
                 <ChevronLeft size={iconSize.md} />
               </IconButton>
               <div className={styles.componentHeaderIdentity}>
-                <h2 ref={detailHeadingRef} tabIndex={-1}>
-                  Components
-                </h2>
+                <div className={styles.componentEyebrowRow}>
+                  <h2 ref={detailHeadingRef} tabIndex={-1} className={styles.componentEyebrow}>
+                    Components
+                  </h2>
+                </div>
                 <div
                   className={styles.componentHeaderContext}
                   aria-label={
@@ -93,6 +95,13 @@ export function TenantDetailPane({
                   }
                 >
                   <span className={styles.componentTenant}>{selected.display_name}</span>
+                  {selected.kind === "host" ? (
+                    <span className={styles.tenantKindBadge}>host</span>
+                  ) : selected.name === "default" ? (
+                    <span className={styles.tenantKindBadge}>protected</span>
+                  ) : (
+                    <span className={styles.tenantKindBadge}>managed</span>
+                  )}
                   <div className={styles.componentHome}>
                     <span aria-hidden="true">·</span>
                     <code title={selected.home}>{selectedHome}</code>
@@ -118,8 +127,15 @@ export function TenantDetailPane({
                     <span className={styles.componentHeaderLoading}>Loading…</span>
                   ) : (
                     <>
-                      <span className={styles.componentInstalledSummary}>
-                        <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
+                      <span
+                        className={styles.componentInstalledSummary}
+                        data-status={
+                          installedComponentCount === componentTotalCount ? "all" : "partial"
+                        }
+                      >
+                        <span>
+                          <strong>{installedComponentCount}</strong>/{componentTotalCount} installed
+                        </span>
                       </span>
                       {attentionComponentCount > 0 && (
                         <span className={styles.componentSummaryAttention}>
@@ -183,6 +199,9 @@ export function TenantDetailPane({
                     >
                       <div className={styles.componentGroupHeader}>
                         <h3 id={`component-group-${group.id}`}>{group.label}</h3>
+                        <span className={styles.componentGroupCount}>
+                          {group.rows.length} {group.rows.length === 1 ? "component" : "components"}
+                        </span>
                       </div>
                       <div role="list" aria-label={`${group.label} Components`}>
                         {group.rows.map((row) => {
@@ -229,6 +248,24 @@ export function TenantDetailPane({
                       </div>
                     </section>
                   ))}
+                </div>
+              )}
+              {!componentCatalogLoading && selected.kind === "host" && (
+                <div className={styles.hostEnvironmentNotice}>
+                  <div className={styles.hostNoticeHeader}>
+                    <House
+                      size={iconSize.sm}
+                      className={styles.hostNoticeIcon}
+                      aria-hidden="true"
+                    />
+                    <strong>Host Workstation Environment</strong>
+                  </div>
+                  <p>
+                    The Host Tenant operates directly on your local workstation without
+                    containerization. AIBox manages statusline integration here, while Coding Agents
+                    (Claude & Codex) and Toolchain runtimes remain isolated within containerized
+                    Managed Tenants.
+                  </p>
                 </div>
               )}
             </div>

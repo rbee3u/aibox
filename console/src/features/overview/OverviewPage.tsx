@@ -1,4 +1,4 @@
-import { Image, Server } from "lucide-react";
+import { Container, Layers, Server } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { OverviewBrowsingMemory } from "@/features/overview/browsingState";
 import type { Operation } from "@/api/operations";
@@ -9,6 +9,7 @@ import { RuntimeSection } from "@/features/overview/components/RuntimeSection";
 import { EnvironmentDetails } from "@/features/overview/components/EnvironmentDetails";
 import { AttentionPanel } from "@/features/overview/components/AttentionPanel";
 import { TenantStatusList } from "@/features/overview/components/TenantStatusList";
+import { OverviewKpis } from "@/features/overview/components/OverviewKpis";
 import { useOverviewController } from "@/features/overview/useOverviewController";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";
 import { capitalize } from "@/shared/lib/format";
@@ -36,6 +37,7 @@ export function OverviewPage(props: OverviewPageProps) {
     buildDisabled,
     buildUnavailableReason,
     elapsedUptime,
+    requestsTotal,
   } = service;
   const { tree, pageRef, topology, topologyError, topologyRefreshing, loadTopology } = resources;
 
@@ -56,78 +58,115 @@ export function OverviewPage(props: OverviewPageProps) {
 
   return (
     <div ref={pageRef} className={styles.page} data-overview-scroll data-scroll-axis="vertical">
+      <div className={styles.pageHeader}>
+        <div className={styles.headerLeft}>
+          <h1 className={styles.pageTitle}>Overview</h1>
+          <p className={styles.pageSubtitle}>System health, metrics, and resource topology</p>
+        </div>
+        <div className={styles.headerActions}>
+          <RefreshButton
+            label="Refresh Overview"
+            compactOnNarrow
+            busyLabel="Refreshing Overview"
+            busy={overviewRefreshing || topologyRefreshing}
+            disabled={overviewRefreshing || topologyRefreshing}
+            onClick={() => void Promise.all([loadOverview(true), loadTopology(true)])}
+          >
+            Refresh
+          </RefreshButton>
+        </div>
+      </div>
+
       <section className={styles.statusSection} aria-label="Service status">
-        <div className={styles.statusStrip}>
-          <div className={styles.statusMain}>
-            <RuntimeStatus
-              icon={<Server size={iconSize.xs} />}
-              label="Service"
-              value={overviewError ? "Unavailable" : overview ? "Running" : "Loading"}
-              tone={overviewError ? "error" : overview ? "good" : "neutral"}
-            />
-            <RuntimeStatus
-              icon={<Server size={iconSize.xs} />}
-              label="Docker"
-              value={overviewError ? "Unknown" : capitalize(overview?.docker.status ?? "checking")}
-              tone={overviewError ? "neutral" : dockerTone(overview?.docker.status)}
-            />
-            <div className={styles.runtimeGroup} role="group" aria-label="Runtime Image management">
+        <div className={styles.systemStatusBar}>
+          <div className={styles.systemStatusMain}>
+            <span className={styles.systemStatusTitle}>System Health</span>
+            <div className={styles.statusMain}>
               <RuntimeStatus
-                icon={<Image size={iconSize.xs} />}
-                label="Runtime Image"
+                icon={<Server size={iconSize.xs} />}
+                label="Service"
+                value={overviewError ? "Unavailable" : overview ? "Running" : "Loading"}
+                tone={overviewError ? "error" : overview ? "good" : "neutral"}
+              />
+              <RuntimeStatus
+                icon={<Container size={iconSize.xs} />}
+                label="Docker"
                 value={
-                  overviewError
-                    ? "Unknown"
-                    : capitalize(overview?.runtime_image.status ?? "checking")
+                  overviewError ? "Unknown" : capitalize(overview?.docker.status ?? "checking")
                 }
-                tone={overviewError ? "neutral" : imageTone(overview?.runtime_image.status)}
+                tone={overviewError ? "neutral" : dockerTone(overview?.docker.status)}
               />
-              <RuntimeSection
-                overview={overview}
-                operation={props.operation}
-                buildDisabled={buildDisabled}
-                buildUnavailableReason={buildUnavailableReason}
-                onBuild={(force) => void build(force)}
-              />
-            </div>
-            <div className={styles.statusActions}>
-              <RefreshButton
-                label="Refresh Overview"
-                compactOnNarrow
-                busyLabel="Refreshing Overview"
-                busy={overviewRefreshing || topologyRefreshing}
-                disabled={overviewRefreshing || topologyRefreshing}
-                onClick={() => void Promise.all([loadOverview(true), loadTopology(true)])}
+              <div
+                className={styles.runtimeGroup}
+                role="group"
+                aria-label="Runtime Image management"
               >
-                Refresh
-              </RefreshButton>
+                <RuntimeStatus
+                  icon={<Layers size={iconSize.xs} />}
+                  label="Runtime Image"
+                  value={
+                    overviewError
+                      ? "Unknown"
+                      : capitalize(overview?.runtime_image.status ?? "checking")
+                  }
+                  tone={overviewError ? "neutral" : imageTone(overview?.runtime_image.status)}
+                />
+                <RuntimeSection
+                  overview={overview}
+                  operation={props.operation}
+                  buildDisabled={buildDisabled}
+                  buildUnavailableReason={buildUnavailableReason}
+                  onBuild={(force) => void build(force)}
+                />
+              </div>
             </div>
           </div>
+
+          <div className={styles.systemStatusActions}>
+            <EnvironmentDetails overview={overview} elapsedUptime={elapsedUptime} />
+          </div>
+
           {buildUnavailableReason && (
             <span id="runtime-build-unavailable" className="srOnly">
               {buildUnavailableReason}
             </span>
           )}
-          <EnvironmentDetails overview={overview} elapsedUptime={elapsedUptime} />
         </div>
-        <AttentionPanel
-          panel={attention.panel}
-          items={attention.attentionItems}
-          onNavigate={props.onNavigate}
-          onRetry={(source) =>
-            void (source === "service" ? loadOverview(true) : loadTopology(true))
-          }
-          serviceRetrying={overviewRefreshing}
-          topologyRetrying={topologyRefreshing}
-        />
       </section>
+
+      <OverviewKpis
+        overview={overview}
+        topology={topology}
+        requestsTotal={requestsTotal}
+        onNavigate={props.onNavigate}
+      />
+
+      <AttentionPanel
+        panel={attention.panel}
+        items={attention.attentionItems}
+        onNavigate={props.onNavigate}
+        onRetry={(source) => void (source === "service" ? loadOverview(true) : loadTopology(true))}
+        serviceRetrying={overviewRefreshing}
+        topologyRetrying={topologyRefreshing}
+      />
+
       <section className={styles.topologySection} aria-labelledby="topology-title">
         <div className={styles.topologyHeading}>
           <div>
             <h2 id="topology-title">Tenants</h2>
             <p>
               {topology
-                ? `${topology.tenants.filter((tenant) => tenant.kind === "managed").length} Managed · ${topology.tenants.filter((tenant) => tenant.kind === "host").length} Host`
+                ? (() => {
+                    const hostCount = topology.tenants.filter(
+                      (tenant) => tenant.kind === "host",
+                    ).length;
+                    const managedCount = topology.tenants.filter(
+                      (tenant) => tenant.kind === "managed",
+                    ).length;
+                    return hostCount > 0
+                      ? `${hostCount} Host · ${managedCount} Managed`
+                      : `${managedCount} Managed Tenants`;
+                  })()
                 : topologyError
                   ? "Resource inspection unavailable"
                   : "Loading resources"}

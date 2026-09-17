@@ -1,170 +1,433 @@
 .table {
   width: 100%;
-  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border: 0;
+}
+
+.table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.table tbody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.tenantCard {
+  display: grid;
+  grid-template-columns: 220px 190px 1fr 1fr;
+  gap: 0;
+  align-items: stretch;
+  background: var(--surface);
   border: 1px solid var(--line-structural);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 20px;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+:root[data-resolved-theme="dark"] .tenantCard {
+  background: var(--surface-raised);
+}
+
+.tenantCard:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.tenantHeaderCell {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 0 20px 0 0;
   text-align: left;
+  font-weight: normal;
 }
-.table th,
-.table td {
-  padding: 20px;
-  vertical-align: top;
-  font-weight: var(--weight-regular);
-  overflow-wrap: anywhere;
+
+.tenantIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.table thead th {
-  padding-block: 12px;
-  color: var(--ink-secondary);
+
+.tenantIdentity > .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
+}
+
+.tenantIconWrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color var(--transition-fast);
+}
+
+.hostIconWrapper {
+  color: var(--muted);
+}
+
+.tenantCard:hover .tenantIconWrapper {
+  color: var(--accent);
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
   background: var(--surface-inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  font-weight: var(--weight-medium);
+  width: fit-content;
+}
+
+.componentsCell,
+.agentCell {
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 0 20px;
+  border-left: 1px solid var(--line-content);
+}
+
+.agentCell:last-child {
+  padding-right: 0;
+}
+
+.sectionContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+.headerTitleGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.headerIcon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.sectionTitle {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-secondary);
+  letter-spacing: 0.02em;
+}
+
+.agentName {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.agentConfigRow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.currentConfigLink {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.currentConfigLabel {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color var(--transition-fast);
 }
-.table thead th:first-child {
-  border-top-left-radius: var(--radius-md);
-}
-.table thead th:last-child {
-  border-top-right-radius: var(--radius-md);
-}
-.table tbody tr + tr > * {
-  border-top: 1px solid var(--line-content);
-}
-.summary {
-  display: grid;
-  /*
-   * Three stacked links per Agent cell, the lower two underlined. At the 4px
-   * this carried while there were two, the underline of one link nearly met
-   * the next link's text and the three lines read as one paragraph.
-   */
-  gap: 8px;
-}
-.secondary {
-  color: var(--ink-secondary);
+
+.currentConfigValue {
   font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  transition: color var(--transition-fast);
 }
+
+.link:hover .currentConfigLabel {
+  color: var(--accent);
+}
+
+.link:hover .currentConfigValue {
+  color: var(--accent-strong);
+}
+
+.agentChipsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.actionPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--ink-secondary);
+  text-decoration: none;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.link:hover .actionPill {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  box-shadow: var(--shadow-xs);
+  text-decoration: none;
+}
+
+.pillError {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.pillWarning {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.componentsFactRow {
+  display: flex;
+  align-items: center;
+}
+
+.componentDetailText {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.componentsActionRow {
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.primaryLink {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color var(--transition-fast);
+}
+
+.arrowIcon {
+  display: inline-block;
+  transition: transform var(--transition-fast);
+}
+
+.link:hover .primaryLink {
+  color: var(--accent-strong);
+}
+
+.link:hover .arrowIcon {
+  transform: translateX(2px);
+}
+
 .link {
   display: inline-flex;
-  /*
-   * The label and its metadata wrap as two units, not as one shrinking line.
-   * Under `nowrap` neither child could move to a second line, so a narrow
-   * column shrank both below their content width and each broke *inside* its
-   * own phrase: the arrow stranded alone under "Current Config", and
-   * "ag-github" split across two lines. Every width from 1024 to 1420 did
-   * this, which is most of the laptops this Console runs on.
-   */
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   min-height: 24px;
   max-width: 100%;
-  /*
-   * Nearly every cell in this table navigates, so the accent would colour a
-   * third of the page and say nothing. The arrow and the underline carry the
-   * affordance; the accent is reserved for hover and for the module you are
-   * actually in.
-   */
   color: var(--ink);
   text-decoration: none;
   border-radius: var(--radius-sm);
   line-height: 1.5;
+  transition: color var(--transition-fast);
 }
+
 .link svg,
-.fact svg {
+.fact svg,
+.issueBanner svg {
   flex-shrink: 0;
   align-self: center;
 }
-/*
- * A status fact shares the row's layout but none of its affordances: no
- * pointer, no hover, no tab stop. It reads beside the action it explains.
- */
-.fact {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  min-height: 24px;
-  max-width: 100%;
-  line-height: 1.5;
-}
+
 .link:hover {
   color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration: none;
 }
-.primaryLink {
-  font-weight: var(--weight-medium);
-}
-.secondaryLink {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
+
 .link:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
 }
+
+.fact {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  max-width: 100%;
+  line-height: 1.4;
+  font-size: var(--text-xs);
+}
+
 .warning {
   color: var(--warning);
-  font-size: var(--text-xs);
 }
+
 .error {
   color: var(--danger);
-  font-size: var(--text-xs);
 }
+
+.issueRow {
+  margin-top: 4px;
+}
+
+.issueBanner {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.issueWarning {
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-line);
+  color: var(--warning);
+}
+
+.issueError {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-line);
+  color: var(--danger);
+}
+
+.emptyStatusText {
+  display: inline-block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-style: italic;
+  padding-top: 4px;
+}
+
 .mobileLabel {
   display: none;
 }
-@media (max-width: 1000px) {
-  .table th,
-  .table td {
-    padding: 16px 12px;
+
+@media (max-width: 1100px) {
+  .tenantCard {
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .tenantHeaderCell {
+    grid-column: span 2;
+    padding-right: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-content);
+  }
+  .componentsCell {
+    grid-column: span 2;
+    border-left: none;
+    padding-inline: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-content);
+  }
+  .agentCell {
+    border-left: none;
+    padding-inline: 0;
+  }
+  .agentCell:nth-of-type(4) {
+    border-left: 1px solid var(--line-content);
+    padding-left: 16px;
   }
 }
-@media (max-width: 760px) {
-  .table,
-  .table tbody {
-    display: block;
+
+@media (max-width: 700px) {
+  .tenantCard {
+    grid-template-columns: 1fr;
+    gap: 14px;
   }
-  .table {
-    border: 0;
+  .tenantHeaderCell,
+  .componentsCell,
+  .agentCell {
+    grid-column: span 1;
+    border-left: none !important;
+    padding-inline: 0 !important;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-content);
   }
-  .table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-  .table tbody tr {
-    display: grid;
-    border: 1px solid var(--line-structural);
-    border-radius: var(--radius-md);
-    margin-bottom: 16px;
-  }
-  .table tbody th {
-    background: var(--surface-inset);
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-  }
-  .table tbody tr + tr > * {
-    border-top: 0;
-  }
-  .table tbody td {
-    display: grid;
-    grid-template-columns: 84px minmax(0, 1fr);
-    gap: 12px;
-    padding-block: 12px;
-  }
-  .mobileLabel {
-    display: block;
-    color: var(--ink-secondary);
-    font-size: var(--text-xs);
-    line-height: 24px;
+  .agentCell:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
   }
 }
+
 @media (pointer: coarse) {
   .link {
-    min-height: 44px;
+    min-height: 38px;
     align-items: center;
   }
 }

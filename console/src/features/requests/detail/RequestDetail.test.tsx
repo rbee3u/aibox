@@ -564,7 +564,7 @@ describe("RequestDetail", () => {
   it("defaults JSON Bodies to Pretty, folds nested values, and copies losslessly", async () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
-    const source = '{"nested":{"big":900719925474099312345},"text":"' + `${"界".repeat(201)}"}`;
+    const source = '{"nested":{"big":900719925474099312345},"text":"' + `${"\u2605".repeat(201)}"}`;
     const encoded = new TextEncoder().encode(source);
     renderRequestBody({ ...completedDetail, request_body_bytes: encoded.length }, encoded);
 
@@ -900,7 +900,7 @@ describe("RequestDetail", () => {
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
-      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"原诗"}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Original verse"}}\n\n',
     ].join("");
     renderDetail(
       { ...completedDetail, response_body_bytes: source.length },
@@ -914,7 +914,7 @@ describe("RequestDetail", () => {
     const eventList = screen.getByRole("list", { name: "SSE Events" });
     expect(within(eventList).getAllByRole("listitem")).toHaveLength(3);
     expect(within(eventList).getByRole("button", { name: /message_start/ })).toBeInTheDocument();
-    expect(within(eventList).getByText("原诗")).toBeInTheDocument();
+    expect(within(eventList).getByText("Original verse")).toBeInTheDocument();
     expect(within(eventList).queryByRole("button", { name: /#2content_block_delta/ })).toBeNull();
 
     const run = within(eventList).getByRole("button", {
@@ -927,13 +927,13 @@ describe("RequestDetail", () => {
     expect(run).toHaveAttribute("aria-expanded", "true");
     expect(within(eventList).getByRole("button", { name: /#2content_block_delta/ })).toBeVisible();
     expect(within(eventList).getByRole("button", { name: /#4content_block_delta/ })).toBeVisible();
-    expect(within(eventList).getByText("原诗")).toBeInTheDocument();
+    expect(within(eventList).getByText("Original verse")).toBeInTheDocument();
   });
 
   it("shows Event-local text on collapsed SSE cards", () => {
     const source =
-      'data: {"type":"response.output_text.delta","delta":"可将"}\n\n' +
-      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":"We can"}\n\n' +
+      'data: {"type":"response.output_text.done","text":"We can improve this"}\n\n' +
       'data: {"type":"response.created"}\n\n';
     renderDetail(
       { ...completedDetail, response_body_bytes: source.length },
@@ -946,21 +946,23 @@ describe("RequestDetail", () => {
 
     const items = within(screen.getByRole("list", { name: "SSE Events" })).getAllByRole("listitem");
     expect(items).toHaveLength(3);
-    expect(screen.getByRole("button", { name: /output_text.delta/ })).toHaveTextContent("可将");
+    expect(screen.getByRole("button", { name: /output_text.delta/ })).toHaveTextContent("We can");
     expect(screen.getByRole("button", { name: /output_text.done/ })).toHaveTextContent(
-      "可将“好”改为“旧”",
+      "We can improve this",
     );
-    expect(screen.getByRole("button", { name: /response.created/ })).not.toHaveTextContent("可将");
+    expect(screen.getByRole("button", { name: /response.created/ })).not.toHaveTextContent(
+      "We can",
+    );
   });
 
   it("collapses a run of short-preview SSE Events without joining them into a reply", async () => {
     const user = userEvent.setup();
     const source = [
       'data: {"type":"response.created"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"可"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"将"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"好"}\n\n',
-      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"We"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"can"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"improve"}\n\n',
+      'data: {"type":"response.output_text.done","text":"We can improve this"}\n\n',
     ].join("");
     renderDetail(
       { ...completedDetail, response_body_bytes: source.length },
@@ -973,7 +975,7 @@ describe("RequestDetail", () => {
 
     const eventList = screen.getByRole("list", { name: "SSE Events" });
     expect(within(eventList).getAllByRole("listitem")).toHaveLength(3);
-    expect(within(eventList).getByText("可将“好”改为“旧”")).toBeInTheDocument();
+    expect(within(eventList).getByText("We can improve this")).toBeInTheDocument();
     expect(
       within(eventList).queryByRole("button", { name: /#2response\.output_text\.delta/ }),
     ).toBeNull();
@@ -982,14 +984,14 @@ describe("RequestDetail", () => {
       name: "3 response.output_text.delta events, #2 to #4",
     });
     expect(run).toHaveTextContent("3 response.output_text.delta · #2–#4");
-    expect(run).not.toHaveTextContent("可将");
+    expect(run).not.toHaveTextContent("We can");
 
     await user.click(run);
     expect(run).toHaveAttribute("aria-expanded", "true");
     expect(
       within(eventList).getByRole("button", { name: /#2response\.output_text\.delta/ }),
-    ).toHaveTextContent("可");
-    expect(within(eventList).getByText("可将“好”改为“旧”")).toBeInTheDocument();
+    ).toHaveTextContent("We");
+    expect(within(eventList).getByText("We can improve this")).toBeInTheDocument();
   });
 
   it("renders EmptyState when response tab has no response", () => {

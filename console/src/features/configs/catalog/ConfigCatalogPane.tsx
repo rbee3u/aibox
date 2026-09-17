@@ -29,6 +29,7 @@ import styles from "@/features/configs/ConfigPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const CurrentConfigIcon = resourceIcons.currentConfig;
+const HostTenantIcon = resourceIcons.hostTenant;
 const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
 export function ConfigCatalogPane({
@@ -123,7 +124,13 @@ export function ConfigCatalogPane({
                 options={tenantOptions}
                 pluralLabel="tenants"
                 selected={new Set([configTenantSelectionValue(tenant)])}
-                triggerIcon={<ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />}
+                triggerIcon={
+                  tenant.kind === "host" ? (
+                    <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  )
+                }
                 unavailableSummary={
                   loadingTenants ? "Loading" : managedTenantMissing ? "Not found" : "Unavailable"
                 }
@@ -206,7 +213,7 @@ export function ConfigCatalogPane({
         <div className={layout.rowGroup}>
           {!managedTenantMissing && (
             <div
-              className={`${layout.row} ${marksInspection && selection.current ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
+              className={`${layout.row} ${styles.configRow} ${marksInspection && selection.current ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
             >
               <button
                 ref={(element) => registerConfigRow("current", element)}
@@ -220,7 +227,9 @@ export function ConfigCatalogPane({
                 disabled={busy || loadingCatalog || (selectionMode ? true : false)}
                 onClick={() => void openCurrent()}
               >
-                <CurrentConfigIcon size={iconSize.sm} data-icon="current-config" />
+                <span className={styles.configRowIcon}>
+                  <CurrentConfigIcon size={iconSize.sm} data-icon="current-config" />
+                </span>
                 <span className={styles.configRowText}>
                   <strong>Current Config</strong>
                   {appliedName && (
@@ -244,7 +253,7 @@ export function ConfigCatalogPane({
                 )}
             </div>
           )}
-          <div className={layout.divider}>
+          <div className={`${layout.divider} ${styles.configDivider}`}>
             <span>Named Configs</span>
             <IconButton
               className={layout.addAction}
@@ -266,7 +275,7 @@ export function ConfigCatalogPane({
             return (
               <div
                 key={entry.name}
-                className={`${layout.row} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? layout.rowSelectable : ""}`}
+                className={`${layout.row} ${styles.configRow} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? layout.rowSelectable : ""}`}
               >
                 <button
                   ref={(element) => registerConfigRow(entry.name, element)}
@@ -284,7 +293,9 @@ export function ConfigCatalogPane({
                     selectionMode ? toggleConfig(entry.name) : void openConfig(entry.name)
                   }
                 >
-                  <NamedConfigIcon size={iconSize.sm} />
+                  <span className={styles.configRowIcon}>
+                    <NamedConfigIcon size={iconSize.sm} />
+                  </span>
                   <span className={styles.configRowText}>
                     <span className={styles.configRowTitle}>
                       <strong>{entry.name}</strong>

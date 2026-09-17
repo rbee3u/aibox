@@ -104,4 +104,33 @@ describe("IconButton", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(element).toBe(button);
   });
+
+  it("does not open its tooltip when focus is restored from a closing dialog", () => {
+    render(
+      <IconButton label="Create item">
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    const button = screen.getByRole("button", { name: "Create item" });
+    button.setAttribute("data-dialog-restoring-focus", "true");
+    fireEvent.focus(button);
+    button.removeAttribute("data-dialog-restoring-focus");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("closes its tooltip on pointerLeave even when the button retains focus", () => {
+    vi.useFakeTimers();
+    render(
+      <IconButton label="Refresh status">
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    const button = screen.getByRole("button", { name: "Refresh status" });
+    fireEvent.focus(button);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.pointerEnter(button);
+    fireEvent.pointerLeave(button);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
 });

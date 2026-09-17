@@ -214,6 +214,20 @@ describe("Conversation attention", () => {
       tools,
       { kind: "message", value: message },
     ]);
+    expect(
+      conversationReadingTimeline([
+        { kind: "message", value: message },
+        {
+          kind: "message",
+          value: {
+            entry_ids: ["msg-empty"],
+            role: "assistant",
+            timestamp: message.timestamp,
+            text: "   ",
+          },
+        },
+      ]),
+    ).toEqual([{ kind: "message", value: message }]);
   });
 
   it("does not alarm a complete Transcript with routine unsupported projections", () => {

@@ -1,4 +1,12 @@
-import { ArrowUp, ChevronDown, Download, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Download,
+  LoaderCircle,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ComponentKind, ComponentRow } from "@/api/tenants";
@@ -106,7 +114,27 @@ export function ComponentRowItem({
                     {presentation.stateBadge ?? presentation.stateLabel}
                   </StatusBadge>
                   {row.version && (row.status === "installed" || row.status === "modified") && (
-                    <strong>v{row.version}</strong>
+                    <strong
+                      className={`${styles.versionTag} ${
+                        row.status === "installed" && model.latest.detail === "Up to date."
+                          ? styles.versionUpToDate
+                          : ""
+                      }`}
+                      title={
+                        row.status === "installed" && model.latest.detail === "Up to date."
+                          ? "Verified up to date"
+                          : undefined
+                      }
+                    >
+                      v{row.version}
+                      {row.status === "installed" && model.latest.detail === "Up to date." && (
+                        <Check
+                          size={iconSize.xs}
+                          className={styles.versionCheckIcon}
+                          aria-hidden="true"
+                        />
+                      )}
+                    </strong>
                   )}
                 </span>
               </div>
@@ -227,6 +255,7 @@ export function ComponentRowItem({
         ) : null}
         {presentation.canRemove && (
           <IconButton
+            className={styles.componentRemoveButton}
             tone="dangerQuiet"
             label={`Remove ${label}`}
             disabled={mutationBusy}

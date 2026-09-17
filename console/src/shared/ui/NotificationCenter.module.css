@@ -1,6 +1,6 @@
 .center {
   position: fixed;
-  top: 58px;
+  top: 68px;
   left: 50%;
   z-index: var(--layer-notification);
   display: grid;
@@ -17,7 +17,7 @@
   align-items: start;
   gap: var(--space-md);
   border: 1px solid;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: var(--space-md) var(--space-lg);
   box-shadow: var(--shadow-md);
   font-size: var(--text-xs);
@@ -63,22 +63,16 @@
 }
 
 .dismiss {
+  display: grid;
+  width: 28px;
   min-height: 28px;
+  place-items: center;
+  padding: 0;
   border-color: transparent;
   color: inherit;
   background: transparent;
   box-shadow: none;
-}
-
-.dismiss {
-  display: grid;
-  width: 28px;
-  place-items: center;
-  padding: 0;
-}
-
-.dismiss {
-  width: 28px;
+  border-radius: var(--radius-sm);
 }
 
 .dismiss:hover:not(:disabled) {

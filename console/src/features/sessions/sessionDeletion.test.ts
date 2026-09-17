@@ -29,10 +29,14 @@ describe("sessionDeletionFacts", () => {
     const session = sourcedSession(sessionSource("host", "codex"), {
       ...firstSession,
       title: "[$improve-unit-tests](/Users/rbee3u/.agents/skills/x/SKILL.md)",
-      latest_message: "已完善 SSE 观察上限相关单元测试",
+      latest_message: "Added unit tests for the SSE observation limit",
     });
     expect(sessionDeletionFacts(session)).toEqual([
-      { label: "Session", value: "已完善 SSE 观察上限相关单元测试", fullWidth: true },
+      {
+        label: "Session",
+        value: "Added unit tests for the SSE observation limit",
+        fullWidth: true,
+      },
       { label: "Source", value: "Host Tenant Codex" },
       { label: "Started", value: "2026-08-17 17:00:00" },
     ]);

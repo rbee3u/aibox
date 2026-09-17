@@ -152,7 +152,11 @@ describe("Body presentation", () => {
   });
 
   it("strictly distinguishes UTF-8 Source from original hex", () => {
-    expect(decodeUtf8(new TextEncoder().encode("你好"))).toEqual({ ok: true, text: "你好" });
+    const utf8Text = "Hello, \u{1f30d}";
+    expect(decodeUtf8(new TextEncoder().encode(utf8Text))).toEqual({
+      ok: true,
+      text: utf8Text,
+    });
     expect(decodeUtf8(new Uint8Array([0xff, 0x00]))).toEqual({
       ok: false,
       hex: "ff 00",
@@ -168,7 +172,7 @@ describe("Body presentation", () => {
   it("applies the Pretty and string guards only above their exact boundaries", () => {
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES)).toBe(false);
     expect(shouldDeferPretty(LARGE_PRETTY_BYTES + 1)).toBe(true);
-    expect(jsonStringPreview("界".repeat(LONG_STRING_CHARACTERS))).toBeNull();
+    expect(jsonStringPreview("\u2605".repeat(LONG_STRING_CHARACTERS))).toBeNull();
     expect(jsonStringPreview("😀".repeat(LONG_STRING_CHARACTERS + 1))).toBe(
       "😀".repeat(LONG_STRING_CHARACTERS),
     );
@@ -217,7 +221,7 @@ describe("Body presentation", () => {
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
       'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}\n\n',
-      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"原诗"}}\n\n',
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Original verse"}}\n\n',
       'data: {"type":"message_stop"}\n\n',
     ].join("");
     const presented = parseSse(source).events.map(presentSseEvent);
@@ -227,16 +231,16 @@ describe("Body presentation", () => {
     if (grouped[1].kind !== "run") throw new Error("expected a run");
     expect(grouped[1].items).toHaveLength(3);
     expect(sseEventRunLabel(grouped[1])).toBe("3 content_block_delta · #2–#4");
-    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("原诗");
+    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("Original verse");
   });
 
   it("collapses consecutive same-type Events whose card preview is only a short fragment", () => {
     const source = [
       'data: {"type":"response.created"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"可"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"将"}\n\n',
-      'data: {"type":"response.output_text.delta","delta":"好"}\n\n',
-      'data: {"type":"response.output_text.done","text":"可将“好”改为“旧”"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"We"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"can"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"improve"}\n\n',
+      'data: {"type":"response.output_text.done","text":"We can improve this"}\n\n',
     ].join("");
     const presented = parseSse(source).events.map(presentSseEvent);
     const grouped = groupSseEventsWithoutPreview(presented);
@@ -244,15 +248,15 @@ describe("Body presentation", () => {
     expect(grouped[1]).toMatchObject({ kind: "run", type: "response.output_text.delta" });
     if (grouped[1].kind !== "run") throw new Error("expected a run");
     expect(grouped[1].items).toHaveLength(3);
-    expect(grouped[1].items.map((item) => item.preview)).toEqual(["可", "将", "好"]);
+    expect(grouped[1].items.map((item) => item.preview)).toEqual(["We", "can", "improve"]);
     expect(sseEventRunLabel(grouped[1])).toBe("3 response.output_text.delta · #2–#4");
-    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("可将“好”改为“旧”");
+    expect(grouped[2].kind === "event" && grouped[2].item.preview).toBe("We can improve this");
   });
 
   it("previews text already on an SSE Event without joining other Events", () => {
-    const delta = parseJson('{"type":"response.output_text.delta","delta":"可将"}');
+    const delta = parseJson('{"type":"response.output_text.delta","delta":"We can"}');
     const done = parseJson(
-      '{"type":"response.output_text.done","text":"可将“好”改为“旧”：\\n\\n下一句"}',
+      '{"type":"response.output_text.done","text":"We can improve this:\\n\\nNext sentence"}',
     );
     const created = parseJson('{"type":"response.created"}');
     const numeric = parseJson('{"type":"answer.delta","value":900719925474099312345}');
@@ -260,15 +264,15 @@ describe("Body presentation", () => {
       '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}',
     );
     const anthropic = parseJson(
-      '{"type":"content_block_delta","delta":{"type":"text_delta","text":"旧风景"}}',
+      '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Old landscape"}}',
     );
-    expect(sseEventTextPreview(delta)).toBe("可将");
-    expect(sseEventTextPreview(done)).toBe("可将“好”改为“旧”： 下一句");
+    expect(sseEventTextPreview(delta)).toBe("We can");
+    expect(sseEventTextPreview(done)).toBe("We can improve this: Next sentence");
     expect(sseEventTextPreview(created)).toBeNull();
     expect(sseEventTextPreview(numeric)).toBeNull();
     expect(sseEventTextPreview(parseJson("[DONE]"))).toBeNull();
     expect(sseEventTextPreview(chat)).toBe("Hello");
-    expect(sseEventTextPreview(anthropic)).toBe("旧风景");
+    expect(sseEventTextPreview(anthropic)).toBe("Old landscape");
     expect(sseEventTextPreview(parseJson(`{"text":"${"x".repeat(97)}"}`))).toBe(
       `${"x".repeat(95)}…`,
     );

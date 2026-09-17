@@ -1,5 +1,5 @@
 import { ConfigComparisonProvider } from "@/features/configs/detail/ConfigComparisonContext";
-import { AlertTriangle, ChevronLeft, Save } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Save, ShieldAlert } from "lucide-react";
 import { useId } from "react";
 
 import type { ConfigApi } from "@/api/configs";
@@ -23,6 +23,7 @@ import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
 
+const CurrentConfigIcon = resourceIcons.currentConfig;
 const ManagedTenantIcon = resourceIcons.managedTenant;
 const NamedConfigIcon = resourceIcons.namedConfig;
 export function ConfigDetailPane({
@@ -48,7 +49,8 @@ export function ConfigDetailPane({
     managedTenantMissing,
     tenant,
   } = catalog;
-  const { closeConfigDetail, detailBackButtonRef, detailHeadingRef, selection } = detail;
+  const { closeConfigDetail, detailBackButtonRef, detailHeadingRef, openCurrent, selection } =
+    detail;
   const {
     dirtyFiles,
     editorMode,
@@ -63,7 +65,7 @@ export function ConfigDetailPane({
     switchEditorMode,
     visualAvailable,
   } = editor;
-  const { requestApply } = dialogs;
+  const { openCreateDialog, requestApply } = dialogs;
   const { setError } = feedback;
   const { mutationBusy, previewPropagation, saveAll } = mutations;
   const inspectedName = namedConfigName(selection);
@@ -81,6 +83,7 @@ export function ConfigDetailPane({
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
+
   return (
     <section className={layout.detailPane}>
       {loadingTenants || loadingCatalog ? (
@@ -98,7 +101,47 @@ export function ConfigDetailPane({
           icon={<NamedConfigIcon size={iconSize.xl} aria-hidden="true" />}
           title="Named Configs"
           description="Select Current Config or a Named Config to inspect its files."
-        />
+        >
+          <div className={styles.emptyStateGuide}>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <CurrentConfigIcon size={iconSize.sm} />
+                <strong>Current Config</strong>
+                <span className={styles.emptyStateBadgeActive}>Active Sandbox</span>
+              </div>
+              <p>
+                Live configuration files mounted directly into the container. Edits in Raw mode
+                update the active runtime environment immediately.
+              </p>
+              <button
+                type="button"
+                className={styles.emptyStateAction}
+                onClick={() => void openCurrent()}
+              >
+                Inspect Current Config →
+              </button>
+            </div>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <NamedConfigIcon size={iconSize.sm} />
+                <strong>Named Configs</strong>
+                <span className={styles.emptyStateBadgeProfiles}>Saved Profiles</span>
+              </div>
+              <p>
+                Reusable profile templates. Edit configurations visually or in Raw code, and apply
+                any profile to Current Config with one click.
+              </p>
+              <button
+                type="button"
+                className={styles.emptyStateAction}
+                disabled={mutationBusy}
+                onClick={openCreateDialog}
+              >
+                + Create Named Config
+              </button>
+            </div>
+          </div>
+        </EmptyState>
       ) : data ? (
         <>
           <div className={styles.configEditorHeader}>
@@ -141,68 +184,72 @@ export function ConfigDetailPane({
                   </div>
                 )}
               </div>
-              <p className={styles.editorNotice}>{editorNotice}</p>
-              <div className={styles.contextFacts} aria-label="Config editing context">
-                <span>
-                  <small>Tenant</small>
-                  <strong>{configTenantLabel}</strong>
-                </span>
-                <span>
-                  <small>Coding Agent</small>
-                  <strong>{agent === "codex" ? "Codex" : "Claude"}</strong>
-                </span>
-                <span>
-                  <small>Config</small>
-                  <strong>{configSelectionLabel}</strong>
-                </span>
-                <span>
-                  <small>File</small>
-                  <strong
-                    className={styles.contextFile}
-                    title={agent === "codex" ? "config.toml + auth.json" : "settings.json"}
-                  >
-                    {agent === "codex" ? "config.toml + auth.json" : "settings.json"}
-                  </strong>
-                </span>
+              <div className={styles.configSubHeader}>
+                <div className={styles.contextFacts} aria-label="Config editing context">
+                  <span>
+                    <small>Tenant: </small>
+                    <strong>{configTenantLabel}</strong>
+                  </span>
+                  <span>
+                    <small>Agent: </small>
+                    <strong>{agent === "codex" ? "Codex" : "Claude"}</strong>
+                  </span>
+                  <span>
+                    <small>File: </small>
+                    <strong
+                      className={styles.contextFile}
+                      title={agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                    >
+                      {agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                    </strong>
+                  </span>
+                </div>
+                <div className={styles.editorControls} aria-label="Editor mode">
+                  <span className={styles.saveStatus}>
+                    {dirtyFiles.length > 0
+                      ? `${dirtyFiles.length} unsaved file${dirtyFiles.length === 1 ? "" : "s"}`
+                      : "All files saved"}
+                  </span>
+                  <SegmentedControl variant="filled" role="group" aria-label="Editor mode">
+                    {visualAvailable && !selection.current && (
+                      <button
+                        type="button"
+                        aria-pressed={editorMode === "visual"}
+                        onClick={() => switchEditorMode("visual")}
+                      >
+                        Visual
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      aria-pressed={editorMode === "raw"}
+                      onClick={() => switchEditorMode("raw")}
+                    >
+                      Raw
+                    </button>
+                  </SegmentedControl>
+                  {dirtyFiles.length > 1 && (
+                    <ActionButton
+                      tone="primarySoft"
+                      disabled={mutationBusy}
+                      onClick={() => void saveAll()}
+                    >
+                      <Save size={iconSize.xs} /> Save all
+                    </ActionButton>
+                  )}
+                </div>
+              </div>
+              <div className={styles.editorNotice}>
+                <ShieldAlert
+                  size={iconSize.xs}
+                  className={styles.editorNoticeIcon}
+                  aria-hidden="true"
+                />
+                <span>{editorNotice}</span>
               </div>
             </div>
           </div>
           <div id={filesId} className={styles.configFilePanel}>
-            <div className={styles.editorModeBar} aria-label="Editor mode">
-              <span>
-                {dirtyFiles.length > 0
-                  ? `${dirtyFiles.length} unsaved file${dirtyFiles.length === 1 ? "" : "s"}`
-                  : "All files saved"}
-              </span>
-              <SegmentedControl variant="filled" role="group" aria-label="Editor mode">
-                {visualAvailable && !selection.current && (
-                  <button
-                    type="button"
-                    aria-pressed={editorMode === "visual"}
-                    onClick={() => switchEditorMode("visual")}
-                  >
-                    Visual
-                  </button>
-                )}
-                <button
-                  type="button"
-                  aria-pressed={editorMode === "raw"}
-                  onClick={() => switchEditorMode("raw")}
-                >
-                  Raw
-                </button>
-              </SegmentedControl>
-              {/* One dirty file already has its own Save; Save all earns its place at two. */}
-              {dirtyFiles.length > 1 && (
-                <ActionButton
-                  tone="primarySoft"
-                  disabled={mutationBusy}
-                  onClick={() => void saveAll()}
-                >
-                  <Save size={iconSize.xs} /> Save all
-                </ActionButton>
-              )}
-            </div>
             <ConfigComparisonProvider
               key={`${configTenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : namedConfigName(selection)}`}
               api={api}
