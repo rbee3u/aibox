@@ -113,7 +113,7 @@ pub(crate) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
     Ok(MetadataDocument { sections })
 }
 
-/// Resolve the AIBox-owned metadata path for one Tenant and Coding Agent.
+/// Resolve the AIBox-owned metadata path for one Tenant and Agent.
 pub(crate) fn metadata_path(selected: &TenantAgent) -> PathBuf {
     selected.named_config_catalog_dir().join(METADATA_FILE)
 }

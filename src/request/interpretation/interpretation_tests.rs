@@ -72,26 +72,25 @@ fn body_content_coding_accepts_identity_and_one_case_insensitive_coding() {
 }
 
 #[test]
-fn coding_agent_session_id_uses_protocol_specific_exact_headers() {
+fn agent_session_id_uses_protocol_specific_exact_headers() {
     let headers = [
         header("X-Claude-Code-Session-Id", b"claude-session"),
         header("SESSION-ID", b"codex-session"),
     ];
     assert_eq!(
-        coding_agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
+        agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
         Some("codex-session")
     );
     assert_eq!(
-        coding_agent_session_id(Some("https://example.test/v1/messages"), &headers).as_deref(),
+        agent_session_id(Some("https://example.test/v1/messages"), &headers).as_deref(),
         Some("claude-session")
     );
     assert_eq!(
-        coding_agent_session_id(Some("https://example.test/v1/responses"), &headers[..1])
-            .as_deref(),
+        agent_session_id(Some("https://example.test/v1/responses"), &headers[..1]).as_deref(),
         Some("claude-session")
     );
     assert_eq!(
-        coding_agent_session_id(
+        agent_session_id(
             Some("https://example.test/openai/deployments/gpt/chat/completions/?api-version=1"),
             &headers,
         )
@@ -99,13 +98,13 @@ fn coding_agent_session_id_uses_protocol_specific_exact_headers() {
         Some("codex-session")
     );
     assert_eq!(
-        coding_agent_session_id(Some("https://example.test/health"), &headers),
+        agent_session_id(Some("https://example.test/health"), &headers),
         None
     );
 }
 
 #[test]
-fn coding_agent_session_id_keeps_the_first_nonempty_utf8_value() {
+fn agent_session_id_keeps_the_first_nonempty_utf8_value() {
     let headers = [
         header("session-id", b""),
         header("session-id", b"opaque-session-value"),
@@ -113,7 +112,7 @@ fn coding_agent_session_id_keeps_the_first_nonempty_utf8_value() {
         header("x-session-id", b"ignored"),
     ];
     assert_eq!(
-        coding_agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
+        agent_session_id(Some("https://example.test/v1/responses"), &headers).as_deref(),
         Some("opaque-session-value")
     );
 }

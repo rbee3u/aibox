@@ -94,7 +94,7 @@ pub(crate) enum ConversationRole {
     Assistant,
 }
 
-/// A Transcript line the Coding Agent CLI wrote in a speaker's slot without
+/// A Transcript line the Agent CLI wrote in a speaker's slot without
 /// anyone having said it. The Console renders these as events, not speech.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]

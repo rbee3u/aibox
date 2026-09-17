@@ -1,4 +1,4 @@
-# Mutable runtimes and Coding Agents are installed into each Managed Tenant
+# Mutable runtimes and Agents are installed into each Managed Tenant
 # Home as Components; this image provides their shared system substrate.
 #
 # That substrate includes the shared fonts and the ABI libraries a headless
@@ -88,4 +88,4 @@ ENV HOME=/home/aibox LANG=C.UTF-8
 WORKDIR /workspace
 USER aibox
 
-# AIBox injects the Tenant-local Coding Agent or Debug Shell at runtime.
+# AIBox injects the Tenant-local Agent or Debug Shell at runtime.

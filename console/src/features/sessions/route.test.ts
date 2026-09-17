@@ -10,13 +10,13 @@ describe("Sessions route codec", () => {
     expect(route.tab).toBe("conversation");
   });
 
-  it("reads repeated Tenant and Coding Agent selections", () => {
+  it("reads repeated Tenant and Agent selections", () => {
     const route = readSessionRoute("?tenant=host&tenant=managed%3Awork&agent=claude&agent=codex");
     expect([...route.tenants].sort()).toEqual(["host", "managed:work"]);
     expect([...route.agents].sort()).toEqual(["claude", "codex"]);
   });
 
-  it("drops unparsable Tenant keys and unknown Coding Agents", () => {
+  it("drops unparsable Tenant keys and unknown Agents", () => {
     const route = readSessionRoute("?tenant=managed%3A&tenant=Nope&agent=gemini");
     expect([...route.tenants]).toEqual(["managed:default"]);
     expect([...route.agents]).toEqual(["codex"]);
@@ -35,7 +35,7 @@ describe("Sessions route codec", () => {
     expect(readSessionRoute("?tab=details").tab).toBe("details");
   });
 
-  it("writes sorted Tenants and declared Coding Agent order", () => {
+  it("writes sorted Tenants and declared Agent order", () => {
     const query = sessionLocation(new Set(["managed:work", "host"]), new Set(["claude", "codex"]));
     expect(query.toString()).toBe("tenant=host&tenant=managed%3Awork&agent=codex&agent=claude");
   });

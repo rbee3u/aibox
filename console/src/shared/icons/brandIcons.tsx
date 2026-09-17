@@ -6,7 +6,7 @@ import openaiIcon from "@/shared/icons/brand/openai.svg";
 import pythonIcon from "@/shared/icons/brand/python.svg";
 import rustIcon from "@/shared/icons/brand/rust.svg";
 import type { CSSProperties } from "react";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import styles from "@/shared/icons/brandIcons.module.css";
 
 export type BrandName = "github" | "openai" | "claude" | "nodejs" | "python" | "rust" | "go";
@@ -27,7 +27,7 @@ interface BrandIconProps {
   className?: string;
 }
 
-export function brandForAgent(agent: CodingAgentKind): BrandName {
+export function brandForAgent(agent: AgentKind): BrandName {
   return agent === "codex" ? "openai" : "claude";
 }
 

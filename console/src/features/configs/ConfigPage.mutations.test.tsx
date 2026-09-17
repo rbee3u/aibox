@@ -264,9 +264,9 @@ describe("ConfigPage", () => {
       expect(action).toHaveClass(actionStyles.secondary);
       expect(action).not.toHaveClass(actionStyles.ghost);
     }
-    await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
+    await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
     expect(
-      screen.queryByRole("button", { name: "Select multiple Coding Agents" }),
+      screen.queryByRole("button", { name: "Select multiple Agents" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: "Claude" }));
     await waitFor(() =>

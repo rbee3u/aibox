@@ -1,4 +1,4 @@
-//! Node.js and Coding Agent executable ownership.
+//! Node.js and Claude/Codex executable ownership.
 
 use super::native::{executable_file_exists, remove_local_launcher};
 use super::{ComponentStatus, validate_stable_version};

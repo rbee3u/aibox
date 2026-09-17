@@ -37,7 +37,7 @@ impl ComponentCoordinator {
         self.state.latest_component_snapshot().await
     }
 
-    pub(crate) async fn check_latest(&self) -> Result<LatestSnapshot> {
+    pub(crate) async fn check_latest(&self) -> LatestSnapshot {
         self.state.check_latest_components().await
     }
 

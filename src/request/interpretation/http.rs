@@ -93,7 +93,7 @@ pub(super) fn family_from_url(value: Option<&str>) -> ProtocolFamily {
     }
 }
 
-pub(crate) fn coding_agent_session_id(
+pub(crate) fn agent_session_id(
     upstream_url: Option<&str>,
     headers: &[RecordedHeader],
 ) -> Option<String> {

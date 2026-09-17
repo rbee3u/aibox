@@ -9,7 +9,7 @@ import type {
   SessionDetailMeta,
   SessionDetailStats,
 } from "@/api/sessions";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common/tenantOptions";
 import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
 import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
@@ -56,8 +56,8 @@ interface ControllerOptions {
 
 export interface SessionViewModel {
   catalog: {
-    agentOptions: SelectionOption<CodingAgentKind>[];
-    commitAgents: (values: ReadonlySet<CodingAgentKind>) => void;
+    agentOptions: SelectionOption<AgentKind>[];
+    commitAgents: (values: ReadonlySet<AgentKind>) => void;
     commitTenants: (values: ReadonlySet<TenantSelectionValue>) => void;
     data: AggregatedSessionData | null;
     load: (kind?: "initial" | "refresh") => Promise<AggregatedSessionData | null>;
@@ -67,7 +67,7 @@ export interface SessionViewModel {
     refreshing: boolean;
     retryPageError: () => void;
     retryTenants: () => void;
-    selectedAgents: Set<CodingAgentKind>;
+    selectedAgents: Set<AgentKind>;
     selectedTenants: Set<TenantSelectionValue>;
     sessions: SourcedSession[];
     sessionTenantMissing: boolean;
@@ -255,7 +255,7 @@ export function useSessionController({
       .filter((value): value is TenantSelectionValue => value.length > 0);
     const agents = agentSourceKey
       .split(",")
-      .filter((value): value is CodingAgentKind => value === "codex" || value === "claude");
+      .filter((value): value is AgentKind => value === "codex" || value === "claude");
     return tenantSelectionValues.flatMap((tenantSelectionValue) =>
       agents.map((selectedAgent) => sessionSource(tenantSelectionValue, selectedAgent)),
     );
@@ -408,7 +408,7 @@ export function useSessionController({
     resetCatalog();
     updateSessionLocation(sessionLocation(next, selectedAgents));
   }
-  function commitAgents(values: ReadonlySet<CodingAgentKind>) {
+  function commitAgents(values: ReadonlySet<AgentKind>) {
     const next = new Set(values);
     clearInspection();
     resetCatalog();

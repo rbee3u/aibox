@@ -15,7 +15,7 @@ struct ResolvedWorkspace(String);
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExtraMount(String);
 
-/// Fully resolved and validated inputs for a Coding Agent Run.
+/// Fully resolved and validated inputs for an Agent Run.
 ///
 /// Constructing one is the only way to reach mount resolution, so the
 /// resolve-then-validate order is a property of the type rather than a rule

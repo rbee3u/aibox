@@ -12,7 +12,7 @@ pub(crate) const DEFAULT_TENANT_NAME: &str = "default";
 /// Storage key used for the Host Tenant Named Config catalog outside valid names.
 pub(crate) const HOST_STORAGE_KEY: &str = "__host";
 
-/// One Coding Agent selected within a Tenant.
+/// One Agent selected within a Tenant.
 #[derive(Debug, Clone)]
 pub(crate) struct TenantAgent {
     tenant: Tenant,
@@ -32,7 +32,7 @@ impl ManagedTenant {
         })
     }
 
-    /// Select one Coding Agent in this Tenant.
+    /// Select one Agent in this Tenant.
     pub(crate) fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         Tenant::Managed(self.clone()).for_agent(agent)
     }
@@ -65,7 +65,7 @@ impl TenantSelection {
 }
 
 impl Tenant {
-    /// Select one Coding Agent in this Tenant.
+    /// Select one Agent in this Tenant.
     pub(crate) fn for_agent(&self, agent: AgentKind) -> TenantAgent {
         let home = self.home_dir().to_path_buf();
         let named_config_catalog_dir = self.root().join(agent.tag()).join(self.storage_key());
@@ -77,7 +77,7 @@ impl Tenant {
         }
     }
 
-    /// Home containing native Coding Agent state.
+    /// Home containing native Agent state.
     pub(crate) fn home_dir(&self) -> &Path {
         match self {
             Self::Managed(tenant) => &tenant.home_dir,

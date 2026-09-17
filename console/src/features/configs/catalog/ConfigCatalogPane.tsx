@@ -139,10 +139,10 @@ export function ConfigCatalogPane({
               <SelectionMenu
                 className={layout.filterControl}
                 disabled={busy}
-                label="Coding Agent"
+                label="Agent"
                 onCommit={selectAgent}
                 options={agentOptions}
-                pluralLabel="Coding Agents"
+                pluralLabel="Agents"
                 selected={new Set([agent])}
                 triggerIcon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
                 allowMultiple={false}

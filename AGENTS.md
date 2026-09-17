@@ -28,7 +28,7 @@ complete behavioral contract into another document.
   execution and Runtime Image construction.
 - `src/sandbox/` validates `RunSpec` and mounts, then builds Docker arguments.
   `src/execution/` orchestrates Run and Debug without depending on Clap.
-- `src/agent/` centralizes Coding Agent contracts. `src/session/` owns Session
+- `src/agent/` centralizes Agent contracts. `src/session/` owns Session
   discovery; Agent-specific Transcript parsing stays in `session/claude.rs`
   and `session/codex.rs`.
 - `src/tenant/`, `src/config/`, and `src/component/` own their domain
@@ -45,7 +45,7 @@ complete behavioral contract into another document.
 
 ## Guardrails
 
-### Coding Agents and CLI
+### Agents and CLI
 
 - Reach shared Agent paths, Config files and templates, empty Current Config,
   and invocation behavior only through `AgentKind`. Shared contract matches

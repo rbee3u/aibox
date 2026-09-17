@@ -12,7 +12,7 @@ interface OperationStatePresentation {
 }
 
 /**
- * What one Operation state looks like and says. A Coding Agent install that
+ * What one Operation state looks like and says. An Agent install that
  * fails and one that succeeds have to be distinguishable at a glance, so each
  * terminal state owns a tone and its own mark rather than sharing a stop sign.
  */

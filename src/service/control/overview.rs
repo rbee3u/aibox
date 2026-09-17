@@ -199,7 +199,7 @@ pub(crate) struct TopologyNamedConfigs {
     error: Option<String>,
 }
 
-/// Discovered Sessions for one Coding Agent, as a count only.
+/// Discovered Sessions for one Agent, as a count only.
 ///
 /// Discovery counts Transcripts; it names none and parses none. A failed walk
 /// reports zero beside its error rather than dropping the Agent, matching how

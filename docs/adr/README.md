@@ -11,4 +11,4 @@ These ADRs record the current architectural decisions that shape AIBox.
 - [0007: Request evidence and materialized projections](0007-request-evidence-and-materialized-projections.md)
 - [0008: Acyclic feature-first Console](0008-acyclic-feature-first-console.md)
 - [0009: Rust-owned Console contract](0009-rust-owned-console-contract.md)
-- [0010: Centralized Coding Agent contracts](0010-centralized-coding-agent-contracts.md)
+- [0010: Centralized Agent contracts](0010-centralized-agent-contracts.md)

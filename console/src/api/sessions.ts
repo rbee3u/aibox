@@ -1,5 +1,5 @@
 import type { TenantRow } from "@/api/core";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type {
   ConversationMessage,
   ConversationNotice,
@@ -44,19 +44,19 @@ export interface SessionApi {
   listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
   listSessions(
     tenant: TenantSelection,
-    agent: CodingAgentKind,
+    agent: AgentKind,
     signal?: AbortSignal,
   ): Promise<SessionListData>;
   streamSessionDetail(
     tenant: TenantSelection,
-    agent: CodingAgentKind,
+    agent: AgentKind,
     id: string,
     handlers: SessionDetailHandlers,
     signal?: AbortSignal,
   ): Promise<void>;
   loadSessionEvidence(
     tenant: TenantSelection,
-    agent: CodingAgentKind,
+    agent: AgentKind,
     id: string,
     entry: string,
     snapshot: string,
@@ -64,23 +64,19 @@ export interface SessionApi {
   ): Promise<TranscriptEvidence>;
   deleteSessions(
     tenant: TenantSelection,
-    agent: CodingAgentKind,
+    agent: AgentKind,
     ids: string[],
   ): Promise<{ deleted: number }>;
 }
 
-function sessionSourceQuery(tenant: TenantSelection, agent: CodingAgentKind, id?: string) {
+function sessionSourceQuery(tenant: TenantSelection, agent: AgentKind, id?: string) {
   const query = tenantQuery(tenant);
   query.set("agent", agent);
   if (id !== undefined) query.set("id", id);
   return query;
 }
 
-export function sessionDetailPath(
-  tenant: TenantSelection,
-  agent: CodingAgentKind,
-  id: string,
-): string {
+export function sessionDetailPath(tenant: TenantSelection, agent: AgentKind, id: string): string {
   return `/_aibox/api/sessions/detail?${sessionSourceQuery(tenant, agent, id)}`;
 }
 

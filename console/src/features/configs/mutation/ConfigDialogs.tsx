@@ -233,7 +233,7 @@ export function ConfigDialogs({
           title={`Apply ${applyTarget.name} to Current Config?`}
           facts={[
             { label: "Tenant", value: configTenantLabel },
-            { label: "Coding Agent", value: agent === "codex" ? "Codex" : "Claude" },
+            { label: "Agent", value: agent === "codex" ? "Codex" : "Claude" },
             { label: "Source", value: `Named Config ${applyTarget.name}` },
             { label: "Target", value: "Current Config" },
           ]}

@@ -6,12 +6,12 @@ reapplies a Named Config.
 
 ## Model and Native Files
 
-Every Config belongs to one Tenant and Coding Agent. The Host Tenant operates
+Every Config belongs to one Tenant and Agent. The Host Tenant operates
 directly on the real Host Home, including unredacted credentials.
 
 - A **Named Config** is a reusable definition of the fixed Config Fields owned
   by `AgentKind`.
-- **Current Config** is the native file set read by the Coding Agent.
+- **Current Config** is the native file set read by the Agent.
 - **Config Application** is an explicit, one-shot projection of a Named Config
   into Current Config.
 - **Config Drift** compares Current Config with the source recorded by Last

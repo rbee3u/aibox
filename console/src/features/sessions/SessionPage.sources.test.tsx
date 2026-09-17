@@ -14,7 +14,7 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 describe("SessionPage", () => {
-  it("aggregates every selected Tenant and Coding Agent with stable source identities", async () => {
+  it("aggregates every selected Tenant and Agent with stable source identities", async () => {
     const streamSessionDetail = vi.fn().mockResolvedValue(undefined);
     const { api, listSessions } = fakeApi({
       sessions: (tenantSelection, agent) => {
@@ -43,11 +43,9 @@ describe("SessionPage", () => {
     await user.click(within(filterMenu).getByRole("button", { name: "Select multiple tenants" }));
     await user.click(within(filterMenu).getByRole("checkbox", { name: "work" }));
     await user.click(within(filterMenu).getByRole("button", { name: "Apply" }));
-    await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
-    filterMenu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(
-      within(filterMenu).getByRole("button", { name: "Select multiple Coding Agents" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
+    filterMenu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(filterMenu).getByRole("button", { name: "Select multiple Agents" }));
     await user.click(within(filterMenu).getByRole("checkbox", { name: "Claude" }));
     await user.click(within(filterMenu).getByRole("button", { name: "Apply" }));
     const newest = await screen.findByRole("button", {
@@ -181,7 +179,7 @@ describe("SessionPage", () => {
     const firstRender = render(<SessionPage api={empty.api} />);
     expect(await screen.findByText("No Sessions found")).toBeInTheDocument();
     expect(
-      screen.getByText("No Sessions were found for the selected Tenants and Coding Agents."),
+      screen.getByText("No Sessions were found for the selected Tenants and Agents."),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Select a Session" })).toBeInTheDocument();
     expect(
@@ -212,7 +210,7 @@ describe("SessionPage", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details.",
+        "This Transcript contains no supported user or Agent messages. Transcript events stay on Details.",
       ),
     ).toBeInTheDocument();
     // The rail stays mounted with nothing to number, so the reading keeps its column.

@@ -33,7 +33,7 @@ pub(super) fn safe_path(path: &Path) -> String {
 }
 
 /// Resolve a Transcript directory only through real directory entries beneath
-/// the selected Home. The Home is writable by a Coding Agent, so following a
+/// the selected Home. The Home is writable by an Agent, so following a
 /// `.claude`/`.codex` ancestor symlink it planted could make Console deletion
 /// remove Transcripts outside the Tenant.
 pub(crate) fn checked_session_dir(home: &Path, components: &[&str]) -> Result<Option<PathBuf>> {

@@ -1,5 +1,5 @@
 import type { Bootstrap, TenantRow } from "@/api/core";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type {
   ConfigComparison,
   ConfigComparisonFile,
@@ -65,7 +65,7 @@ export type ConfigFileData = Omit<
 
 export interface ConfigFileTarget {
   tenant: TenantSelection;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   current: boolean;
   config: string | null;
   file: string;
@@ -95,7 +95,7 @@ export interface ConfigApi {
   listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
   listConfigs(
     tenant: TenantSelection,
-    agent: CodingAgentKind,
+    agent: AgentKind,
     signal?: AbortSignal,
   ): Promise<ConfigListData>;
   revealConfigFile(target: ConfigFileTarget): Promise<ConfigFileData>;
@@ -108,9 +108,9 @@ export interface ConfigApi {
     files: ConfigComparisonInput[],
   ): Promise<ConfigComparison>;
   saveConfigFile(target: ConfigFileTarget, input: ConfigFileInput): Promise<ConfigFileData>;
-  createConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
-  applyConfig(tenant: TenantSelection, agent: CodingAgentKind, name: string): Promise<void>;
-  deleteConfigs(tenant: TenantSelection, agent: CodingAgentKind, names: string[]): Promise<void>;
+  createConfig(tenant: TenantSelection, agent: AgentKind, name: string): Promise<void>;
+  applyConfig(tenant: TenantSelection, agent: AgentKind, name: string): Promise<void>;
+  deleteConfigs(tenant: TenantSelection, agent: AgentKind, names: string[]): Promise<void>;
   previewCredentialPropagation(): Promise<PropagationPreview>;
   executeCredentialPropagation(planId: string): Promise<PropagationReport>;
 }

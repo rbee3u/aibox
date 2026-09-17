@@ -20,11 +20,11 @@ describe("SessionPage", () => {
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
     const tenantTrigger = await screen.findByRole("button", { name: "Tenant: default" });
-    const agentTrigger = screen.getByRole("button", { name: "Coding Agent: Codex" });
+    const agentTrigger = screen.getByRole("button", { name: "Agent: Codex" });
     expect(tenantTrigger).toHaveTextContent("default");
     expect(tenantTrigger).not.toHaveTextContent("Tenant:");
     expect(agentTrigger).toHaveTextContent("Codex");
-    expect(agentTrigger).not.toHaveTextContent("Coding Agent:");
+    expect(agentTrigger).not.toHaveTextContent("Agent:");
     const agentIcon = agentTrigger.querySelector<HTMLElement>('[data-icon="openai"]');
     expect(agentIcon).toBeInTheDocument();
     expect(agentIcon?.style.getPropertyValue("--brand-icon-size")).toBe("14px");
@@ -68,7 +68,7 @@ describe("SessionPage", () => {
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toHaveTextContent("Refresh");
     expect(screen.getByRole("button", { name: "Select Sessions" })).toHaveTextContent("Select");
     await user.click(agentTrigger);
-    const agentMenu = screen.getByRole("dialog", { name: "Coding Agent" });
+    const agentMenu = screen.getByRole("dialog", { name: "Agent" });
     const codexOption = within(agentMenu).getByRole("option", { name: "Codex" });
     const claudeOption = within(agentMenu).getByRole("option", { name: "Claude" });
     expect(codexOption).toHaveAttribute("aria-selected", "true");
@@ -77,9 +77,7 @@ describe("SessionPage", () => {
     expect(
       await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Coding Agent: Claude" })).toHaveTextContent(
-      "Claude",
-    );
+    expect(screen.getByRole("button", { name: "Agent: Claude" })).toHaveTextContent("Claude");
   });
   it("reports a missing Managed Tenant in the Session selector", async () => {
     window.history.replaceState(
@@ -92,7 +90,7 @@ describe("SessionPage", () => {
     render(<SessionPage api={api} />);
     const tenantTrigger = await screen.findByRole("button", { name: "Tenant: Not found" });
     expect(
-      screen.getByText("No Sessions were found for the selected Tenants and Coding Agents."),
+      screen.getByText("No Sessions were found for the selected Tenants and Agents."),
     ).toBeInTheDocument();
     await user.click(tenantTrigger);
     const tenantMenu = screen.getByRole("dialog", { name: "Tenant" });
@@ -182,10 +180,10 @@ describe("SessionPage", () => {
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
     await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
-    const agentTrigger = screen.getByRole("button", { name: "Coding Agent: Codex" });
+    const agentTrigger = screen.getByRole("button", { name: "Agent: Codex" });
     await user.click(agentTrigger);
-    let menu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Coding Agents" }));
+    let menu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
     const codexCheckbox = within(menu).getByRole("checkbox", { name: "Codex" });
     const claudeCheckbox = within(menu).getByRole("checkbox", { name: "Claude" });
     expect(codexCheckbox).toBeChecked();
@@ -196,23 +194,23 @@ describe("SessionPage", () => {
     expect(listSessions.mock.calls.some(([, agent]) => agent === "claude")).toBe(false);
     await user.keyboard("{Escape}");
     expect(agentTrigger).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Coding Agent: Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
     await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Coding Agents" }));
+    menu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
     await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
     await user.click(within(menu).getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("button", { name: "Coding Agent: Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
     await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Coding Agents" }));
+    menu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
     await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
     await user.click(document.body);
-    expect(screen.queryByRole("dialog", { name: "Coding Agent" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Coding Agent: Codex" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Agent" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
     await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Coding Agents" }));
+    menu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
     await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
     await user.click(within(menu).getByRole("button", { name: "Apply" }));
     await waitFor(() =>
@@ -223,41 +221,37 @@ describe("SessionPage", () => {
       ),
     );
     const multipleAgentTrigger = screen.getByRole("button", {
-      name: "Coding Agent: 2 Coding Agents",
+      name: "Agent: 2 Agents",
     });
-    expect(multipleAgentTrigger).toHaveTextContent("2 Coding Agents");
+    expect(multipleAgentTrigger).toHaveTextContent("2 Agents");
     expect(
       screen
         .getByRole("button", { name: "First prompt, Tenant default · Codex" })
         .querySelector("small"),
     ).toHaveTextContent("default Codex");
     await user.click(multipleAgentTrigger);
-    menu = screen.getByRole("dialog", { name: "Coding Agent" });
+    menu = screen.getByRole("dialog", { name: "Agent" });
     expect(within(menu).getByRole("checkbox", { name: "Codex" })).toBeChecked();
     expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeChecked();
     expect(within(menu).getByRole("button", { name: "Apply" })).toBeDisabled();
     await user.click(within(menu).getByRole("checkbox", { name: "Codex" }));
     expect(within(menu).getByRole("checkbox", { name: "Codex" })).not.toBeChecked();
     expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeDisabled();
-    expect(
-      within(menu).getByRole("button", { name: "Choose one Coding Agent" }),
-    ).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Choose one Agent" })).toBeInTheDocument();
     await user.click(within(menu).getByRole("button", { name: "Cancel" }));
-    await user.click(screen.getByRole("button", { name: "Coding Agent: 2 Coding Agents" }));
-    menu = screen.getByRole("dialog", { name: "Coding Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Choose one Coding Agent" }));
-    await user.click(within(menu).getByRole("button", { name: "Back to multiple Coding Agents" }));
+    await user.click(screen.getByRole("button", { name: "Agent: 2 Agents" }));
+    menu = screen.getByRole("dialog", { name: "Agent" });
+    await user.click(within(menu).getByRole("button", { name: "Choose one Agent" }));
+    await user.click(within(menu).getByRole("button", { name: "Back to multiple Agents" }));
     expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeChecked();
-    await user.click(within(menu).getByRole("button", { name: "Choose one Coding Agent" }));
+    await user.click(within(menu).getByRole("button", { name: "Choose one Agent" }));
     await user.click(within(menu).getByRole("option", { name: "Claude" }));
-    expect(screen.getByRole("button", { name: "Coding Agent: Claude" })).toHaveTextContent(
-      "Claude",
-    );
+    expect(screen.getByRole("button", { name: "Agent: Claude" })).toHaveTextContent("Claude");
     expect(
       await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" }),
     ).toBeInTheDocument();
   });
-  it("aborts a stale Session list request when the Coding Agent changes", async () => {
+  it("aborts a stale Session list request when the Agent changes", async () => {
     const codexList = deferred<SessionListData>();
     let codexCalls = 0;
     let codexSignal: AbortSignal | undefined;
@@ -278,7 +272,7 @@ describe("SessionPage", () => {
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
     await waitFor(() => expect(codexSignal).toBeDefined());
-    await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
+    await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
     await user.click(screen.getByRole("option", { name: "Claude" }));
     expect(codexSignal?.aborted).toBe(true);
     expect(
@@ -307,7 +301,7 @@ describe("SessionPage", () => {
     await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
     await user.click(screen.getByRole("button", { name: "Refresh Sessions" }));
     await waitFor(() => expect(refreshSignal).toBeDefined());
-    await user.click(screen.getByRole("button", { name: "Coding Agent: Codex" }));
+    await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
     await user.click(screen.getByRole("option", { name: "Claude" }));
     expect(refreshSignal?.aborted).toBe(true);
     await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { ConfigApi, ConfigListData } from "@/api/configs";
 import type { TenantSelection } from "@/domain/tenant";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
@@ -10,7 +10,7 @@ import { LatestRequest } from "@/shared/lib/latestRequest";
 export function useConfigCatalog(
   api: Pick<ConfigApi, "listConfigs">,
   tenant: TenantSelection,
-  agent: CodingAgentKind,
+  agent: AgentKind,
   onLoaded?: (catalog: ConfigListData) => void,
 ) {
   const [catalog, setCatalog] = useState<ConfigListData | null>(null);
@@ -46,7 +46,7 @@ export function useConfigCatalog(
   );
 
   useEffect(() => {
-    // A Tenant or Coding Agent selection change starts a fresh catalog lifecycle.
+    // A Tenant or Agent selection change starts a fresh catalog lifecycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCatalog(null);
     setError(null);

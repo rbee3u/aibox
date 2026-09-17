@@ -1,4 +1,4 @@
-//! Coding Agent Transcript backend contract and selection.
+//! Agent Transcript backend contract and selection.
 
 #[cfg(test)]
 use super::filesystem::test_transcript_home;
@@ -57,7 +57,7 @@ pub(crate) trait SessionBackend {
     fn prompt_record(&self, value: &Value) -> PromptRecord;
 
     /// Project one native Transcript Entry into the Console's shared detail
-    /// vocabulary. Coding Agent formats intentionally keep this mapping local.
+    /// vocabulary. Agent formats intentionally keep this mapping local.
     fn detail_records(&self, value: &Value, entry_id: &str, line: u64) -> Vec<DetailRecord> {
         vec![DetailRecord::Evidence(evidence_for(
             value,
@@ -92,7 +92,7 @@ pub(crate) trait SessionBackend {
     /// session with no readable message just gets an empty title (unless a backend's
     /// `title_of` finds something else, like Claude's `ai-title`), so tool/
     /// injected-only shells still list and can be cleared. One streaming pass
-    /// with O(1) state; the Coding Agent-specific answers come from the methods
+    /// with O(1) state; the Agent-specific answers come from the methods
     /// above.
     /// `home` anchors no-follow traversal of every path component.
     fn summarize_in(&self, home: &Path, path: &Path) -> Result<SessionSummary> {

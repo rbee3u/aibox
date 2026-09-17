@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 
 import type { ConfigApi } from "@/api/configs";
 import { decodeBase64 } from "@/shared/lib/encoding";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelection } from "@/domain/tenant";
 import type { ConfigFileController } from "@/features/configs/detail/configFileController";
 import { useConfigFileSession } from "@/features/configs/detail/useConfigFileSession";
@@ -31,7 +31,7 @@ import { iconSize } from "@/shared/icons/iconSizes";
 interface ConfigFilePaneProps {
   api: ConfigApi;
   tenant: TenantSelection;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   selection: ConfigSelection;
   file: string;
   mode: "visual" | "raw";

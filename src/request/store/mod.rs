@@ -64,7 +64,7 @@ impl SummaryMetadata {
             response: None,
             terminal: false,
             timing: TimingMetadata::default(),
-            coding_agent_session_id: None,
+            agent_session_id: None,
             protocol,
             outcome: None,
             errors: Vec::new(),

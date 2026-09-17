@@ -70,7 +70,7 @@ impl NamedConfigLayout {
     }
 }
 
-/// Create a Named Config from the selected Coding Agent's built-in template.
+/// Create a Named Config from the selected Agent's built-in template.
 pub(crate) fn create_named_config(selected: &TenantAgent, config: &NamedConfigName) -> Result<()> {
     selected.ensure_named_config_catalog()?;
 

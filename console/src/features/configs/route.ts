@@ -1,4 +1,4 @@
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import {
   DNS_LABEL_PATTERN,
   parseTenantSelectionValue,
@@ -51,7 +51,7 @@ export function namedConfigName(selection: ConfigSelection): string | null {
 }
 export interface ConfigRouteState {
   tenant: TenantSelection;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   selection: ConfigSelection;
   file: string | null;
   detailOpen: boolean;
@@ -79,7 +79,7 @@ export function readConfigRoute(search: string): ConfigRouteState {
 }
 export function configLocation(
   tenant: TenantSelection,
-  agent: CodingAgentKind,
+  agent: AgentKind,
   selection: ConfigSelection | null,
   file?: string | null,
 ): URLSearchParams {

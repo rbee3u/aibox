@@ -42,7 +42,7 @@ pub(crate) struct ApplicationResult {
 }
 
 impl NamedConfigDefinition {
-    /// Parse and validate the fixed Config Fields for one Coding Agent.
+    /// Parse and validate the fixed Config Fields for one Agent.
     pub(crate) fn parse(agent: AgentKind, main: &str, auth: Option<&str>) -> Result<Self> {
         Ok(Self::parse_with_warnings(agent, main, auth)?.definition)
     }

@@ -1,4 +1,4 @@
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import { parseTenantSelectionValue, type TenantSelectionValue } from "@/domain/tenant";
 import { SESSION_AGENT_OPTIONS } from "@/features/sessions/sessionSource";
 import { readEnum } from "@/shared/lib/queryParams";
@@ -7,20 +7,20 @@ export type SessionTab = "conversation" | "details";
 
 export interface SessionRouteSelection {
   tenantSelectionValue: TenantSelectionValue;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   id: string;
 }
 
 export interface SessionRouteState {
   tenants: Set<TenantSelectionValue>;
-  agents: Set<CodingAgentKind>;
+  agents: Set<AgentKind>;
   selection: SessionRouteSelection | null;
   tab: SessionTab;
 }
 
 const SESSION_TABS: readonly SessionTab[] = ["conversation", "details"];
 
-function isAgent(value: string | null): value is CodingAgentKind {
+function isAgent(value: string | null): value is AgentKind {
   return value === "codex" || value === "claude";
 }
 
@@ -57,7 +57,7 @@ export function readSessionRoute(search: string): SessionRouteState {
 
 export function sessionLocation(
   tenants: ReadonlySet<TenantSelectionValue>,
-  agents: ReadonlySet<CodingAgentKind>,
+  agents: ReadonlySet<AgentKind>,
   selection?: SessionRouteSelection | null,
   tab: SessionTab = "conversation",
 ): URLSearchParams {

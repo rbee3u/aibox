@@ -7,7 +7,7 @@ import type {
   ConfigVisualOption,
 } from "@/api/configs";
 import { decodeBase64, encodeBase64 } from "@/shared/lib/encoding";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelection } from "@/domain/tenant";
 import {
   comparableProvider,
@@ -47,7 +47,7 @@ export interface ConfigFileSnapshotModel {
 
 export function configFileTarget(
   tenant: TenantSelection,
-  agent: CodingAgentKind,
+  agent: AgentKind,
   selection: ConfigSelection,
   file: string,
 ): ConfigFileTarget {

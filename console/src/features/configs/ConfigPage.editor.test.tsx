@@ -635,7 +635,7 @@ describe("ConfigPage", () => {
     render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
     await revealConfigFiles(user);
     expect(await screen.findByRole("button", { name: "Tenant: Host" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Coding Agent: Claude" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Claude" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "team" })).toHaveAttribute("aria-pressed", "true");
     const editor = await screen.findByRole("textbox", { name: "settings.json content" });
     await user.type(editor, "changed");
@@ -696,7 +696,7 @@ describe("ConfigPage", () => {
     expect(drift.parentElement).toBe(name.parentElement);
     expect(name.compareDocumentPosition(drift) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const agentIcon = screen
-      .getByRole("button", { name: "Coding Agent: Codex" })
+      .getByRole("button", { name: "Agent: Codex" })
       .querySelector<HTMLElement>('[data-icon="openai"]');
     expect(agentIcon).toBeInTheDocument();
     expect(agentIcon?.style.getPropertyValue("--brand-icon-size")).toBe("14px");

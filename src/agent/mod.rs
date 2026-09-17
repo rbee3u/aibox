@@ -1,4 +1,4 @@
-//! Coding Agent-specific runtime and configuration contracts.
+//! Agent-specific runtime and configuration contracts.
 //!
 //! [`AgentKind`] centralizes matches that define shared runtime and Config
 //! contracts for the closed Agent set. Domain-owned behavior matches the Agent
@@ -7,7 +7,7 @@
 //!
 //! Shared orchestration asks [`AgentKind`] for paths, Named Config files, and
 //! command construction. Transcript parsing remains in the two Session backend
-//! modules because the Coding Agents use different on-disk formats.
+//! modules because the Agents use different on-disk formats.
 
 mod claude;
 mod codex;
@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::Path;
 
-/// Native executable and opaque arguments for one Coding Agent launch.
+/// Native executable and opaque arguments for one Agent launch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentInvocation {
     command: Vec<OsString>,
@@ -63,7 +63,7 @@ pub(crate) struct MainConfigField {
 
 const NO_ENUM_VALUES: &[&str] = &[];
 
-/// Coding Agent identity used across execution and management domains.
+/// Agent identity used across execution and management domains.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
 )]
@@ -77,7 +77,7 @@ pub(crate) enum AgentKind {
 }
 
 impl AgentKind {
-    /// Every Coding Agent supported by AIBox.
+    /// Every Agent supported by AIBox.
     pub(crate) const ALL: [Self; 2] = [Self::Claude, Self::Codex];
 
     /// Lowercase name used by the CLI, paths, and executable.
@@ -153,7 +153,7 @@ impl AgentKind {
         }
     }
 
-    /// Parse the Coding Agent's native main configuration (Claude JSON or
+    /// Parse the Agent's native main configuration (Claude JSON or
     /// Codex TOML) into a generic object map.
     pub(crate) fn parse_main_config(self, content: &str) -> Result<Map<String, Value>> {
         if self == Self::Codex && content.trim().is_empty() {
@@ -169,7 +169,7 @@ impl AgentKind {
             .with_context(|| format!("{} main configuration must be an object", self.tag()))
     }
 
-    /// Render a JSON object in the Coding Agent's native main format.
+    /// Render a JSON object in the Agent's native main format.
     pub(crate) fn render_main_config(self, value: &Value) -> Result<String> {
         if !value.is_object() {
             anyhow::bail!("{} main configuration must be an object", self.tag());
@@ -180,7 +180,7 @@ impl AgentKind {
         }
     }
 
-    /// Build the native Coding Agent invocation without Tenant Environment
+    /// Build the native Agent invocation without Tenant Environment
     /// wrapping or Named Config data.
     pub(crate) fn invocation(self, home: &Path, passthrough: &[OsString]) -> AgentInvocation {
         let mut command = vec![home.join(".local/bin").join(self.tag()).into_os_string()];

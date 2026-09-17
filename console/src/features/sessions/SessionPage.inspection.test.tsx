@@ -105,7 +105,7 @@ describe("SessionPage", () => {
     expect(screen.getByText("Session ID")).toBeInTheDocument();
     expect(screen.getByText("Inside the Tenant Home")).toBeInTheDocument();
     expect(screen.queryByText("Tenant")).not.toBeInTheDocument();
-    expect(screen.queryByText("Coding Agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
     expect(screen.queryByText("Started")).not.toBeInTheDocument();
     expect(screen.getByTitle("First to last Transcript event")).toHaveTextContent("1s");
   });

@@ -17,7 +17,7 @@ use super::{
 };
 use crate::foundation::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
 use crate::request::assessment::refresh_assessment;
-use crate::request::interpretation::coding_agent_session_id;
+use crate::request::interpretation::agent_session_id;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
@@ -78,7 +78,7 @@ impl RequestStore {
         let id = Uuid::now_v7().to_string();
         let observed_at = utc_now();
         let origin = Instant::now();
-        let coding_agent_session_id = coding_agent_session_id(upstream_url, &headers);
+        let agent_session_id = agent_session_id(upstream_url, &headers);
         let display_host = safe_display_host(host_hint.unwrap_or("invalid"));
         let host = sanitize_host(&display_host);
         let directory_name = format!("active-{}-{host}-{id}", utc_basic_at(&observed_at)?);
@@ -124,7 +124,7 @@ impl RequestStore {
                 response: None,
                 terminal: false,
                 timing: TimingMetadata::default(),
-                coding_agent_session_id,
+                agent_session_id,
                 protocol: Some(ProtocolSummary::for_url(upstream_url)),
                 outcome: None,
                 errors: Vec::new(),

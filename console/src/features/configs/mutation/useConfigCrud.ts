@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { ConfigApi, ConfigListData } from "@/api/configs";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelection } from "@/domain/tenant";
 import {
   configLocation,
@@ -15,7 +15,7 @@ import { messageOf } from "@/shared/lib/errors";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 
 interface ConfigCrudOptions {
-  agent: CodingAgentKind;
+  agent: AgentKind;
   api: Pick<ConfigApi, "applyConfig" | "createConfig" | "deleteConfigs">;
   currentSelection: boolean;
   file: string | null;

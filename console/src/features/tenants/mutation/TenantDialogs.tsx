@@ -310,7 +310,7 @@ function CreateTenantDialog({
               Create Managed Tenant
             </h2>
             <p className={styles.dialogSubtitle}>
-              Provision an isolated filesystem sandbox environment for Coding Agents.
+              Provision an isolated filesystem sandbox environment for Agents.
             </p>
           </div>
         </div>

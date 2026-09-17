@@ -1,4 +1,4 @@
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type {
   TopologyAgent,
   TopologyComponents,
@@ -202,10 +202,7 @@ export function tenantComponentLocation(
   query.set("component", kind);
   return query;
 }
-export function namedCatalogLocation(
-  tenant: TenantSelection,
-  agent: CodingAgentKind,
-): URLSearchParams {
+export function namedCatalogLocation(tenant: TenantSelection, agent: AgentKind): URLSearchParams {
   const query = tenantLocation(tenant);
   query.set("agent", agent);
   query.set("named", "1");

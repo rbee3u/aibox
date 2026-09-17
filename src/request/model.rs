@@ -337,8 +337,8 @@ pub(crate) struct SummaryMetadata {
     pub response: Option<SummaryResponseMetadata>,
     pub terminal: bool,
     pub timing: TimingMetadata,
-    #[serde(default)]
-    pub coding_agent_session_id: Option<String>,
+    #[serde(default, alias = "coding_agent_session_id")]
+    pub agent_session_id: Option<String>,
     #[serde(default)]
     pub protocol: Option<ProtocolSummary>,
     pub outcome: Option<Outcome>,

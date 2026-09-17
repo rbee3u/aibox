@@ -61,9 +61,7 @@ describe("SessionPage", () => {
     render(<SessionPage api={api} />);
     expect(await screen.findByRole("heading", { name: "First prompt" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tenant: 2 tenants" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Coding Agent: 2 Coding Agents" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: 2 Agents" })).toBeInTheDocument();
     expect(listSessions).toHaveBeenCalledTimes(4);
     expect(streamSessionDetail).toHaveBeenCalledWith(
       { kind: "host" },

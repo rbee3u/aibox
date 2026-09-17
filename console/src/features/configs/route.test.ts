@@ -65,11 +65,11 @@ describe("Configs route codec", () => {
     expect(readConfigRoute("?file=config.toml").file).toBeNull();
   });
 
-  it("falls back to Codex for an unknown Coding Agent", () => {
+  it("falls back to Codex for an unknown Agent", () => {
     expect(readConfigRoute("?agent=gemini").agent).toBe("codex");
   });
 
-  it("always writes the Tenant and Coding Agent", () => {
+  it("always writes the Tenant and Agent", () => {
     expect(configLocation({ kind: "host" }, "claude", null).toString()).toBe(
       "tenant=host&agent=claude",
     );

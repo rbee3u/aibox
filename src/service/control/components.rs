@@ -99,7 +99,7 @@ pub(super) async fn latest_components(
 }
 
 pub(super) async fn check_latest_components(State(state): State<ServiceState>) -> ControlResult {
-    let snapshot = ComponentCoordinator::new(state).check_latest().await?;
+    let snapshot = ComponentCoordinator::new(state).check_latest().await;
     Ok(json_response(StatusCode::OK, &snapshot))
 }
 

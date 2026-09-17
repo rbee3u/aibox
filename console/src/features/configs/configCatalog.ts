@@ -5,7 +5,7 @@ import type {
   ConfigDrift,
   PropagationOutcome,
 } from "@/api/configs";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelection } from "@/domain/tenant";
 import { configTenantSelectionValue } from "@/features/configs/route";
 import { driftCatalogLabel, formatTimestamp } from "@/shared/lib/format";
@@ -49,7 +49,7 @@ export function configWarningPresentation(
 }
 export function configIssueDescriptionId(
   tenant: TenantSelection,
-  agent: CodingAgentKind,
+  agent: AgentKind,
   name: string,
 ): string {
   return `config-issue-${configTenantSelectionValue(tenant).replace(":", "-")}-${agent}-${name}`;

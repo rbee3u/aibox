@@ -45,7 +45,7 @@ irreversible.
 
 ## Sessions
 
-The Console discovers native Coding Agent Transcripts on the host without
+The Console discovers native Agent Transcripts on the host without
 starting Docker:
 
 | Agent | Transcript location |
@@ -94,9 +94,13 @@ independent; installing or updating one never changes another.
 
 Versioned Components have one active version. Omitting a version lets the
 native source select its stable release; exact `X.Y.Z` installs that release.
-`Check for updates` refreshes native inspection and a Service-wide in-memory
-Latest Release snapshot. It never polls, stores desired state, or updates
-automatically. Downgrade requires Remove followed by exact install.
+Service startup makes one best-effort asynchronous observation of the native
+release sources and publishes a Service-wide in-memory Latest Release snapshot
+when at least one source succeeds. `Check for updates` explicitly refreshes
+native inspection and that snapshot, including source failures. The Service
+never polls, persists the snapshot, stores desired state, retries a failed
+startup observation, or updates automatically. Downgrade requires Remove
+followed by exact install.
 
 Inspection reports `installed`, `incomplete`, `modified`, `unmanaged`, or
 `not-installed`. Installation may repair recognizable incomplete state.

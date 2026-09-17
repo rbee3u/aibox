@@ -36,14 +36,14 @@ describe("Session source vocabulary", () => {
     expect(managed.tenant).toEqual({ kind: "managed", name: "work" });
   });
 
-  it("keys a row by its Tenant, Coding Agent, and Session id", () => {
+  it("keys a row by its Tenant, Agent, and Session id", () => {
     const source = sessionSource("managed:work", "codex");
     expect(sourcedSession(source, row("abc", "2026-08-17T09:00:00Z")).key).toBe(
       '["managed:work","codex","abc"]',
     );
   });
 
-  it("orders newest first, then by Tenant, Coding Agent, and id", () => {
+  it("orders newest first, then by Tenant, Agent, and id", () => {
     const codexWork = sessionSource("managed:work", "codex");
     const claudeWork = sessionSource("managed:work", "claude");
     const older = sourcedSession(codexWork, row("a", "2026-08-17T08:00:00Z"));

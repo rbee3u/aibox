@@ -2,9 +2,15 @@ use super::*;
 use axum::body::Body;
 use axum::http::Request;
 use base64::Engine as _;
+use futures_util::future::BoxFuture;
 use http_body_util::BodyExt as _;
 use serde_json::Value;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
 use tower::ServiceExt as _;
+
+const VERSIONED_COMPONENT_COUNT: usize =
+    crate::component::ComponentKind::ALL.len() - crate::component::ComponentKind::STATUSLINES.len();
 
 pub(crate) fn test_state(root: &Path) -> ServiceState {
     let host_home = root.join("host-home");
@@ -47,6 +53,51 @@ fn json_request(path: &str, body: impl Into<Body>) -> Request<Body> {
 async fn response_json(response: Response<Body>) -> Value {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&body).unwrap()
+}
+
+#[derive(Clone, Default)]
+struct PendingLatestControl {
+    calls: Arc<AtomicUsize>,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl PendingLatestControl {
+    async fn wait_until_all_started(&self) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while self.calls.load(Ordering::SeqCst) < VERSIONED_COMPONENT_COUNT {
+                self.started.notified().await;
+            }
+        })
+        .await
+        .expect("all Latest Release fixture requests should start");
+    }
+
+    fn release(&self) {
+        self.release.notify_waiters();
+    }
+}
+
+struct PendingLatestProvider {
+    control: PendingLatestControl,
+}
+
+impl crate::component::LatestProvider for PendingLatestProvider {
+    fn fetch(
+        &self,
+        kind: crate::component::ComponentKind,
+    ) -> BoxFuture<'static, crate::component::LatestResult> {
+        let control = self.control.clone();
+        Box::pin(async move {
+            control.calls.fetch_add(1, Ordering::SeqCst);
+            control.started.notify_one();
+            control.release.notified().await;
+            crate::component::LatestResult::Unavailable {
+                source: kind.name(),
+                error: "fixture unavailable".to_string(),
+            }
+        })
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -520,6 +571,161 @@ async fn component_update_check_is_shared_partial_and_socket_free() {
     assert!(!root.path().join("tenants").exists());
     assert!(state.operation_snapshot().is_none());
     assert!(state.begin_management_mutation().is_ok());
+}
+
+#[tokio::test]
+async fn component_update_prefetch_publishes_partial_but_hides_all_unavailable() {
+    use crate::component::LatestResult;
+    use crate::testutil::FixtureLatestProvider;
+    use std::collections::BTreeMap;
+
+    let unavailable_root = tempfile::tempdir().unwrap();
+    let unavailable = test_state(unavailable_root.path());
+    unavailable.prefetch_latest_components().await;
+    assert_eq!(unavailable.latest_component_snapshot().await, None);
+
+    let partial_root = tempfile::tempdir().unwrap();
+    let mut partial = test_state(partial_root.path());
+    partial.set_latest_provider(Arc::new(FixtureLatestProvider {
+        results: BTreeMap::from([(
+            "node".to_string(),
+            LatestResult::Available {
+                version: "24.19.0".to_string(),
+                source: "nodejs.org",
+            },
+        )]),
+    }));
+    partial.prefetch_latest_components().await;
+
+    let snapshot = partial.latest_component_snapshot().await.unwrap();
+    assert_eq!(snapshot.entries.len(), VERSIONED_COMPONENT_COUNT);
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.kind == crate::component::ComponentKind::Node
+            && entry.state == crate::component::LatestEntryState::Available
+    }));
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.kind == crate::component::ComponentKind::Codex
+            && entry.state == crate::component::LatestEntryState::Unavailable
+    }));
+}
+
+#[tokio::test]
+async fn explicit_component_check_joins_prefetch_and_publishes_its_failed_batch() {
+    let root = tempfile::tempdir().unwrap();
+    let control = PendingLatestControl::default();
+    let mut state = test_state(root.path());
+    state.set_latest_provider(Arc::new(PendingLatestProvider {
+        control: control.clone(),
+    }));
+    let app = router(state.clone());
+    let prefetch_state = state.clone();
+    let observed_state = state.clone();
+    let release = control.clone();
+
+    let ((), response, ()) = tokio::join!(
+        biased;
+        async move { prefetch_state.prefetch_latest_components().await },
+        async move {
+            app.oneshot(json_request("/_aibox/api/components/latest/check", "{}"))
+                .await
+                .unwrap()
+        },
+        async move {
+            release.wait_until_all_started().await;
+            assert_eq!(observed_state.latest_component_snapshot().await, None);
+            release.release();
+        },
+    );
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let checked = response_json(response).await;
+    assert!(
+        checked["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| { entry["state"] == "unavailable" })
+    );
+    assert_eq!(
+        control.calls.load(Ordering::SeqCst),
+        VERSIONED_COMPONENT_COUNT
+    );
+    assert_eq!(
+        checked,
+        serde_json::to_value(state.latest_component_snapshot().await.unwrap()).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn concurrent_explicit_component_checks_share_one_batch() {
+    let root = tempfile::tempdir().unwrap();
+    let control = PendingLatestControl::default();
+    let mut state = test_state(root.path());
+    let previous = state.check_latest_components().await;
+    state.set_latest_provider(Arc::new(PendingLatestProvider {
+        control: control.clone(),
+    }));
+    let app = router(state.clone());
+    let observed_state = state;
+    let release = control.clone();
+
+    let (first, second, ()) = tokio::join!(
+        biased;
+        app.clone().oneshot(json_request(
+            "/_aibox/api/components/latest/check",
+            "{}",
+        )),
+        app.oneshot(json_request(
+            "/_aibox/api/components/latest/check",
+            "{}",
+        )),
+        async move {
+            release.wait_until_all_started().await;
+            assert_eq!(
+                observed_state.latest_component_snapshot().await,
+                Some(previous)
+            );
+            release.release();
+        },
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(response_json(first).await, response_json(second).await);
+    assert_eq!(
+        control.calls.load(Ordering::SeqCst),
+        VERSIONED_COMPONENT_COUNT
+    );
+}
+
+#[tokio::test]
+async fn shutdown_cancels_component_update_prefetch_without_publishing() {
+    let root = tempfile::tempdir().unwrap();
+    let control = PendingLatestControl::default();
+    let mut state = test_state(root.path());
+    state.set_latest_provider(Arc::new(PendingLatestProvider {
+        control: control.clone(),
+    }));
+    let shutdown = CancellationToken::new();
+    let cancel = shutdown.clone();
+    let wait = control.clone();
+
+    tokio::join!(
+        biased;
+        prefetch_component_updates(state.clone(), shutdown),
+        async move {
+            wait.wait_until_all_started().await;
+            cancel.cancel();
+        },
+    );
+
+    assert_eq!(
+        control.calls.load(Ordering::SeqCst),
+        VERSIONED_COMPONENT_COUNT
+    );
+    assert_eq!(state.latest_component_snapshot().await, None);
 }
 
 #[tokio::test]

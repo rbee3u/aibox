@@ -770,7 +770,8 @@ fn persisted_metadata_uses_the_stable_schema_names() {
     assert_eq!(summary["request"]["http_version"], "HTTP/2");
     assert_eq!(summary["response"]["status"], 200);
     assert_eq!(summary["assessment"]["level"], "active");
-    assert_eq!(summary["coding_agent_session_id"], "opaque-session");
+    assert_eq!(summary["agent_session_id"], "opaque-session");
+    assert!(summary.get("coding_agent_session_id").is_none());
     assert_eq!(summary["protocol"]["family"], "openai_responses");
     assert_eq!(summary["protocol"]["response_terminal"], false);
     assert!(summary["protocol"]["model"]["requested"].is_null());
@@ -798,8 +799,27 @@ fn chat_completions_uses_the_v4_protocol_projection() {
         serde_json::from_reader(fs::File::open(request.directory.join(SUMMARY_JSON)).unwrap())
             .unwrap();
     assert_eq!(summary["schema_version"], FORMAT_VERSION);
-    assert_eq!(summary["coding_agent_session_id"], "chat-session");
+    assert_eq!(summary["agent_session_id"], "chat-session");
+    assert!(summary.get("coding_agent_session_id").is_none());
     assert_eq!(summary["protocol"]["family"], "openai_chat_completions");
+}
+
+#[test]
+fn summary_metadata_reads_the_legacy_agent_session_id_key_and_writes_the_new_key() {
+    let mut legacy = serde_json::to_value(SummaryMetadata::test("legacy-request", None)).unwrap();
+    let object = legacy.as_object_mut().unwrap();
+    assert!(object.remove("agent_session_id").is_some());
+    object.insert(
+        "coding_agent_session_id".to_string(),
+        serde_json::json!("legacy-session"),
+    );
+
+    let summary: SummaryMetadata = serde_json::from_value(legacy).unwrap();
+    assert_eq!(summary.agent_session_id.as_deref(), Some("legacy-session"));
+
+    let current = serde_json::to_value(summary).unwrap();
+    assert_eq!(current["agent_session_id"], "legacy-session");
+    assert!(current.get("coding_agent_session_id").is_none());
 }
 
 #[test]

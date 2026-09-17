@@ -7,11 +7,11 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::net::SocketAddr;
 
-/// Parsed `aibox` command line, excluding Coding Agent arguments after `--`.
+/// Parsed `aibox` command line, excluding Agent arguments after `--`.
 #[derive(Debug, Parser)]
 #[command(
     name = "aibox",
-    about = "Run Coding Agents and Debug Shells inside a Docker Filesystem Sandbox",
+    about = "Run Agents and Debug Shells inside a Docker Filesystem Sandbox",
     subcommand_required = true,
     arg_required_else_help = true,
     version
@@ -202,12 +202,12 @@ fn reject_duplicate_selection_options(args: &[OsString]) -> Result<(), clap::Err
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Run a Coding Agent inside the AIBox container.
+    /// Run an Agent inside the AIBox container.
     ///
     /// Pass arguments verbatim after `--`, for example:
     /// `aibox run -- "fix the build"`.
     Run(RunArgs),
-    /// Open a Bash shell for a Managed Tenant without starting a Coding Agent.
+    /// Open a Bash shell for a Managed Tenant without starting an Agent.
     Debug(DebugArgs),
     /// Start the local AIBox Console and Request Proxy.
     Console(ConsoleArgs),
@@ -236,10 +236,10 @@ fn parse_listen(value: &str) -> Result<SocketAddr, String> {
     Ok(address)
 }
 
-/// Options for launching a Coding Agent in Docker.
+/// Options for launching an Agent in Docker.
 #[derive(Debug, Args)]
 pub(crate) struct RunArgs {
-    /// Coding Agent to run. Omit for Codex.
+    /// Agent to run. Omit for Codex.
     #[arg(id = "run-agent", long = "agent", value_name = "AGENT", value_enum)]
     pub agent: Option<AgentKind>,
 

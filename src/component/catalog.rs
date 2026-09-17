@@ -70,7 +70,7 @@ pub(crate) fn inspect_tenant_environment_components(
     (capabilities, warnings)
 }
 
-/// Require the selected Coding Agent's Tenant-local executable before a Run.
+/// Require the selected Agent's Tenant-local executable before a Run.
 pub(crate) fn require_agent_component(agent: AgentKind, home: &Path) -> Result<()> {
     let kind = ComponentKind::for_agent(agent);
     match inspect(kind, home)? {

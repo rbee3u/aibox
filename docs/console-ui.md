@@ -292,10 +292,10 @@ preserve plain text and line breaks.
 ### Overview and Tenants
 
 Overview is one Tenant status table showing every Tenant and the summary state
-of Codex, Claude, and Components, with each Coding Agent's Current Config, Named
+of Codex, Claude, and Components, with each Agent's Current Config, Named
 Config count, and discovered Session count stated in its own cell. Missing
 inspection is distinct from zero or healthy state, and Component totals never
-imply Coding Agent readiness. Links open the relevant management scope, and
+imply Agent readiness. Links open the relevant management scope, and
 returning to the module restores the scroll position.
 
 Session counts are discovery counts from the same read that builds the table:
@@ -309,7 +309,7 @@ stays quiet; build failures are not Service outages, and unavailable Docker is
 reported once for dependent inspection.
 
 Tenants combines Tenant lifecycle with Component status and actions. Overview
-links may target a Tenant, Coding Agent, Config scope, or Component row without
+links may target a Tenant, Agent, Config scope, or Component row without
 creating a parallel selection model. The frontend may present update
 comparisons, but does not invent installed state, desired versions, or automatic
 updates. Follow the [Tenant Component contract](tenants.md#tenant-components).
@@ -320,7 +320,7 @@ Every selected Config displays its native files. Content may contain credentials
 and is shown without redaction; keep that reminder in the editor context, stated
 once and stable across editor modes — Visual masks credentials without removing
 them. The Host Tenant's reminder also says that edits write to the real Host
-Home. Reads remain scoped to the selected Tenant, Coding Agent, and Config.
+Home. Reads remain scoped to the selected Tenant, Agent, and Config.
 
 Named Config main files use Visual mode only when the API supplies a Visual
 Config Option model; Raw remains available, and Current Config is Raw-only.

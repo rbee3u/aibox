@@ -1,4 +1,4 @@
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { SessionRow } from "@/api/sessions";
 import {
   tenantSelectionFromValue,
@@ -12,7 +12,7 @@ export interface SessionSource {
   tenant: TenantSelection;
   tenantSelectionValue: TenantSelectionValue;
   tenantLabel: string;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   agentLabel: string;
 }
 
@@ -28,14 +28,14 @@ export interface AggregatedSessionData {
 }
 
 export const SESSION_AGENT_OPTIONS: readonly {
-  value: CodingAgentKind;
+  value: AgentKind;
   label: string;
 }[] = [
   { value: "codex", label: "Codex" },
   { value: "claude", label: "Claude" },
 ];
 
-export function agentLabel(agent: CodingAgentKind): string {
+export function agentLabel(agent: AgentKind): string {
   return SESSION_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
 }
 
@@ -65,7 +65,7 @@ export function accessibleSessionSource(source: SessionSource): string {
 
 export function sessionSource(
   tenantSelectionValue: TenantSelectionValue,
-  agent: CodingAgentKind,
+  agent: AgentKind,
 ): SessionSource {
   return {
     key: JSON.stringify([tenantSelectionValue, agent]),
@@ -85,7 +85,7 @@ export function sourcedSession(source: SessionSource, row: SessionRow): SourcedS
   };
 }
 
-/** Newest first, then by Tenant, Coding Agent, and Session id for stability. */
+/** Newest first, then by Tenant, Agent, and Session id for stability. */
 export function compareSessions(left: SourcedSession, right: SourcedSession): number {
   return (
     right.start_ts.localeCompare(left.start_ts) ||

@@ -1,6 +1,6 @@
 # Filesystem Sandbox and Mounts
 
-AIBox treats its Docker container as the Coding Agent, Debug Shell, or
+AIBox treats its Docker container as the Agent, Debug Shell, or
 Component installer's Filesystem Sandbox. It controls which host paths enter
 the container; it does not confine network or credential authority.
 
@@ -193,7 +193,7 @@ revalidate paths and reject symlinks or unexpected types.
 
 The proxy best-effort recognizes OpenAI Responses, OpenAI Chat Completions, and
 Claude Messages. It records model, reasoning effort, response mode, First
-Token, final Token Usage, Provider diagnostics, and an unverified Coding Agent
+Token, final Token Usage, Provider diagnostics, and an unverified Agent
 Session ID. Recognition never changes forwarding.
 
 For recognized streams, First Token is the receipt time of the first nonempty

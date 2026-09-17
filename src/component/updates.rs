@@ -56,6 +56,14 @@ pub(crate) struct LatestSnapshot {
     pub(crate) entries: Vec<LatestEntry>,
 }
 
+impl LatestSnapshot {
+    pub(crate) fn has_available_release(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.state == LatestEntryState::Available)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LatestResult {
     Available {

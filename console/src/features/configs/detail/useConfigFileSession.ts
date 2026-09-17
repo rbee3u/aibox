@@ -14,7 +14,7 @@ import type {
   ConfigVisualOption,
 } from "@/api/configs";
 import { encodeBase64 } from "@/shared/lib/encoding";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelection } from "@/domain/tenant";
 import { requestProxyRoute } from "@/features/configs/configCatalog";
 import type { ConfigFileController } from "@/features/configs/detail/configFileController";
@@ -40,7 +40,7 @@ import { messageOf } from "@/shared/lib/errors";
 export interface ConfigFileSessionOptions {
   api: ConfigApi;
   tenant: TenantSelection;
-  agent: CodingAgentKind;
+  agent: AgentKind;
   selection: ConfigSelection;
   file: string;
   mode: "visual" | "raw";

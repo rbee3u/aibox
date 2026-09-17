@@ -100,7 +100,7 @@ const detail = {
       upstream_response_body_completed_at_ns: "450000000",
       finished_at_ns: "500000000",
     },
-    coding_agent_session_id: null,
+    agent_session_id: null,
     protocol,
     outcome: "completed",
     errors: [],
@@ -156,7 +156,7 @@ export async function mockRequests(
       return route.fulfill({
         json: {
           ...detail,
-          summary: { ...detail.summary, coding_agent_session_id: sessionId },
+          summary: { ...detail.summary, agent_session_id: sessionId },
         },
       });
     }

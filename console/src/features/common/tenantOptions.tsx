@@ -1,5 +1,5 @@
 import type { TenantRow } from "@/api/core";
-import type { CodingAgentKind } from "@/domain/codingAgent";
+import type { AgentKind } from "@/domain/agent";
 import type { TenantSelectionValue } from "@/domain/tenant";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
@@ -76,10 +76,8 @@ export function tenantSelectionLabel(
   );
 }
 
-/** Coding Agent options in the Console's fixed presentation order. */
-export function agentSelectionOptions(
-  agents: readonly CodingAgentKind[],
-): SelectionOption<CodingAgentKind>[] {
+/** Agent options in the Console's fixed presentation order. */
+export function agentSelectionOptions(agents: readonly AgentKind[]): SelectionOption<AgentKind>[] {
   return agents.map((value) => ({
     value,
     label: value === "codex" ? "Codex" : "Claude",

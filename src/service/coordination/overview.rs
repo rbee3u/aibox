@@ -51,7 +51,7 @@ pub(crate) struct TopologyTenantSnapshot {
     pub(crate) components: Result<Vec<ComponentInspection>, String>,
 }
 
-/// One Coding Agent's Config and Session state within a Topology Tenant row.
+/// One Agent's Config and Session state within a Topology Tenant row.
 pub(crate) struct TopologyAgentSnapshot {
     pub(crate) agent: AgentKind,
     pub(crate) current_config: Result<config::CurrentConfigInspection, String>,

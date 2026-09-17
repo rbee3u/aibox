@@ -12,7 +12,7 @@
 //! Indexing is deliberately subordinate to forwarding: a non-contiguous chunk or
 //! a write failure disables it and becomes a Request warning without altering the
 //! recorded bytes or the Request Outcome. The indexer also notes the first token
-//! and the provider terminal event, so a Coding Agent that closes immediately
+//! and the provider terminal event, so an Agent that closes immediately
 //! after a complete stream is not recorded as a client disconnect.
 //!
 //! Raw body recording remains unbounded, but this in-memory observer stops for

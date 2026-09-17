@@ -9,7 +9,7 @@ import type {
 } from "@/api/configs";
 import type { TenantRow } from "@/api/core";
 import type { Operation } from "@/api/operations";
-import { CODING_AGENTS, type CodingAgentKind } from "@/domain/codingAgent";
+import { AGENTS, type AgentKind } from "@/domain/agent";
 import { DNS_LABEL_PATTERN, type TenantSelectionValue } from "@/domain/tenant";
 import {
   agentSelectionOptions,
@@ -60,8 +60,8 @@ interface ControllerOptions {
 
 export interface ConfigViewModel {
   catalog: {
-    agent: CodingAgentKind;
-    agentOptions: SelectionOption<CodingAgentKind>[];
+    agent: AgentKind;
+    agentOptions: SelectionOption<AgentKind>[];
     catalog: ConfigListData | null;
     catalogError: string | null;
     configFiles: string[];
@@ -75,7 +75,7 @@ export interface ConfigViewModel {
     refreshing: boolean;
     refreshConfigs: () => Promise<void>;
     retryTenants: () => void;
-    selectAgent: (values: ReadonlySet<CodingAgentKind>) => void;
+    selectAgent: (values: ReadonlySet<AgentKind>) => void;
     selectTenant: (values: ReadonlySet<TenantSelectionValue>) => void;
     tenant: ReturnType<typeof tenantSelectionFromConfigValue>;
     tenantError: string | null;
@@ -269,7 +269,7 @@ export function useConfigController({
     onLocationChange(configLocation(tenant, agent, null), true);
   }, [agent, detailOpen, managedTenantMissing, onLocationChange, tenant]);
   const tenantOptions = useMemo(() => tenantSelectionOptions(tenants), [tenants]);
-  const agentOptions = useMemo(() => agentSelectionOptions(CODING_AGENTS), []);
+  const agentOptions = useMemo(() => agentSelectionOptions(AGENTS), []);
   const configTenantLabel = tenantSelectionLabel(tenants, tenant);
   const inspectedName = namedConfigName(selection);
   const configSelectionLabel = selection.current
@@ -439,7 +439,7 @@ export function useConfigController({
       onLocationChange(configLocation(tenantSelectionFromConfigValue(next), agent, null));
     });
   }
-  function selectAgent(values: ReadonlySet<CodingAgentKind>) {
+  function selectAgent(values: ReadonlySet<AgentKind>) {
     const next = [...values][0];
     if (!next || next === agent) return;
     requestEditorAction(() => {

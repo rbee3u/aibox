@@ -1,4 +1,4 @@
-//! Coding Agent Run orchestration.
+//! Agent Run orchestration.
 
 use super::{DockerSource, canonical_tenant_home, require_runtime_image, tenant_capabilities};
 use crate::agent::AgentKind;
@@ -17,7 +17,7 @@ pub(crate) struct RunCommand {
     pub(crate) mounts: Vec<String>,
 }
 
-/// Resolve every user-controlled input, then start the Coding Agent.
+/// Resolve every user-controlled input, then start the Agent.
 ///
 /// The Runtime Image check precedes Tenant initialization so a missing image
 /// cannot leave freshly created Tenant state behind.

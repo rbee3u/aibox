@@ -131,7 +131,7 @@ describe("ConfigPage", () => {
     const trigger = screen.getByRole("button", { name: "Tenant: Host" });
     expect(trigger).toHaveFocus();
     expect(trigger).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Coding Agent: Codex" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeEnabled();
     slow.resolve(empty);
     await waitFor(() => expect(screen.getByRole("button", { name: "Tenant: Host" })).toHaveFocus());
   });

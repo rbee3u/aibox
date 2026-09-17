@@ -59,7 +59,7 @@ export interface SessionDeletionGroup {
   ids: string[];
 }
 
-/** Groups a batch by Tenant-and-Coding Agent in deterministic request order. */
+/** Groups a batch by Tenant-and-Agent in deterministic request order. */
 export function groupSessionsForDeletion(rows: readonly SourcedSession[]): SessionDeletionGroup[] {
   const groups = new Map<string, SessionDeletionGroup>();
   for (const row of rows) {

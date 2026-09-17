@@ -1,6 +1,6 @@
 //! Browse saved Sessions directly from a Tenant Home or Host Home without
 //! starting a container. Discovery, id resolution, listing, and deletion are shared;
-//! [`SessionBackend`] isolates the two Coding Agents' Transcript formats.
+//! [`SessionBackend`] isolates the two Agents' Transcript formats.
 //! Strict discovery protects Console detail and deletion from partial views,
 //! while listing can report traversal errors alongside readable Sessions.
 

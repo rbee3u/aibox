@@ -155,7 +155,7 @@ describe("TenantPage", () => {
     const { api } = tenantApi({ components });
     render(<TenantPage api={api} />);
 
-    expect(await screen.findByRole("region", { name: "Coding Agents" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Agents" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Statuslines" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Runtimes & Toolchains" })).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(8);
@@ -171,7 +171,7 @@ describe("TenantPage", () => {
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
-    expect(screen.queryByText("OpenAI coding agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("OpenAI agent")).not.toBeInTheDocument();
     expect(screen.queryByText("Python, uv, and pip")).not.toBeInTheDocument();
     expect(document.querySelectorAll("[data-component-icon]")).toHaveLength(8);
     for (const [component, brand] of [
@@ -220,7 +220,7 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} search="?tenant=host" />);
 
     expect(await screen.findByRole("region", { name: "Statuslines" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Coding Agents" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Agents" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Runtimes & Toolchains" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByLabelText("Selected Tenant: Host Tenant")).toBeInTheDocument();

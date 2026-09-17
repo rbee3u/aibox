@@ -49,9 +49,22 @@ struct CredentialPropagationState {
 
 #[derive(Clone)]
 struct ComponentUpdateState {
-    snapshot: Arc<RwLock<Option<LatestSnapshot>>>,
+    cache: Arc<RwLock<ComponentUpdateCache>>,
     check: Arc<Mutex<()>>,
     provider: Arc<dyn LatestProvider>,
+}
+
+#[derive(Default)]
+struct ComponentUpdateCache {
+    generation: u64,
+    completed: Option<LatestSnapshot>,
+    published: Option<LatestSnapshot>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ComponentUpdateTrigger {
+    Startup,
+    Explicit,
 }
 
 pub(crate) struct PendingAuthPropagation {
@@ -112,7 +125,7 @@ impl ServiceState {
                 },
             },
             component_updates: ComponentUpdateState {
-                snapshot: Arc::new(RwLock::new(None)),
+                cache: Arc::new(RwLock::new(ComponentUpdateCache::default())),
                 check: Arc::new(Mutex::new(())),
                 provider: latest_provider,
             },
@@ -189,24 +202,45 @@ impl ServiceState {
     }
 
     pub(crate) async fn latest_component_snapshot(&self) -> Option<LatestSnapshot> {
-        self.component_updates.snapshot.read().await.clone()
+        self.component_updates.cache.read().await.published.clone()
     }
 
-    pub(crate) async fn check_latest_components(&self) -> Result<LatestSnapshot> {
-        let _guard = self
-            .component_updates
-            .check
-            .clone()
-            .try_lock_owned()
-            .map_err(|_| {
-                application_error(
-                    ApplicationErrorKind::Busy,
-                    "another Component update check is running",
-                )
-            })?;
+    pub(crate) async fn prefetch_latest_components(&self) {
+        self.refresh_latest_components(ComponentUpdateTrigger::Startup)
+            .await;
+    }
+
+    pub(crate) async fn check_latest_components(&self) -> LatestSnapshot {
+        self.refresh_latest_components(ComponentUpdateTrigger::Explicit)
+            .await
+    }
+
+    async fn refresh_latest_components(&self, trigger: ComponentUpdateTrigger) -> LatestSnapshot {
+        let observed_generation = self.component_updates.cache.read().await.generation;
+        let _guard = self.component_updates.check.lock().await;
+
+        {
+            let mut cache = self.component_updates.cache.write().await;
+            if cache.generation != observed_generation {
+                let snapshot = cache
+                    .completed
+                    .clone()
+                    .expect("a completed Component update generation has a snapshot");
+                if trigger == ComponentUpdateTrigger::Explicit {
+                    cache.published = Some(snapshot.clone());
+                }
+                return snapshot;
+            }
+        }
+
         let snapshot = check_snapshot(self.component_updates.provider.clone()).await;
-        *self.component_updates.snapshot.write().await = Some(snapshot.clone());
-        Ok(snapshot)
+        let mut cache = self.component_updates.cache.write().await;
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.completed = Some(snapshot.clone());
+        if trigger == ComponentUpdateTrigger::Explicit || snapshot.has_available_release() {
+            cache.published = Some(snapshot.clone());
+        }
+        snapshot
     }
 
     #[cfg(test)]

@@ -187,7 +187,7 @@ export function SessionConversation({
                 variant="detail"
                 icon={<SessionIcon size={iconSize.xl} aria-hidden="true" />}
                 title="No readable conversation"
-                description="This Transcript contains no supported user or Coding Agent messages. Transcript events stay on Details."
+                description="This Transcript contains no supported user or Agent messages. Transcript events stay on Details."
               />
             )}
           </div>

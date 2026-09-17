@@ -39,6 +39,22 @@ fn help_exposes_only_supported_commands() {
 }
 
 #[test]
+fn help_uses_the_agent_domain_term() {
+    let legacy_term = ["Coding", "Agent"].join(" ");
+    for args in [
+        &["aibox", "--help"][..],
+        &["aibox", "run", "--help"][..],
+        &["aibox", "debug", "--help"][..],
+    ] {
+        let help = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+        let help = help.to_string();
+        assert!(help.contains("Agent"), "{args:?}: {help}");
+        assert!(!help.contains(&legacy_term), "{args:?}: {help}");
+    }
+}
+
+#[test]
 fn removed_commands_are_unknown() {
     for command in [
         "build",

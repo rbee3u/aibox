@@ -55,14 +55,14 @@ impl TenantSelection {
     }
 }
 
-/// A persistent Coding Agent identity.
+/// A persistent Tenant identity.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Tenant {
     /// An AIBox-managed, runnable Tenant.
     Managed(ManagedTenant),
     /// The management-only Tenant backed by the real host Home.
     Host {
-        /// Real host Home containing native Coding Agent state.
+        /// Real host Home containing native Agent state.
         home_dir: PathBuf,
         /// Root containing host-only AIBox state.
         root_dir: PathBuf,

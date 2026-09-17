@@ -134,7 +134,7 @@ describe("ConfirmDialog", () => {
         title="Apply openai to Current Config?"
         facts={[
           { label: "Tenant", value: "Host Tenant" },
-          { label: "Coding Agent", value: "Codex" },
+          { label: "Agent", value: "Codex" },
           { label: "Source", value: "Named Config openai" },
           { label: "Target", value: "Current Config" },
         ]}
@@ -149,7 +149,7 @@ describe("ConfirmDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Apply openai to Current Config?" });
     expect(within(dialog).getByText("Tenant")).toBeInTheDocument();
     expect(within(dialog).getByText("Host Tenant")).toBeInTheDocument();
-    expect(within(dialog).getByText("Coding Agent")).toBeInTheDocument();
+    expect(within(dialog).getByText("Agent")).toBeInTheDocument();
     expect(within(dialog).getByText("Codex")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Present fields replace; omitted fixed fields are removed.");
     expect(within(dialog).getByRole("button", { name: "Apply" })).toHaveClass(

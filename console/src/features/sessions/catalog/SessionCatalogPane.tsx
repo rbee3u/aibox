@@ -117,10 +117,10 @@ export function SessionCatalogPane({
               <SelectionMenu
                 className={layout.filterControl}
                 disabled={deletionBusy}
-                label="Coding Agent"
+                label="Agent"
                 onCommit={commitAgents}
                 options={agentOptions}
-                pluralLabel="Coding Agents"
+                pluralLabel="Agents"
                 selected={selectedAgents}
                 triggerIcon={
                   selectedAgents.size === 1 ? (
@@ -205,7 +205,7 @@ export function SessionCatalogPane({
               <SessionIcon size={iconSize.lg} data-icon="session-list-empty" aria-hidden="true" />
             }
             title="No Sessions found"
-            description="No Sessions were found for the selected Tenants and Coding Agents."
+            description="No Sessions were found for the selected Tenants and Agents."
           />
         )}
       </div>

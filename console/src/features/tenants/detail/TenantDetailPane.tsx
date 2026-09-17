@@ -262,7 +262,7 @@ export function TenantDetailPane({
                   </div>
                   <p>
                     The Host Tenant operates directly on your local workstation without
-                    containerization. AIBox manages statusline integration here, while Coding Agents
+                    containerization. AIBox manages statusline integration here, while Agents
                     (Claude & Codex) and Toolchain runtimes remain isolated within containerized
                     Managed Tenants.
                   </p>

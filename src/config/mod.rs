@@ -78,9 +78,9 @@ impl fmt::Display for NamedConfigName {
 /// One Agent-defined native Config file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigFile {
-    /// The Coding Agent's main native configuration file.
+    /// The Agent's main native configuration file.
     Main,
-    /// The Coding Agent's native credential file.
+    /// The Agent's native credential file.
     Auth,
 }
 
@@ -94,7 +94,7 @@ impl ConfigFile {
         .flatten()
     }
 
-    /// Resolve a wire filename against one Coding Agent contract.
+    /// Resolve a wire filename against one Agent contract.
     pub(crate) fn parse(agent: crate::agent::AgentKind, value: &str) -> Result<Self> {
         if value == agent.main_config_file() {
             return Ok(Self::Main);
@@ -105,7 +105,7 @@ impl ConfigFile {
         bail!("unsupported Config file for {}: {value}", agent.tag())
     }
 
-    /// Return the native filename for one Coding Agent.
+    /// Return the native filename for one Agent.
     pub(crate) fn as_str(self, agent: crate::agent::AgentKind) -> &'static str {
         match self {
             Self::Main => agent.main_config_file(),
@@ -119,7 +119,7 @@ impl ConfigFile {
 /// A mutually exclusive Current or Named Config selection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigTarget {
-    /// The selected Coding Agent's Current Config.
+    /// The selected Agent's Current Config.
     Current,
     /// One validated Named Config.
     Named(NamedConfigName),

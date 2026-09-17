@@ -27,9 +27,7 @@ pub(crate) use crate::request::model::{
     ProtocolDiagnostic, ProtocolFamily, ProtocolSummary, ResponseModeValue,
 };
 use anyhow::Context as _;
-pub(crate) use http::{
-    BodyContentCoding, body_content_coding, body_reader, coding_agent_session_id,
-};
+pub(crate) use http::{BodyContentCoding, agent_session_id, body_content_coding, body_reader};
 use serde_json::Value;
 use std::path::Path;
 

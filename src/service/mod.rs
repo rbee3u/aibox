@@ -100,6 +100,13 @@ async fn serve(
     let router = router(state.clone());
     println!("{}", startup_banner(listen));
 
+    let component_update_shutdown = shutdown.clone();
+    let component_update_state = state.clone();
+    tokio::spawn(prefetch_component_updates(
+        component_update_state,
+        component_update_shutdown,
+    ));
+
     let compact_shutdown = shutdown.clone();
     let compact_state = state.request();
     tokio::spawn(request_group_compact_loop(compact_state, compact_shutdown));
@@ -178,6 +185,14 @@ fn ensure_default_managed_tenant(root: &Path) -> Result<()> {
     tenant::ManagedTenant::resolve(root, tenant::DEFAULT_TENANT_NAME)?
         .ensure_initialized()
         .context("create or repair Default Managed Tenant")
+}
+
+async fn prefetch_component_updates(state: ServiceState, shutdown: CancellationToken) {
+    tokio::select! {
+        biased;
+        () = shutdown.cancelled() => {}
+        () = state.prefetch_latest_components() => {}
+    }
 }
 
 /// Wait one compact interval, then compact at most one Request Group, until shutdown.

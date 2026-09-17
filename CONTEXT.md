@@ -1,6 +1,6 @@
 # AIBox
 
-AIBox runs Coding Agents inside explicit filesystem boundaries and manages
+AIBox runs Agents inside explicit filesystem boundaries and manages
 Tenant-scoped native state.
 
 ## Language
@@ -15,16 +15,16 @@ The embedded management interface for AIBox state and operations.
 
 ### Execution and Isolation
 
-**Coding Agent**:
-A supported external coding assistant that AIBox can invoke.
+**Agent**:
+A supported external AI assistant that AIBox can invoke.
 
 **Run**:
-A temporary Coding Agent execution within one Managed Tenant and Workspace,
+A temporary Agent execution within one Managed Tenant and Workspace,
 independent of any Session.
 
 **Debug Shell**:
-A temporary interactive shell within one Managed Tenant, without a Coding Agent
-or Workspace.
+A temporary interactive shell within one Managed Tenant, without starting an
+Agent or mounting a Workspace.
 
 **Workspace**:
 The host directory used as a Run's primary working area.
@@ -45,7 +45,7 @@ An explicit mapping from a host source into a container target for a Run.
 The dedicated host storage boundary for AIBox-managed state and Request evidence.
 
 **Tenant**:
-A scope for Coding Agent state and capabilities. A Tenant is either a Managed
+A scope for Agent state and capabilities. A Tenant is either a Managed
 Tenant or the Host Tenant.
 
 **Managed Tenant**:
@@ -60,27 +60,27 @@ Managed Tenant, including one named `host`.
 The persistent home belonging to one Managed Tenant.
 
 **Host Home**:
-The user's real home that backs the Host Tenant's native Coding Agent state.
+The user's real home that backs the Host Tenant's native Agent state.
 
 **Tenant Environment**:
 The environment composed for one Managed Tenant when a Run or Debug Shell starts.
 
 **Component**:
-An optional native capability belonging to a Tenant, such as a Coding Agent,
-language runtime, toolchain, or statusline.
+An optional native capability belonging to a Tenant, such as an Agent
+executable, language runtime, toolchain, or statusline.
 _Avoid_: Plugin
 
 ### Configuration
 
 **Current Config**:
-The native configuration currently consumed by one Coding Agent in one Tenant.
+The native configuration currently consumed by one Agent in one Tenant.
 _Avoid_: Active Config
 
 **Named Config**:
-A reusable named definition of Config Fields for one Tenant and one Coding Agent.
+A reusable named definition of Config Fields for one Tenant and one Agent.
 
 **Config Field**:
-One logical setting or credential unit in a Coding Agent's Named Config model.
+One logical setting or credential unit in an Agent's Named Config model.
 
 **Config Application**:
 The one-time projection of a Named Config's Config Fields into Current Config.
@@ -100,11 +100,11 @@ existing Codex Named Configs and Managed Tenant Current Configs.
 ### Sessions
 
 **Session**:
-A Coding Agent interaction identity within one Tenant and Coding Agent,
-independent of Runs and represented by one Transcript.
+An interaction identity belonging to one Tenant and Agent, independent of Runs
+and represented by one Transcript.
 
 **Transcript**:
-The Coding Agent's native persistent record of one Session, including its native
+The Agent's native persistent record of one Session, including its native
 records and diagnostic content.
 
 **Transcript Evidence**:
@@ -132,7 +132,7 @@ The terminal result of a Request, independent of HTTP status.
 A classification of a Request derived from its state, outcome, HTTP and provider
 results, and diagnostic evidence.
 
-**Coding Agent Session ID**:
+**Agent Session ID**:
 An unverified session identifier found in Request evidence. It does not link a
 Request to an AIBox Session.
 

@@ -29,7 +29,7 @@ describe("BrandIcon", () => {
     expect(icon?.style.getPropertyValue("--brand-icon")).toBe(`url("${source}")`);
   });
 
-  it("maps Coding Agents to their brand identities", () => {
+  it("maps Agents to their brand identities", () => {
     expect(brandForAgent("codex")).toBe("openai");
     expect(brandForAgent("claude")).toBe("claude");
   });

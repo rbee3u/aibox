@@ -193,7 +193,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
     resolveRequestedEffective(protocol?.model) ??
     (detail.state === "active" ? "Detecting…" : "Not reported");
   const reasoningEffort = resolveRequestedEffective(protocol?.reasoning_effort);
-  const sessionId = detail.summary.coding_agent_session_id;
+  const sessionId = detail.summary.agent_session_id;
   const sessionCopied = sessionId !== null && copiedSessionId === sessionId;
   const stages = timingStages(detail);
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
@@ -224,17 +224,13 @@ function Summary({ detail }: { detail: RequestDetailData }) {
         </div>
         <dl className={styles.sessionMeta}>
           <div className={styles.sessionFact}>
-            <dt>Coding Agent Session ID</dt>
+            <dt>Agent Session ID</dt>
             <dd>
               <span className={styles.sessionValue}>{sessionId ?? "Not reported"}</span>
               {sessionId && (
                 <IconButton
                   size="sm"
-                  label={
-                    sessionCopied
-                      ? "Coding Agent Session ID copied"
-                      : "Copy Coding Agent Session ID"
-                  }
+                  label={sessionCopied ? "Agent Session ID copied" : "Copy Agent Session ID"}
                   onClick={copySessionId}
                 >
                   {sessionCopied ? (

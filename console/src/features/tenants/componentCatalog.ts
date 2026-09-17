@@ -31,7 +31,7 @@ const COMPONENT_LABELS: Record<ComponentKind, string> = {
 
 /** Presentation-only grouping; a Managed catalog shows all three sections. */
 export const COMPONENT_GROUPS: readonly ComponentGroup[] = [
-  { id: "coding-agents", label: "Coding Agents", kinds: ["codex", "claude"] },
+  { id: "agents", label: "Agents", kinds: ["codex", "claude"] },
   { id: "statuslines", label: "Statuslines", kinds: ["codex-statusline", "claude-statusline"] },
   {
     id: "runtimes-toolchains",

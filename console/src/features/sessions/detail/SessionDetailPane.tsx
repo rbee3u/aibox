@@ -189,8 +189,8 @@ export function SessionDetailPane({
                 <span className={styles.emptyStateBadge}>Full Audit</span>
               </div>
               <p>
-                Complete record of multi-turn interactions between users and Coding Agents. Review
-                prompts, model reasoning, and historical dialogue progression.
+                Complete record of multi-turn interactions between users and Agents. Review prompts,
+                model reasoning, and historical dialogue progression.
               </p>
             </div>
             <div className={styles.emptyStateCard}>
