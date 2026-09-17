@@ -101,7 +101,7 @@ export function RequestDetail({
   return (
     <section className={styles.panel} aria-label="Request details">
       <header className={styles.header}>
-        <h2 className={styles.requestOverview}>
+        <h2 className={styles.requestOverview} title={`${request.method} ${origin}${path}`}>
           <span className={styles.method}>{request.method}</span>
           <span className={styles.url}>
             <strong>{origin}</strong>
@@ -109,13 +109,11 @@ export function RequestDetail({
           </span>
         </h2>
         <div className={styles.caption}>
-          <span className={styles.contextPill}>
-            <RecordHeadlineStatus
-              response={response}
-              state={detail.state}
-              assessment={detail.assessment}
-            />
-          </span>
+          <RecordHeadlineStatus
+            response={response}
+            state={detail.state}
+            assessment={detail.assessment}
+          />
           {detail.result?.total_ms !== undefined && (
             <span className={styles.contextPill}>
               <small>Duration: </small>
