@@ -41,12 +41,9 @@ describe("SessionPage", () => {
       }),
     );
     const dialog = screen.getByRole("dialog", { name: "Delete Session 111111111111?" });
-    expect(dialog).toHaveTextContent("First prompt");
-    expect(dialog).toHaveTextContent("default Codex");
-    expect(dialog).toHaveTextContent("2026-08-17 17:00:00");
-    expect(dialog).toHaveTextContent(
-      "Permanently deletes its Transcript from Tenant default Codex.",
-    );
+    expect(dialog).toHaveTextContent("Tenant: default");
+    expect(dialog).toHaveTextContent("Agent: Codex");
+    expect(dialog).toHaveTextContent("Permanently deletes this session transcript.");
     expect(detailSignal?.aborted).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(detailSignal?.aborted).toBe(true);
@@ -109,7 +106,8 @@ describe("SessionPage", () => {
     ).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
-    expect(dialog).toHaveTextContent("Sources: Tenant default Codex (2)");
+    expect(dialog).toHaveTextContent("Tenant: default");
+    expect(dialog).toHaveTextContent("Agent: Codex");
     rows = [thirdSession];
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
@@ -187,7 +185,7 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("Sources: Host Tenant Codex (2)");
+    expect(dialog).toHaveTextContent("Tenant: Host Tenant");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(deleteSessions).not.toHaveBeenCalled();
   });

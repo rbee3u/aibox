@@ -1108,30 +1108,6 @@
   white-space: nowrap;
 }
 
-.batchDeletePlan {
-  margin-top: 12px;
-}
-
-.batchDeleteCount {
-  margin-bottom: 8px;
-  color: var(--ink);
-  font-size: var(--text-xs);
-}
-
-.batchDeleteRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  color: var(--ink-secondary);
-  font-size: var(--text-xs);
-}
-
-.batchDeleteRow code {
-  font-family: var(--font-mono);
-  color: var(--ink);
-}
-
 .componentIdentity strong {
   min-width: 0;
   overflow: hidden;

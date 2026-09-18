@@ -45,21 +45,52 @@
   line-height: var(--line-height-panel-title);
 }
 
+.pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.contextPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  font-size: var(--text-meta);
+  color: var(--ink-secondary);
+  line-height: 1.4;
+}
+
+.contextPill small {
+  color: var(--muted);
+  font-size: var(--text-meta);
+}
+
+.contextPill strong {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
 .facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  margin: 12px 0 0;
-  overflow: hidden;
-  border: 1px solid var(--line-content);
+  gap: 10px 16px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-control);
   border-radius: var(--radius-md);
-  background: var(--line-content);
+  background: var(--surface-inset);
 }
 
 .facts > div {
   min-width: 0;
-  padding: 10px 12px;
-  background: var(--surface);
+  padding: 0;
+  background: transparent;
 }
 
 .fullWidthFact {
@@ -67,10 +98,11 @@
 }
 
 .facts dt {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: var(--muted);
   font-size: var(--text-meta);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
+  text-transform: none;
 }
 
 .facts dd {
@@ -85,9 +117,9 @@
 
 .message {
   margin: 12px 0 0;
-  color: var(--muted);
+  color: var(--ink-secondary);
   font-size: var(--text-xs);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .content > p:not(.message) {
@@ -107,20 +139,102 @@
 }
 
 .confirmationPrompt {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
+  user-select: text;
+}
+
+.confirmationPill {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  vertical-align: middle;
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.confirmationPill:hover {
+  border-color: var(--line-control-strong);
+}
+
+.confirmationPill:focus-within {
+  border-color: var(--accent);
+}
+
+.confirmationFill {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 2px 7px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.confirmationFill:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.confirmationFill:focus-visible,
+.confirmationCopy:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .confirmationName {
   display: inline;
-  max-width: 100%;
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
-  border: 1px solid var(--line-content);
+  border: none;
+  padding: 0;
   color: var(--code-text);
   font-family: var(--font-mono);
   font-size: inherit;
   font-weight: var(--weight-semibold);
-  background: var(--surface-inset);
+  background: transparent;
+  transition: color var(--transition-fast);
+}
+
+.confirmationFill:hover .confirmationName {
+  color: var(--accent);
+}
+
+.confirmationDivider {
+  width: 1px;
+  background: var(--line-control);
+  flex-shrink: 0;
+}
+
+.confirmationCopy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.confirmationCopy:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.confirmationCopy:active {
+  background: var(--surface-pressed);
 }
 
 .actions {

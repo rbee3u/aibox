@@ -22,7 +22,6 @@ describe("TenantPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox"), "work");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     const alert = await screen.findByRole("alert");

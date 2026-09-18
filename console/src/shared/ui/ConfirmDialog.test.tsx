@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
+import { ConfirmDialog, ContextPill } from "@/shared/ui/ConfirmDialog";
 import actionButtonStyles from "@/shared/ui/ActionButton.module.css";
 import confirmDialogStyles from "@/shared/ui/ConfirmDialog.module.css";
 
@@ -100,11 +100,11 @@ describe("ConfirmDialog", () => {
     expect(confirm).toBeEnabled();
   });
 
-  /*
-   * The typed name is the friction. A copy control beside it used to hand the
-   * name over in one click; Enter, which the pattern promises, did nothing.
-   */
-  it("confirms on Enter once the typed name matches, and offers no copy shortcut", () => {
+  it("confirms on Enter once the typed name matches, and supports fill and copy shortcuts", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
     const onConfirm = vi.fn();
     render(
       <ConfirmDialog
@@ -117,13 +117,28 @@ describe("ConfirmDialog", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "Type work to confirm" });
-    expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+    const confirm = screen.getByRole("button", { name: "Delete" });
+    const fillButton = screen.getByRole("button", { name: "Fill work" });
+    const copyButton = screen.getByRole("button", { name: "Copy work" });
 
-    fireEvent.change(input, { target: { value: "wor" } });
-    fireEvent.submit(input.closest("form")!);
-    expect(onConfirm).not.toHaveBeenCalled();
+    // Test copy shortcut
+    await act(async () => {
+      fireEvent.click(copyButton);
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith("work");
+    expect(screen.getByRole("button", { name: "Copied work" })).toBeInTheDocument();
 
-    fireEvent.change(input, { target: { value: "work" } });
+    await act(() => vi.advanceTimersByTimeAsync(1500));
+    expect(screen.getByRole("button", { name: "Copy work" })).toBeInTheDocument();
+
+    // Test fill shortcut
+    expect(confirm).toBeDisabled();
+    fireEvent.click(fillButton);
+    expect(input).toHaveValue("work");
+    expect(confirm).toBeEnabled();
+
+    // Test Enter submit
     fireEvent.submit(input.closest("form")!);
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
@@ -203,5 +218,29 @@ describe("ConfirmDialog", () => {
     expect(requestDt.parentElement).toHaveClass(confirmDialogStyles.fullWidthFact);
     expect(statusDt.parentElement).not.toHaveClass(confirmDialogStyles.fullWidthFact);
     expect(idDt.parentElement).toHaveClass(confirmDialogStyles.fullWidthFact);
+  });
+
+  it("renders context pills with and without labels", () => {
+    render(
+      <ConfirmDialog
+        title="Delete Named Config custom?"
+        pills={
+          <>
+            <ContextPill label="Tenant" value="default" />
+            <ContextPill label="Agent" value="Codex" />
+            <ContextPill value="Isolated" />
+          </>
+        }
+        confirmLabel="Delete"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Tenant:")).toBeInTheDocument();
+    expect(screen.getByText("default")).toBeInTheDocument();
+    expect(screen.getByText("Agent:")).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Isolated")).toBeInTheDocument();
   });
 });
