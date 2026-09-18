@@ -93,6 +93,7 @@
         "kind": "codex",
         "state": "available",
         "version": "1.2.3",
+        "newest": null,
         "source": "GitHub Releases",
         "error": null
       }

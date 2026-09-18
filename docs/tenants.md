@@ -96,11 +96,14 @@ Versioned Components have one active version. Omitting a version lets the
 native source select its stable release; exact `X.Y.Z` installs that release.
 Service startup makes one best-effort asynchronous observation of the native
 release sources and publishes a Service-wide in-memory Latest Release snapshot
-when at least one source succeeds. `Check for updates` explicitly refreshes
-native inspection and that snapshot, including source failures. The Service
-never polls, persists the snapshot, stores desired state, retries a failed
-startup observation, or updates automatically. Downgrade requires Remove
-followed by exact install.
+when at least one source succeeds. For `node`, that snapshot records the current
+LTS tip as `version` and the newest stable release as `newest`. An installed
+Node is compared with the LTS tip when it is not newer than that tip, and with
+`newest` otherwise. Omitting a version still selects LTS. `Check for updates`
+explicitly refreshes native inspection and that snapshot, including source
+failures. The Service never polls, persists the snapshot, stores desired state,
+retries a failed startup observation, or updates automatically. Downgrade
+requires Remove followed by exact install.
 
 Inspection reports `installed`, `incomplete`, `modified`, `unmanaged`, or
 `not-installed`. Installation may repair recognizable incomplete state.

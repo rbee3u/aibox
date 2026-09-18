@@ -104,6 +104,14 @@ Tests follow their modules; page interactions stay at the feature root. Keep
 suite-only doubles local and feature-wide support inside that feature. Share
 cross-feature fixtures only when the production concept is also shared.
 
+Vitest runs pure `.test.ts` files in a shared Node environment so codecs,
+reducers, formatting, and source-contract checks do not pay for jsdom. Tests
+that use browser globals are listed with the isolated DOM project in
+`console/vite.config.ts`; `.test.tsx` files use that DOM project by default.
+The shared reset restores mocks, stubbed globals, and real timers after every
+test. Keep Node-project tests free of mutable module-global state so file order
+cannot affect their results.
+
 Do not repeat pure rules in browser tests. Geometry tests assert behavior and
 relative layout, not design-token values or pixel snapshots. Routine Rust and
 Console tests remain socket-free.

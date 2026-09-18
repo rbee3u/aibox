@@ -94,6 +94,7 @@ describe("TenantPage", () => {
             kind: "python",
             state: "available",
             version: "3.15.0",
+            newest: null,
             source: "python.org",
             error: null,
           },
@@ -135,6 +136,7 @@ describe("TenantPage", () => {
             kind: "python",
             state: "available",
             version: "3.15.0",
+            newest: null,
             source: "python.org",
             error: null,
           },
@@ -196,6 +198,7 @@ describe("TenantPage", () => {
               kind: "python",
               state: "available",
               version: latestVersion,
+              newest: null,
               source: "python.org",
               error: null,
             },
@@ -231,6 +234,7 @@ describe("TenantPage", () => {
             kind: "node",
             state: "available",
             version: "1.10.0",
+            newest: null,
             source: "nodejs.org",
             error: null,
           },
@@ -254,6 +258,46 @@ describe("TenantPage", () => {
     expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
   });
 
+  it("updates an installed Node newer than LTS to the newest stable release", async () => {
+    const { api, mutateComponent } = tenantApi({
+      latest: {
+        checked_at: "2026-08-25T08:00:00Z",
+        entries: [
+          {
+            kind: "node",
+            state: "available",
+            version: "24.21.0",
+            newest: "26.8.2",
+            source: "nodejs.org",
+            error: null,
+          },
+        ],
+      },
+      components: [
+        {
+          kind: "node",
+          supports_version: true,
+          status: "installed",
+          version: "26.1.0",
+          error: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    const row = await screen.findByRole("listitem");
+    expect(row).toHaveTextContent("v26.1.0");
+    expect(within(row).getByText("Outdated")).toBeInTheDocument();
+    expect(within(row).getByRole("textbox", { name: "Node.js version" })).toHaveValue("26.8.2");
+    await user.click(await screen.findByRole("button", { name: "Update" }));
+    expect(mutateComponent).toHaveBeenLastCalledWith(
+      { kind: "managed", name: "default" },
+      "node",
+      true,
+      "26.8.2",
+    );
+  });
+
   it("combines local refresh with an explicit shared update check", async () => {
     const snapshot = {
       checked_at: "2026-08-25T08:00:00Z",
@@ -262,6 +306,7 @@ describe("TenantPage", () => {
           kind: "node" as const,
           state: "available" as const,
           version: "24.19.0",
+          newest: null,
           source: "nodejs.org",
           error: null,
         },
@@ -323,6 +368,7 @@ describe("TenantPage", () => {
             kind: "node",
             state: "available",
             version: "24.21.0",
+            newest: null,
             source: "nodejs.org",
             error: null,
           },

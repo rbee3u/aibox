@@ -130,6 +130,22 @@ export function latestEntryFor(
   return snapshot?.entries.find((entry) => entry.kind === kind) ?? null;
 }
 
+/**
+ * Node records LTS in `version` and the overall newest stable in `newest`.
+ * An installed Node at or below the LTS tip is compared with LTS; anything
+ * newer is compared with `newest`. Other Components leave `newest` empty.
+ */
+function effectiveLatestVersion(
+  entry: Pick<ComponentLatestEntry, "version" | "newest">,
+  installedVersion: string | null,
+): string | null {
+  if (!entry.version) return null;
+  if (!installedVersion || !entry.newest) return entry.version;
+  const installedAgainstLts = compareStableVersions(installedVersion, entry.version);
+  if (installedAgainstLts !== null && installedAgainstLts <= 0) return entry.version;
+  return entry.newest;
+}
+
 export interface ComponentLatestInfo {
   label: string;
   detail: string;
@@ -202,7 +218,8 @@ export function latestInfoFor(
       latestVersion: entry.version,
     };
   }
-  const comparison = compareStableVersions(entry.version, row.version);
+  const latestVersion = effectiveLatestVersion(entry, row.version) ?? entry.version;
+  const comparison = compareStableVersions(latestVersion, row.version);
   const detail =
     comparison === null
       ? "The observed and current versions could not be compared."
@@ -212,11 +229,11 @@ export function latestInfoFor(
           ? "The observed release is lower than the current version."
           : "Up to date.";
   return {
-    label: `Latest release ${entry.version}`,
+    label: `Latest release ${latestVersion}`,
     detail,
     updateAvailable: comparison === 1,
     installedVersion: row.version,
-    latestVersion: entry.version,
+    latestVersion,
   };
 }
 

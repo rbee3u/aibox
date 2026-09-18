@@ -496,6 +496,7 @@ async fn component_update_check_is_shared_partial_and_socket_free() {
                 "node".to_string(),
                 LatestResult::Available {
                     version: "24.19.0".to_string(),
+                    newest: Some("26.8.2".to_string()),
                     source: "nodejs.org",
                 },
             ),
@@ -553,6 +554,15 @@ async fn component_update_check_is_shared_partial_and_socket_free() {
             .as_array()
             .unwrap()
             .iter()
+            .find(|entry| entry["kind"] == "node")
+            .unwrap()["newest"],
+        "26.8.2"
+    );
+    assert_eq!(
+        checked["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
             .find(|entry| entry["kind"] == "codex")
             .unwrap()["state"],
         "unavailable"
@@ -591,6 +601,7 @@ async fn component_update_prefetch_publishes_partial_but_hides_all_unavailable()
             "node".to_string(),
             LatestResult::Available {
                 version: "24.19.0".to_string(),
+                newest: Some("26.8.2".to_string()),
                 source: "nodejs.org",
             },
         )]),

@@ -291,6 +291,7 @@ mod tests {
                     kind: ComponentKind::Codex,
                     state: LatestEntryState::Available,
                     version: Some("1.2.3".to_string()),
+                    newest: None,
                     source: "GitHub Releases".to_string(),
                     error: None,
                 }],
