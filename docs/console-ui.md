@@ -234,7 +234,9 @@ not both.
 
 A control whose only content is an icon owes the reader its name, and gives it
 to a pointer and a keyboard alike: after a hover delay, and immediately on
-focus, since focus has no other way to read the glyph. The name is one string
+focus that follows keyboard input, since focus has no other way to read the
+glyph. Programmatic focus restoration preserves the user's place without
+summoning a tooltip for a pointer interaction elsewhere. The name is one string
 serving as both the accessible name and the tooltip text, so the two cannot
 drift. Withholding it is not a neutral choice — a trash icon in a list of fifty
 rows carries no clue which row it ends, and the answer is already written.

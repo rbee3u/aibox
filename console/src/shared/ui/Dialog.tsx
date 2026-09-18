@@ -48,11 +48,8 @@ export function Dialog({
       window.setTimeout(() => {
         const active = document.activeElement;
         if (active && active !== document.body && active !== document.documentElement) return;
-        if (target?.isConnected) {
-          target.setAttribute("data-dialog-restoring-focus", "true");
-          target.focus();
-          target.removeAttribute("data-dialog-restoring-focus");
-        } else {
+        if (target?.isConnected) target.focus();
+        else {
           document.querySelector<HTMLElement>('[data-dialog-focus-fallback="true"]')?.focus();
         }
       });

@@ -210,6 +210,7 @@ describe("Requests page selection and deletion", () => {
         screen.getByRole("button", { name: "Delete POST second.example.test/v1/responses" }),
       ).toHaveFocus(),
     );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.queryByText("Request deleted")).not.toBeInTheDocument();
   });
 

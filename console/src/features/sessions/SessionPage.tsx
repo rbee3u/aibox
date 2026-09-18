@@ -43,6 +43,7 @@ export function SessionPage(props: PageProps) {
         <SessionDetailPane api={props.api} detail={detail} mutations={mutations} />
       </div>
       <SessionDialogs
+        catalog={catalog}
         dialogs={dialogs}
         feedback={feedback}
         mutations={mutations}

@@ -39,12 +39,12 @@ describe("SessionPage", () => {
       "false",
     );
     expect(
-      within(tenantMenu).getByRole("button", { name: "Select multiple tenants" }),
-    ).toBeInTheDocument();
+      within(tenantMenu).queryByRole("button", { name: "Select multiple tenants" }),
+    ).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(tenantTrigger).toHaveFocus();
     const session = await screen.findByRole("button", {
-      name: "First prompt, Tenant default · Codex",
+      name: "First prompt",
     });
     expect(session.querySelector('[data-icon="session-record"]')).toHaveClass(
       "lucide-messages-square",
@@ -61,7 +61,7 @@ describe("SessionPage", () => {
     expect(session).not.toHaveTextContent(firstSession.display_id);
     expect(
       screen.getByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     ).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).not.toHaveAttribute("title");
@@ -74,9 +74,7 @@ describe("SessionPage", () => {
     expect(codexOption).toHaveAttribute("aria-selected", "true");
     expect(claudeOption).toHaveAttribute("aria-selected", "false");
     await user.click(claudeOption);
-    expect(
-      await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Second prompt" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Agent: Claude" })).toHaveTextContent("Claude");
   });
   it("reports a missing Managed Tenant in the Session selector", async () => {
@@ -90,7 +88,7 @@ describe("SessionPage", () => {
     render(<SessionPage api={api} />);
     const tenantTrigger = await screen.findByRole("button", { name: "Tenant: Not found" });
     expect(
-      screen.getByText("No Sessions were found for the selected Tenants and Agents."),
+      screen.getByText("No Sessions were found for the selected Tenant and Agent."),
     ).toBeInTheDocument();
     await user.click(tenantTrigger);
     const tenantMenu = screen.getByRole("dialog", { name: "Tenant" });
@@ -120,7 +118,7 @@ describe("SessionPage", () => {
     });
     render(<SessionPage api={api} />);
     const skill = await screen.findByRole("button", {
-      name: "Added unit tests for the SSE observation limit, Tenant default · Codex",
+      name: "Added unit tests for the SSE observation limit",
     });
     expect(
       within(skill).getByText("Added unit tests for the SSE observation limit", {
@@ -129,7 +127,7 @@ describe("SessionPage", () => {
     ).toBeInTheDocument();
     expect(within(skill).getByText("improve-unit-tests")).toBeInTheDocument();
     const review = screen.getByRole("button", {
-      name: "Codex request review, Tenant default · Codex",
+      name: "Codex request review",
     });
     expect(
       within(review).getByText("Codex request review", { selector: "strong" }),
@@ -148,13 +146,13 @@ describe("SessionPage", () => {
     });
     render(<SessionPage api={api} />);
     const row = await screen.findByRole("button", {
-      name: `${firstSession.title}, Tenant default · Codex`,
+      name: firstSession.title,
     });
     const metadata = within(row).getByText("2026-09-13 15:12:41").parentElement;
     expect(metadata).toHaveTextContent("2026-09-13 15:12:41 · 14 messages · 1 tool");
     expect(within(row).queryByText("Tenant default · Codex")).toBeNull();
     const other = screen.getByRole("button", {
-      name: `${secondSession.title}, Tenant default · Codex`,
+      name: secondSession.title,
     });
     expect(other).toHaveTextContent("1 message · 0 tools");
   });
@@ -166,53 +164,29 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([longSession]) });
     render(<SessionPage api={api} />);
     const session = await screen.findByRole("button", {
-      name: `${title}, Tenant default · Codex`,
+      name: title,
     });
     const titleElement = within(session).getByTitle(title);
     expect(titleElement.tagName).toBe("STRONG");
     expect(titleElement).toHaveTextContent(title);
   });
-  it("stages multiple values, cancels drafts, and can return to one value", async () => {
+  it("switches Agent immediately in single-select menu without multiple selection controls", async () => {
     const { api, listSessions } = fakeApi({
       sessions: (_tenant, agent) =>
         agent === "claude" ? list([secondSession]) : list([firstSession]),
     });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
+    await screen.findByRole("button", { name: "First prompt" });
     const agentTrigger = screen.getByRole("button", { name: "Agent: Codex" });
     await user.click(agentTrigger);
-    let menu = screen.getByRole("dialog", { name: "Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
-    const codexCheckbox = within(menu).getByRole("checkbox", { name: "Codex" });
-    const claudeCheckbox = within(menu).getByRole("checkbox", { name: "Claude" });
-    expect(codexCheckbox).toBeChecked();
-    expect(codexCheckbox).toBeDisabled();
-    expect(claudeCheckbox.closest("label")).not.toHaveAttribute("title");
-    await user.click(claudeCheckbox);
-    expect(within(menu).getByRole("button", { name: "Apply" })).toBeEnabled();
-    expect(listSessions.mock.calls.some(([, agent]) => agent === "claude")).toBe(false);
-    await user.keyboard("{Escape}");
-    expect(agentTrigger).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
-    await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
-    await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
-    await user.click(within(menu).getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
-    await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
-    await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
-    await user.click(document.body);
-    expect(screen.queryByRole("dialog", { name: "Agent" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Agent: Codex" })).toBeInTheDocument();
-    await user.click(agentTrigger);
-    menu = screen.getByRole("dialog", { name: "Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Select multiple Agents" }));
-    await user.click(within(menu).getByRole("checkbox", { name: "Claude" }));
-    await user.click(within(menu).getByRole("button", { name: "Apply" }));
+    const menu = screen.getByRole("dialog", { name: "Agent" });
+    expect(
+      within(menu).queryByRole("button", { name: "Select multiple Agents" }),
+    ).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("checkbox")).not.toBeInTheDocument();
+    const claudeOption = within(menu).getByRole("option", { name: "Claude" });
+    await user.click(claudeOption);
     await waitFor(() =>
       expect(listSessions).toHaveBeenCalledWith(
         expect.any(Object),
@@ -220,36 +194,8 @@ describe("SessionPage", () => {
         expect.any(AbortSignal),
       ),
     );
-    const multipleAgentTrigger = screen.getByRole("button", {
-      name: "Agent: 2 Agents",
-    });
-    expect(multipleAgentTrigger).toHaveTextContent("2 Agents");
-    expect(
-      screen
-        .getByRole("button", { name: "First prompt, Tenant default · Codex" })
-        .querySelector("small"),
-    ).toHaveTextContent("default Codex");
-    await user.click(multipleAgentTrigger);
-    menu = screen.getByRole("dialog", { name: "Agent" });
-    expect(within(menu).getByRole("checkbox", { name: "Codex" })).toBeChecked();
-    expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeChecked();
-    expect(within(menu).getByRole("button", { name: "Apply" })).toBeDisabled();
-    await user.click(within(menu).getByRole("checkbox", { name: "Codex" }));
-    expect(within(menu).getByRole("checkbox", { name: "Codex" })).not.toBeChecked();
-    expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeDisabled();
-    expect(within(menu).getByRole("button", { name: "Choose one Agent" })).toBeInTheDocument();
-    await user.click(within(menu).getByRole("button", { name: "Cancel" }));
-    await user.click(screen.getByRole("button", { name: "Agent: 2 Agents" }));
-    menu = screen.getByRole("dialog", { name: "Agent" });
-    await user.click(within(menu).getByRole("button", { name: "Choose one Agent" }));
-    await user.click(within(menu).getByRole("button", { name: "Back to multiple Agents" }));
-    expect(within(menu).getByRole("checkbox", { name: "Claude" })).toBeChecked();
-    await user.click(within(menu).getByRole("button", { name: "Choose one Agent" }));
-    await user.click(within(menu).getByRole("option", { name: "Claude" }));
     expect(screen.getByRole("button", { name: "Agent: Claude" })).toHaveTextContent("Claude");
-    expect(
-      await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Second prompt" })).toBeInTheDocument();
   });
   it("aborts a stale Session list request when the Agent changes", async () => {
     const codexList = deferred<SessionListData>();
@@ -275,9 +221,7 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
     await user.click(screen.getByRole("option", { name: "Claude" }));
     expect(codexSignal?.aborted).toBe(true);
-    expect(
-      await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Second prompt" })).toBeInTheDocument();
   });
   it("clears the manual refresh state when an Agent change replaces the request", async () => {
     const refresh = deferred<SessionListData>();
@@ -298,13 +242,13 @@ describe("SessionPage", () => {
     });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
+    await screen.findByRole("button", { name: "First prompt" });
     await user.click(screen.getByRole("button", { name: "Refresh Sessions" }));
     await waitFor(() => expect(refreshSignal).toBeDefined());
     await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
     await user.click(screen.getByRole("option", { name: "Claude" }));
     expect(refreshSignal?.aborted).toBe(true);
-    await screen.findByRole("button", { name: "Second prompt, Tenant default · Claude" });
+    await screen.findByRole("button", { name: "Second prompt" });
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toBeEnabled();
   });
 });

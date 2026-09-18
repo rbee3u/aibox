@@ -73,9 +73,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.getByText(/· 2 messages · 0 tools/)).toBeInTheDocument();
     expect(screen.queryByText(/· 1s ·/)).not.toBeInTheDocument();
     const userMessage = (await screen.findAllByRole("article")).find((article) =>
@@ -163,9 +161,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.getByText("1 tool")).toBeInTheDocument();
     expect(screen.getByText("1 tool").closest("summary")).toHaveTextContent(/^1 toolexec$/);
     expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
@@ -225,9 +221,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.getByText("1 malformed entry could not be read.")).toBeInTheDocument();
     expect(screen.queryByText("Transcript warning")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Transcript diagnostics")).toBeInTheDocument();
@@ -276,9 +270,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(await screen.findByLabelText("Activity has diagnostics")).toBeInTheDocument();
     expect(screen.queryByText("View Details")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Transcript diagnostics")).not.toBeInTheDocument();
@@ -333,9 +325,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.queryByLabelText("Activity has diagnostics")).not.toBeInTheDocument();
     await user.click(screen.getByText("1 tool"));
     const badge = screen.getByText("No result").closest("[data-status-tone]");
@@ -411,9 +401,7 @@ describe("SessionPage", () => {
     });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     await user.click(screen.getByText("Transcript activity"));
     const disclosure = screen.getByText("response_item").closest("details");
     await user.click(screen.getByText("response_item"));
@@ -473,9 +461,7 @@ describe("SessionPage", () => {
     });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     await user.click(screen.getByText("Transcript activity"));
     await user.click(screen.getByText("response_item"));
     await user.click(screen.getByText("Raw entry"));
@@ -536,9 +522,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     const failure = await screen.findByRole("note", { name: "Request failed" });
     expect(failure).toHaveTextContent("API Error: Request rejected (429)");
     expect(screen.getByRole("note", { name: "Turn interrupted" })).toHaveTextContent(
@@ -603,9 +587,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.getByRole("article")).toHaveTextContent("Please inspect this.");
     // Both groups hold only routine housekeeping, so neither reaches the reading stream.
     expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
@@ -659,9 +641,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     const activitySummary = await screen.findByText("Transcript activity");
     const activityDisclosure = activitySummary.closest("details");
     expect(activityDisclosure).not.toBeNull();
@@ -706,9 +686,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     const article = await screen.findByRole("article");
     const scrollContainer = article.parentElement?.parentElement as HTMLDivElement;
     Object.defineProperties(scrollContainer, {
@@ -766,9 +744,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     const userArticles = screen
       .getAllByRole("article")
       .filter((article) =>
@@ -828,9 +804,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     // Opening a Session scrolls to its top and reads the position on the next
     // frames; let those land before the reader moves.
     const articles = await screen.findAllByRole("article");
@@ -868,9 +842,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]), streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     const notice = await screen.findByText(
       "Transcript did not finish loading — content may be incomplete.",
     );

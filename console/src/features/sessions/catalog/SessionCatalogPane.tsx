@@ -1,6 +1,7 @@
-import { AlertTriangle, Box, ListChecks, Trash2 } from "lucide-react";
+import { AlertTriangle, ListChecks, Trash2 } from "lucide-react";
 
 import { SessionRow } from "@/features/sessions/catalog/SessionRow";
+import { sessionTenantSelectionValue } from "@/features/sessions/route";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
@@ -27,19 +28,19 @@ export function SessionCatalogPane({
   selection,
 }: Pick<SessionViewModel, "catalog" | "detail" | "dialogs" | "mutations" | "selection">) {
   const {
+    agent,
     agentOptions,
-    commitAgents,
-    commitTenants,
     data,
     load,
     loadingList,
     loadingTenants,
     refreshButton,
     refreshing,
-    selectedAgents,
-    selectedTenants,
+    selectAgent,
+    selectTenant,
     sessions,
     sessionTenantMissing,
+    tenant,
     tenantOptions,
   } = catalog;
   const { currentSession, openSession, unsafeView } = detail;
@@ -99,12 +100,12 @@ export function SessionCatalogPane({
                 className={layout.filterControl}
                 disabled={loadingTenants || deletionBusy}
                 label="Tenant"
-                onCommit={commitTenants}
+                onCommit={selectTenant}
                 options={tenantOptions}
                 pluralLabel="tenants"
-                selected={selectedTenants}
+                selected={new Set([sessionTenantSelectionValue(tenant)])}
                 triggerIcon={
-                  selectedTenants.size === 1 && selectedTenants.has("host") ? (
+                  tenant.kind === "host" ? (
                     <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
                   ) : (
                     <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
@@ -113,25 +114,18 @@ export function SessionCatalogPane({
                 unavailableSummary={
                   loadingTenants ? "Loading" : sessionTenantMissing ? "Not found" : "Unavailable"
                 }
+                allowMultiple={false}
               />
               <SelectionMenu
                 className={layout.filterControl}
                 disabled={deletionBusy}
                 label="Agent"
-                onCommit={commitAgents}
+                onCommit={selectAgent}
                 options={agentOptions}
                 pluralLabel="Agents"
-                selected={selectedAgents}
-                triggerIcon={
-                  selectedAgents.size === 1 ? (
-                    <BrandIcon
-                      brand={brandForAgent([...selectedAgents][0] ?? "codex")}
-                      size={iconSize.xs}
-                    />
-                  ) : (
-                    <Box size={iconSize.xs} aria-hidden="true" />
-                  )
-                }
+                selected={new Set([agent])}
+                triggerIcon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
+                allowMultiple={false}
               />
             </div>
             <div className={layout.toolbarActions}>
@@ -190,7 +184,6 @@ export function SessionCatalogPane({
             deletionBusy={deletionBusy}
             loadingList={loadingList}
             unsafeView={unsafeView}
-            showSource={selectedTenants.size > 1 || selectedAgents.size > 1}
             onOpen={() => void openSession(row)}
             onToggle={() => toggleSession(row.key)}
             onDelete={() => openSingleDelete(row)}
@@ -205,7 +198,7 @@ export function SessionCatalogPane({
               <SessionIcon size={iconSize.lg} data-icon="session-list-empty" aria-hidden="true" />
             }
             title="No Sessions found"
-            description="No Sessions were found for the selected Tenants and Agents."
+            description="No Sessions were found for the selected Tenant and Agent."
           />
         )}
       </div>

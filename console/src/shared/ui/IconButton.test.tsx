@@ -60,6 +60,7 @@ describe("IconButton", () => {
 
     fireEvent.pointerLeave(button);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Tab" });
     fireEvent.focus(button);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
     fireEvent.keyDown(button, { key: "Escape" });
@@ -105,16 +106,66 @@ describe("IconButton", () => {
     expect(element).toBe(button);
   });
 
-  it("does not open its tooltip when focus is restored from a closing dialog", () => {
+  it("does not open when pointer input is followed by programmatic focus", () => {
     render(
       <IconButton label="Create item">
         <RefreshCw aria-hidden="true" />
       </IconButton>,
     );
     const button = screen.getByRole("button", { name: "Create item" });
-    button.setAttribute("data-dialog-restoring-focus", "true");
+    fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+
     fireEvent.focus(button);
-    button.removeAttribute("data-dialog-restoring-focus");
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("discards open and pending tooltip state while disabled", () => {
+    vi.useFakeTimers();
+    const view = render(
+      <IconButton label="Refresh status">
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    const button = screen.getByRole("button", { name: "Refresh status" });
+
+    fireEvent.pointerEnter(button);
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    view.rerender(
+      <IconButton label="Refresh status" disabled>
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    view.rerender(
+      <IconButton label="Refresh status">
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.pointerEnter(button);
+    act(() => {
+      vi.advanceTimersByTime(449);
+    });
+    view.rerender(
+      <IconButton label="Refresh status" disabled>
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    view.rerender(
+      <IconButton label="Refresh status">
+        <RefreshCw aria-hidden="true" />
+      </IconButton>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
@@ -126,6 +177,7 @@ describe("IconButton", () => {
       </IconButton>,
     );
     const button = screen.getByRole("button", { name: "Refresh status" });
+    fireEvent.keyDown(document, { key: "Tab" });
     fireEvent.focus(button);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 

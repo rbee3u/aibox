@@ -1,10 +1,6 @@
 import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
 import { sessionListCopy } from "@/features/sessions/sessionListCopy";
-import {
-  accessibleSessionSource,
-  visibleSessionListSource,
-  type SourcedSession,
-} from "@/features/sessions/sessionSource";
+import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
 import { IconButton } from "@/shared/ui/IconButton";
@@ -26,8 +22,6 @@ interface SessionRowProps {
   loadingList: boolean;
   /** A traversal error makes the listed rows unsafe to act on. */
   unsafeView: boolean;
-  /** When the catalog already names one Tenant and one Agent, omit the source. */
-  showSource: boolean;
   onOpen: () => void;
   onToggle: () => void;
   onDelete: () => void;
@@ -35,7 +29,7 @@ interface SessionRowProps {
   registerDelete: (element: HTMLButtonElement | null) => void;
 }
 
-/** One Session catalog row: title, source, preview, and its danger delete action. */
+/** One Session catalog row: title, summary, preview, and its danger delete action. */
 export function SessionRow({
   row,
   current,
@@ -46,7 +40,6 @@ export function SessionRow({
   deletionBusy,
   loadingList,
   unsafeView,
-  showSource,
   onOpen,
   onToggle,
   onDelete,
@@ -54,7 +47,6 @@ export function SessionRow({
   registerDelete,
 }: SessionRowProps) {
   const copy = sessionListCopy(row.title, row.latest_message);
-  const accessibleSource = accessibleSessionSource(row.source);
   return (
     <div
       className={[
@@ -71,9 +63,7 @@ export function SessionRow({
         type="button"
         className={styles.sessionRowMain}
         aria-label={
-          selectionMode
-            ? `${selected ? "Deselect" : "Select"} ${copy.headline}, ${accessibleSource}`
-            : `${copy.headline}, ${accessibleSource}`
+          selectionMode ? `${selected ? "Deselect" : "Select"} ${copy.headline}` : copy.headline
         }
         aria-pressed={selectionMode ? selected : undefined}
         disabled={deletionBusy || loadingList}
@@ -83,12 +73,6 @@ export function SessionRow({
         <span>
           <strong title={copy.headline}>{copy.headline}</strong>
           <small className={styles.sessionRowMetadata}>
-            {showSource && (
-              <>
-                <span>{visibleSessionListSource(row.source)}</span>
-                {" · "}
-              </>
-            )}
             <time dateTime={row.start_ts}>{formatTimestamp(row.start_ts)}</time>
             {` · ${messageCountLabel(row.message_count)} · ${toolCountLabel(row.tool_count)}`}
           </small>
@@ -120,9 +104,7 @@ export function SessionRow({
           className={styles.sessionDelete}
           tone="dangerQuiet"
           label={
-            deleting
-              ? `Deleting Session ${row.display_id} from ${accessibleSource}`
-              : `Delete Session ${row.display_id} from ${accessibleSource}`
+            deleting ? `Deleting Session ${row.display_id}` : `Delete Session ${row.display_id}`
           }
           aria-busy={deleting}
           disabled={unsafeView || mutationBusy || loadingList}
