@@ -492,7 +492,9 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Select Configs" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Named Configs" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete selected Named Configs?" });
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Named Configs?" });
+    expect(within(dialog).getByText("default")).toBeInTheDocument();
+    expect(within(dialog).getByText("Codex")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "second Named Config could not be deleted",

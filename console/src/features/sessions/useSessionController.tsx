@@ -11,8 +11,13 @@ import type {
 } from "@/api/sessions";
 import type { AgentKind } from "@/domain/agent";
 import { agentSelectionOptions, tenantSelectionOptions } from "@/features/common/tenantOptions";
-import { readSessionRoute, sessionLocation, type SessionTab } from "@/features/sessions/route";
-import type { SessionDialogSource } from "@/features/sessions/sessionCatalog";
+import {
+  readSessionRoute,
+  sessionLocation,
+  sessionTenantSelectionValue,
+  tenantSelectionFromSessionValue,
+  type SessionTab,
+} from "@/features/sessions/route";
 import {
   isConversationNotice,
   transcriptAttentionNotice,
@@ -20,8 +25,6 @@ import {
 } from "@/features/sessions/detail/sessionDetail";
 import {
   SESSION_AGENT_OPTIONS,
-  sessionSource,
-  visibleSessionSource,
   type AggregatedSessionData,
   type SourcedSession,
 } from "@/features/sessions/sessionSource";
@@ -36,7 +39,7 @@ import {
   useSessionDeletion,
   type SessionDeletion,
 } from "@/features/sessions/mutation/useSessionDeletion";
-import type { TenantSelectionValue } from "@/domain/tenant";
+import type { TenantSelection, TenantSelectionValue } from "@/domain/tenant";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
@@ -56,9 +59,8 @@ interface ControllerOptions {
 
 export interface SessionViewModel {
   catalog: {
+    agent: AgentKind;
     agentOptions: SelectionOption<AgentKind>[];
-    commitAgents: (values: ReadonlySet<AgentKind>) => void;
-    commitTenants: (values: ReadonlySet<TenantSelectionValue>) => void;
     data: AggregatedSessionData | null;
     load: (kind?: "initial" | "refresh") => Promise<AggregatedSessionData | null>;
     loadingList: boolean;
@@ -67,10 +69,11 @@ export interface SessionViewModel {
     refreshing: boolean;
     retryPageError: () => void;
     retryTenants: () => void;
-    selectedAgents: Set<AgentKind>;
-    selectedTenants: Set<TenantSelectionValue>;
+    selectAgent: (values: ReadonlySet<AgentKind>) => void;
+    selectTenant: (values: ReadonlySet<TenantSelectionValue>) => void;
     sessions: SourcedSession[];
     sessionTenantMissing: boolean;
+    tenant: TenantSelection;
     tenantError: string | null;
     tenantOptions: SelectionOption<TenantSelectionValue>[];
   };
@@ -131,7 +134,6 @@ export interface SessionViewModel {
   dialogs: {
     registerDeleteButton: (key: string, element: HTMLButtonElement | null) => void;
     dialogKeys: string[] | null;
-    dialogSources: SessionDialogSource[];
     selectButton: RefObject<HTMLButtonElement | null>;
     closeBatchDelete: () => void;
     closeSingleDelete: () => void;
@@ -153,13 +155,13 @@ export function useSessionController({
   onLocationChange,
 }: ControllerOptions): SessionViewModel {
   const routeIntent = useMemo(() => readSessionRoute(search), [search]);
-  const {
-    agents: selectedAgents,
-    selection: routeSelection,
-    tab: sessionTab,
-    tenants: selectedTenants,
-  } = routeIntent;
-  const routeSourceKey = JSON.stringify([[...selectedTenants].sort(), [...selectedAgents].sort()]);
+  const { agent, sessionId, tab: sessionTab, tenant: rawTenant } = routeIntent;
+  const selectedTenantKey = sessionTenantSelectionValue(rawTenant);
+  const tenant = useMemo(
+    () => tenantSelectionFromSessionValue(selectedTenantKey),
+    [selectedTenantKey],
+  );
+  const routeSourceKey = `${selectedTenantKey}:${agent}`;
   const previousSearch = useRef(search);
   const previousRouteSourceKey = useRef(routeSourceKey);
   const writtenSearch = useRef<string | null>(null);
@@ -174,7 +176,7 @@ export function useSessionController({
   const { selectedKeys, selectionMode } = workflow;
   const [error, setError] = useState<string | null>(null);
   const reportInspectionFailure = useCallback((row: SourcedSession, cause: unknown) => {
-    setError(`Couldn’t load Session from ${visibleSessionSource(row.source)}: ${messageOf(cause)}`);
+    setError(`Couldn’t load Session ${row.display_id}: ${messageOf(cause)}`);
   }, []);
   const inspection = useSessionInspection(api, reportInspectionFailure);
   const {
@@ -224,14 +226,7 @@ export function useSessionController({
   );
   function updateSessionTab(next: SessionTab) {
     if (next === sessionTab) return;
-    const selection = currentSession
-      ? {
-          tenantSelectionValue: currentSession.source.tenantSelectionValue,
-          agent: currentSession.source.agent,
-          id: currentSession.id,
-        }
-      : routeSelection;
-    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents, selection, next));
+    updateSessionLocation(sessionLocation(tenant, agent, currentSession?.id ?? sessionId, next));
   }
   useNarrowDetailFocus(detailHeadingRef, currentSession !== null, currentSession?.key);
   const tenantOptions = useMemo(() => tenantSelectionOptions(tenants), [tenants]);
@@ -239,27 +234,11 @@ export function useSessionController({
     () => agentSelectionOptions(SESSION_AGENT_OPTIONS.map((option) => option.value)),
     [],
   );
-  const selectedSessionTenant = selectedTenants.size === 1 ? [...selectedTenants][0] : null;
   const sessionTenantMissing =
     !loadingTenants &&
     !tenantError &&
-    selectedSessionTenant?.startsWith("managed:") === true &&
-    !tenantOptions.some((option) => option.value === selectedSessionTenant);
-  const tenantSourceKey = [...selectedTenants].sort().join(",");
-  const agentSourceKey = SESSION_AGENT_OPTIONS.map((option) => option.value)
-    .filter((agent) => selectedAgents.has(agent))
-    .join(",");
-  const sources = useMemo(() => {
-    const tenantSelectionValues = tenantSourceKey
-      .split(",")
-      .filter((value): value is TenantSelectionValue => value.length > 0);
-    const agents = agentSourceKey
-      .split(",")
-      .filter((value): value is AgentKind => value === "codex" || value === "claude");
-    return tenantSelectionValues.flatMap((tenantSelectionValue) =>
-      agents.map((selectedAgent) => sessionSource(tenantSelectionValue, selectedAgent)),
-    );
-  }, [agentSourceKey, tenantSourceKey]);
+    selectedTenantKey.startsWith("managed:") &&
+    !tenantOptions.some((option) => option.value === selectedTenantKey);
   const clearInspection = useCallback(() => {
     clearDetailInspection();
     clearConversation();
@@ -291,7 +270,8 @@ export function useSessionController({
     onSourceLifecycleReset: resetSourceLifecycle,
     replaceCurrent,
     setError,
-    sources,
+    tenant,
+    agent,
   });
   const openSession = useCallback(
     async (row: SourcedSession, updateLocation = true, preserveContent = false) => {
@@ -299,25 +279,11 @@ export function useSessionController({
       if (!preserveContent) clearConversation();
       setError(null);
       if (updateLocation) {
-        const nextSelection = {
-          tenantSelectionValue: row.source.tenantSelectionValue,
-          agent: row.source.agent,
-          id: row.id,
-        };
-        updateSessionLocation(
-          sessionLocation(selectedTenants, selectedAgents, nextSelection, sessionTab),
-        );
+        updateSessionLocation(sessionLocation(tenant, agent, row.id, sessionTab));
       }
       await inspect(row, preserveContent);
     },
-    [
-      clearConversation,
-      inspect,
-      selectedAgents,
-      selectedTenants,
-      sessionTab,
-      updateSessionLocation,
-    ],
+    [agent, clearConversation, inspect, sessionTab, tenant, updateSessionLocation],
   );
   const refreshTranscript = useCallback(async () => {
     const inspected = inspectedSession();
@@ -340,7 +306,8 @@ export function useSessionController({
     removeSession,
     reportFailure,
     resolveFailure,
-    sourceKey: routeSourceKey,
+    tenant,
+    agent,
   });
   useEffect(() => {
     const changed = previousSearch.current !== search;
@@ -355,17 +322,12 @@ export function useSessionController({
     void load();
   }, [clearInspection, load, resetCatalog, routeSourceKey, search]);
   useEffect(() => {
-    if (!routeSelection) {
+    if (!sessionId) {
       if (inspectedSession()) clearInspection();
       return;
     }
     if (!data || loadingList) return;
-    const row = data.sessions.find(
-      (candidate) =>
-        candidate.source.tenantSelectionValue === routeSelection.tenantSelectionValue &&
-        candidate.source.agent === routeSelection.agent &&
-        candidate.id === routeSelection.id,
-    );
+    const row = data.sessions.find((candidate) => candidate.id === sessionId);
     if (row) {
       // URL-owned selection synchronizes the external detail stream lifecycle.
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -374,16 +336,16 @@ export function useSessionController({
     }
     // The refreshed catalog can invalidate a route-owned Session selection.
     clearInspection();
-    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents), true);
+    updateSessionLocation(sessionLocation(tenant, agent), true);
   }, [
+    agent,
     clearInspection,
     data,
     loadingList,
     openSession,
-    routeSelection,
+    sessionId,
     inspectedSession,
-    selectedAgents,
-    selectedTenants,
+    tenant,
     updateSessionLocation,
   ]);
   const { enterSelection, cancelSelection } = useSelectionModeFocus({
@@ -402,22 +364,24 @@ export function useSessionController({
     const allSelected = keys.length > 0 && keys.every((key) => selectedKeys.has(key));
     dispatchWorkflow({ type: "selection_toggle_all", keys, clear: allSelected });
   }
-  function commitTenants(values: ReadonlySet<TenantSelectionValue>) {
-    const next = new Set(values);
+  function selectTenant(values: ReadonlySet<TenantSelectionValue>) {
+    const value = [...values][0];
+    if (!value) return;
     clearInspection();
     resetCatalog();
-    updateSessionLocation(sessionLocation(next, selectedAgents));
+    updateSessionLocation(sessionLocation(tenantSelectionFromSessionValue(value), agent));
   }
-  function commitAgents(values: ReadonlySet<AgentKind>) {
-    const next = new Set(values);
+  function selectAgent(values: ReadonlySet<AgentKind>) {
+    const nextAgent = [...values][0];
+    if (!nextAgent) return;
     clearInspection();
     resetCatalog();
-    updateSessionLocation(sessionLocation(selectedTenants, next));
+    updateSessionLocation(sessionLocation(tenant, nextAgent));
   }
   function closeSessionInspection() {
     const focusKey = currentSession?.key ?? null;
     clearInspection();
-    updateSessionLocation(sessionLocation(selectedTenants, selectedAgents));
+    updateSessionLocation(sessionLocation(tenant, agent));
     window.requestAnimationFrame(() => {
       if (focusKey) sessionRows.focus(focusKey);
     });
@@ -464,9 +428,8 @@ export function useSessionController({
   }
   return {
     catalog: {
+      agent,
       agentOptions,
-      commitAgents,
-      commitTenants,
       data,
       load,
       loadingList,
@@ -475,10 +438,11 @@ export function useSessionController({
       refreshing,
       retryPageError,
       retryTenants,
-      selectedAgents,
-      selectedTenants,
+      selectAgent,
+      selectTenant,
       sessions,
       sessionTenantMissing,
+      tenant,
       tenantError,
       tenantOptions,
     },

@@ -3,14 +3,13 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Operation } from "@/api/operations";
 import type { SessionApi } from "@/api/sessions";
-import { groupSessionsForDeletion, sessionDialogSources } from "@/features/sessions/sessionCatalog";
+import type { AgentKind } from "@/domain/agent";
+import type { TenantSelection } from "@/domain/tenant";
 import {
   focusTargetAfterSessionDelete,
-  visibleSessionSource,
   type AggregatedSessionData,
   type SourcedSession,
 } from "@/features/sessions/sessionSource";
-import { messageOf } from "@/shared/lib/errors";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 
 export type SessionDeletion = { kind: "record"; key: string } | { kind: "batch" } | null;
@@ -36,7 +35,8 @@ interface SessionDeletionOptions {
   removeSession: (key: string) => void;
   reportFailure: (source: "action", title: string, cause: unknown) => void;
   resolveFailure: (source: "action") => void;
-  sourceKey: string;
+  tenant: TenantSelection;
+  agent: AgentKind;
 }
 
 /** Owns Session deletion requests, dialog state, partial failure recovery, and focus restoration. */
@@ -55,7 +55,8 @@ export function useSessionDeletion({
   removeSession,
   reportFailure,
   resolveFailure,
-  sourceKey,
+  tenant,
+  agent,
 }: SessionDeletionOptions) {
   const [dialog, setDialog] = useState<SessionDeleteDialog>(null);
   const [deletion, setDeletion] = useState<SessionDeletion>(null);
@@ -66,12 +67,12 @@ export function useSessionDeletion({
   const singleDeleteTarget = dialog?.kind === "record" ? dialog.target : null;
 
   useEffect(() => {
-    // A source-filter change invalidates any pending deletion target and focus plan.
+    // A filter change invalidates any pending deletion target and focus plan.
     /* eslint-disable react-hooks/set-state-in-effect */
     setDialog(null);
     setFocusAfterDelete(undefined);
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [sourceKey]);
+  }, [agent, tenant]);
 
   useEffect(() => {
     if (focusAfterDelete === undefined || deletion !== null) return;
@@ -152,27 +153,17 @@ export function useSessionDeletion({
     const keys = dialogKeys;
     const keySet = new Set(keys);
     const selectedRows = data?.sessions.filter((row) => keySet.has(row.key)) ?? [];
-    const groups = groupSessionsForDeletion(selectedRows);
+    const ids = selectedRows.map((row) => row.id);
     const currentKey = inspectedSession()?.key;
     const wasCurrent = currentKey ? keySet.has(currentKey) : false;
     if (wasCurrent) clearInspection();
     resolveFailure("action");
-    const failures: string[] = [];
-    for (const { source, ids } of groups) {
-      try {
-        await api.deleteSessions(source.tenant, source.agent, ids);
-      } catch (cause) {
-        failures.push(`${visibleSessionSource(source)}: ${messageOf(cause)}`);
-      }
+    try {
+      await api.deleteSessions(tenant, agent, ids);
+    } catch (cause) {
+      reportFailure("action", "Couldn’t delete selected Sessions", cause);
     }
     setDialogKeys(null);
-    if (failures.length > 0) {
-      reportFailure(
-        "action",
-        "Couldn’t delete all selected Sessions",
-        new Error(failures.join("; ")),
-      );
-    }
     const refreshed = await load("refresh");
     if (refreshed && refreshed.warnings.length === 0) {
       const remaining = new Set(
@@ -184,15 +175,11 @@ export function useSessionDeletion({
         if (survivor) void openSession(survivor);
       }
     }
-    if (failures.length === 0) setFocusAfterDelete(null);
+    setFocusAfterDelete(null);
     finishDeletion();
   }
 
-  const sessions = data?.sessions ?? [];
   const deletionBusy = deletion !== null;
-  const dialogSessions = dialogKeys
-    ? sessions.filter((session) => dialogKeys.includes(session.key))
-    : [];
 
   // Grouped the way the Session view model consumes it, so the controller
   // spreads these rather than forwarding each field.
@@ -207,7 +194,6 @@ export function useSessionDeletion({
     },
     dialogs: {
       dialogKeys,
-      dialogSources: sessionDialogSources(dialogSessions),
       closeBatchDelete: () => setDialogKeys(null),
       closeSingleDelete: () => setSingleDeleteTarget(null),
       openBatchDelete: (keys: string[]) => setDialogKeys(keys),

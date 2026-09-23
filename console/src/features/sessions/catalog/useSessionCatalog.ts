@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SessionApi } from "@/api/sessions";
-import { aggregateSessionCatalog, splitSessionResults } from "@/features/sessions/sessionCatalog";
+import { projectSessionCatalog } from "@/features/sessions/sessionCatalog";
 import {
-  visibleSessionSource,
+  sessionSource,
   type AggregatedSessionData,
-  type SessionSource,
   type SourcedSession,
 } from "@/features/sessions/sessionSource";
+import {
+  tenantSelectionFromValue,
+  tenantSelectionValue,
+  type TenantSelection,
+} from "@/domain/tenant";
+import type { AgentKind } from "@/domain/agent";
 import { messageOf } from "@/shared/lib/errors";
 import { LatestRequest } from "@/shared/lib/latestRequest";
 
@@ -24,10 +29,11 @@ interface SessionCatalogOptions {
   onSourceLifecycleReset: () => void;
   replaceCurrent: (row: SourcedSession) => void;
   setError: (error: string | null) => void;
-  sources: SessionSource[];
+  tenant: TenantSelection;
+  agent: AgentKind;
 }
 
-/** Owns the cancellable multi-source Session catalog lifecycle. */
+/** Owns the cancellable single-source Session catalog lifecycle. */
 export function useSessionCatalog({
   abortDetailStream,
   api,
@@ -37,13 +43,15 @@ export function useSessionCatalog({
   onSourceLifecycleReset,
   replaceCurrent,
   setError,
-  sources,
+  tenant,
+  agent,
 }: SessionCatalogOptions) {
   const [data, setData] = useState<AggregatedSessionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const requestOwner = useRef(new LatestRequest());
+  const tenantKey = tenantSelectionValue(tenant);
 
   const reset = useCallback(() => {
     setData(null);
@@ -69,43 +77,32 @@ export function useSessionCatalog({
         setLoading(true);
       }
       try {
-        const results = await Promise.allSettled(
-          sources.map(async (source) => {
-            const result = await api.listSessions(source.tenant, source.agent, request.signal);
-            return { result, source };
-          }),
-        );
+        const tenantSelection = tenantSelectionFromValue(tenantKey);
+        const result = await api.listSessions(tenantSelection, agent, request.signal);
         if (request.signal.aborted || !request.isCurrent()) return null;
-        const { successes, failures } = splitSessionResults(results, sources);
-        if (successes.length === 0 && failures.length > 0) {
-          const failureText = failures
-            .map(({ cause, source }) => `${visibleSessionSource(source)}: ${messageOf(cause)}`)
-            .join("; ");
-          setUnavailable(true);
-          setError(`Couldn’t load Sessions: ${failureText}`);
-          setData((current) =>
-            kind === "refresh" && current ? current : { sessions: [], warnings: [], partial: true },
-          );
-          onSelectionReset();
-          return null;
-        }
-        const result: AggregatedSessionData = aggregateSessionCatalog(successes, failures);
-        setData(result);
+        const source = sessionSource(tenantKey, agent);
+        const aggregated = projectSessionCatalog(source, result);
+        setData(aggregated);
         setError(null);
         setUnavailable(false);
         const inspected = inspectedSession();
         if (inspected) {
-          const refreshed = result.sessions.find((row) => row.key === inspected.key);
+          const refreshed = aggregated.sessions.find((row) => row.key === inspected.key);
           if (refreshed) replaceCurrent(refreshed);
           else clearInspection();
         }
-        if (result.warnings.length > 0) {
+        if (aggregated.warnings.length > 0) {
           onSelectionReset();
         }
-        return result;
+        return aggregated;
       } catch (cause) {
         if (request.isCurrent() && !sessionRequestCancelled(cause, request.signal)) {
-          setError(messageOf(cause));
+          setUnavailable(true);
+          setError(`Couldn’t load Sessions: ${messageOf(cause)}`);
+          setData((current) =>
+            kind === "refresh" && current ? current : { sessions: [], warnings: [], partial: true },
+          );
+          onSelectionReset();
         }
         return null;
       } finally {
@@ -116,12 +113,21 @@ export function useSessionCatalog({
         request.release();
       }
     },
-    [api, clearInspection, inspectedSession, onSelectionReset, replaceCurrent, setError, sources],
+    [
+      agent,
+      api,
+      clearInspection,
+      inspectedSession,
+      onSelectionReset,
+      replaceCurrent,
+      setError,
+      tenantKey,
+    ],
   );
 
   useEffect(() => {
     const owner = requestOwner.current;
-    // A source-filter change starts a fresh external catalog lifecycle.
+    // A filter change starts a fresh external catalog lifecycle.
     /* eslint-disable react-hooks/set-state-in-effect */
     clearInspection();
     reset();

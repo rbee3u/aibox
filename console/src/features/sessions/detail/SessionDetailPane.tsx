@@ -186,7 +186,7 @@ export function SessionDetailPane({
               <div className={styles.emptyStateCardHeader}>
                 <SessionIcon size={iconSize.sm} />
                 <strong>Session Transcripts</strong>
-                <span className={styles.emptyStateBadge}>Full Audit</span>
+                <span className={styles.emptyStateBadge}>Full audit</span>
               </div>
               <p>
                 Complete record of multi-turn interactions between users and Agents. Review prompts,
@@ -197,7 +197,7 @@ export function SessionDetailPane({
               <div className={styles.emptyStateCardHeader}>
                 <Wrench size={iconSize.sm} />
                 <strong>Interactive Evidence</strong>
-                <span className={styles.emptyStateBadge}>Tools & Calls</span>
+                <span className={styles.emptyStateBadge}>Tools & calls</span>
               </div>
               <p>
                 Drill down into individual tool invocations, shell command executions, file

@@ -12,7 +12,6 @@ import type { RequestsApi } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
 import { RequestList } from "@/features/requests/catalog/RequestList";
 import { REQUESTS_PER_PAGE } from "@/features/requests/catalog/listModel";
-import { requestDeletionFacts } from "@/features/requests/requestDeletion";
 import { useRequestsController } from "@/features/requests/useRequestsController";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
@@ -203,7 +202,7 @@ export function RequestsPage(props: RequestsPageProps) {
                   <div className={styles.emptyStateCardHeader}>
                     <Activity size={iconSize.sm} />
                     <strong>Traffic & Token Metrics</strong>
-                    <span className={styles.emptyStateBadge}>Tokens & Latency</span>
+                    <span className={styles.emptyStateBadge}>Tokens & latency</span>
                   </div>
                   <p>
                     Track input, output, and reasoning token consumption, cache hit ratios,
@@ -214,7 +213,7 @@ export function RequestsPage(props: RequestsPageProps) {
                   <div className={styles.emptyStateCardHeader}>
                     <ShieldCheck size={iconSize.sm} />
                     <strong>Wire & Security Audit</strong>
-                    <span className={styles.emptyStateBadge}>Wire & Proxy</span>
+                    <span className={styles.emptyStateBadge}>Wire & proxy</span>
                   </div>
                   <p>
                     Inspect sanitized HTTP request/response headers, raw JSON bodies, streaming
@@ -239,15 +238,11 @@ export function RequestsPage(props: RequestsPageProps) {
               ? "Delete this Request?"
               : `Delete ${dialog.ids.length} selected Request${dialog.ids.length === 1 ? "" : "s"}?`
           }
-          facts={
+          message={
             dialog.kind === "request"
-              ? requestDeletionFacts(
-                  list.requests.find((request) => request.id === dialog.id),
-                  dialog.id,
-                )
-              : undefined
+              ? "Permanently deletes this request and response record. This action cannot be undone."
+              : "Permanently deletes the selected request and response records. This action cannot be undone."
           }
-          message="Permanently deletes the selected raw Request and Response data."
           confirmLabel="Delete"
           onConfirm={() => void confirmDelete()}
           onCancel={cancelDialog}

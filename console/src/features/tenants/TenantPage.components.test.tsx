@@ -43,7 +43,7 @@ describe("TenantPage", () => {
       if (removable) expect(screen.getByRole("button", { name: removeLabel })).toBeEnabled();
       else expect(screen.queryByRole("button", { name: removeLabel })).not.toBeInTheDocument();
       const summary = screen.getByLabelText("Component summary");
-      if (status === "modified") expect(summary).toHaveTextContent("1/8 installed1 issue");
+      if (status === "modified") expect(summary).toHaveTextContent("1/8 installed1 differs");
     },
   );
   it("shows row-local progress until the Component Operation reaches a terminal state", async () => {
@@ -94,6 +94,7 @@ describe("TenantPage", () => {
             kind: "python",
             state: "available",
             version: "3.15.0",
+            newest: null,
             source: "python.org",
             error: null,
           },
@@ -114,7 +115,8 @@ describe("TenantPage", () => {
 
     const row = await screen.findByRole("listitem");
     expect(row).toHaveTextContent("v3.14.7");
-    expect(row).toHaveTextContent("Latest v3.15.0");
+    expect(within(row).getByText("Outdated")).toBeInTheDocument();
+    expect(within(row).getByRole("textbox", { name: "Python version" })).toHaveValue("3.15.0");
     expect(row).not.toHaveTextContent("Update available");
     await user.click(await screen.findByRole("button", { name: "Update" }));
     expect(mutateComponent).toHaveBeenLastCalledWith(
@@ -125,7 +127,7 @@ describe("TenantPage", () => {
     );
   });
 
-  it("updates to an exact newer version from the split action", async () => {
+  it("updates to an exact newer version from the inline version input", async () => {
     const { api, mutateComponent } = tenantApi({
       latest: {
         checked_at: "2026-08-25T08:00:00Z",
@@ -134,6 +136,7 @@ describe("TenantPage", () => {
             kind: "python",
             state: "available",
             version: "3.15.0",
+            newest: null,
             source: "python.org",
             error: null,
           },
@@ -152,36 +155,29 @@ describe("TenantPage", () => {
     const user = userEvent.setup();
     render(<TenantPage api={api} />);
 
-    const options = await screen.findByRole("button", {
-      name: "Update options for Python",
-    });
-    await user.click(options);
-    const menuItem = screen.getByRole("menuitem", { name: "Update to version…" });
-    await waitFor(() => expect(menuItem).toHaveFocus());
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(options).toHaveFocus());
-    await user.click(options);
-    await user.click(screen.getByRole("menuitem", { name: "Update to version…" }));
+    const row = await screen.findByRole("listitem");
+    const input = within(row).getByRole("textbox", { name: "Python version" });
+    const update = within(row).getByRole("button", { name: "Update" });
 
-    const dialog = screen.getByRole("dialog", {
-      name: "Update Python version",
-    });
-    expect(within(dialog).getByText("Enter a stable version newer than v3.12.0.")).toBeVisible();
-    const version = within(dialog).getByRole("textbox", { name: "Component version" });
-    const update = within(dialog).getByRole("button", { name: "Update version" });
+    expect(input).toHaveValue("3.15.0");
+    expect(update).toBeEnabled();
 
-    await user.type(version, "3.12.0");
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("already installed");
+    // Type currently installed version
+    await user.clear(input);
+    await user.type(input, "3.12.0");
     expect(update).toBeDisabled();
 
-    await user.clear(version);
-    await user.type(version, "3.11.9");
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Remove the Component");
+    // Type older version
+    await user.clear(input);
+    await user.type(input, "3.11.9");
     expect(update).toBeDisabled();
 
-    await user.clear(version);
-    await user.type(version, "3.16.0");
-    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    // Type with leading 'v' to test smart prefix normalization
+    await user.clear(input);
+    await user.type(input, "v3.16.0");
+    expect(input).toHaveValue("3.16.0");
+    expect(update).toBeEnabled();
+
     await user.click(update);
     expect(mutateComponent).toHaveBeenLastCalledWith(
       { kind: "managed", name: "default" },
@@ -202,6 +198,7 @@ describe("TenantPage", () => {
               kind: "python",
               state: "available",
               version: latestVersion,
+              newest: null,
               source: "python.org",
               error: null,
             },
@@ -220,10 +217,8 @@ describe("TenantPage", () => {
       render(<TenantPage api={api} />);
       const row = await screen.findByRole("listitem");
       expect(row).toHaveTextContent("v3.14.7");
-      if (latestVersion === "3.14.7") {
-        expect(row).not.toHaveTextContent("Latest");
-      } else {
-        expect(row).toHaveTextContent(`Latest v${latestVersion}`);
+      if (latestVersion === "3.13.7") {
+        expect(row).toHaveTextContent("The observed release is lower than the current version.");
       }
       expect(row).not.toHaveTextContent("Current");
       expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
@@ -239,6 +234,7 @@ describe("TenantPage", () => {
             kind: "node",
             state: "available",
             version: "1.10.0",
+            newest: null,
             source: "nodejs.org",
             error: null,
           },
@@ -257,9 +253,49 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
     const row = await screen.findByRole("listitem");
     expect(row).toHaveTextContent("v1.9.0");
-    expect(row).toHaveTextContent("Latest v1.10.0");
+    expect(within(row).getByRole("textbox", { name: "Node.js version" })).toHaveValue("1.10.0");
     expect(row).not.toHaveTextContent("Update available");
     expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+  });
+
+  it("updates an installed Node newer than LTS to the newest stable release", async () => {
+    const { api, mutateComponent } = tenantApi({
+      latest: {
+        checked_at: "2026-08-25T08:00:00Z",
+        entries: [
+          {
+            kind: "node",
+            state: "available",
+            version: "24.21.0",
+            newest: "26.8.2",
+            source: "nodejs.org",
+            error: null,
+          },
+        ],
+      },
+      components: [
+        {
+          kind: "node",
+          supports_version: true,
+          status: "installed",
+          version: "26.1.0",
+          error: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<TenantPage api={api} />);
+    const row = await screen.findByRole("listitem");
+    expect(row).toHaveTextContent("v26.1.0");
+    expect(within(row).getByText("Outdated")).toBeInTheDocument();
+    expect(within(row).getByRole("textbox", { name: "Node.js version" })).toHaveValue("26.8.2");
+    await user.click(await screen.findByRole("button", { name: "Update" }));
+    expect(mutateComponent).toHaveBeenLastCalledWith(
+      { kind: "managed", name: "default" },
+      "node",
+      true,
+      "26.8.2",
+    );
   });
 
   it("combines local refresh with an explicit shared update check", async () => {
@@ -270,6 +306,7 @@ describe("TenantPage", () => {
           kind: "node" as const,
           state: "available" as const,
           version: "24.19.0",
+          newest: null,
           source: "nodejs.org",
           error: null,
         },
@@ -295,7 +332,12 @@ describe("TenantPage", () => {
     expect(checkUpdates).not.toHaveClass(actionButtonStyles.secondary);
     expect(screen.getByLabelText("Component summary")).not.toHaveTextContent(/checked/i);
     await user.click(checkUpdates);
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Latest v24.19.0");
+    const updatedRow = await screen.findByRole("listitem");
+    await waitFor(() =>
+      expect(within(updatedRow).getByRole("textbox", { name: "Node.js version" })).toHaveValue(
+        "24.19.0",
+      ),
+    );
     /*
      * The freshness is drawn, not only announced. It used to reach the
      * accessible name alone, so a sighted reader was invited to act on the
@@ -310,7 +352,59 @@ describe("TenantPage", () => {
     expect(
       await screen.findByLabelText("Selected Tenant: work, Managed Tenant"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("listitem")).toHaveTextContent("Latest v24.19.0");
+    const workRow = screen.getByRole("listitem");
+    expect(within(workRow).getByRole("textbox", { name: "Node.js version" })).toHaveValue(
+      "24.19.0",
+    );
     expect(latestComponents).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders distinct summary badges for installed, outdated, differs, and issues", async () => {
+    const { api } = tenantApi({
+      latest: {
+        checked_at: "2026-08-16T12:00:00Z",
+        entries: [
+          {
+            kind: "node",
+            state: "available",
+            version: "24.21.0",
+            newest: null,
+            source: "nodejs.org",
+            error: null,
+          },
+        ],
+      },
+      components: [
+        {
+          kind: "node",
+          supports_version: true,
+          status: "installed",
+          version: "24.19.0",
+          error: null,
+        },
+        {
+          kind: "claude-statusline",
+          supports_version: false,
+          status: "modified",
+          version: null,
+          error: null,
+        },
+        {
+          kind: "python",
+          supports_version: true,
+          status: "incomplete",
+          version: null,
+          error: null,
+        },
+      ],
+    });
+    render(<TenantPage api={api} />);
+    const summary = await screen.findByLabelText("Component summary");
+    await waitFor(() => {
+      expect(summary).toHaveTextContent("2/8 installed");
+      expect(summary).toHaveTextContent("1 outdated");
+      expect(summary).toHaveTextContent("1 differs");
+      expect(summary).toHaveTextContent("1 issue");
+    });
   });
 });

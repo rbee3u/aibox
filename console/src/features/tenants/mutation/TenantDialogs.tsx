@@ -11,30 +11,26 @@ import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/tenants/TenantPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
-import { abbreviateTenantHome } from "@/shared/lib/hostHome";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 
 const ManagedTenantIcon = resourceIcons.managedTenant;
 
 export function TenantDialogs({
-  catalog,
   components,
   dialogs,
   mutations,
-}: Pick<TenantViewModel, "components" | "dialogs" | "mutations"> & {
-  catalog?: TenantViewModel["catalog"];
-}) {
+}: Pick<TenantViewModel, "components" | "dialogs" | "mutations">) {
   const { submitSpecificVersion } = components;
   const {
     cancelComponentRemove,
     cancelComponentUpdate,
-    componentRemoveTarget,
-    componentUpdateTarget,
-    changeSpecificVersion,
-    closeSpecificVersion,
     cancelDeleteDialog,
     changeNewName,
+    changeSpecificVersion,
     closeCreateDialog,
+    closeSpecificVersion,
+    componentRemoveTarget,
+    componentUpdateTarget,
     createError,
     createHelpId,
     createNameTaken,
@@ -71,54 +67,20 @@ export function TenantDialogs({
           newName={newName}
         />
       )}
-      {deleteTarget?.names.length === 1 &&
-        (() => {
-          const targetName = deleteTarget.names[0];
-          const targetTenant = catalog?.managedTenants.find((t) => t.name === targetName);
-          const homePath = targetTenant
-            ? abbreviateTenantHome(targetTenant.home, catalog?.hostTenant?.home ?? null)
-            : `~/.aibox/tenants/${targetName}`;
-          return (
-            <ConfirmDialog
-              title={`Delete Tenant ${targetName}?`}
-              facts={[
-                { label: "Target", value: <code>{targetName}</code> },
-                { label: "Type", value: "Managed Tenant" },
-                {
-                  label: "Tenant Home",
-                  value: <code title={targetTenant?.home ?? undefined}>{homePath}</code>,
-                  fullWidth: true,
-                },
-              ]}
-              message="Permanently deletes Tenant Home, Sessions, Components state, and Named Configs."
-              confirmation={targetName}
-              confirmLabel="Delete"
-              busy={mutationBusy}
-              onCancel={cancelDeleteDialog}
-              onConfirm={() => void deleteTenants()}
-            />
-          );
-        })()}
+      {deleteTarget?.names.length === 1 && (
+        <ConfirmDialog
+          title={`Delete Tenant ${deleteTarget.names[0]}?`}
+          message="Permanently removes this tenant and its filesystem sandbox. This action cannot be undone."
+          confirmLabel="Delete"
+          busy={mutationBusy}
+          onCancel={cancelDeleteDialog}
+          onConfirm={() => void deleteTenants()}
+        />
+      )}
       {deleteTarget && deleteTarget.names.length > 1 && (
         <ConfirmDialog
-          title="Delete selected Managed Tenants?"
-          message="Permanently deletes each Tenant Home, Sessions, Components state, and Named Configs."
-          description={
-            <div className={styles.batchDeletePlan}>
-              <div className={styles.batchDeleteCount}>
-                <strong>{deleteTarget.names.length}</strong> Managed Tenants will be permanently
-                removed:
-              </div>
-              <div className={layout.planList}>
-                {deleteTarget.names.map((name) => (
-                  <div key={name} className={styles.batchDeleteRow}>
-                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
-                    <code>{name}</code>
-                  </div>
-                ))}
-              </div>
-            </div>
-          }
+          title={`Delete ${deleteTarget.names.length} selected Tenants?`}
+          message="Permanently removes the selected tenants and all associated data. This action cannot be undone."
           confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDeleteDialog}

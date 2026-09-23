@@ -3,6 +3,14 @@ import { defineConfig } from "vitest/config";
 type NodeProcess = { env: Record<string, string | undefined> };
 const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
 const outputDirectory = nodeProcess.env.AIBOX_CONSOLE_OUT_DIR ?? "../assets";
+const domTypeScriptTests = [
+  "src/api/connect.test.ts",
+  "src/api/requests.test.ts",
+  "src/api/transport.test.ts",
+  "src/app/routing/useConsoleRouter.test.ts",
+  "src/features/requests/detail/bodyPresentation.test.ts",
+  "src/features/requests/requestFormat.test.ts",
+];
 
 export default defineConfig({
   base: "/_aibox/ui/",
@@ -33,8 +41,28 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-    include: ["src/**/*.test.{ts,tsx}"],
+    pool: "threads",
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          isolate: false,
+          setupFiles: "./src/test/reset.ts",
+          include: ["src/**/*.test.ts"],
+          exclude: domTypeScriptTests,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "dom",
+          environment: "jsdom",
+          setupFiles: "./src/test/setup.ts",
+          include: ["src/**/*.test.tsx", ...domTypeScriptTests],
+        },
+      },
+    ],
   },
 });

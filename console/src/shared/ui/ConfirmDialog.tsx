@@ -1,6 +1,7 @@
-import { AlertTriangle, LoaderCircle } from "lucide-react";
+import { ArrowRightLeft, Check, Copy, LoaderCircle, Trash2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
@@ -13,8 +14,27 @@ export interface ConfirmDialogFact {
   fullWidth?: boolean;
 }
 
-interface ConfirmDialogProps {
+export interface ContextPillProps {
+  icon?: ReactNode;
+  label?: ReactNode;
+  value: ReactNode;
+  className?: string;
+}
+
+export function ContextPill({ icon, label, value, className }: ContextPillProps) {
+  return (
+    <span className={`${styles.contextPill} ${className ?? ""}`.trim()}>
+      {icon}
+      {label !== undefined && <small>{label}: </small>}
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+export interface ConfirmDialogProps {
   title: string;
+  icon?: ReactNode;
+  pills?: ReactNode;
   facts?: ReadonlyArray<ConfirmDialogFact>;
   message?: string;
   description?: ReactNode;
@@ -29,6 +49,8 @@ interface ConfirmDialogProps {
 
 export function ConfirmDialog({
   title,
+  icon,
+  pills,
   facts,
   message,
   description,
@@ -43,6 +65,7 @@ export function ConfirmDialog({
   const titleId = useId();
   const inputId = useId();
   const [typed, setTyped] = useState("");
+  const [copied, copy] = useClipboardFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const enabled = !confirmation || typed === confirmation;
@@ -68,9 +91,15 @@ export function ConfirmDialog({
         }}
       >
         <div className={`${styles.icon} ${variant === "primary" ? styles.primaryIcon : ""}`}>
-          <AlertTriangle size={iconSize.md} aria-hidden="true" />
+          {icon ??
+            (variant === "primary" ? (
+              <ArrowRightLeft size={iconSize.md} aria-hidden="true" />
+            ) : (
+              <Trash2 size={iconSize.md} aria-hidden="true" />
+            ))}
         </div>
         <h2 id={titleId}>{title}</h2>
+        {pills && <div className={styles.pills}>{pills}</div>}
         {facts && facts.length > 0 && (
           <dl className={styles.facts}>
             {facts.map((fact) => (
@@ -85,14 +114,45 @@ export function ConfirmDialog({
         {description}
         {confirmation && (
           <div className={styles.confirmation}>
-            <label htmlFor={inputId} className={styles.confirmationPrompt}>
-              Type <code className={styles.confirmationName}>{confirmation}</code> to confirm
-            </label>
+            <div className={styles.confirmationPrompt}>
+              <span>Type</span>
+              <div className={styles.confirmationPill}>
+                <button
+                  type="button"
+                  className={styles.confirmationFill}
+                  onClick={() => {
+                    setTyped(confirmation);
+                    inputRef.current?.focus();
+                  }}
+                  title="Click to fill"
+                  aria-label={`Fill ${confirmation}`}
+                >
+                  <code className={styles.confirmationName}>{confirmation}</code>
+                </button>
+                <span className={styles.confirmationDivider} aria-hidden="true" />
+                <button
+                  type="button"
+                  className={styles.confirmationCopy}
+                  onClick={() => void copy(confirmation, true)}
+                  aria-label={copied ? `Copied ${confirmation}` : `Copy ${confirmation}`}
+                  title={copied ? "Copied" : "Copy to clipboard"}
+                >
+                  {copied ? (
+                    <Check size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <Copy size={iconSize.xs} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              <span>to confirm</span>
+            </div>
             <TextInput
               id={inputId}
               ref={inputRef}
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
+              aria-label={`Type ${confirmation} to confirm`}
+              placeholder={`Type "${confirmation}" or click badge above`}
             />
           </div>
         )}

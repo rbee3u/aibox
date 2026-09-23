@@ -1,13 +1,29 @@
 //! Fully resolved and validated filesystem inputs for one Run.
 
 use super::{args, mount};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
-/// A workspace path that has completed host-side resolution and UTF-8
-/// validation. The inner representation is ready for Docker's `-v` syntax.
+/// A workspace source and its container target, resolved before mount checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedWorkspace(String);
+struct ResolvedWorkspace {
+    source: String,
+    target: String,
+}
+
+impl ResolvedWorkspace {
+    fn resolve(workspace: Option<&str>) -> Result<Self> {
+        let source = mount::resolve_workspace(workspace)?;
+        let name = Path::new(&source)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .with_context(|| format!("workspace has no directory name: {source}"))?;
+        Ok(Self {
+            target: format!("/workspace/{name}"),
+            source,
+        })
+    }
+}
 
 /// An extra bind mount that has completed host-side resolution. Keeping this
 /// distinct from the raw CLI string prevents execution from re-parsing or
@@ -36,7 +52,7 @@ impl RunSpec {
         mounts: &[String],
         aibox_root: &Path,
     ) -> Result<Self> {
-        let workspace = ResolvedWorkspace(mount::resolve_workspace(workspace)?);
+        let workspace = ResolvedWorkspace::resolve(workspace)?;
         let extra_mounts = mount::resolve_mounts(mounts)?
             .into_iter()
             .map(ExtraMount)
@@ -45,8 +61,8 @@ impl RunSpec {
             .iter()
             .map(|mount| mount.0.clone())
             .collect::<Vec<_>>();
-        mount::validate_extra_mount_targets(&mount_strings)?;
-        mount::validate_aibox_mount_sources(&workspace.0, &mount_strings, aibox_root)?;
+        mount::validate_extra_mount_targets(&mount_strings, &workspace.target)?;
+        mount::validate_aibox_mount_sources(&workspace.source, &mount_strings, aibox_root)?;
         Ok(Self {
             workspace,
             extra_mounts,
@@ -59,7 +75,12 @@ impl RunSpec {
             .iter()
             .map(|mount| mount.0.clone())
             .collect::<Vec<_>>();
-        args::assemble_run_args(&self.workspace.0, home_dir, &mounts)
+        args::assemble_run_args(
+            &self.workspace.source,
+            &self.workspace.target,
+            home_dir,
+            &mounts,
+        )
     }
 }
 

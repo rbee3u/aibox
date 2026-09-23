@@ -1,4 +1,4 @@
-//! Upstream target parsing, address policy, connection, and transport errors.
+//! Upstream target parsing, resolution, connection, and transport errors.
 
 use super::attempt::RequestAttempt;
 use super::error_response::finish_proxy_response;
@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, Response, StatusCode};
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::time::Duration;
 use url::{Host, Url};
@@ -24,7 +24,6 @@ pub(super) trait UpstreamSender: Send + Sync {
     fn connect(
         &self,
         url: &Url,
-        allow_private_upstream: bool,
     ) -> UpstreamFuture<'_, Result<Self::Connection, UpstreamConnectError>>;
 
     fn send(
@@ -42,7 +41,7 @@ pub(super) struct UpstreamRequest {
 }
 
 pub(super) enum UpstreamConnectError {
-    NonPublic(String),
+    InvalidTarget(String),
     Dns(String),
     ClientConfiguration(String),
 }
@@ -60,14 +59,13 @@ impl UpstreamSender for ReqwestUpstreamSender {
     fn connect(
         &self,
         url: &Url,
-        allow_private_upstream: bool,
     ) -> UpstreamFuture<'_, Result<Self::Connection, UpstreamConnectError>> {
         let url = url.clone();
         Box::pin(async move {
-            let resolved = validate_and_resolve(&url, allow_private_upstream)
+            let resolved = validate_and_resolve(&url)
                 .await
                 .map_err(|error| match error {
-                    TargetError::Rejected(message) => UpstreamConnectError::NonPublic(message),
+                    TargetError::Rejected(message) => UpstreamConnectError::InvalidTarget(message),
                     TargetError::Upstream(message) => UpstreamConnectError::Dns(message),
                 })?;
             build_client(&url, &resolved)
@@ -159,19 +157,19 @@ where
                 ErrorKind::ServerShutdown,
             )));
         }
-        result = sender.connect(url, state.allow_private_upstream) => result,
+        result = sender.connect(url) => result,
     };
     match connection {
         Ok(connection) => Ok((connection, body)),
-        Err(UpstreamConnectError::NonPublic(message)) => Err(Box::new(
+        Err(UpstreamConnectError::InvalidTarget(message)) => Err(Box::new(
             reject_with_body(
                 guard,
                 body,
                 state.shutdown.clone(),
-                StatusCode::FORBIDDEN,
+                StatusCode::BAD_REQUEST,
                 &message,
                 Outcome::Rejected,
-                ErrorKind::NonPublicTarget,
+                ErrorKind::InvalidTargetUrl,
             )
             .await,
         )),
@@ -231,15 +229,13 @@ pub(super) fn upstream_request_failure(
     )
 }
 
+#[derive(Debug)]
 pub(super) enum TargetError {
     Rejected(String),
     Upstream(String),
 }
 
-pub(super) async fn validate_and_resolve(
-    url: &Url,
-    allow_private: bool,
-) -> Result<Vec<SocketAddr>, TargetError> {
+pub(super) async fn validate_and_resolve(url: &Url) -> Result<Vec<SocketAddr>, TargetError> {
     let host = url
         .host_str()
         .ok_or_else(|| TargetError::Rejected("target URL has no host".to_string()))?;
@@ -264,25 +260,7 @@ pub(super) async fn validate_and_resolve(
             "upstream host {host} resolved to no addresses"
         )));
     }
-    require_allowed_addresses(host, &addresses, allow_private)?;
     Ok(addresses)
-}
-
-pub(super) fn require_allowed_addresses(
-    host: &str,
-    addresses: &[SocketAddr],
-    allow_private: bool,
-) -> Result<(), TargetError> {
-    if !allow_private
-        && addresses
-            .iter()
-            .any(|address| !is_allowed_upstream_ip(address.ip()))
-    {
-        return Err(TargetError::Rejected(format!(
-            "upstream host {host} resolved to a non-public address"
-        )));
-    }
-    Ok(())
 }
 
 pub(super) fn build_client(url: &Url, addresses: &[SocketAddr]) -> anyhow::Result<reqwest::Client> {
@@ -297,71 +275,4 @@ pub(super) fn build_client(url: &Url, addresses: &[SocketAddr]) -> anyhow::Resul
         builder = builder.resolve_to_addrs(host, addresses);
     }
     Ok(builder.build()?)
-}
-
-pub(super) fn is_public_ip(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => is_public_v4(address),
-        IpAddr::V6(address) => is_public_v6(address),
-    }
-}
-
-pub(super) fn is_allowed_upstream_ip(address: IpAddr) -> bool {
-    is_public_ip(address) || is_fake_ip_v4(address)
-}
-
-pub(super) fn is_fake_ip_v4(address: IpAddr) -> bool {
-    let address = match address {
-        IpAddr::V4(address) => address,
-        IpAddr::V6(address) => match address.to_ipv4_mapped() {
-            Some(address) => address,
-            None => return false,
-        },
-    };
-    matches_prefix(u32::from(address), 0xc612_0000, 15)
-}
-
-pub(super) fn is_public_v4(address: Ipv4Addr) -> bool {
-    let value = u32::from(address);
-    !matches_prefix(value, 0x0000_0000, 8)
-        && !matches_prefix(value, 0x0a00_0000, 8)
-        && !matches_prefix(value, 0x6440_0000, 10)
-        && !matches_prefix(value, 0x7f00_0000, 8)
-        && !matches_prefix(value, 0xa9fe_0000, 16)
-        && !matches_prefix(value, 0xac10_0000, 12)
-        && !matches_prefix(value, 0xc000_0000, 24)
-        && !matches_prefix(value, 0xc000_0200, 24)
-        && !matches_prefix(value, 0xc058_6300, 24)
-        && !matches_prefix(value, 0xc0a8_0000, 16)
-        && !matches_prefix(value, 0xc612_0000, 15)
-        && !matches_prefix(value, 0xc633_6400, 24)
-        && !matches_prefix(value, 0xcb00_7100, 24)
-        && !matches_prefix(value, 0xe000_0000, 4)
-        && !matches_prefix(value, 0xf000_0000, 4)
-}
-
-pub(super) fn is_public_v6(address: Ipv6Addr) -> bool {
-    if let Some(mapped) = address.to_ipv4_mapped() {
-        return is_public_v4(mapped);
-    }
-    let value = u128::from(address);
-    matches_prefix_v6(value, 0x2000_0000_0000_0000_0000_0000_0000_0000, 3)
-        && address != Ipv6Addr::UNSPECIFIED
-        && address != Ipv6Addr::LOCALHOST
-        && !matches_prefix_v6(value, 0x0064_ff9b_0001_0000_0000_0000_0000_0000, 48)
-        && !matches_prefix_v6(value, 0x0100_0000_0000_0000_0000_0000_0000_0000, 64)
-        && !matches_prefix_v6(value, 0x2001_0000_0000_0000_0000_0000_0000_0000, 23)
-        && !matches_prefix_v6(value, 0x2001_0db8_0000_0000_0000_0000_0000_0000, 32)
-        && !matches_prefix_v6(value, 0x3fff_0000_0000_0000_0000_0000_0000_0000, 20)
-        && !matches_prefix_v6(value, 0xfc00_0000_0000_0000_0000_0000_0000_0000, 7)
-        && !matches_prefix_v6(value, 0xfe80_0000_0000_0000_0000_0000_0000_0000, 10)
-        && !matches_prefix_v6(value, 0xff00_0000_0000_0000_0000_0000_0000_0000, 8)
-}
-
-pub(super) fn matches_prefix(value: u32, network: u32, bits: u32) -> bool {
-    value & (!0_u32 << (32 - bits)) == network
-}
-
-pub(super) fn matches_prefix_v6(value: u128, network: u128, bits: u32) -> bool {
-    value & (!0_u128 << (128 - bits)) == network
 }

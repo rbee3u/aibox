@@ -68,8 +68,9 @@ in the Console.
 
 ## Security and Persistent State
 
-Each Run mounts a Workspace at `/workspace` and the selected Tenant Home at
-`/home/aibox`. Extra Mounts explicitly grant access to another host path:
+Each Run mounts a Workspace at `/workspace/<directory name>` and the selected
+Tenant Home at `/home/aibox`. Extra Mounts explicitly grant access to another
+host path:
 
 ```sh
 aibox run -w ../other-project -m ../reference:/reference:ro

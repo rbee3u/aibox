@@ -156,7 +156,7 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
 
     expect(await screen.findByRole("region", { name: "Agents" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Statuslines" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Statuslines" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Runtimes & Toolchains" })).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(8);
     for (const label of [
@@ -372,12 +372,10 @@ describe("TenantPage", () => {
     await user.click(screen.getByRole("button", { name: "Select work" }));
     await user.click(screen.getByRole("button", { name: "Select extra" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Tenants" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete selected Managed Tenants?" });
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Tenants?" });
     expect(
-      within(dialog)
-        .getAllByRole("code")
-        .map((code) => code.textContent),
-    ).toEqual(["extra", "work"]);
+      within(dialog).getByText(/Permanently removes the selected tenants/),
+    ).toBeInTheDocument();
   });
   it("protects Host from bulk selection and disables create in selection mode", async () => {
     const { api } = tenantApi();
@@ -481,7 +479,9 @@ describe("TenantPage", () => {
     const user = userEvent.setup();
     render(<TenantPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
-    await user.keyboard("work{Enter}");
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
     await waitFor(() => expect(deleteTenants).toHaveBeenCalledWith(["work"]));
     await waitFor(() =>
       expect(document.activeElement).toBe(
@@ -551,16 +551,15 @@ describe("TenantPage", () => {
     expect(dialog).toHaveTextContent("Managed Tenant work already exists.");
     expect(createTenant).not.toHaveBeenCalled();
   });
-  it("requires the Managed Tenant name for single deletion", async () => {
+  it("confirms single Managed Tenant deletion without typing a confirmation", async () => {
     const deleteTenants = vi.fn().mockResolvedValue(undefined);
     const { api } = tenantApi({ deleteTenants });
     const user = userEvent.setup();
     render(<TenantPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Tenant work?" });
-    const confirmation = within(dialog).getByRole("textbox");
-    expect(within(dialog).getByRole("button", { name: "Delete" })).toBeDisabled();
-    await user.type(confirmation, "work");
+    expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Delete" })).toBeEnabled();
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteTenants).toHaveBeenCalledWith(["work"]);
   });
@@ -586,7 +585,10 @@ describe("TenantPage", () => {
     await user.click(await screen.findByRole("button", { name: "Select Tenants" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Tenants" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete selected Managed Tenants?" });
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Tenants?" });
+    expect(
+      within(dialog).getByText(/Permanently removes the selected tenants/),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Deselect work" })).not.toBeInTheDocument();

@@ -4,12 +4,14 @@ import type { Operation } from "@/api/operations";
 import type { ComponentKind, ComponentRow, TenantApi } from "@/api/tenants";
 import type { TenantRow } from "@/api/core";
 import {
-  COMPONENT_GROUPS,
+  HOST_COMPONENT_GROUPS,
+  MANAGED_COMPONENT_GROUPS,
   compareStableVersions,
   componentFailureTitle,
   componentProgressLabel,
   hasComponentAttention,
   hasComponentUpdate,
+  isStatuslineComponent,
   latestEntryFor,
   tenantSelection,
   updateOverwritesLocalEdits,
@@ -102,16 +104,37 @@ export function useComponentActions({
   const installedComponentCount = visibleComponents.filter(
     (row) => row.status === "installed" || row.status === "modified",
   ).length;
-  const attentionComponentCount = visibleComponents.filter(hasComponentAttention).length;
-  const updatableComponentCount = visibleComponents.filter((row) =>
+  const outdatedComponentCount = visibleComponents.filter((row) =>
     hasComponentUpdate(row, latestSnapshot),
   ).length;
-  const componentGroups = COMPONENT_GROUPS.map((group) => ({
-    ...group,
-    rows: group.kinds
-      .map((kind) => visibleComponents.find((row) => row.kind === kind))
-      .filter((row): row is ComponentRow => Boolean(row)),
-  })).filter((group) => group.rows.length > 0);
+  const differingComponentCount = visibleComponents.filter(
+    (row) => row.status === "modified",
+  ).length;
+  const issueComponentCount = visibleComponents.filter(
+    (row) => hasComponentAttention(row) && row.status !== "modified",
+  ).length;
+  const groupsToUse = selected?.kind === "host" ? HOST_COMPONENT_GROUPS : MANAGED_COMPONENT_GROUPS;
+  const statuslinesWithoutParent =
+    selected?.kind === "host"
+      ? []
+      : visibleComponents.filter(
+          (row) =>
+            isStatuslineComponent(row.kind) &&
+            !visibleComponents.some(
+              (parent) => parent.kind === (row.kind === "codex-statusline" ? "codex" : "claude"),
+            ),
+        );
+  const componentGroups = groupsToUse
+    .map((group) => {
+      const rows = group.kinds
+        .map((kind) => visibleComponents.find((row) => row.kind === kind))
+        .filter((row): row is ComponentRow => Boolean(row));
+      if (group.id === "agents" && statuslinesWithoutParent.length > 0) {
+        rows.push(...statuslinesWithoutParent);
+      }
+      return { ...group, rows };
+    })
+    .filter((group) => group.rows.length > 0);
   const specificVersionValue = specificVersion.trim();
   const specificVersionFormatValid = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(
     specificVersionValue,
@@ -237,13 +260,13 @@ export function useComponentActions({
    * hand-edited state stops for confirmation first; everything else adds or
    * repairs and starts at once.
    */
-  function installComponent(row: ComponentRow) {
+  function installComponent(row: ComponentRow, requestedVersion?: string | null) {
     if (!selected) return;
     if (updateOverwritesLocalEdits(row)) {
       setComponentUpdateTarget({ row, tenantLabel: selected.display_name });
       return;
     }
-    void mutateComponent(row, true);
+    void mutateComponent(row, true, requestedVersion);
   }
 
   function cancelComponentUpdate() {
@@ -276,7 +299,8 @@ export function useComponentActions({
     componentActionProgress,
     loadComponents,
     components: {
-      attentionComponentCount,
+      allComponents: visibleComponents,
+      attentionComponentCount: issueComponentCount,
       checkingLatest,
       checkForUpdates,
       componentCatalogLoading,
@@ -285,9 +309,12 @@ export function useComponentActions({
       componentMenuPosition,
       componentMenuRef,
       componentTotalCount,
+      differingComponentCount,
       installedComponentCount,
       installComponent,
-      updatableComponentCount,
+      issueComponentCount,
+      outdatedComponentCount,
+      updatableComponentCount: outdatedComponentCount,
       latestSnapshot,
       openComponentMenu,
       openMenu,

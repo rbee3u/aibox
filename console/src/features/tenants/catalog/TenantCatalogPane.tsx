@@ -1,4 +1,4 @@
-import { Check, ListChecks, Plus, Trash2 } from "lucide-react";
+import { Check, Clipboard, ListChecks, Plus, Trash2 } from "lucide-react";
 
 import { tenantLocation, tenantSelectionValueOf } from "@/features/tenants/route";
 import type { TenantViewModel } from "@/features/tenants/useTenantController";
@@ -42,7 +42,7 @@ export function TenantCatalogPane({
     selectButton,
     tenantCatalogError,
   } = catalog;
-  const { detailOpen, selectedKey } = detail;
+  const { copiedHome, copyHome, detailOpen, selectedKey } = detail;
   const narrowLayout = useNarrowLayout();
   const inspectedKey = catalogMarksInspection(narrowLayout, detailOpen) ? selectedKey : null;
   const { openCreateDialog } = dialogs;
@@ -170,6 +170,29 @@ export function TenantCatalogPane({
                     </small>
                   </span>
                 </button>
+                {!selectionMode && (
+                  <div className={layout.rowActions}>
+                    <IconButton
+                      className={`${layout.rowAction} ${styles.tenantCopyAction}`}
+                      data-copied={copiedHome === hostTenant.home ? "true" : undefined}
+                      label={
+                        copiedHome === hostTenant.home
+                          ? "Tenant Home copied"
+                          : "Copy Host Tenant Home"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void copyHome(hostTenant.home, hostTenant.home);
+                      }}
+                    >
+                      {copiedHome === hostTenant.home ? (
+                        <Check size={iconSize.xs} />
+                      ) : (
+                        <Clipboard size={iconSize.xs} />
+                      )}
+                    </IconButton>
+                  </div>
+                )}
               </div>
             )}
             <div className={`${layout.divider} ${styles.managedDivider}`}>
@@ -191,7 +214,7 @@ export function TenantCatalogPane({
               return (
                 <div
                   key={key}
-                  className={`${layout.row} ${styles.tenantRow} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? layout.rowSelectable : ""} ${isDefault ? layout.rowProtected : ""}`}
+                  className={`${layout.row} ${styles.tenantRow} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? `${layout.rowSelectable} ${isDefault ? layout.rowProtected : ""}` : ""}`}
                 >
                   <button
                     ref={(element) => registerTenantRow(key, element)}
@@ -235,17 +258,38 @@ export function TenantCatalogPane({
                       </span>
                     )}
                   </button>
-                  {!selectionMode && !isDefault && (
+                  {!selectionMode && (
                     <div className={layout.rowActions}>
                       <IconButton
-                        className={`${layout.rowAction} ${layout.rowDeleteAction}`}
-                        tone="dangerQuiet"
-                        label={`Delete Tenant ${row.display_name}`}
-                        disabled={mutationBusy}
-                        onClick={() => requestTenantDelete([row.name])}
+                        className={`${layout.rowAction} ${styles.tenantCopyAction}`}
+                        data-copied={copiedHome === row.home ? "true" : undefined}
+                        label={
+                          copiedHome === row.home
+                            ? "Tenant Home copied"
+                            : `Copy Tenant Home for ${row.display_name}`
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void copyHome(row.home, row.home);
+                        }}
                       >
-                        <Trash2 size={iconSize.xs} />
+                        {copiedHome === row.home ? (
+                          <Check size={iconSize.xs} />
+                        ) : (
+                          <Clipboard size={iconSize.xs} />
+                        )}
                       </IconButton>
+                      {!isDefault && (
+                        <IconButton
+                          className={`${layout.rowAction} ${layout.rowDeleteAction}`}
+                          tone="dangerQuiet"
+                          label={`Delete Tenant ${row.display_name}`}
+                          disabled={mutationBusy}
+                          onClick={() => requestTenantDelete([row.name])}
+                        >
+                          <Trash2 size={iconSize.xs} />
+                        </IconButton>
+                      )}
                     </div>
                   )}
                 </div>

@@ -31,28 +31,23 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list(rows), deleteSessions, streamSessionDetail });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(detailSignal).toBeDefined();
     await user.click(
       screen.getByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     );
     const dialog = screen.getByRole("dialog", { name: "Delete Session 111111111111?" });
-    expect(dialog).toHaveTextContent("First prompt");
-    expect(dialog).toHaveTextContent("default Codex");
-    expect(dialog).toHaveTextContent("2026-08-17 17:00:00");
-    expect(dialog).toHaveTextContent(
-      "Permanently deletes its Transcript from Tenant default Codex.",
-    );
+    expect(dialog).toHaveTextContent("Tenant: default");
+    expect(dialog).toHaveTextContent("Agent: Codex");
+    expect(dialog).toHaveTextContent("Permanently deletes this session transcript.");
     expect(detailSignal?.aborted).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(detailSignal?.aborted).toBe(true);
     expect(
       screen.getByRole("button", {
-        name: "Deleting Session 111111111111 from Tenant default · Codex",
+        name: "Deleting Session 111111111111",
       }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Refresh Sessions" })).toBeDisabled();
@@ -62,9 +57,7 @@ describe("SessionPage", () => {
     rows = [secondSession];
     act(() => deletion.resolve({ deleted: 1 }));
     await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "First prompt, Tenant default · Codex" }),
-      ).not.toBeInTheDocument(),
+      expect(screen.queryByRole("button", { name: "First prompt" })).not.toBeInTheDocument(),
     );
     expect(screen.getByText("Select a Session")).toBeInTheDocument();
     expect(document.querySelector('[data-icon="session-empty"]')).toHaveClass(
@@ -73,10 +66,11 @@ describe("SessionPage", () => {
     await waitFor(() =>
       expect(
         screen.getByRole("button", {
-          name: "Delete Session 222222222222 from Tenant default · Codex",
+          name: "Delete Session 222222222222",
         }),
       ).toHaveFocus(),
     );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
   it("selects the loaded snapshot and confirms deletion of only those explicit IDs", async () => {
     let rows = [firstSession, secondSession];
@@ -84,7 +78,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list(rows), deleteSessions });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
+    await screen.findByRole("button", { name: "First prompt" });
     expect(screen.queryByRole("button", { name: "Delete all" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     expect(screen.getByRole("button", { name: /^Select First prompt/ })).toHaveFocus();
@@ -104,12 +98,14 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     expect(screen.getByText("2 selected")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Deselect First prompt, Tenant default · Codex" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Deselect First prompt" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 2 selected Sessions?" });
-    expect(dialog).toHaveTextContent("Sources: Tenant default Codex (2)");
+    expect(dialog).toHaveTextContent("Tenant: default");
+    expect(dialog).toHaveTextContent("Agent: Codex");
     rows = [thirdSession];
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
@@ -118,9 +114,7 @@ describe("SessionPage", () => {
         secondSession.id,
       ]),
     );
-    expect(
-      await screen.findByRole("button", { name: "New prompt, Tenant default · Codex" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "New prompt" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select Sessions" })).toBeInTheDocument();
   });
   it("reconciles surviving selections after a non-transactional batch failure", async () => {
@@ -132,7 +126,7 @@ describe("SessionPage", () => {
     const { api } = fakeApi({ sessions: () => list(rows), deleteSessions });
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
-    await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" });
+    await screen.findByRole("button", { name: "First prompt" });
     await user.click(screen.getByRole("button", { name: "Select Sessions" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
@@ -141,9 +135,10 @@ describe("SessionPage", () => {
     expect(alert).toHaveTextContent("second Transcript could not be deleted");
     expect(within(alert).queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(await screen.findByText("1 selected")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Deselect Second prompt, Tenant default · Codex" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Deselect Second prompt" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.queryByRole("button", { name: "Select Sessions" })).not.toBeInTheDocument();
   });
   it("disables deletion for an incomplete view but not for Transcript content warnings", async () => {
@@ -158,7 +153,7 @@ describe("SessionPage", () => {
     expect(await screen.findByRole("button", { name: "Select Sessions" })).toBeDisabled();
     expect(
       screen.getByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     ).toBeDisabled();
     firstRender.unmount();
@@ -167,7 +162,7 @@ describe("SessionPage", () => {
     expect(await screen.findByRole("button", { name: "Select Sessions" })).toBeEnabled();
     expect(
       screen.getByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     ).toBeEnabled();
   });
@@ -178,7 +173,7 @@ describe("SessionPage", () => {
     await user.click(await screen.findByRole("button", { name: "Tenant: default" }));
     await user.click(screen.getByRole("option", { name: "Host Tenant" }));
     const hostSession = await screen.findByRole("button", {
-      name: "First prompt, Host Tenant · Codex",
+      name: "First prompt",
     });
     expect(hostSession.querySelector("small")).toHaveTextContent("2026-08-17 17:00:00");
     expect(hostSession.querySelector("small")).not.toHaveTextContent("Host Tenant Codex");
@@ -187,7 +182,7 @@ describe("SessionPage", () => {
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Delete selected Sessions" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("Sources: Host Tenant Codex (2)");
+    expect(dialog).toHaveTextContent("Tenant: Host Tenant");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(deleteSessions).not.toHaveBeenCalled();
   });

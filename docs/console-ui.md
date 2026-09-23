@@ -15,7 +15,7 @@ installs the committed lockfile. Run it once per environment and again after
 frontend dependency changes. Native build bindings are platform-specific,
 so do not share one `node_modules` between host and container platforms. When a
 Workspace is shared, mount a separate directory over
-`/workspace/console/node_modules`.
+`/workspace/<directory name>/console/node_modules`.
 
 Use `make help` for the authoritative target list. The main targets are:
 
@@ -103,6 +103,14 @@ Keep a rule in the narrowest useful layer:
 Tests follow their modules; page interactions stay at the feature root. Keep
 suite-only doubles local and feature-wide support inside that feature. Share
 cross-feature fixtures only when the production concept is also shared.
+
+Vitest runs pure `.test.ts` files in a shared Node environment so codecs,
+reducers, formatting, and source-contract checks do not pay for jsdom. Tests
+that use browser globals are listed with the isolated DOM project in
+`console/vite.config.ts`; `.test.tsx` files use that DOM project by default.
+The shared reset restores mocks, stubbed globals, and real timers after every
+test. Keep Node-project tests free of mutable module-global state so file order
+cannot affect their results.
 
 Do not repeat pure rules in browser tests. Geometry tests assert behavior and
 relative layout, not design-token values or pixel snapshots. Routine Rust and
@@ -226,7 +234,9 @@ not both.
 
 A control whose only content is an icon owes the reader its name, and gives it
 to a pointer and a keyboard alike: after a hover delay, and immediately on
-focus, since focus has no other way to read the glyph. The name is one string
+focus that follows keyboard input, since focus has no other way to read the
+glyph. Programmatic focus restoration preserves the user's place without
+summoning a tooltip for a pointer interaction elsewhere. The name is one string
 serving as both the accessible name and the tooltip text, so the two cannot
 drift. Withholding it is not a neutral choice — a trash icon in a list of fifty
 rows carries no clue which row it ends, and the answer is already written.

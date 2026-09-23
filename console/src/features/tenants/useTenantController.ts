@@ -90,6 +90,7 @@ export interface TenantViewModel {
     toggleTenant: (key: TenantSelectionValue) => void;
   };
   components: {
+    allComponents: ComponentRow[];
     attentionComponentCount: number;
     checkingLatest: boolean;
     checkForUpdates: () => Promise<void>;
@@ -100,9 +101,12 @@ export interface TenantViewModel {
     componentMenuPosition: { top: number; left: number } | null;
     componentMenuRef: RefObject<HTMLDivElement | null>;
     componentTotalCount: number;
+    differingComponentCount: number;
     installedComponentCount: number;
     /** Installs, repairs, or updates the row; an overwriting Update confirms first. */
-    installComponent: (row: ComponentRow) => void;
+    installComponent: (row: ComponentRow, requestedVersion?: string | null) => void;
+    issueComponentCount: number;
+    outdatedComponentCount: number;
     updatableComponentCount: number;
     latestSnapshot: ComponentLatestSnapshot | null;
     loadComponents: (target: TenantRow | null, showLoading?: boolean) => Promise<void>;

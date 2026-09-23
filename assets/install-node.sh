@@ -24,12 +24,12 @@ if [ -n "$requested" ]; then
 else
     version="$(
         curl -fsSL https://nodejs.org/dist/index.json |
-            jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].version'
+            jq -r '[.[] | select((.lts | type == "string" or . == true) and (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))][0].version'
     )"
 fi
 
 if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "failed to resolve a stable Node.js version" >&2
+    echo "failed to resolve a stable Node.js LTS version" >&2
     exit 1
 fi
 

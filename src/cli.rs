@@ -252,7 +252,7 @@ pub(crate) struct RunArgs {
     )]
     pub tenant: Option<String>,
 
-    /// Workspace mounted at /workspace (default: current directory).
+    /// Workspace mounted at /workspace/DIRECTORY_NAME (default: current directory).
     #[arg(short, long)]
     pub workspace: Option<String>,
 

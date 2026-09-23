@@ -6,8 +6,9 @@ the container; it does not confine network or credential authority.
 
 ## Workspace and Mount Rules
 
-The launch directory is the default Workspace mounted at `/workspace`. Select
-another existing directory with:
+The launch directory is the default Workspace. A Run mounts it at
+`/workspace/<directory name>` and uses that path as its working directory.
+Select another existing directory with:
 
 ```sh
 aibox run --workspace ../other-project
@@ -31,7 +32,9 @@ share these rules:
 - Resolved sources must be UTF-8 and contain no `:` because Docker's short `-v`
   syntax cannot represent them safely.
 - Container targets must be absolute. Mounts are writable unless marked `:ro`.
-- Extra Mounts may be nested below `/workspace` or `/home/aibox`, but cannot
+- Extra Mount targets are literal: `/workspace/cache` is beside a Workspace
+  mounted at `/workspace/project`, while `/workspace/project/cache` is inside
+  it. They may be nested under the Workspace or `/home/aibox`, but cannot
   replace either managed mount or one of its ancestors.
 - `$AIBOX_ROOT` and host paths containing it are rejected. Inside that root,
   only `tenants/<name>` or descendants may be mounted.
@@ -42,8 +45,13 @@ state. Every Extra Mount is an explicit authority grant.
 ## Runtime Boundary
 
 Each Run drops Linux capabilities, enables `no-new-privileges`, mounts the
-selected Tenant Home at `/home/aibox`, mounts the Workspace at `/workspace`,
-and adds only requested Extra Mounts.
+selected Tenant Home at `/home/aibox`, mounts the Workspace at
+`/workspace/<directory name>`, and adds only requested Extra Mounts. The name
+comes from the resolved Workspace source, so symlink aliases use the real
+directory name. A filesystem root such as `/` cannot be a Workspace because
+it has no directory name. Different host directories with the same name share
+the same container path. Existing Agent state stored for `/workspace` stays
+where it is; AIBox does not migrate it.
 
 A Debug Shell uses the same disposable image and security flags but mounts only
 the selected Tenant Home. Component installation does the same. Both retain
@@ -140,16 +148,18 @@ preserves the method, path, repeated query values, headers, and body. Only
 followed, and requests are not retried. Host and hop-by-hop headers are rebuilt
 or removed; CONNECT and Upgrade/WebSocket are unsupported.
 
-Before connecting, AIBox resolves the target and requires every address to be
-public. The only exception is `198.18.0.0/15` for host-side Fake-IP DNS.
-Loopback, private, link-local, CGNAT, ULA, multicast, unspecified,
-documentation, other reserved, and metadata addresses are rejected. Accepted
-addresses are pinned to the connection; TLS uses the host's trusted CA roots.
+Before connecting, AIBox resolves the target and pins the resolved addresses
+to the connection. It accepts public, private, and loopback upstream addresses;
+TLS uses the host's trusted CA roots. To forward through a local service on the
+AIBox host at port 18787, use an upstream base URL such as
+`http://host.docker.internal:9923/http://127.0.0.1:18787/v1` from a Managed
+Tenant. The `127.0.0.1` inside the proxy path is resolved by the host-side
+Service. Any client that can reach the proxy listener can also request host-local
+upstreams through it.
 
 | Failure | Status |
 | --- | ---: |
 | Invalid target | 400 |
-| Non-public target | 403 |
 | CONNECT | 405 |
 | Upgrade/WebSocket | 426 |
 | Connection timeout | 504 |

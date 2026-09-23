@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SessionListData } from "@/api/sessions";
 import {
-  aggregateSessionCatalog,
-  groupSessionsForDeletion,
-  sessionDialogSources,
-  splitSessionResults,
+  messageCountLabel,
+  projectSessionCatalog,
+  toolCountLabel,
 } from "@/features/sessions/sessionCatalog";
-import { sessionSource, sourcedSession } from "@/features/sessions/sessionSource";
+import { sessionSource } from "@/features/sessions/sessionSource";
 
 function result(id: string, partial = false): SessionListData {
   return {
@@ -17,72 +16,29 @@ function result(id: string, partial = false): SessionListData {
         start_ts: "2026-08-17T09:00:00Z",
         title: id,
         latest_message: "",
-        message_count: 0,
-        tool_count: 0,
+        message_count: 1,
+        tool_count: 2,
         warnings: [],
       },
     ],
-    warnings: [],
+    warnings: ["warning-1"],
     partial,
   };
 }
 
 describe("Session catalog projection", () => {
-  it("retains source identity and reports partial reads", () => {
+  it("projects a single source read and preserves warnings and partial flags", () => {
     const source = sessionSource("managed:work", "codex");
-    const failedSource = sessionSource("host", "claude");
-    const { successes, failures } = splitSessionResults(
-      [
-        { status: "fulfilled", value: { source, result: result("ok") } },
-        { status: "rejected", reason: new Error("unreadable") },
-      ],
-      [source, failedSource],
-    );
-    const catalog = aggregateSessionCatalog(successes, failures);
-    expect(catalog.sessions[0].key).toContain("managed:work");
+    const catalog = projectSessionCatalog(source, result("ok", true));
+    expect(catalog.sessions[0].key).toBe('["managed:work","codex","ok"]');
     expect(catalog.partial).toBe(true);
-    expect(catalog.warnings).toContain("Host Tenant Claude: unreadable");
+    expect(catalog.warnings).toEqual(["warning-1"]);
   });
 
-  it("groups deletion requests by source and keeps source order stable", () => {
-    const codex = sessionSource("managed:work", "codex");
-    const claude = sessionSource("managed:work", "claude");
-    const rows = [
-      sourcedSession(claude, {
-        id: "c",
-        display_id: "c",
-        start_ts: "",
-        title: "",
-        latest_message: "",
-        message_count: 0,
-        tool_count: 0,
-        warnings: [],
-      }),
-      sourcedSession(codex, {
-        id: "a",
-        display_id: "a",
-        start_ts: "",
-        title: "",
-        latest_message: "",
-        message_count: 0,
-        tool_count: 0,
-        warnings: [],
-      }),
-      sourcedSession(codex, {
-        id: "b",
-        display_id: "b",
-        start_ts: "",
-        title: "",
-        latest_message: "",
-        message_count: 0,
-        tool_count: 0,
-        warnings: [],
-      }),
-    ];
-    expect(groupSessionsForDeletion(rows).map((group) => [group.source.agent, group.ids])).toEqual([
-      ["claude", ["c"]],
-      ["codex", ["a", "b"]],
-    ]);
-    expect(sessionDialogSources(rows).map(({ count }) => count)).toEqual([1, 2]);
+  it("formats singular and plural message and tool count labels", () => {
+    expect(messageCountLabel(1)).toBe("1 message");
+    expect(messageCountLabel(2)).toBe("2 messages");
+    expect(toolCountLabel(1)).toBe("1 tool");
+    expect(toolCountLabel(0)).toBe("0 tools");
   });
 });

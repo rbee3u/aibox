@@ -75,8 +75,6 @@
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 

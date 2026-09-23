@@ -30,7 +30,7 @@ pub(crate) fn reject_colon_in_bind_source(kind: &str, path: &Path) -> Result<()>
 ///
 /// Relative input is anchored to the process working directory.
 pub(super) fn resolve_workspace(workspace: Option<&str>) -> Result<String> {
-    let cwd = std::env::current_dir().context("get current dir for /workspace")?;
+    let cwd = std::env::current_dir().context("get current dir for workspace")?;
     let path = match workspace {
         Some(workspace) => {
             let path = Path::new(workspace);
@@ -109,13 +109,16 @@ fn parse_mount_spec(mount: &str) -> Result<MountSpec<'_>> {
     }
 }
 
-/// Reject extra mounts that replace `/workspace`, the shared container Home,
+/// Reject extra mounts that replace the Workspace or shared container Home,
 /// or an ancestor of either managed target.
-pub(super) fn validate_extra_mount_targets(mounts: &[String]) -> Result<()> {
+pub(super) fn validate_extra_mount_targets(
+    mounts: &[String],
+    workspace_target: &str,
+) -> Result<()> {
     for mount in mounts {
         let target = bind_target(mount)?;
         let target = normalize_container_target(target)?;
-        if shadows_managed_target(&target, "/workspace")
+        if shadows_managed_target(&target, workspace_target)
             || shadows_managed_target(&target, CONTAINER_HOME)
         {
             bail!(

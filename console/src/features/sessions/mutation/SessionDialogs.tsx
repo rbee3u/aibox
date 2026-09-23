@@ -1,21 +1,50 @@
 import type { Operation } from "@/api/operations";
-import { sessionDeletionFacts } from "@/features/sessions/sessionDeletion";
-import { visibleSessionSource } from "@/features/sessions/sessionSource";
+import { sessionTenantSelectionValue } from "@/features/sessions/route";
+import { agentLabel, sessionListTenantLabel } from "@/features/sessions/sessionSource";
 import type { SessionViewModel } from "@/features/sessions/useSessionController";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
+import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { iconSize } from "@/shared/icons/iconSizes";
+import { ConfirmDialog, ContextPill } from "@/shared/ui/ConfirmDialog";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
 
+const HostTenantIcon = resourceIcons.hostTenant;
+const ManagedTenantIcon = resourceIcons.managedTenant;
+
 export function SessionDialogs({
+  catalog,
   dialogs,
   feedback,
   mutations,
   operation,
-}: Pick<SessionViewModel, "dialogs" | "feedback" | "mutations"> & {
+}: Pick<SessionViewModel, "catalog" | "dialogs" | "feedback" | "mutations"> & {
   operation?: Operation | null;
 }) {
-  const { closeBatchDelete, closeSingleDelete, dialogKeys, dialogSources, singleDeleteTarget } =
-    dialogs;
+  const { tenant, agent } = catalog;
+  const { closeBatchDelete, closeSingleDelete, dialogKeys, singleDeleteTarget } = dialogs;
   const { batchBusy, deleteSelectedSessions, deleteSession, deletion } = mutations;
+
+  const pills = (
+    <>
+      <ContextPill
+        icon={
+          tenant.kind === "host" ? (
+            <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+          ) : (
+            <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+          )
+        }
+        label="Tenant"
+        value={sessionListTenantLabel(sessionTenantSelectionValue(tenant))}
+      />
+      <ContextPill
+        icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
+        label="Agent"
+        value={agentLabel(agent)}
+      />
+    </>
+  );
+
   return (
     <>
       <NotificationCenter
@@ -30,8 +59,8 @@ export function SessionDialogs({
       {singleDeleteTarget && (
         <ConfirmDialog
           title={`Delete Session ${singleDeleteTarget.display_id}?`}
-          facts={sessionDeletionFacts(singleDeleteTarget)}
-          message={`Permanently deletes its Transcript from ${visibleSessionSource(singleDeleteTarget.source)}.`}
+          pills={pills}
+          message="Permanently deletes this session transcript. This action cannot be undone."
           confirmLabel="Delete"
           busy={deletion?.kind === "record" || operation?.state === "running"}
           onCancel={() => {
@@ -43,9 +72,8 @@ export function SessionDialogs({
       {dialogKeys && (
         <ConfirmDialog
           title={`Delete ${dialogKeys.length} selected Session${dialogKeys.length === 1 ? "" : "s"}?`}
-          message={`Permanently deletes the selected Transcripts. Sources: ${dialogSources
-            .map(({ count, source }) => `${visibleSessionSource(source)} (${count})`)
-            .join("; ")}.`}
+          pills={pills}
+          message="Permanently deletes the selected session transcripts. This action cannot be undone."
           confirmLabel="Delete"
           busy={batchBusy || operation?.state === "running"}
           onCancel={() => {

@@ -13,6 +13,29 @@ const TOOLTIP_GAP_PX = 8;
 const VIEWPORT_MARGIN_PX = 8;
 const TOOLTIP_MAX_WIDTH_PX = 320;
 
+interface InputModalityState {
+  keyboard: boolean;
+}
+
+/*
+ * `:focus-visible` is not enough here: after a pointer presses non-focusable
+ * whitespace, Chromium can classify a later programmatic `focus()` as visible.
+ * Remember the real input modality so focus recovery does not impersonate a
+ * keyboard visit to the trigger.
+ */
+const inputModalityByDocument = new WeakMap<Document, InputModalityState>();
+
+function inputModalityFor(ownerDocument: Document): InputModalityState {
+  const existing = inputModalityByDocument.get(ownerDocument);
+  if (existing) return existing;
+
+  const state = { keyboard: true };
+  ownerDocument.addEventListener("keydown", () => (state.keyboard = true), true);
+  ownerDocument.addEventListener("pointerdown", () => (state.keyboard = false), true);
+  inputModalityByDocument.set(ownerDocument, state);
+  return state;
+}
+
 interface TooltipPosition {
   left: number;
   top: number;
@@ -57,6 +80,12 @@ export function AnchoredTooltip<T extends HTMLElement>({
   const [pending, setPending] = useState(false);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
+  const inputModality = useRef<InputModalityState | null>(null);
+
+  useLayoutEffect(() => {
+    const ownerDocument = triggerRef.current?.ownerDocument;
+    if (ownerDocument) inputModality.current = inputModalityFor(ownerDocument);
+  }, []);
 
   const clearOpenTimer = useCallback(() => {
     if (openTimer.current === null) return;
@@ -70,6 +99,14 @@ export function AnchoredTooltip<T extends HTMLElement>({
     setOpen(false);
     setPosition(null);
   }, [clearOpenTimer]);
+
+  useEffect(() => {
+    if (!disabled) return;
+    // Disabling invalidates the ephemeral interaction, including a hover
+    // timer that could otherwise reopen when the trigger becomes enabled.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    close();
+  }, [close, disabled]);
 
   const scheduleOpen = useCallback(() => {
     clearOpenTimer();
@@ -164,8 +201,7 @@ export function AnchoredTooltip<T extends HTMLElement>({
       if (!disabled && event.pointerType !== "mouse") openImmediately();
     },
     onFocus: () => {
-      if (triggerRef.current?.getAttribute("data-dialog-restoring-focus") === "true") return;
-      if (!disabled) openImmediately();
+      if (!disabled && inputModality.current?.keyboard !== false) openImmediately();
     },
     onBlur: () => close(),
     onKeyDown: (event) => {

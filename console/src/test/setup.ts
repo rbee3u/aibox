@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach, vi } from "vitest";
+import { afterEach } from "vitest";
+import "@/test/reset";
 
 // CodeMirror probes canvas text metrics, while jsdom deliberately does not
 // implement a rendering context. Returning null exercises CodeMirror's native
@@ -60,7 +61,4 @@ afterEach(() => {
   document.documentElement.removeAttribute("style");
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-resolved-theme");
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
 });

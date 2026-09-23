@@ -4,6 +4,7 @@ use super::*;
 fn assemble_run_args_keeps_sandbox_flags_and_mount_order() {
     let args = assemble_run_args(
         "/abs/workspace",
+        "/workspace/workspace",
         Path::new("/abs/tenant"),
         &["/abs/cache:/cache:ro".to_string()],
     );
@@ -28,9 +29,9 @@ fn assemble_run_args_keeps_sandbox_flags_and_mount_order() {
         "-v".to_string(),
         "/abs/tenant:/home/aibox".to_string(),
         "-v".to_string(),
-        "/abs/workspace:/workspace".to_string(),
+        "/abs/workspace:/workspace/workspace".to_string(),
         "-w".to_string(),
-        "/workspace".to_string(),
+        "/workspace/workspace".to_string(),
         "-v".to_string(),
         "/abs/cache:/cache:ro".to_string(),
     ]);

@@ -38,12 +38,17 @@ pub(crate) enum LatestEntryState {
 }
 
 /// One result in the Service latest-release observation.
+///
+/// `version` is the source's stable tip. Node stores the current LTS there and
+/// the overall newest stable release in `newest`; other Components leave
+/// `newest` empty.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct LatestEntry {
     pub(crate) kind: ComponentKind,
     pub(crate) state: LatestEntryState,
     pub(crate) version: Option<String>,
+    pub(crate) newest: Option<String>,
     pub(crate) source: String,
     pub(crate) error: Option<String>,
 }
@@ -68,6 +73,7 @@ impl LatestSnapshot {
 pub(crate) enum LatestResult {
     Available {
         version: String,
+        newest: Option<String>,
         source: &'static str,
     },
     Unavailable {
@@ -102,48 +108,34 @@ impl OfficialLatestProvider {
     async fn fetch_kind(client: Client, kind: ComponentKind) -> LatestResult {
         match kind {
             ComponentKind::Node => match fetch_node(&client).await {
-                Ok(version) => LatestResult::Available {
+                Ok((version, newest)) => LatestResult::Available {
                     version,
+                    newest: Some(newest),
                     source: "nodejs.org",
                 },
                 Err(error) => unavailable("nodejs.org", error.to_string()),
             },
             ComponentKind::Go => match fetch_go(&client).await {
-                Ok(version) => LatestResult::Available {
-                    version,
-                    source: "go.dev",
-                },
+                Ok(version) => available(version, "go.dev"),
                 Err(error) => unavailable("go.dev", error.to_string()),
             },
             ComponentKind::Rust => match fetch_rust(&client).await {
-                Ok(version) => LatestResult::Available {
-                    version,
-                    source: "static.rust-lang.org",
-                },
+                Ok(version) => available(version, "static.rust-lang.org"),
                 Err(error) => unavailable("static.rust-lang.org", error.to_string()),
             },
             ComponentKind::Python => match fetch_python(&client).await {
-                Ok(version) => LatestResult::Available {
-                    version,
-                    source: "github.com/astral-sh/python-build-standalone",
-                },
+                Ok(version) => available(version, "github.com/astral-sh/python-build-standalone"),
                 Err(error) => unavailable(
                     "github.com/astral-sh/python-build-standalone",
                     error.to_string(),
                 ),
             },
             ComponentKind::Codex => match fetch_codex(&client).await {
-                Ok(version) => LatestResult::Available {
-                    version,
-                    source: "github.com/openai/codex",
-                },
+                Ok(version) => available(version, "github.com/openai/codex"),
                 Err(error) => unavailable("github.com/openai/codex", error.to_string()),
             },
             ComponentKind::Claude => match fetch_claude(&client).await {
-                Ok(version) => LatestResult::Available {
-                    version,
-                    source: "registry.npmjs.org/@anthropic-ai/claude-code",
-                },
+                Ok(version) => available(version, "registry.npmjs.org/@anthropic-ai/claude-code"),
                 Err(error) => unavailable(
                     "registry.npmjs.org/@anthropic-ai/claude-code",
                     error.to_string(),
@@ -191,10 +183,15 @@ fn snapshot_from_results(results: Vec<(ComponentKind, LatestResult)>) -> LatestS
     let mut entries = results
         .into_iter()
         .map(|(kind, result)| match result {
-            LatestResult::Available { version, source } => LatestEntry {
+            LatestResult::Available {
+                version,
+                newest,
+                source,
+            } => LatestEntry {
                 kind,
                 state: LatestEntryState::Available,
                 version: Some(version),
+                newest,
                 source: source.to_string(),
                 error: None,
             },
@@ -202,6 +199,7 @@ fn snapshot_from_results(results: Vec<(ComponentKind, LatestResult)>) -> LatestS
                 kind,
                 state: LatestEntryState::Unavailable,
                 version: None,
+                newest: None,
                 source: source.to_string(),
                 error: Some(error),
             },
@@ -216,24 +214,39 @@ fn snapshot_from_results(results: Vec<(ComponentKind, LatestResult)>) -> LatestS
     }
 }
 
-async fn fetch_node(client: &Client) -> Result<String> {
+async fn fetch_node(client: &Client) -> Result<(String, String)> {
     let value = fetch_json(client, "https://nodejs.org/dist/index.json").await?;
     parse_node_releases(&value)
 }
 
-fn parse_node_releases(value: &Value) -> Result<String> {
+fn parse_node_releases(value: &Value) -> Result<(String, String)> {
     let releases = value
         .as_array()
         .context("Node.js release source is not an array")?;
-    releases
+    let version = releases
         .iter()
-        .filter_map(|release| release.get("version").and_then(Value::as_str))
-        .find_map(|version| {
-            version
-                .strip_prefix('v')
-                .and_then(|value| validate_stable_version(value).ok())
-        })
-        .context("Node.js release source has no stable release")
+        .filter(|release| node_release_is_lts(release))
+        .find_map(node_stable_version)
+        .context("Node.js release source has no stable LTS release")?;
+    let newest = releases
+        .iter()
+        .find_map(node_stable_version)
+        .unwrap_or_else(|| version.clone());
+    Ok((version, newest))
+}
+
+fn node_release_is_lts(release: &Value) -> bool {
+    release
+        .get("lts")
+        .is_some_and(|lts| lts.is_string() || lts.as_bool() == Some(true))
+}
+
+fn node_stable_version(release: &Value) -> Option<String> {
+    release
+        .get("version")
+        .and_then(Value::as_str)
+        .and_then(|version| version.strip_prefix('v'))
+        .and_then(|value| validate_stable_version(value).ok())
 }
 
 #[derive(Deserialize)]
@@ -391,6 +404,14 @@ async fn read_limited(response: reqwest::Response) -> Result<Vec<u8>> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+fn available(version: String, source: &'static str) -> LatestResult {
+    LatestResult::Available {
+        version,
+        newest: None,
+        source,
+    }
 }
 
 fn unavailable(source: &'static str, error: impl Into<String>) -> LatestResult {

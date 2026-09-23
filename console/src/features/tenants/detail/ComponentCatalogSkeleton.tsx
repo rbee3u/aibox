@@ -1,11 +1,12 @@
-import { COMPONENT_GROUPS } from "@/features/tenants/componentCatalog";
+import {
+  HOST_COMPONENT_GROUPS,
+  MANAGED_COMPONENT_GROUPS,
+} from "@/features/tenants/componentCatalog";
 import styles from "@/features/tenants/TenantPage.module.css";
 
-/** Placeholder that keeps the catalog's group and row rhythm while loading. */
+/** Placeholder that keeps the catalog's group and card rhythm while loading. */
 export function ComponentCatalogSkeleton({ host }: { host: boolean }) {
-  const groups = host
-    ? COMPONENT_GROUPS.filter((group) => group.id === "statuslines")
-    : COMPONENT_GROUPS;
+  const groups = host ? HOST_COMPONENT_GROUPS : MANAGED_COMPONENT_GROUPS;
   return (
     <div
       className={styles.componentCatalogSkeleton}
@@ -17,16 +18,23 @@ export function ComponentCatalogSkeleton({ host }: { host: boolean }) {
           <div className={styles.componentGroupHeader}>
             <span className={styles.skeletonLine} />
           </div>
-          {group.kinds.map((kind) => (
-            <div className={`${styles.componentRow} ${styles.componentSkeletonRow}`} key={kind}>
-              <span className={styles.skeletonIcon} />
-              <span className={styles.componentSkeletonContent}>
-                <span className={styles.skeletonLine} />
-                <span className={`${styles.skeletonLine} ${styles.skeletonLineShort}`} />
-              </span>
-              <span className={styles.componentSkeletonAction} />
-            </div>
-          ))}
+          <div className={styles.componentGrid}>
+            {group.kinds.map((kind) => (
+              <div className={`${styles.componentCard} ${styles.componentSkeletonCard}`} key={kind}>
+                <div className={styles.componentCardHeader}>
+                  <span className={styles.skeletonIcon} />
+                  <div className={styles.componentContent}>
+                    <div className={styles.componentIdentity}>
+                      <span className={styles.skeletonLine} />
+                    </div>
+                  </div>
+                </div>
+                <div className={styles.componentCardFooter}>
+                  <span className={styles.componentSkeletonAction} />
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>

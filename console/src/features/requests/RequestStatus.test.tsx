@@ -293,6 +293,7 @@ describe("RequestStatus", () => {
     );
     const trigger = screen.getByRole("button", { name: /Warning: Disconnected/ });
 
+    fireEvent.keyDown(document, { key: "Tab" });
     fireEvent.focus(trigger);
     expect(screen.getByRole("tooltip")).toHaveTextContent(disconnectWarning.primary!.message);
     expect(trigger).toHaveAttribute("aria-expanded", "true");

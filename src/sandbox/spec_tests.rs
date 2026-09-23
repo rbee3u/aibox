@@ -26,11 +26,19 @@ fn resolve_accepts_a_workspace_with_read_only_extra_mounts() {
 
     let args = spec.assemble_run_args(Path::new("/abs/tenant"));
     let canonical_workspace = fs::canonicalize(workspace.path()).unwrap();
+    let workspace_target = format!(
+        "/workspace/{}",
+        canonical_workspace.file_name().unwrap().to_str().unwrap()
+    );
     let canonical_extra = fs::canonicalize(extra.path()).unwrap();
     assert!(
         args.windows(2).any(|pair| pair[0] == "-v"
-            && pair[1] == format!("{}:/workspace", canonical_workspace.display())),
+            && pair[1] == format!("{}:{workspace_target}", canonical_workspace.display())),
         "{args:?}"
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-w", &workspace_target])
     );
     assert!(
         args.windows(2)
@@ -38,6 +46,80 @@ fn resolve_accepts_a_workspace_with_read_only_extra_mounts() {
                 && pair[1] == format!("{}:/data:ro", canonical_extra.display())),
         "{args:?}"
     );
+}
+
+#[test]
+fn resolve_uses_current_directory_for_default_workspace_target() {
+    let root = root_with_tenant("work");
+    let spec = RunSpec::resolve(None, &[], root.path()).unwrap();
+    let source = fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+    let target = format!(
+        "/workspace/{}",
+        source.file_name().unwrap().to_str().unwrap()
+    );
+    let args = spec.assemble_run_args(Path::new("/abs/tenant"));
+
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "-v" && pair[1] == format!("{}:{target}", source.display()))
+    );
+    assert!(args.windows(2).any(|pair| pair == ["-w", &target]));
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_uses_canonical_workspace_name_for_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = root_with_tenant("work");
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("actual-project");
+    let alias = directory.path().join("alias");
+    fs::create_dir(&workspace).unwrap();
+    symlink(&workspace, &alias).unwrap();
+
+    let spec = RunSpec::resolve(Some(alias.to_str().unwrap()), &[], root.path()).unwrap();
+    let args = spec.assemble_run_args(Path::new("/abs/tenant"));
+    let canonical_workspace = fs::canonicalize(&workspace).unwrap();
+    assert!(args.windows(2).any(|pair| pair[0] == "-v"
+        && pair[1]
+            == format!(
+                "{}:/workspace/actual-project",
+                canonical_workspace.display()
+            )));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-w", "/workspace/actual-project"])
+    );
+}
+
+#[test]
+fn resolve_rejects_root_as_workspace() {
+    let root = root_with_tenant("work");
+    let error = RunSpec::resolve(Some("/"), &[], root.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("workspace has no directory name"), "{error}");
+}
+
+#[test]
+fn resolve_rejects_extra_mount_over_workspace_target() {
+    let root = root_with_tenant("work");
+    let workspace = tempfile::tempdir().unwrap();
+    let extra = tempfile::tempdir().unwrap();
+    let target = format!(
+        "/workspace/{}",
+        workspace.path().file_name().unwrap().to_str().unwrap()
+    );
+    let error = RunSpec::resolve(
+        Some(workspace.path().to_str().unwrap()),
+        &[format!("{}:{target}:ro", extra.path().display())],
+        root.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("would override or shadow"), "{error}");
 }
 
 #[test]

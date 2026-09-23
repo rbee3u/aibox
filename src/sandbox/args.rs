@@ -11,6 +11,7 @@ use std::path::Path;
 /// Assemble Docker arguments for the Tenant Home, Workspace, and Extra Mounts.
 pub(super) fn assemble_run_args(
     workspace: &str,
+    workspace_target: &str,
     home_dir: &Path,
     extra_mounts: &[String],
 ) -> Vec<String> {
@@ -19,8 +20,8 @@ pub(super) fn assemble_run_args(
     args.push("-v".into());
     args.push(format!("{}:{CONTAINER_HOME}", home_dir.display()));
     args.push("-v".into());
-    args.push(format!("{workspace}:/workspace"));
-    args.extend(["-w".into(), "/workspace".into()]);
+    args.push(format!("{workspace}:{workspace_target}"));
+    args.extend(["-w".into(), workspace_target.into()]);
     for mount in extra_mounts {
         args.push("-v".into());
         args.push(mount.clone());

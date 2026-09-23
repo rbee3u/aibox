@@ -139,7 +139,7 @@ describe("Requests page list", () => {
     const panel = await screen.findByRole("complementary", { name: "Request list" });
 
     for (const { url, label } of cases) {
-      const row = within(panel).getByRole("button", { name: `POST ${label}` });
+      const row = await within(panel).findByRole("button", { name: `POST ${label}` });
       const target = within(row).getByTitle(url);
       expect(target).toHaveTextContent(label);
       expect(target.textContent).not.toContain("stream=true");

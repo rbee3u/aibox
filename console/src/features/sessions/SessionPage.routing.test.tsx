@@ -30,29 +30,25 @@ describe("SessionPage", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Couldn’t load Sessions");
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
-    expect(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "First prompt" })).toBeInTheDocument();
   });
   it("keeps Session browsing available but blocks deletion during a Management Operation", async () => {
     const { api } = fakeApi({ sessions: () => list([firstSession]) });
     render(<SessionPage api={api} operation={activeOperation} />);
     expect(await screen.findByRole("button", { name: "Refresh Sessions" })).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "First prompt" })).toBeEnabled();
     expect(
       screen.getByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     ).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Changes are temporarily unavailable");
   });
-  it("restores repeated filters and a uniquely sourced Session from the URL", async () => {
+  it("restores filters and the selected Session from the URL", async () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/sessions?tenant=managed%3Adefault&tenant=host&agent=codex&agent=claude&session_tenant=host&session_agent=claude&session=${firstSession.id}`,
+      `/_aibox/ui/sessions?tenant=host&agent=claude&session=${firstSession.id}`,
     );
     const { api, listSessions, streamSessionDetail } = fakeApi({
       sessions: () => list([firstSession]),
@@ -60,9 +56,10 @@ describe("SessionPage", () => {
     });
     render(<SessionPage api={api} />);
     expect(await screen.findByRole("heading", { name: "First prompt" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tenant: 2 tenants" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Agent: 2 Agents" })).toBeInTheDocument();
-    expect(listSessions).toHaveBeenCalledTimes(4);
+    expect(screen.getByRole("button", { name: "Tenant: Host" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent: Claude" })).toBeInTheDocument();
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(listSessions).toHaveBeenCalledWith({ kind: "host" }, "claude", expect.any(AbortSignal));
     expect(streamSessionDetail).toHaveBeenCalledWith(
       { kind: "host" },
       "claude",
@@ -75,7 +72,7 @@ describe("SessionPage", () => {
     window.history.replaceState(
       null,
       "",
-      `/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex&session_tenant=managed%3Adefault&session_agent=codex&session=${firstSession.id}&tab=details`,
+      `/_aibox/ui/sessions?tenant=managed%3Adefault&agent=codex&session=${firstSession.id}&tab=details`,
     );
     const { api } = fakeApi({
       sessions: () => list([firstSession]),
@@ -89,7 +86,7 @@ describe("SessionPage", () => {
     expect(screen.getByText("0ms", { exact: true })).toBeInTheDocument();
     expect(
       screen.getAllByRole("button", {
-        name: "Delete Session 111111111111 from Tenant default · Codex",
+        name: "Delete Session 111111111111",
       }),
     ).toHaveLength(1);
   });
@@ -101,9 +98,7 @@ describe("SessionPage", () => {
     const onLocationChange = vi.fn();
     const user = userEvent.setup();
     render(<SessionPage api={api} onLocationChange={onLocationChange} />);
-    await user.click(
-      await screen.findByRole("button", { name: "First prompt, Tenant default · Codex" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(await screen.findByRole("button", { name: "Conversation" })).toHaveAttribute(
       "aria-current",
       "page",
@@ -126,7 +121,7 @@ describe("SessionPage", () => {
     const user = userEvent.setup();
     const view = render(<SessionPage api={api} search="" onLocationChange={onLocationChange} />);
     const row = await screen.findByRole("button", {
-      name: "Second prompt, Tenant default · Codex",
+      name: "Second prompt",
     });
     const catalog = row.parentElement?.parentElement as HTMLDivElement;
     catalog.scrollTop = 480;

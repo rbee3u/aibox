@@ -107,7 +107,7 @@ export function ConfigDetailPane({
               <div className={styles.emptyStateCardHeader}>
                 <CurrentConfigIcon size={iconSize.sm} />
                 <strong>Current Config</strong>
-                <span className={styles.emptyStateBadgeActive}>Active Sandbox</span>
+                <span className={styles.emptyStateBadgeActive}>Active sandbox</span>
               </div>
               <p>
                 Live configuration files mounted directly into the container. Edits in Raw mode
@@ -125,7 +125,7 @@ export function ConfigDetailPane({
               <div className={styles.emptyStateCardHeader}>
                 <NamedConfigIcon size={iconSize.sm} />
                 <strong>Named Configs</strong>
-                <span className={styles.emptyStateBadgeProfiles}>Saved Profiles</span>
+                <span className={styles.emptyStateBadgeProfiles}>Saved profiles</span>
               </div>
               <p>
                 Reusable profile templates. Edit configurations visually or in Raw code, and apply

@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=24.19.0 <25"
   },
+  "allowScripts": {
+    "fsevents@2.3.2 || 2.3.3": false
+  },
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -51,6 +54,6 @@
     "typescript": "6.0.3",
     "typescript-eslint": "^8.66.0",
     "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

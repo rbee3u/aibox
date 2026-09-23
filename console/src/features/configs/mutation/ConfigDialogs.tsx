@@ -1,4 +1,4 @@
-import { AlertTriangle, LoaderCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, LoaderCircle } from "lucide-react";
 
 import {
   propagationDetail,
@@ -10,17 +10,20 @@ import {
 import type { ConfigPendingAction } from "@/features/configs/route";
 import type { ConfigViewModel } from "@/features/configs/useConfigController";
 import { ActionButton } from "@/shared/ui/ActionButton";
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
+import { ConfirmDialog, ContextPill } from "@/shared/ui/ConfirmDialog";
 import { Dialog } from "@/shared/ui/Dialog";
 import { TextInput } from "@/shared/ui/FormControls";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import { StatusBadge } from "@/shared/ui/StatusBadge";
 import layout from "@/shared/ui/layout/catalog.module.css";
 import styles from "@/features/configs/ConfigPage.module.css";
+import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const NamedConfigIcon = resourceIcons.namedConfig;
+const HostTenantIcon = resourceIcons.hostTenant;
+const ManagedTenantIcon = resourceIcons.managedTenant;
 
 /**
  * A mode switch keeps the reader on the file, so it must not read as leaving:
@@ -43,6 +46,78 @@ function pendingActionCopy(action: ConfigPendingAction, dirtyFiles: readonly str
     body: `Your unsaved edits to ${subject} only exist in the ${source} editor. Save them first, or discard them to switch.`,
     verb: "switch",
   };
+}
+
+interface ApplyConfigDescriptionProps {
+  tenantLabel: string;
+  isHost: boolean;
+  agentLabel: string;
+  sourceName: string;
+}
+
+function ApplyConfigDescription({
+  tenantLabel,
+  isHost,
+  agentLabel,
+  sourceName,
+}: ApplyConfigDescriptionProps) {
+  return (
+    <div className={styles.applyDetails}>
+      <dl className={styles.applyFlowCard}>
+        <div className={styles.applyFlowMeta}>
+          <div className={styles.applyMetaGroup}>
+            <dt>Tenant</dt>
+            <dd>
+              <span className={isHost ? styles.applyHostTag : styles.applyTenantTag}>
+                {tenantLabel}
+              </span>
+            </dd>
+          </div>
+          <div className={styles.applyMetaGroup}>
+            <dt>Agent</dt>
+            <dd>
+              <span className={styles.applyAgentTag}>{agentLabel}</span>
+            </dd>
+          </div>
+        </div>
+
+        <div className={styles.applyFlowTrack}>
+          <div className={styles.applyFlowStep}>
+            <dt>Source</dt>
+            <dd className={styles.applyFlowValue}>Named Config {sourceName}</dd>
+          </div>
+          <div className={styles.applyFlowArrow} aria-hidden="true">
+            <ArrowRight size={iconSize.xs} />
+          </div>
+          <div className={styles.applyFlowStep}>
+            <dt>Target</dt>
+            <dd className={styles.applyFlowValue}>Current Config</dd>
+          </div>
+        </div>
+      </dl>
+
+      <ul className={styles.applyRulesList}>
+        <li>
+          <Check size={iconSize.xs} className={styles.applyRuleCheck} aria-hidden="true" />
+          <span>Replaces declared fields and removes omitted fixed fields</span>
+        </li>
+        <li>
+          <Check size={iconSize.xs} className={styles.applyRuleCheck} aria-hidden="true" />
+          <span>Preserves unrelated native configuration</span>
+        </li>
+      </ul>
+
+      {isHost && (
+        <AlertBanner
+          className={styles.applyHostAlert}
+          tone="warning"
+          icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
+        >
+          Writes directly to Host Home — one-shot with no rollback.
+        </AlertBanner>
+      )}
+    </div>
+  );
 }
 
 export function ConfigDialogs({
@@ -231,13 +306,14 @@ export function ConfigDialogs({
       {applyTarget && (
         <ConfirmDialog
           title={`Apply ${applyTarget.name} to Current Config?`}
-          facts={[
-            { label: "Tenant", value: configTenantLabel },
-            { label: "Agent", value: agent === "codex" ? "Codex" : "Claude" },
-            { label: "Source", value: `Named Config ${applyTarget.name}` },
-            { label: "Target", value: "Current Config" },
-          ]}
-          message="Present fields replace; omitted fixed fields are removed. Unrelated native config is kept. One-shot; no rollback."
+          description={
+            <ApplyConfigDescription
+              tenantLabel={configTenantLabel}
+              isHost={tenant.kind === "host"}
+              agentLabel={agent === "codex" ? "Codex" : "Claude"}
+              sourceName={applyTarget.name}
+            />
+          }
           confirmation={tenant.kind === "host" ? "Host Tenant" : undefined}
           confirmLabel="Apply"
           variant="primary"
@@ -249,7 +325,27 @@ export function ConfigDialogs({
       {deleteTarget?.names.length === 1 && (
         <ConfirmDialog
           title={`Delete Named Config ${deleteTarget.names[0]}?`}
-          message="Deletes this Named Config only. Current Config is unchanged; Drift may become Source missing."
+          pills={
+            <>
+              <ContextPill
+                icon={
+                  tenant.kind === "host" ? (
+                    <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  )
+                }
+                label="Tenant"
+                value={configTenantLabel}
+              />
+              <ContextPill
+                icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
+                label="Agent"
+                value={agent === "codex" ? "Codex" : "Claude"}
+              />
+            </>
+          }
+          message="Permanently deletes this profile. Current Config is unchanged."
           confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDelete}
@@ -258,15 +354,28 @@ export function ConfigDialogs({
       )}
       {deleteTarget && deleteTarget.names.length > 1 && (
         <ConfirmDialog
-          title="Delete selected Named Configs?"
-          message="Deletes the selected Named Configs only. Current Config is unchanged; Drift may become Source missing."
-          description={
-            <div className={styles.planList}>
-              {deleteTarget.names.map((name) => (
-                <code key={name}>{name}</code>
-              ))}
-            </div>
+          title={`Delete ${deleteTarget.names.length} selected Named Configs?`}
+          pills={
+            <>
+              <ContextPill
+                icon={
+                  tenant.kind === "host" ? (
+                    <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  ) : (
+                    <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />
+                  )
+                }
+                label="Tenant"
+                value={configTenantLabel}
+              />
+              <ContextPill
+                icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
+                label="Agent"
+                value={agent === "codex" ? "Codex" : "Claude"}
+              />
+            </>
           }
+          message="Permanently deletes the selected profiles. Current Config is unchanged."
           confirmLabel="Delete"
           busy={mutationBusy}
           onCancel={cancelDelete}

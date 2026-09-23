@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { TenantPage, tenantApi } from "@/features/tenants/testSupport";
@@ -22,7 +22,6 @@ describe("TenantPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Delete Tenant work" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox"), "work");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     const alert = await screen.findByRole("alert");
@@ -31,7 +30,7 @@ describe("TenantPage", () => {
     expect(await screen.findByRole("button", { name: "Delete Tenant work" })).toBeInTheDocument();
   });
 
-  it("keeps Install available before checking and validates a specific version dialog", async () => {
+  it("keeps Install available before checking and validates an inline version input", async () => {
     const { api, mutateComponent } = tenantApi({
       mutateComponent: () => Promise.resolve({ kind: "completed", value: {} }),
       components: [
@@ -51,28 +50,17 @@ describe("TenantPage", () => {
     expect(screen.getByRole("button", { name: "Check for updates" })).toBeInTheDocument();
     expect(screen.queryByText("Not checked")).not.toBeInTheDocument();
     expect(within(row).queryByLabelText("Python latest release")).toBeNull();
-    expect(row).not.toHaveTextContent("—");
-    const options = screen.getByRole("button", {
-      name: "Install options for Python",
-    });
-    await user.click(options);
-    const menuItem = screen.getByRole("menuitem", { name: "Install version…" });
-    await waitFor(() => expect(menuItem).toHaveFocus());
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
-    await waitFor(() => expect(options).toHaveFocus());
-    await user.click(options);
-    await user.click(screen.getByRole("menuitem", { name: "Install version…" }));
-    const dialog = screen.getByRole("dialog", {
-      name: "Install Python version",
-    });
-    expect(within(dialog).getByText("Enter a stable version in X.Y.Z form.")).toBeVisible();
-    const version = within(dialog).getByRole("textbox", { name: "Component version" });
+    const version = within(row).getByRole("textbox", { name: "Python version" });
+    const install = within(row).getByRole("button", { name: "Install" });
+
+    // Invalid format disables install
     await user.type(version, "3.13");
-    expect(within(dialog).getByRole("button", { name: "Install version" })).toBeDisabled();
+    expect(install).toBeDisabled();
+
     await user.clear(version);
     await user.type(version, "3.13.7");
-    await user.click(within(dialog).getByRole("button", { name: "Install version" }));
+    expect(install).toBeEnabled();
+    await user.click(install);
 
     expect(mutateComponent).toHaveBeenCalledWith(
       { kind: "managed", name: "default" },
@@ -80,8 +68,11 @@ describe("TenantPage", () => {
       true,
       "3.13.7",
     );
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Install" }));
+
+    // Empty version installs default/latest
+    await user.clear(version);
+    expect(install).toBeEnabled();
+    await user.click(install);
     expect(mutateComponent).toHaveBeenCalledWith(
       { kind: "managed", name: "default" },
       "python",
@@ -99,6 +90,7 @@ describe("TenantPage", () => {
             kind: "codex",
             state: "unavailable",
             version: null,
+            newest: null,
             source: "chatgpt.com",
             error: "No comparable stable release feed.",
           },
@@ -116,12 +108,11 @@ describe("TenantPage", () => {
     });
     render(<TenantPage api={api} />);
     const row = await screen.findByRole("listitem");
-    expect(row).toHaveTextContent("Latest unavailable");
-    expect(within(row).getByText("Latest unavailable")).not.toHaveAttribute("title");
     expect(row).toHaveTextContent("No comparable stable release feed.");
     expect(within(row).queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
   });
+
   it("shows incomparable versions as an inline diagnostic", async () => {
     const { api } = tenantApi({
       latest: {
@@ -131,6 +122,7 @@ describe("TenantPage", () => {
             kind: "node",
             state: "available",
             version: "24.19.0",
+            newest: null,
             source: "nodejs.org",
             error: null,
           },
@@ -149,10 +141,10 @@ describe("TenantPage", () => {
     render(<TenantPage api={api} />);
     const row = await screen.findByRole("listitem");
     expect(row).toHaveTextContent("vdevelopment");
-    expect(row).toHaveTextContent("Latest v24.19.0");
     expect(row).toHaveTextContent("The observed and current versions could not be compared.");
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
   });
+
   it("does not compare an incomplete Component with the latest release", async () => {
     const { api } = tenantApi({
       latest: {
@@ -162,6 +154,7 @@ describe("TenantPage", () => {
             kind: "python",
             state: "available",
             version: "3.15.0",
+            newest: null,
             source: "github.com/astral-sh/python-build-standalone",
             error: null,
           },
@@ -178,8 +171,7 @@ describe("TenantPage", () => {
       ],
     });
     render(<TenantPage api={api} />);
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Latest v3.15.0");
-    expect(screen.getByRole("button", { name: "Repair" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Repair" })).toBeEnabled();
     expect(screen.queryByText("Installed version 3.14.7 is older.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
   });

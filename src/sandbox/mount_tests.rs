@@ -115,10 +115,14 @@ fn resolve_mounts_rejects_malformed_short_syntax() {
 
 #[test]
 fn extra_mounts_must_not_replace_managed_targets() {
+    let workspace_target = "/workspace/project";
     for target in [
         "/workspace",
         "/workspace/",
         "/workspace/.",
+        "/workspace/project",
+        "/workspace/project/.",
+        "/workspace/project/cache/..",
         "/tmp/../workspace",
         "/",
         "/home",
@@ -128,19 +132,23 @@ fn extra_mounts_must_not_replace_managed_targets() {
         "/home/aibox/..",
         "/home/aibox/.cache/../..",
     ] {
-        let error = validate_extra_mount_targets(&[format!("/host:{target}:ro")])
+        let error = validate_extra_mount_targets(&[format!("/host:{target}:ro")], workspace_target)
             .unwrap_err()
             .to_string();
         assert!(error.contains("would override or shadow"));
     }
-    validate_extra_mount_targets(&[
-        "/host:/legacy-work:ro".to_string(),
-        "/host:/workspace-cache:ro".to_string(),
-        "/host:/workspace/.cache:ro".to_string(),
-        "/host:/home/aibox-cache:ro".to_string(),
-        "/host:/home/aibox2:ro".to_string(),
-        "/host:/home/aibox/.cache:ro".to_string(),
-    ])
+    validate_extra_mount_targets(
+        &[
+            "/host:/legacy-work:ro".to_string(),
+            "/host:/workspace-cache:ro".to_string(),
+            "/host:/workspace/other:ro".to_string(),
+            "/host:/workspace/project/.cache:ro".to_string(),
+            "/host:/home/aibox-cache:ro".to_string(),
+            "/host:/home/aibox2:ro".to_string(),
+            "/host:/home/aibox/.cache:ro".to_string(),
+        ],
+        workspace_target,
+    )
     .unwrap();
 }
 

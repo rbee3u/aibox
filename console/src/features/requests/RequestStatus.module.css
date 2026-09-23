@@ -73,35 +73,42 @@
   background: currentColor;
 }
 .headline {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 7px;
+  gap: 8px;
   font-family: var(--font-mono);
 }
 .headlineStatus {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 5px;
-  font-size: var(--text-xs);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  font-size: var(--text-meta);
   font-weight: var(--weight-bold);
+  line-height: 1.4;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .tag {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 23px;
-  padding: 2px 7px;
+  padding: 1px 7px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   font-family: var(--font-sans);
-  font-size: var(--text-xs);
+  font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
-  line-height: 1.2;
+  line-height: 1.4;
   white-space: nowrap;
   max-width: 100%;
+}
+.tag:is(button) {
+  cursor: pointer;
 }
 .activeTag {
   color: var(--accent);

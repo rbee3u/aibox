@@ -29,7 +29,22 @@ const COMPONENT_LABELS: Record<ComponentKind, string> = {
   go: "Go",
 };
 
-/** Presentation-only grouping; a Managed catalog shows all three sections. */
+/** Presentation-only grouping; a Managed catalog shows Agents and Runtimes & Toolchains (with Statuslines merged into Agents). */
+export const MANAGED_COMPONENT_GROUPS: readonly ComponentGroup[] = [
+  { id: "agents", label: "Agents", kinds: ["codex", "claude"] },
+  {
+    id: "runtimes-toolchains",
+    label: "Runtimes & Toolchains",
+    kinds: ["node", "python", "rust", "go"],
+  },
+];
+
+/** Host Tenant only manages host-level Statuslines. */
+export const HOST_COMPONENT_GROUPS: readonly ComponentGroup[] = [
+  { id: "statuslines", label: "Statuslines", kinds: ["codex-statusline", "claude-statusline"] },
+];
+
+/** All recognized presentation groups across Managed and Host tenants. */
 export const COMPONENT_GROUPS: readonly ComponentGroup[] = [
   { id: "agents", label: "Agents", kinds: ["codex", "claude"] },
   { id: "statuslines", label: "Statuslines", kinds: ["codex-statusline", "claude-statusline"] },
@@ -39,6 +54,14 @@ export const COMPONENT_GROUPS: readonly ComponentGroup[] = [
     kinds: ["node", "python", "rust", "go"],
   },
 ];
+
+export const AGENT_STATUSLINE_KIND: Record<
+  "codex" | "claude",
+  "codex-statusline" | "claude-statusline"
+> = {
+  codex: "codex-statusline",
+  claude: "claude-statusline",
+};
 
 export const COMPONENT_ACTION_MENU_WIDTHS: Record<"install" | "update", number> = {
   install: 136,
@@ -105,6 +128,22 @@ export function latestEntryFor(
   kind: ComponentRow["kind"],
 ): ComponentLatestEntry | null {
   return snapshot?.entries.find((entry) => entry.kind === kind) ?? null;
+}
+
+/**
+ * Node records LTS in `version` and the overall newest stable in `newest`.
+ * An installed Node at or below the LTS tip is compared with LTS; anything
+ * newer is compared with `newest`. Other Components leave `newest` empty.
+ */
+function effectiveLatestVersion(
+  entry: Pick<ComponentLatestEntry, "version" | "newest">,
+  installedVersion: string | null,
+): string | null {
+  if (!entry.version) return null;
+  if (!installedVersion || !entry.newest) return entry.version;
+  const installedAgainstLts = compareStableVersions(installedVersion, entry.version);
+  if (installedAgainstLts !== null && installedAgainstLts <= 0) return entry.version;
+  return entry.newest;
 }
 
 export interface ComponentLatestInfo {
@@ -179,7 +218,8 @@ export function latestInfoFor(
       latestVersion: entry.version,
     };
   }
-  const comparison = compareStableVersions(entry.version, row.version);
+  const latestVersion = effectiveLatestVersion(entry, row.version) ?? entry.version;
+  const comparison = compareStableVersions(latestVersion, row.version);
   const detail =
     comparison === null
       ? "The observed and current versions could not be compared."
@@ -189,11 +229,11 @@ export function latestInfoFor(
           ? "The observed release is lower than the current version."
           : "Up to date.";
   return {
-    label: `Latest release ${entry.version}`,
+    label: `Latest release ${latestVersion}`,
     detail,
     updateAvailable: comparison === 1,
     installedVersion: row.version,
-    latestVersion: entry.version,
+    latestVersion,
   };
 }
 
@@ -224,9 +264,6 @@ export interface ComponentPresentation {
   diagnostic: string | null;
 }
 
-const COMPONENT_DIFFERS_DIAGNOSTIC =
-  "Edited here, or changed in a newer AIBox — Update rewrites the statusline to the current AIBox definition.";
-
 /**
  * Whether the row's Update overwrites state the Tenant may have edited by hand,
  * which is the one Component action that discards something without a way back.
@@ -242,7 +279,7 @@ export function updateOverwritesLocalEdits(row: ComponentRow): boolean {
  *
  * `modified` is reported only by statuslines, and the Console cannot tell a
  * hand edit from a definition that changed in a newer AIBox, so the row says
- * "Differs" — true of both — and states what Update will do to it.
+ * "Differs" — true of both.
  */
 export function componentPresentation(row: ComponentRow): ComponentPresentation {
   if (row.error || !row.status) {
@@ -290,7 +327,7 @@ export function componentPresentation(row: ComponentRow): ComponentPresentation 
         badgeTone: "warn",
         primaryAction: "Update",
         canRemove: true,
-        diagnostic: COMPONENT_DIFFERS_DIAGNOSTIC,
+        diagnostic: null,
       };
     case "unmanaged":
       return {

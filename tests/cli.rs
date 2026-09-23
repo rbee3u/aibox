@@ -96,6 +96,14 @@ fn process_environment_runs_with_fixed_runtime_image() {
         .unwrap();
     assert_success(&output);
     let log = std::fs::read_to_string(log).unwrap();
+    let canonical_workspace = std::fs::canonicalize(&workspace).unwrap();
+    assert!(
+        log.contains(&format!(
+            "<{}:/workspace/workspace> <-w> </workspace/workspace>",
+            canonical_workspace.display()
+        )),
+        "{log}"
+    );
     assert!(
         log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
         "{log}"

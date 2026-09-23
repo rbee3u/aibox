@@ -60,7 +60,6 @@ pub(crate) struct RequestProxyState {
     store: Store,
     shutdown: CancellationToken,
     response_tasks: TaskTracker,
-    allow_private_upstream: bool,
     reporter: Option<RequestReporter>,
 }
 
@@ -83,16 +82,13 @@ impl RequestProxyState {
             store: Store::open_with_warning_sink(root, warning_sink)?,
             shutdown,
             response_tasks: TaskTracker::new(),
-            allow_private_upstream: false,
             reporter,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(root: &Path) -> Result<Self> {
-        let mut state = Self::new(root, CancellationToken::new())?;
-        state.allow_private_upstream = true;
-        Ok(state)
+        Self::new(root, CancellationToken::new())
     }
 
     pub(crate) fn inspection(&self) -> RequestInspection {

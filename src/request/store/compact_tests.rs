@@ -1,31 +1,62 @@
-use super::super::{ObservedRequest, Outcome, RequestStore, RuntimeMeasurements};
+use super::super::layout::RequestFile;
+use super::super::{
+    FORMAT_VERSION, Outcome, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY, RequestAssessment,
+    RequestStore, SUMMARY_JSON, SummaryMetadata,
+};
 use super::{GROUP_SIZE, UNGROUPED_COMPACT_THRESHOLD};
+use crate::foundation::sync::lock_unpoisoned;
 use std::fs;
 use std::time::Instant;
 use uuid::Uuid;
 
+// Compaction needs hundreds of existing entries to cross its production
+// thresholds. Seed the already-persisted layout directly so these tests do not
+// repeat the durability/fsync contract covered by the Request writer suites.
 fn seed_terminal(store: &RequestStore, index: usize) -> (String, std::path::PathBuf) {
-    let (request, _) = store
-        .begin(ObservedRequest {
-            host_hint: Some("example.test"),
-            ..ObservedRequest::test("GET", &format!("/r{index}"))
-        })
-        .unwrap();
-    let id = request.id.clone();
-    store
-        .finish(
-            &request,
-            Instant::now(),
-            &RuntimeMeasurements::default(),
-            Outcome::Completed,
-            None,
-        )
-        .unwrap();
-    let old = request.locator.path();
+    let id = Uuid::now_v7().to_string();
     let timestamp = format!("20260831T000000.{index:03}Z");
-    let renamed = store.root().join(format!("{timestamp}-example.test-{id}"));
-    fs::rename(old, &renamed).unwrap();
-    (id, renamed)
+    let directory = store.root().join(format!("{timestamp}-example.test-{id}"));
+    fs::create_dir(&directory).unwrap();
+    let request = RequestFile {
+        schema_version: FORMAT_VERSION,
+        request_id: id.clone(),
+        kind: "request".to_string(),
+        method: "GET".to_string(),
+        upstream_url: None,
+        headers: Vec::new(),
+    };
+    write_json(directory.join(REQUEST_JSON), &request);
+    fs::write(directory.join(REQUEST_BODY), []).unwrap();
+    fs::write(directory.join(RESPONSE_BODY), []).unwrap();
+
+    let mut summary = SummaryMetadata::test(id.clone(), None);
+    summary.observed_at = "2026-08-31T00:00:00Z".to_string();
+    summary.request.incoming_uri = format!("/r{index}");
+    summary.terminal = true;
+    summary.timing.finished_at_ns = Some("0".to_string());
+    summary.outcome = Some(Outcome::Completed);
+    summary.assessment = RequestAssessment::ok();
+    write_json(directory.join(SUMMARY_JSON), &summary);
+    (id, directory)
+}
+
+fn seed_active(store: &RequestStore, index: usize, prefixed: bool) -> String {
+    let id = Uuid::now_v7().to_string();
+    let timestamp = format!("20260831T000000.{index:03}Z");
+    let prefix = if prefixed { "active-" } else { "" };
+    let directory = store
+        .root()
+        .join(format!("{prefix}{timestamp}-example.test-{id}"));
+    fs::create_dir(&directory).unwrap();
+    write_json(
+        directory.join(SUMMARY_JSON),
+        &SummaryMetadata::test(id.clone(), None),
+    );
+    id
+}
+
+fn write_json(path: std::path::PathBuf, value: &impl serde::Serialize) {
+    fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
 }
 
 fn root_names(store: &RequestStore) -> Vec<String> {
@@ -74,26 +105,26 @@ fn compact_moves_oldest_eligible_requests_into_a_named_group() {
 fn compact_skips_active_prefixed_and_in_process_requests() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    for index in 0..(UNGROUPED_COMPACT_THRESHOLD + 1) {
-        store
-            .begin(ObservedRequest {
-                host_hint: Some("example.test"),
-                ..ObservedRequest::test("GET", &format!("/live{index}"))
-            })
-            .unwrap();
+    let prefixed = UNGROUPED_COMPACT_THRESHOLD + 1 - GROUP_SIZE;
+    for index in 0..prefixed {
+        seed_active(&store, index, true);
     }
+    let in_process: Vec<_> = (prefixed..=UNGROUPED_COMPACT_THRESHOLD)
+        .map(|index| seed_active(&store, index, false))
+        .collect();
+    lock_unpoisoned(&store.active)
+        .extend(in_process.iter().cloned().map(|id| (id, Instant::now())));
 
     store.compact_once().unwrap();
 
     assert!(
         root_names(&store)
             .iter()
-            .all(|name| name.starts_with("active-"))
+            .all(|name| parse_count_suffix(name).is_none())
     );
-    assert_eq!(
-        store.list_page(0, 1).unwrap().total,
-        UNGROUPED_COMPACT_THRESHOLD + 1
-    );
+    let page = store.list_page(0, 1).unwrap();
+    assert_eq!(page.total, UNGROUPED_COMPACT_THRESHOLD + 1);
+    assert_eq!(page.deletable_count, prefixed);
 }
 
 #[test]

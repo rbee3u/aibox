@@ -21,10 +21,23 @@ fn numeric_version_ordering_does_not_use_lexical_order() {
 #[test]
 fn official_source_fixtures_reject_prereleases_and_normalize_prefixes() {
     let node = serde_json::json!([
-        {"version": "v25.0.0-rc.1"},
-        {"version": "v24.19.0"}
+        {"version": "v26.0.0-rc.1", "lts": false},
+        {"version": "v26.8.2", "lts": false},
+        {"version": "v25.9.0", "lts": false},
+        {"version": "v24.19.0", "lts": "Krypton"}
     ]);
-    assert_eq!(parse_node_releases(&node).unwrap(), "24.19.0");
+    assert_eq!(
+        parse_node_releases(&node).unwrap(),
+        ("24.19.0".to_string(), "26.8.2".to_string())
+    );
+
+    let lts_only = serde_json::json!([
+        {"version": "v24.19.0", "lts": "Krypton"}
+    ]);
+    assert_eq!(
+        parse_node_releases(&lts_only).unwrap(),
+        ("24.19.0".to_string(), "24.19.0".to_string())
+    );
 
     let go = serde_json::json!([
         {"version": "go1.27rc1", "stable": false},

@@ -41,7 +41,9 @@ zstd = { version = "0.14", default-features = false }
 http-body-util = "0.1"
 syn = { version = "3", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
-ts-rs = { version = "12", features = ["serde-json-impl"] }
+# SummaryMetadata accepts a legacy serde alias that is intentionally absent
+# from the generated TypeScript contract.
+ts-rs = { version = "12", features = ["no-serde-warnings", "serde-json-impl"] }
 
 [profile.release]
 strip = true

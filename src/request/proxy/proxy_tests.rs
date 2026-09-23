@@ -39,7 +39,6 @@ impl UpstreamSender for FakeUpstreamSender {
     fn connect(
         &self,
         _url: &Url,
-        _allow_private_upstream: bool,
     ) -> UpstreamFuture<'_, Result<Self::Connection, UpstreamConnectError>> {
         Box::pin(async { Ok(()) })
     }
@@ -221,12 +220,12 @@ fn console_upstream_host_keeps_explicit_ports_and_ipv6_brackets() {
 }
 
 #[tokio::test]
-async fn rejected_request_preserves_url_query_headers_and_body_without_a_socket() {
+async fn unsupported_connect_preserves_url_query_headers_and_body_without_a_socket() {
     let temp = tempfile::tempdir().unwrap();
     let state = RequestProxyState::new(temp.path(), CancellationToken::new()).unwrap();
-    let target = "http://192.0.2.1/v1/echo?tag=one&tag=&tag=two";
+    let target = "http://127.0.0.1:18787/v1/echo?tag=one&tag=&tag=two";
     let mut request = Request::builder()
-        .method(Method::POST)
+        .method(Method::CONNECT)
         .uri(format!("/{target}"))
         .body(Body::from(Bytes::from_static(b"request\0\xffbody")))
         .unwrap();
@@ -238,7 +237,7 @@ async fn rejected_request_preserves_url_query_headers_and_body_without_a_socket(
         .append("x-client-repeat", "two".parse().unwrap());
 
     let response = handle(state.clone(), request).await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     let captured_request = state.store.scan().unwrap().remove(0);
     assert_eq!(
         captured_request.request.upstream_url.as_deref(),
@@ -1485,55 +1484,6 @@ fn sse_index_handles_bom_split_chunks_and_crlf_ranges() {
 }
 
 #[test]
-fn public_address_filter_rejects_special_ranges() {
-    for address in [
-        "0.0.0.0",
-        "10.0.0.1",
-        "100.64.0.1",
-        "127.0.0.1",
-        "169.254.169.254",
-        "172.16.0.1",
-        "192.0.2.1",
-        "192.168.1.1",
-        "198.18.0.1",
-        "198.51.100.1",
-        "203.0.113.1",
-        "224.0.0.1",
-        "240.0.0.1",
-        "::",
-        "::1",
-        "::2",
-        "::ffff:127.0.0.1",
-        "100::1",
-        "2001:db8::1",
-        "3fff::1",
-        "fc00::1",
-        "fe80::1",
-        "ff00::1",
-    ] {
-        assert!(
-            !is_public_ip(address.parse().unwrap()),
-            "accepted {address}"
-        );
-    }
-    for address in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
-        assert!(is_public_ip(address.parse().unwrap()), "rejected {address}");
-    }
-}
-
-#[test]
-fn upstream_address_filter_accepts_fake_ip_range() {
-    for address in ["198.18.0.0", "198.18.2.68", "198.19.255.255"] {
-        let address = address.parse().unwrap();
-        assert!(!is_public_ip(address), "publicly routed {address}");
-        assert!(
-            is_allowed_upstream_ip(address),
-            "rejected Fake-IP address {address}"
-        );
-    }
-}
-
-#[test]
 fn hop_by_hop_and_connection_named_headers_are_removed() {
     let mut headers = HeaderMap::new();
     headers.append(
@@ -1574,15 +1524,14 @@ fn recorded_headers_drop_connection_named_fields() {
     assert_eq!(recorded[0].name, "x-app");
 }
 
-#[test]
-fn one_non_public_dns_candidate_rejects_the_whole_target() {
-    let mixed = [
-        "1.1.1.1:443".parse().unwrap(),
-        "10.0.0.1:443".parse().unwrap(),
-    ];
-    assert!(matches!(
-        require_allowed_addresses("mixed.example", &mixed, false),
-        Err(TargetError::Rejected(_))
-    ));
-    assert!(require_allowed_addresses("test-only", &mixed, true).is_ok());
+#[tokio::test]
+async fn literal_loopback_and_private_targets_resolve_without_a_socket() {
+    for (target, address) in [
+        ("http://127.0.0.1:18787/v1/responses", "127.0.0.1:18787"),
+        ("http://10.0.0.1:18787/v1/responses", "10.0.0.1:18787"),
+        ("http://[::1]:18787/v1/responses", "[::1]:18787"),
+    ] {
+        let resolved = validate_and_resolve(&Url::parse(target).unwrap()).await;
+        assert_eq!(resolved.unwrap(), vec![address.parse().unwrap()]);
+    }
 }
