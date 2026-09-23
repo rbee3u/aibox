@@ -131,7 +131,7 @@ pub(super) const DEFAULT_CONFIG: &str = r#"approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 model_provider = "custom"
 
 [model_providers.custom]

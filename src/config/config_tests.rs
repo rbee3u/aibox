@@ -201,6 +201,38 @@ fn named_config_catalog_reports_ready_and_incomplete_entries() {
 }
 
 #[test]
+fn new_and_repaired_named_configs_use_current_templates_without_changing_existing_configs() {
+    for agent in AgentKind::ALL {
+        let root = tempfile::tempdir().unwrap();
+        let selected = selected(root.path(), agent);
+        create_named_config(&selected, &config_name("existing")).unwrap();
+        let existing_path = named_config_file(&selected, "existing", agent.main_config_file());
+        let existing = fs::read_to_string(&existing_path).unwrap();
+        let customized = match agent {
+            AgentKind::Claude => existing.replace("claude-opus-5-5[1m]", "existing-opus"),
+            AgentKind::Codex => existing.replace("gpt-6-sol", "existing-codex"),
+        };
+        assert_ne!(customized, existing, "{agent:?}");
+        write_private(&existing_path, customized.as_bytes());
+
+        create_named_config(&selected, &config_name("fresh")).unwrap();
+        let fresh_path = named_config_file(&selected, "fresh", agent.main_config_file());
+        assert_eq!(
+            fs::read_to_string(&fresh_path).unwrap(),
+            agent.config_template()
+        );
+
+        fs::remove_file(&fresh_path).unwrap();
+        create_named_config(&selected, &config_name("fresh")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&fresh_path).unwrap(),
+            agent.config_template()
+        );
+        assert_eq!(fs::read_to_string(&existing_path).unwrap(), customized);
+    }
+}
+
+#[test]
 fn named_config_catalog_rejects_unsupported_provider_shapes() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
@@ -374,7 +406,7 @@ fn application_status_reports_all_five_drift_states() {
     let current = fs::read_to_string(&current_path).unwrap();
     write_private(
         &current_path,
-        current.replace("gpt-5.6-sol", "different-model").as_bytes(),
+        current.replace("gpt-6-sol", "different-model").as_bytes(),
     );
     assert_eq!(application_status(&selected).drift, ConfigDrift::Dirty);
 

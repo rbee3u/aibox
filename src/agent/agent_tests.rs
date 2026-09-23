@@ -131,11 +131,22 @@ fn invocation_preserves_passthrough_without_injecting_named_config() {
 }
 
 #[test]
-fn claude_template_uses_fables_native_one_megacontext_model_id() {
-    let template: Value = serde_json::from_str(AgentKind::Claude.config_template()).unwrap();
+fn config_templates_use_expected_model_ids() {
+    let codex = AgentKind::Codex
+        .parse_main_config(AgentKind::Codex.config_template())
+        .unwrap();
+    assert_eq!(codex["model"], "gpt-6-sol");
+
+    let claude = AgentKind::Claude
+        .parse_main_config(AgentKind::Claude.config_template())
+        .unwrap();
     assert_eq!(
-        template["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
-        "claude-fable-5"
+        claude["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+        "claude-opus-5-5[1m]"
+    );
+    assert_eq!(
+        claude["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
+        "claude-fable-5-1[1m]"
     );
 }
 
