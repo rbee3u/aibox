@@ -231,6 +231,10 @@ Custom provider aggregate first. Including it shows a name field on that same
 row and reveals Base URL below. Other fields follow Agent-defined order. A
 routed field states the Request Proxy prefix its saved value carries under its
 control. Native file headers and independent Save actions remain.
+Requests detail shows retry count and first/last HTTP 429 times when retry
+rules apply. Its Request upload stage includes local recording before the first
+upstream send; its Response wait stage includes retry delays, and recovered
+requests carry a Warning assessment.
 Files stack at their content height in one scrolling region with each file's
 header sticky while its file is in view; editors do not scroll inside the
 pane. The Raw editor's own chrome — selection, search, panels, tooltips —

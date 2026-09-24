@@ -50,6 +50,13 @@ pub(super) fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
             )
             .flatten()
     });
+    if let Some(retry) = &summary.retry {
+        let first = retry.first_429_at_ns.parse::<u128>()?;
+        let last = retry.last_429_at_ns.parse::<u128>()?;
+        if last < first {
+            bail!("Request retry timing is out of order");
+        }
+    }
     for value in [
         summary.timing.upstream_request_started_at_ns.as_deref(),
         summary

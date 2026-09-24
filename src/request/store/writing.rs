@@ -126,6 +126,7 @@ impl RequestStore {
                 timing: TimingMetadata::default(),
                 agent_session_id,
                 protocol: Some(ProtocolSummary::for_url(upstream_url)),
+                retry: None,
                 outcome: None,
                 errors: Vec::new(),
                 warnings: Vec::new(),

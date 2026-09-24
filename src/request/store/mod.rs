@@ -66,6 +66,7 @@ impl SummaryMetadata {
             timing: TimingMetadata::default(),
             agent_session_id: None,
             protocol,
+            retry: None,
             outcome: None,
             errors: Vec::new(),
             warnings: Vec::new(),

@@ -24,6 +24,27 @@ use std::sync::Mutex;
 #[cfg(test)]
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
+
+pub(super) fn replay_body(
+    guard: &mut RequestAttempt,
+) -> Result<reqwest::Body, Box<Response<Body>>> {
+    let opened = guard.with_request_path(|directory| {
+        crate::foundation::safe_fs::open_real_file(&directory.join("request.body"), "Request body")
+    });
+    let file = match opened.and_then(|file| file) {
+        Ok(file) => file,
+        Err(error) => {
+            return Err(Box::new(recording_failure(
+                guard,
+                format!("open recorded Request body: {error:#}"),
+            )));
+        }
+    };
+    Ok(reqwest::Body::wrap_stream(ReaderStream::new(
+        tokio::fs::File::from_std(file),
+    )))
+}
 
 pub(super) async fn prepare_recorded_request_stream(
     guard: &mut RequestAttempt,
@@ -42,9 +63,7 @@ pub(super) async fn prepare_recorded_request_stream(
             )));
         }
     };
-    if let Err(error) = guard.mark_timing(|timing| {
-        timing.upstream_request_started_at_ns = Some(guard.at_ns());
-    }) {
+    if let Err(error) = guard.mark_upstream_request_started() {
         return Err(Box::new(recording_failure(
             guard,
             format!("checkpoint request timing: {error:#}"),

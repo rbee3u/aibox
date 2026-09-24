@@ -194,6 +194,26 @@ describe("RequestDetail", () => {
     expect(screen.queryByText("No diagnostics.")).not.toBeInTheDocument();
   });
 
+  it("shows the retry count and first and last 429 times", () => {
+    renderDetail({
+      ...completedDetail,
+      summary: {
+        ...completedDetail.summary,
+        retry: {
+          retry_count: 2,
+          first_429_at_ns: "300000000",
+          last_429_at_ns: "11000000000",
+        },
+      },
+    });
+
+    const timing = screen.getByRole("region", { name: "Timing" });
+    expect(definitionValue(timing, "HTTP 429 retries")).toHaveTextContent("2");
+    expect(definitionValue(timing, "First 429")).toHaveTextContent("+300 ms");
+    expect(definitionValue(timing, "Last 429")).toHaveTextContent("+11.00 s");
+    expect(timing).toHaveTextContent("Response wait includes retry delays.");
+  });
+
   it("nests the Claude TTL breakdown under a summed Cache writes metric", () => {
     const detail = {
       ...completedDetail,

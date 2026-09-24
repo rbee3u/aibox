@@ -102,6 +102,7 @@ const detail = {
     },
     agent_session_id: null,
     protocol,
+    retry: null,
     outcome: "completed",
     errors: [],
     warnings: [],

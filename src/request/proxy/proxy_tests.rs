@@ -14,26 +14,113 @@ use base64::Engine as _;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::BodyExt as _;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 struct FakeUpstreamSender {
-    response: Mutex<Option<reqwest::Response>>,
+    result: Mutex<Option<FakeUpstreamResult>>,
+}
+
+enum FakeUpstreamResult {
+    Response(reqwest::Response),
+    ConnectError(UpstreamConnectError),
+    SendError(UpstreamSendError),
 }
 
 impl FakeUpstreamSender {
     fn new(response: reqwest::Response) -> Self {
         Self {
-            response: Mutex::new(Some(response)),
+            result: Mutex::new(Some(FakeUpstreamResult::Response(response))),
+        }
+    }
+
+    fn connect_error(error: UpstreamConnectError) -> Self {
+        Self {
+            result: Mutex::new(Some(FakeUpstreamResult::ConnectError(error))),
+        }
+    }
+
+    fn send_error(error: UpstreamSendError) -> Self {
+        Self {
+            result: Mutex::new(Some(FakeUpstreamResult::SendError(error))),
         }
     }
 }
 
 impl UpstreamSender for FakeUpstreamSender {
+    type Connection = ();
+
+    fn connect(
+        &self,
+        _url: &Url,
+    ) -> UpstreamFuture<'_, Result<Self::Connection, UpstreamConnectError>> {
+        let mut result = self.result.lock().expect("fake upstream result poisoned");
+        if matches!(result.as_ref(), Some(FakeUpstreamResult::ConnectError(_))) {
+            let Some(FakeUpstreamResult::ConnectError(error)) = result.take() else {
+                unreachable!()
+            };
+            Box::pin(async move { Err(error) })
+        } else {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn send(
+        &self,
+        _connection: Self::Connection,
+        request: UpstreamRequest,
+    ) -> UpstreamFuture<'_, Result<reqwest::Response, UpstreamSendError>> {
+        let result = self
+            .result
+            .lock()
+            .expect("fake upstream result poisoned")
+            .take()
+            .expect("fake upstream result already used");
+        Box::pin(async move {
+            request
+                .body
+                .collect()
+                .await
+                .map_err(|error| UpstreamSendError {
+                    message: error.to_string(),
+                    timeout: false,
+                })?;
+            match result {
+                FakeUpstreamResult::Response(response) => Ok(response),
+                FakeUpstreamResult::SendError(error) => Err(error),
+                FakeUpstreamResult::ConnectError(_) => {
+                    unreachable!("connect errors cannot reach send")
+                }
+            }
+        })
+    }
+}
+
+struct RetrySender {
+    statuses: Mutex<VecDeque<StatusCode>>,
+    calls: Arc<AtomicUsize>,
+    bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+    return_first_without_reading_body: bool,
+}
+
+impl RetrySender {
+    fn new(statuses: impl IntoIterator<Item = StatusCode>, early_first: bool) -> Self {
+        Self {
+            statuses: Mutex::new(statuses.into_iter().collect()),
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: Arc::new(Mutex::new(Vec::new())),
+            return_first_without_reading_body: early_first,
+        }
+    }
+}
+
+impl UpstreamSender for RetrySender {
     type Connection = ();
 
     fn connect(
@@ -48,24 +135,45 @@ impl UpstreamSender for FakeUpstreamSender {
         _connection: Self::Connection,
         request: UpstreamRequest,
     ) -> UpstreamFuture<'_, Result<reqwest::Response, UpstreamSendError>> {
-        let response = self
-            .response
+        let index = self.calls.fetch_add(1, Ordering::SeqCst);
+        let status = self
+            .statuses
             .lock()
-            .expect("fake upstream response store poisoned")
-            .take()
-            .expect("fake upstream response already used");
+            .unwrap()
+            .pop_front()
+            .unwrap_or(StatusCode::TOO_MANY_REQUESTS);
+        let bodies = self.bodies.clone();
+        let early = self.return_first_without_reading_body && index == 0;
         Box::pin(async move {
-            request
-                .body
-                .collect()
-                .await
-                .map_err(|error| UpstreamSendError {
-                    message: error.to_string(),
-                    timeout: false,
-                })?;
+            if !early {
+                let body = request
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|error| UpstreamSendError {
+                        message: error.to_string(),
+                        timeout: false,
+                    })?;
+                bodies.lock().unwrap().push(body.to_bytes().to_vec());
+            }
+            let mut response = upstream_response(
+                status,
+                Some("text/plain"),
+                reqwest::Body::from(format!("attempt {index}")),
+            );
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, "9999".parse().unwrap());
+            }
             Ok(response)
         })
     }
+}
+
+fn retry_state(root: &std::path::Path, shutdown: CancellationToken) -> RequestProxyState {
+    std::fs::write(root.join("retry_urls.txt"), "https://relay.example/v1\n").unwrap();
+    RequestProxyState::new(root, shutdown).unwrap()
 }
 
 fn upstream_response(
@@ -105,6 +213,137 @@ fn single_outcome(state: &RequestProxyState) -> Outcome {
         .outcome
 }
 
+#[tokio::test(start_paused = true)]
+async fn matching_429_replays_complete_post_body_and_records_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let state = retry_state(root.path(), CancellationToken::new());
+    let sender = RetrySender::new([StatusCode::TOO_MANY_REQUESTS, StatusCode::OK], true);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/https://relay.example/v1/responses?stream=true")
+        .header(header::CONTENT_LENGTH, "6")
+        .body(Body::from("prompt"))
+        .unwrap();
+
+    let response = handle_with_sender(state.clone(), request, &sender).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"attempt 1")
+    );
+    finish_response_tasks(&state).await;
+    assert_eq!(sender.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(*sender.bodies.lock().unwrap(), [b"prompt".to_vec()]);
+    let stored = state.store.scan().unwrap();
+    let stored = crate::testutil::only(&stored);
+    assert_eq!(
+        std::fs::read(stored.directory.join("request.body")).unwrap(),
+        b"prompt"
+    );
+    assert_eq!(
+        std::fs::read(stored.directory.join("response.body")).unwrap(),
+        b"attempt 1"
+    );
+    assert_eq!(stored.response.as_ref().unwrap().status, 200);
+    assert_eq!(stored.summary.retry.as_ref().unwrap().retry_count, 1);
+    assert_eq!(stored.summary.assessment.level, AssessmentLevel::Warning);
+    let timing = &stored.summary.timing;
+    assert!(
+        timing
+            .upstream_request_started_at_ns
+            .as_ref()
+            .unwrap()
+            .parse::<u128>()
+            .unwrap()
+            <= timing
+                .upstream_request_body_completed_at_ns
+                .as_ref()
+                .unwrap()
+                .parse::<u128>()
+                .unwrap()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn matching_429_stops_at_retry_deadline_and_forwards_last_response() {
+    let root = tempfile::tempdir().unwrap();
+    let state = retry_state(root.path(), CancellationToken::new());
+    let sender = RetrySender::new([], false);
+
+    let response = handle_with_sender(
+        state.clone(),
+        proxy_request("https://relay.example/v1/responses"),
+        &sender,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "9999");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    finish_response_tasks(&state).await;
+    let calls = sender.calls.load(Ordering::SeqCst);
+    assert!(calls > 1 && calls <= 60, "{calls}");
+    assert_eq!(body, Bytes::from(format!("attempt {}", calls - 1)));
+    let stored = state.store.scan().unwrap();
+    let stored = crate::testutil::only(&stored);
+    assert_eq!(
+        stored.summary.retry.as_ref().unwrap().retry_count as usize,
+        calls - 1
+    );
+    assert_eq!(stored.response.as_ref().unwrap().status, 429);
+    assert_eq!(stored.summary.assessment.level, AssessmentLevel::Error);
+}
+
+#[tokio::test]
+async fn unmatched_429_is_forwarded_without_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let state = retry_state(root.path(), CancellationToken::new());
+    let sender = RetrySender::new([StatusCode::TOO_MANY_REQUESTS], false);
+    let response = handle_with_sender(
+        state.clone(),
+        proxy_request("https://other.example/v1/responses"),
+        &sender,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    response.into_body().collect().await.unwrap();
+    finish_response_tasks(&state).await;
+    assert_eq!(sender.calls.load(Ordering::SeqCst), 1);
+    assert!(state.store.scan().unwrap()[0].summary.retry.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_during_retry_wait_stops_without_another_send() {
+    let root = tempfile::tempdir().unwrap();
+    let shutdown = CancellationToken::new();
+    let state = retry_state(root.path(), shutdown.clone());
+    let sender = Arc::new(RetrySender::new([], true));
+    let task_state = state.clone();
+    let task_sender = sender.clone();
+    let task = tokio::spawn(async move {
+        handle_with_sender(
+            task_state,
+            proxy_request("https://relay.example/v1/responses"),
+            task_sender.as_ref(),
+        )
+        .await
+    });
+    while state
+        .store
+        .scan()
+        .unwrap()
+        .first()
+        .and_then(|request| request.summary.retry.as_ref())
+        .is_none()
+    {
+        tokio::task::yield_now().await;
+    }
+    shutdown.cancel();
+    let response = task.await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(sender.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(single_outcome(&state), Outcome::ServerShutdown);
+}
+
 #[tokio::test]
 async fn injected_sender_runs_normal_response_through_handle_without_a_socket() {
     let temp = tempfile::tempdir().unwrap();
@@ -129,6 +368,149 @@ async fn injected_sender_runs_normal_response_through_handle_without_a_socket() 
     );
     finish_response_tasks(&state).await;
     assert_eq!(single_outcome(&state), Outcome::Completed);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ProxyFailureScenario {
+    InvalidTarget,
+    Upgrade,
+    InvalidResolvedTarget,
+    Dns,
+    ClientConfiguration,
+    ConnectTimeout,
+    SendFailure,
+}
+
+#[tokio::test]
+async fn proxy_failures_preserve_status_outcome_and_error_kind_without_a_socket() {
+    for (scenario, status, outcome, kind) in [
+        (
+            ProxyFailureScenario::InvalidTarget,
+            StatusCode::BAD_REQUEST,
+            Outcome::Rejected,
+            ErrorKind::InvalidTargetUrl,
+        ),
+        (
+            ProxyFailureScenario::Upgrade,
+            StatusCode::UPGRADE_REQUIRED,
+            Outcome::Rejected,
+            ErrorKind::UpgradeNotSupported,
+        ),
+        (
+            ProxyFailureScenario::InvalidResolvedTarget,
+            StatusCode::BAD_REQUEST,
+            Outcome::Rejected,
+            ErrorKind::InvalidTargetUrl,
+        ),
+        (
+            ProxyFailureScenario::Dns,
+            StatusCode::BAD_GATEWAY,
+            Outcome::UpstreamError,
+            ErrorKind::DnsError,
+        ),
+        (
+            ProxyFailureScenario::ClientConfiguration,
+            StatusCode::BAD_GATEWAY,
+            Outcome::UpstreamError,
+            ErrorKind::ClientConfiguration,
+        ),
+        (
+            ProxyFailureScenario::ConnectTimeout,
+            StatusCode::GATEWAY_TIMEOUT,
+            Outcome::UpstreamError,
+            ErrorKind::ConnectTimeout,
+        ),
+        (
+            ProxyFailureScenario::SendFailure,
+            StatusCode::BAD_GATEWAY,
+            Outcome::UpstreamError,
+            ErrorKind::UpstreamRequestFailed,
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let state = RequestProxyState::new(temp.path(), CancellationToken::new()).unwrap();
+        let mut request = proxy_request(match scenario {
+            ProxyFailureScenario::InvalidTarget => "ftp://example.com/v1",
+            _ => "https://example.com/v1",
+        });
+        if matches!(scenario, ProxyFailureScenario::Upgrade) {
+            request
+                .headers_mut()
+                .insert(header::UPGRADE, "websocket".parse().unwrap());
+        }
+        let sender = match scenario {
+            ProxyFailureScenario::InvalidTarget | ProxyFailureScenario::Upgrade => {
+                FakeUpstreamSender::new(upstream_response(
+                    StatusCode::OK,
+                    None,
+                    reqwest::Body::from("unused"),
+                ))
+            }
+            ProxyFailureScenario::InvalidResolvedTarget => FakeUpstreamSender::connect_error(
+                UpstreamConnectError::InvalidTarget("invalid resolved target".to_string()),
+            ),
+            ProxyFailureScenario::Dns => FakeUpstreamSender::connect_error(
+                UpstreamConnectError::Dns("resolution failed".to_string()),
+            ),
+            ProxyFailureScenario::ClientConfiguration => FakeUpstreamSender::connect_error(
+                UpstreamConnectError::ClientConfiguration("invalid TLS settings".to_string()),
+            ),
+            ProxyFailureScenario::ConnectTimeout => {
+                FakeUpstreamSender::send_error(UpstreamSendError {
+                    message: "connection timed out".to_string(),
+                    timeout: true,
+                })
+            }
+            ProxyFailureScenario::SendFailure => {
+                FakeUpstreamSender::send_error(UpstreamSendError {
+                    message: "connection refused".to_string(),
+                    timeout: false,
+                })
+            }
+        };
+
+        let response = handle_with_sender(state.clone(), request, &sender).await;
+        assert_eq!(response.status(), status, "{scenario:?}");
+        response.into_body().collect().await.unwrap();
+        finish_response_tasks(&state).await;
+        let stored = state.store.scan().unwrap();
+        let result = crate::testutil::only(&stored).result.as_ref().unwrap();
+        assert_eq!(result.outcome, outcome, "{scenario:?}");
+        assert_eq!(result.error.as_ref().unwrap().kind, kind, "{scenario:?}");
+    }
+}
+
+#[tokio::test]
+async fn upstream_error_response_passes_through_and_is_recorded_without_a_socket() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = RequestProxyState::new(temp.path(), CancellationToken::new()).unwrap();
+    let sender = FakeUpstreamSender::new(upstream_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        Some("text/plain"),
+        reqwest::Body::from("upstream overloaded"),
+    ));
+
+    let response = handle_with_sender(
+        state.clone(),
+        proxy_request("https://example.com/v1"),
+        &sender,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"upstream overloaded")
+    );
+    finish_response_tasks(&state).await;
+    let stored = state.store.scan().unwrap();
+    let stored = crate::testutil::only(&stored);
+    assert_eq!(stored.response.as_ref().unwrap().status, 503);
+    assert_eq!(stored.result.as_ref().unwrap().outcome, Outcome::Completed);
+    assert!(stored.result.as_ref().unwrap().error.is_none());
+    assert_eq!(
+        std::fs::read(stored.directory.join("response.body")).unwrap(),
+        b"upstream overloaded"
+    );
 }
 
 #[tokio::test]
@@ -602,6 +984,59 @@ async fn sse_chunks_reach_disk_before_the_client_without_a_socket() {
     let result = captured_request.result.unwrap();
     assert_eq!(result.outcome, Outcome::Completed);
     assert_eq!(result.response_bytes, 27);
+}
+
+#[tokio::test]
+async fn response_recording_failure_errors_the_downstream_without_forwarding_the_chunk() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = RequestStore::open(temp.path()).unwrap();
+    let (captured_request, _) = store
+        .begin(ObservedRequest::test("GET", "/https://example.com/bytes"))
+        .unwrap();
+    let id = captured_request.id.clone();
+    let response_file = tokio::fs::File::from_std(
+        std::fs::File::open(captured_request.directory.join("response.body")).unwrap(),
+    );
+    let guard = RequestAttempt::new(
+        store.clone(),
+        captured_request,
+        Arc::new(Mutex::new(RuntimeMeasurements::default())),
+        Arc::new(Mutex::new(ProtocolObserver::new(None))),
+    );
+    let upstream = futures_util::stream::iter([Ok::<_, reqwest::Error>(Bytes::from_static(
+        b"must not reach the client",
+    ))]);
+    let (client_sender, mut client_receiver) = mpsc::channel(1);
+    let task = tokio::spawn(async move {
+        let mut guard = guard;
+        record_response_stream(
+            CancellationToken::new(),
+            upstream,
+            response_file,
+            client_sender,
+            &mut guard,
+        )
+        .await;
+    });
+
+    let error = client_receiver.recv().await.unwrap().unwrap_err();
+    assert!(error.to_string().contains("response body"), "{error}");
+    task.await.unwrap();
+    assert!(client_receiver.recv().await.is_none());
+    let stored = store.find(&id).unwrap();
+    assert_eq!(
+        stored.result.as_ref().unwrap().outcome,
+        Outcome::RecordingFailed
+    );
+    assert_eq!(
+        stored.result.unwrap().error.unwrap().kind,
+        ErrorKind::ResponseRecordingFailed
+    );
+    assert!(
+        std::fs::read(stored.directory.join("response.body"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

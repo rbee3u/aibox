@@ -44,6 +44,27 @@ async fn only_one_operation_runs_and_cancellation_is_observable() {
 }
 
 #[tokio::test]
+async fn failed_operation_records_its_error_and_allows_the_next_operation() {
+    let manager = OperationManager::new();
+    let started = manager
+        .start("fail", |_| anyhow::bail!("image build failed"))
+        .unwrap();
+
+    let failed = wait_until_finished(&manager).await;
+    assert_eq!(failed.id, started.id);
+    assert_eq!(failed.state, OperationState::Failed);
+    assert!(failed.ended_at.is_some());
+    assert_eq!(failed.result.as_deref(), Some("image build failed"));
+    assert!(!manager.is_running());
+
+    let next = manager.start("next", |_| Ok("ready".to_string())).unwrap();
+    let succeeded = wait_until_finished(&manager).await;
+    assert_eq!(succeeded.id, next.id);
+    assert_eq!(succeeded.state, OperationState::Succeeded);
+    assert_eq!(succeeded.result.as_deref(), Some("ready"));
+}
+
+#[tokio::test]
 async fn log_ring_is_bounded_and_reports_the_retained_sequence_window() {
     let manager = OperationManager::new();
     manager

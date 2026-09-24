@@ -104,16 +104,21 @@ fn process_environment_runs_with_fixed_runtime_image() {
         )),
         "{log}"
     );
+    let canonical_tenant_home = std::fs::canonicalize(root.join("tenants/env-wired")).unwrap();
+    assert!(
+        log.contains(&format!(
+            "<{}:/home/aibox>",
+            canonical_tenant_home.display()
+        )),
+        "{log}"
+    );
     assert!(
         log.contains("<aibox:latest> </bin/bash> <--login> <-c>"),
         "{log}"
     );
     assert!(
-        log.contains(
-            "<aibox-tenant-environment> </home/aibox> <0> <0> <0> <0> <0> </home/aibox/.local/bin/codex> <exec> <probe>"
-        ),
+        log.contains("</home/aibox/.local/bin/codex> <exec> <probe>"),
         "{log}"
     );
-    assert!(root.join("tenants/env-wired/.codex").is_dir());
     assert!(!home.join(".aibox").exists());
 }

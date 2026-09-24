@@ -44,6 +44,19 @@ For Claude, set its native base URL in Current `settings.json`:
 Use the Configs module to edit Current Config. The proxy prefix contains the
 complete upstream base URL.
 
+To retry rate-limited requests for selected upstreams, create
+`$AIBOX_ROOT/retry_urls.txt` before starting `aibox console`:
+
+```text
+# One upstream base URL per line
+https://relay.example/v1
+```
+
+The file is optional and is read once at Service startup. Restart the Service
+after editing it. An invalid URL, symlink, unreadable file, or file larger than
+1 MiB prevents startup. Rules must be HTTP(S) URLs without credentials, query,
+or fragment. Blank lines and lines beginning with `#` are ignored.
+
 ## Routing and Network Policy
 
 The default listener is `127.0.0.1:9923`. `--listen` accepts one literal
@@ -58,7 +71,7 @@ wildcard listener can serve containers without exposing management routes.
 The path after the first slash is the complete absolute upstream URL. AIBox
 preserves the method, path, repeated query values, headers, and body. Only
 `http` and `https` targets are accepted. Redirects pass through without being
-followed, and requests are not retried. Host and hop-by-hop headers are rebuilt
+followed. Host and hop-by-hop headers are rebuilt
 or removed; CONNECT and Upgrade/WebSocket are unsupported.
 
 Before connecting, AIBox resolves the target and pins the resolved addresses
@@ -82,6 +95,29 @@ upstreams through it.
 Upstream error responses pass through normally. The only upstream timeout is a
 30-second connection timeout; long-running SSE responses have no total or idle
 timeout.
+
+## HTTP 429 Retries
+
+Only targets matched by `retry_urls.txt` are eligible. A rule matches the same
+scheme, host, and effective port, then the same path or a child path segment;
+query values do not participate. For example, `/v1` matches `/v1/responses` but
+not `/v10`. All methods are eligible. Requests outside the rules continue to
+stream and forward responses without retries.
+
+For an eligible Request, the Proxy records its full body before the first
+upstream send so every attempt can replay the same bytes. If the upstream
+responds with HTTP 429, the Proxy waits 10 seconds before each retry, ignoring
+`Retry-After`. It stops scheduling retries 10 minutes after the first 429. If
+the next wait would reach or exceed that deadline, it forwards the last 429
+immediately. An attempt already started may finish after the deadline; there is
+no total attempt timeout. Non-429 responses are forwarded immediately.
+
+Concurrent Requests retry independently. Intermediate 429 response bodies are
+not recorded; the final response remains the Request's raw response evidence.
+The Summary records retry count and the first and last 429 times. A Request
+that succeeds after retrying has Warning assessment; a final 429 remains an
+HTTP error. Service shutdown or handler cancellation stops retrying. A client
+that disconnects before response headers may not be detected immediately.
 
 ## Recording and Storage
 
@@ -151,4 +187,3 @@ any; a grouped deletion updates or removes its Group. Deletion is irreversible.
 
 Claude Messages, OpenAI Responses, and Chat Completions streams work as HTTP
 SSE. WebSocket and CONNECT transports are outside the supported surface.
-

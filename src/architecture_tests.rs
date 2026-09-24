@@ -634,6 +634,7 @@ const TEST_ONLY_SURFACE: &[&str] = &[
     "request/mod.rs::RequestedEffective",
     "request/mod.rs::RequestedObserved",
     "request/mod.rs::ResponseModeValue",
+    "request/mod.rs::RetryMetadata",
     "request/mod.rs::SummaryRequestMetadata",
     "request/mod.rs::SummaryResponseMetadata",
     "request/mod.rs::TimingMetadata",

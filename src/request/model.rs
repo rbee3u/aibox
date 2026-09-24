@@ -150,6 +150,14 @@ pub(crate) struct TimingMetadata {
     pub finished_at_ns: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RetryMetadata {
+    pub retry_count: u32,
+    pub first_429_at_ns: String,
+    pub last_429_at_ns: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct DiagnosticMetadata {
@@ -341,6 +349,8 @@ pub(crate) struct SummaryMetadata {
     pub agent_session_id: Option<String>,
     #[serde(default)]
     pub protocol: Option<ProtocolSummary>,
+    #[serde(default)]
+    pub retry: Option<RetryMetadata>,
     pub outcome: Option<Outcome>,
     pub errors: Vec<DiagnosticMetadata>,
     pub warnings: Vec<DiagnosticMetadata>,

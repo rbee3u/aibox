@@ -29,6 +29,21 @@ pub(crate) fn diagnostic_findings(
     collect_http_findings(summary, &mut findings);
     collect_protocol_findings(summary, &mut findings);
     collect_diagnostic_warnings(summary, &mut findings);
+    if let Some(retry) = &summary.retry
+        && retry.retry_count > 0
+    {
+        push_finding(
+            &mut findings,
+            AssessmentFinding {
+                level: AssessmentLevel::Warning,
+                source: AssessmentSource::Diagnostic,
+                kind: "rate_limit_retries".to_string(),
+                message: format!("Retried {} time(s) after HTTP 429", retry.retry_count),
+                phase: Some("response".to_string()),
+                at_ns: Some(retry.last_429_at_ns.clone()),
+            },
+        );
+    }
 
     if interrupted {
         push_finding(

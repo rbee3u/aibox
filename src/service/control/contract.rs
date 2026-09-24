@@ -21,8 +21,8 @@ mod tests {
         DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic, ProtocolFamily,
         ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestedEffective,
         RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource, ResultMetadata,
-        SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata,
-        TokenUsage,
+        RetryMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
+        TimingMetadata, TokenUsage,
     };
     use crate::service::control::components::{
         ComponentMutation, ComponentQuery, ComponentRow, ComponentStatusWire,
@@ -169,6 +169,7 @@ mod tests {
             ErrorMetadata,
             ErrorKind,
             TimingMetadata,
+            RetryMetadata,
             DiagnosticMetadata,
             SummaryRequestMetadata,
             SummaryResponseMetadata,

@@ -629,13 +629,90 @@ fn restoring_user_shell_profiles_removes_installer_symlinks_without_touching_tar
 }
 
 #[test]
-fn node_installer_contains_architecture_and_checksum_guards() {
+fn node_installer_declares_supported_architectures_and_lts_source() {
     assert!(NODE_INSTALLER.contains("x86_64 | amd64"));
     assert!(NODE_INSTALLER.contains("aarch64 | arm64"));
-    assert!(NODE_INSTALLER.contains("SHASUMS256.txt"));
-    assert!(NODE_INSTALLER.contains("sha256sum"));
-    assert!(NODE_INSTALLER.contains("mv -Tf"));
     assert!(NODE_INSTALLER.contains(".lts"));
+}
+
+#[cfg(unix)]
+#[test]
+fn node_installer_checksum_mismatch_preserves_the_active_release() {
+    use std::os::unix::fs::symlink;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let home = scratch.path().join("home");
+    let bin = scratch.path().join("bin");
+    let root = home.join(".node");
+    let active_release = root.join("releases/v1.0.0");
+    fs::create_dir_all(active_release.join("bin")).unwrap();
+    fs::create_dir(&bin).unwrap();
+    make_executable(&active_release.join("bin/node"));
+    fs::write(active_release.join("bin/npm"), b"existing npm\n").unwrap();
+    symlink("releases/v1.0.0", root.join("current")).unwrap();
+    assert_eq!(
+        inspect(ComponentKind::Node, &home).unwrap(),
+        ComponentStatus::Installed {
+            version: Some("1.0.0".to_string())
+        }
+    );
+
+    crate::testutil::write_stub_script(&bin, "uname", "#!/bin/sh\nprintf 'x86_64\\n'\n");
+    let curl = format!(
+        "#!/bin/sh\ncase \"$2\" in\n  */SHASUMS256.txt) printf '%s  node-v2.0.0-linux-x64.tar.xz\\n' '{}' > \"$4\" ;;\n  */node-v2.0.0-linux-x64.tar.xz) printf 'corrupt archive' > \"$4\" ;;\n  *) exit 99 ;;\nesac\n",
+        "0".repeat(64)
+    );
+    crate::testutil::write_stub_script(&bin, "curl", &curl);
+    crate::testutil::write_stub_script(
+        &bin,
+        "sha256sum",
+        "#!/bin/sh\nprintf 'bad checksum  %s\\n' \"$1\"\n",
+    );
+    let mut path = bin.as_os_str().to_os_string();
+    path.push(":/usr/bin:/bin");
+
+    let output = std::process::Command::new("bash")
+        .arg("-ceux")
+        .arg(NODE_INSTALLER)
+        .arg("aibox-node-installer")
+        .arg("2.0.0")
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Node.js checksum mismatch"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        inspect(ComponentKind::Node, &home).unwrap(),
+        ComponentStatus::Installed {
+            version: Some("1.0.0".to_string())
+        }
+    );
+    assert_eq!(
+        fs::read_link(root.join("current")).unwrap(),
+        std::path::Path::new("releases/v1.0.0")
+    );
+    assert!(!root.join("releases/v2.0.0").exists());
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".install.")
+    }));
+    assert!(fs::read_dir(root.join("releases")).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".staging.")
+    }));
 }
 
 #[test]

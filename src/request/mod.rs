@@ -16,6 +16,7 @@ mod store;
 
 use crate::request::store::{RequestStore as Store, RequestWarningSink};
 use anyhow::Result;
+use proxy::RetryRules;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -39,7 +40,7 @@ pub(crate) use model::{
 #[cfg(test)]
 pub(crate) use model::{
     AssessmentPrimary, DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic,
-    ProtocolFamily, RequestedEffective, RequestedObserved, ResponseModeValue,
+    ProtocolFamily, RequestedEffective, RequestedObserved, ResponseModeValue, RetryMetadata,
     SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata, TokenUsage,
 };
 pub(crate) use proxy::handle as handle_proxy;
@@ -61,6 +62,7 @@ pub(crate) struct RequestProxyState {
     shutdown: CancellationToken,
     response_tasks: TaskTracker,
     reporter: Option<RequestReporter>,
+    retry_rules: RetryRules,
 }
 
 impl RequestProxyState {
@@ -74,6 +76,7 @@ impl RequestProxyState {
         shutdown: CancellationToken,
         reporter: Option<RequestReporter>,
     ) -> Result<Self> {
+        let retry_rules = RetryRules::load(root)?;
         let warning_sink = reporter.clone().map(|reporter| {
             Arc::new(move |category: &str, id: Option<&str>| reporter.warning(category, id))
                 as RequestWarningSink
@@ -83,6 +86,7 @@ impl RequestProxyState {
             shutdown,
             response_tasks: TaskTracker::new(),
             reporter,
+            retry_rules,
         })
     }
 

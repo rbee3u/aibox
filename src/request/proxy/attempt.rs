@@ -5,7 +5,7 @@ use crate::foundation::sync::lock_unpoisoned;
 use crate::request::interpretation::{BodyContentCoding, ProtocolObserver};
 use crate::request::model::{
     DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolSummary, RecordedHeader,
-    TimingMetadata,
+    RetryMetadata, TimingMetadata,
 };
 use crate::request::reporter::RequestReporter;
 use crate::request::response_observation::replay_complete_encoded_sse;
@@ -171,6 +171,44 @@ impl RequestAttempt {
             .update_summary(&self.request.locator, &self.request.summary, |summary| {
                 update(&mut summary.timing);
                 true
+            })?;
+        Ok(())
+    }
+
+    pub(super) fn mark_upstream_request_started(&self) -> anyhow::Result<()> {
+        self.mark_timing(|timing| {
+            timing.upstream_request_started_at_ns = Some(self.at_ns());
+        })
+    }
+
+    pub(super) fn mark_rate_limited(&self) -> anyhow::Result<()> {
+        let at_ns = self.at_ns();
+        self.store
+            .update_summary(&self.request.locator, &self.request.summary, |summary| {
+                match &mut summary.retry {
+                    Some(retry) => retry.last_429_at_ns = at_ns,
+                    None => {
+                        summary.retry = Some(RetryMetadata {
+                            retry_count: 0,
+                            first_429_at_ns: at_ns.clone(),
+                            last_429_at_ns: at_ns,
+                        });
+                    }
+                }
+                true
+            })?;
+        Ok(())
+    }
+
+    pub(super) fn mark_retry_started(&self) -> anyhow::Result<()> {
+        self.store
+            .update_summary(&self.request.locator, &self.request.summary, |summary| {
+                if let Some(retry) = &mut summary.retry {
+                    retry.retry_count = retry.retry_count.saturating_add(1);
+                    true
+                } else {
+                    false
+                }
             })?;
         Ok(())
     }

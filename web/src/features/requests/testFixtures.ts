@@ -177,6 +177,7 @@ export const completedDetail = {
     },
     agent_session_id: "629a8f94-d2cb-404c-9c10-a2a682478259",
     protocol: completedProtocol,
+    retry: null,
     outcome: "completed",
     errors: [],
     warnings: [],
