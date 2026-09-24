@@ -7,7 +7,7 @@ const baselineBytes = 378_629;
 const maxGrowthBytes = 65_536;
 const outputDirectory = resolve(
   import.meta.dirname,
-  globalThis.process.env.AIBOX_CONSOLE_OUT_DIR ?? "../../assets",
+  globalThis.process.env.AIBOX_CONSOLE_OUT_DIR ?? "../dist",
 );
 const asset = pathToFileURL(resolve(outputDirectory, "console.js"));
 const content = await readFile(asset);

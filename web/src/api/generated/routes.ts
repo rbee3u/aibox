@@ -1,4 +1,4 @@
-// Generated from Rust Control routes by make console-contract. Do not edit.
+// Generated from Rust Control routes by make web-contract. Do not edit.
 
 export const routes = {
   ui: { method: "GET", path: "/_aibox/ui" },

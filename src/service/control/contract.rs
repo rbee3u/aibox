@@ -79,7 +79,7 @@ mod tests {
     fn bindings() -> String {
         let config = Config::default().with_large_int("number");
         let mut output = String::from(
-            "// Generated from Rust wire DTOs by make console-contract. Do not edit.\n\n\
+            "// Generated from Rust wire DTOs by make web-contract. Do not edit.\n\n\
              export type JsonValue = number | boolean | string | JsonValue[] | { [key: string]: JsonValue };\n",
         );
         macro_rules! export_types {
@@ -467,7 +467,7 @@ mod tests {
         fs::write(
             directory.join("routes.ts"),
             format!(
-                "// Generated from Rust Control routes by make console-contract. Do not edit.\n\nexport const routes = {{\n{routes}}} as const;\n"
+                "// Generated from Rust Control routes by make web-contract. Do not edit.\n\nexport const routes = {{\n{routes}}} as const;\n"
             ),
         )
         .unwrap();

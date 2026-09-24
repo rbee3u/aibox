@@ -4,9 +4,9 @@ use super::response::content;
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 
-const HTML: &str = include_str!("../../../assets/console.html");
-const CSS: &str = include_str!("../../../assets/console.css");
-const JS: &str = include_str!("../../../assets/console.js");
+const HTML: &str = include_str!("../../../web/dist/console.html");
+const CSS: &str = include_str!("../../../web/dist/console.css");
+const JS: &str = include_str!("../../../web/dist/console.js");
 const CSP_NONCE_PLACEHOLDER: &str = "__AIBOX_CSP_NONCE__";
 
 pub(super) async fn index(csp_nonce: &str) -> Response<Body> {

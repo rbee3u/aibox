@@ -1,7 +1,7 @@
-//! Shared Tenant-and-Agent metadata storage.
+//! Config-owned Tenant-and-Agent metadata storage.
 //!
 //! One AIBox-owned document lives at the selected Tenant-and-Agent Named Config
-//! catalog root. Known feature sections remain typed by their owning modules
+//! catalog root. Config Application owns the typed Last Application section
 //! while this module preserves other top-level sections across atomic updates.
 
 use crate::tenant::TenantAgent;
@@ -19,13 +19,13 @@ const MAX_METADATA_BYTES: u64 = 16 * 1024;
 
 /// One parsed metadata document with opaque top-level sections.
 #[derive(Debug, Default)]
-pub(crate) struct MetadataDocument {
+pub(super) struct MetadataDocument {
     sections: Map<String, Value>,
 }
 
 impl MetadataDocument {
     /// Deserialize one typed top-level section without consuming the document.
-    pub(crate) fn section<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
+    pub(super) fn section<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
         self.sections
             .get(name)
             .cloned()
@@ -35,7 +35,7 @@ impl MetadataDocument {
     }
 
     /// Replace one top-level section while preserving every other JSON value.
-    pub(crate) fn set_section<T: Serialize>(&mut self, name: &str, value: &T) -> Result<()> {
+    pub(super) fn set_section<T: Serialize>(&mut self, name: &str, value: &T) -> Result<()> {
         self.sections.insert(
             name.to_string(),
             serde_json::to_value(value)
@@ -45,7 +45,7 @@ impl MetadataDocument {
     }
 
     /// Serialize and validate an atomic write before other Application writes begin.
-    pub(crate) fn prepare(self, selected: &TenantAgent) -> Result<PreparedMetadataWrite> {
+    pub(super) fn prepare(self, selected: &TenantAgent) -> Result<PreparedMetadataWrite> {
         if !selected.named_config_catalog_exists()? {
             bail!(
                 "Named Config catalog does not exist: {}",
@@ -63,14 +63,14 @@ impl MetadataDocument {
 }
 
 /// One fully validated metadata replacement ready for its final atomic commit.
-pub(crate) struct PreparedMetadataWrite {
+pub(super) struct PreparedMetadataWrite {
     path: PathBuf,
     content: Vec<u8>,
 }
 
 impl PreparedMetadataWrite {
     /// Atomically replace the metadata document and sync its catalog directory.
-    pub(crate) fn commit(self) -> Result<()> {
+    pub(super) fn commit(self) -> Result<()> {
         let parent = self.path.parent().context("metadata path has no parent")?;
         if !crate::foundation::safe_fs::real_dir_exists(parent, "Named Config catalog")? {
             bail!("Named Config catalog does not exist: {}", parent.display());
@@ -89,7 +89,7 @@ impl PreparedMetadataWrite {
 }
 
 /// Read the selected metadata document without creating any filesystem state.
-pub(crate) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
+pub(super) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
     if !selected.named_config_catalog_exists()? {
         return Ok(MetadataDocument::default());
     }
@@ -114,7 +114,7 @@ pub(crate) fn read(selected: &TenantAgent) -> Result<MetadataDocument> {
 }
 
 /// Resolve the AIBox-owned metadata path for one Tenant and Agent.
-pub(crate) fn metadata_path(selected: &TenantAgent) -> PathBuf {
+pub(super) fn metadata_path(selected: &TenantAgent) -> PathBuf {
     selected.named_config_catalog_dir().join(METADATA_FILE)
 }
 

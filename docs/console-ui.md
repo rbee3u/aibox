@@ -1,130 +1,14 @@
-# Console UI Development
+# Console UI
 
-The Console is the React and TypeScript application under `console/`. The Rust
-Service embeds its generated HTML, CSS, and JavaScript from `assets/console.*`.
-These three build outputs are ignored by Git and generated locally.
+This document owns the Console's shared interaction and feature contracts.
+See [Console Architecture](console-architecture.md) for frontend architecture,
+dependency boundaries, Control API ownership, and test organization, and
+[Development](development.md) for environment setup, build outputs, checks,
+and contract generation.
 
-This document owns frontend development, architecture, testing, and interaction
-contracts. Domain behavior belongs in [Configs](configs.md),
-[Tenants](tenants.md), or [Filesystem Sandbox and Mounts](sandbox.md).
-
-## Development
-
-Use a Node version accepted by `console/package.json`; `make console-ci`
-installs the committed lockfile. Run it once per environment and again after
-frontend dependency changes. Native build bindings are platform-specific,
-so do not share one `node_modules` between host and container platforms. When a
-Workspace is shared, mount a separate directory over
-`/workspace/<directory name>/console/node_modules`.
-
-Use `make help` for the authoritative target list. The main targets are:
-
-| Task                             | Command                 |
-| -------------------------------- | ----------------------- |
-| Install dependencies and AIBox    | `make install`          |
-| Full socket-free check           | `make check`            |
-| Console-only check               | `make console-check`    |
-| Build embedded assets            | `make console-build`    |
-| Update Rust-owned wire artifacts | `make console-contract` |
-
-`make install` always runs `npm ci` before building and installing AIBox.
-Other Make targets reuse the installed dependencies. Every Make invocation
-that compiles Rust first builds the Console, including focused Rust checks
-and contract generation. Aggregate targets such as `make check` share that
-prerequisite, so they build the assets once. Build failures stop the dependent
-Rust commands. The build retains the gzip bundle-size budget and published HTML
-validation.
-
-Direct Cargo commands do not build the Console. Generate assets first, and
-regenerate after changing frontend source or switching branches:
-
-```sh
-make console-build
-cargo run -- console
-```
-
-Edit `console/index.html` and `console/src/`, never generated
-`assets/console.*`. Publishing rewrites the asset URLs below `/_aibox/ui/`.
-
-## Architecture
-
-Console dependencies point inward. ESLint enforces these boundaries, and source
-imports use the `@/` alias so dependency edges remain visible.
-
-| Layer                 | May depend on           | Ownership                                         |
-| --------------------- | ----------------------- | ------------------------------------------------- |
-| `domain/`             | itself                  | Cross-feature identities and invariants           |
-| `api/`                | `domain/`               | HTTP, wire conversion, and domain API ports       |
-| `shared/`             | `domain/`               | API-independent UI, hooks, and libraries          |
-| `features/common/`    | inner layers            | Shared feature machinery needing API and UI types |
-| `features/<feature>/` | inner layers and itself | One product feature                               |
-| `app/`                | every layer             | Shell, routing, theme, and composition            |
-
-`api/` and `shared/` do not depend on each other. Features do not import other
-features or `app/`; `features/common/` cannot import a feature back. `src/test/`
-may compose complete pages. Do not add barrel files.
-
-Concern directories have single ownership and do not import siblings. Move
-values shared by concerns to the feature root, and values shared by features to
-the narrowest valid inner layer.
-
-Each feature owns its route codec, controller, grouped view model, view, and
-workflow state. Focused hooks own loading, polling, streaming, and cancellation.
-Only `app/` integrates browser history and composes the persistent shell; pages
-receive a location snapshot and navigation writer. Config dirty state must be
-guarded across in-app, history, and browser navigation.
-
-## Control API and Generated Assets
-
-Console pages and assets live below `/_aibox/ui/`; Console-internal APIs live
-below `/_aibox/api/`. The Control API is not a public integration surface.
-
-The shared transport owns fetch, CSRF, NDJSON, and binary bodies. Domain
-adapters own paths, queries, wire conversion, and feature-facing ports. Features
-never import transport or generated wire types.
-
-Rust owns the wire types, route manifest, and contract samples under
-`console/src/api/generated/`. Declare each route once in
-`service/control/routes.rs`; production clients remain handwritten. Run
-`make console-contract` only for intentional wire changes. Contract checks
-regenerate into temporary directories and compare byte-for-byte with the
-committed wire artifacts. Compiled Console assets are rebuilt during checks
-and are not compared against Git-tracked bundles.
-
-## Testing
-
-Keep a rule in the narrowest useful layer:
-
-1. Pure tests cover codecs, reducers, derivations, formatting, and state.
-2. Feature tests render the real page against a strict domain API fake.
-3. Adapter tests cover HTTP and wire behavior.
-4. Optional Chromium tests cover real layout or browser behavior.
-
-Tests follow their modules; page interactions stay at the feature root. Keep
-suite-only doubles local and feature-wide support inside that feature. Share
-cross-feature fixtures only when the production concept is also shared.
-
-Vitest runs pure `.test.ts` files in a shared Node environment so codecs,
-reducers, formatting, and source-contract checks do not pay for jsdom. Tests
-that use browser globals are listed with the isolated DOM project in
-`console/vite.config.ts`; `.test.tsx` files use that DOM project by default.
-The shared reset restores mocks, stubbed globals, and real timers after every
-test. Keep Node-project tests free of mutable module-global state so file order
-cannot affect their results.
-
-Do not repeat pure rules in browser tests. Geometry tests assert behavior and
-relative layout, not design-token values or pixel snapshots. Routine Rust and
-Console tests remain socket-free.
-
-Playwright uses bundled Chromium. Install and run it explicitly:
-
-```sh
-npm --prefix console exec playwright install chromium
-npm --prefix console run test:chromium
-```
-
-These optional tests start a loopback-only Vite listener. The Runtime Image
-contains Chromium ABI libraries and fonts, but not a browser.
+Domain behavior belongs in [Configs](configs.md), [Tenants](tenants.md),
+[Filesystem Sandbox and Mounts](sandbox.md), or [Requests and Request
+Proxy](requests.md).
 
 ## Shared Interaction Contracts
 
@@ -434,7 +318,7 @@ Rust supplies Request Assessment and diagnostics. The browser does not
 reclassify outcomes or parse bodies to invent model, usage, First Token, Session
 ID, or diagnostics. HTTP status, Provider Error, transport findings, and
 warnings remain independent evidence. Follow the
-[Request diagnostics contract](sandbox.md#diagnostics).
+[Request diagnostics contract](requests.md#diagnostics).
 
 The catalog's status cell carries the Assessment. An HTTP status keeps its own
 tone and gains a level glyph only when the primary finding adds to it; a

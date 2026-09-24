@@ -9,6 +9,7 @@ mod definition;
 mod editing;
 mod files;
 mod layout;
+mod metadata;
 mod native;
 mod visual;
 

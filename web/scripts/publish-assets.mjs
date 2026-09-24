@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const outputDirectory = resolve(
   import.meta.dirname,
-  globalThis.process.env.AIBOX_CONSOLE_OUT_DIR ?? "../../assets",
+  globalThis.process.env.AIBOX_CONSOLE_OUT_DIR ?? "../dist",
 );
 const generatedIndex = pathToFileURL(resolve(outputDirectory, "index.html"));
 const embeddedHtml = pathToFileURL(resolve(outputDirectory, "console.html"));

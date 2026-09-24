@@ -27,7 +27,7 @@ pub(crate) struct EndpointDescription {
 ///
 /// One invocation produces both the path constants used by Axum registration
 /// and the ordered test-facing `ENDPOINTS` manifest that generates
-/// `console/src/api/generated/routes.ts`. Declaring a route in one place keeps
+/// `web/src/api/generated/routes.ts`. Declaring a route in one place keeps
 /// the generated Console manifest from drifting out of the router. A path that
 /// serves several methods lists one `method => key` pair per method, and
 /// `ENDPOINTS` preserves the declaration order because the generated file is

@@ -434,7 +434,7 @@ fn application_preserves_unknown_metadata_sections_and_reruns_to_the_same_curren
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, &config_name("tracked")).unwrap();
-    let metadata_path = crate::metadata::metadata_path(&selected);
+    let metadata_path = super::metadata::metadata_path(&selected);
     write_private(
         &metadata_path,
         br#"{"future_feature":{"enabled":true,"value":7}}"#,
@@ -479,7 +479,7 @@ fn metadata_commit_failure_keeps_committed_files_without_recording_application()
     assert!(format!("{error:#}").contains("metadata"));
     assert!(selected.state_file("config.toml").is_file());
     assert!(selected.state_file("auth.json").is_file());
-    assert!(!crate::metadata::metadata_path(&selected).exists());
+    assert!(!super::metadata::metadata_path(&selected).exists());
     assert_eq!(application_status(&selected).drift, ConfigDrift::Untracked);
 }
 
@@ -488,14 +488,14 @@ fn metadata_rejects_malformed_and_oversized_documents() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, &config_name("tracked")).unwrap();
-    let path = crate::metadata::metadata_path(&selected);
+    let path = super::metadata::metadata_path(&selected);
 
     write_private(&path, b"not json");
-    assert!(format!("{:#}", crate::metadata::read(&selected).unwrap_err()).contains("parse"));
+    assert!(format!("{:#}", super::metadata::read(&selected).unwrap_err()).contains("parse"));
 
     write_private(&path, &vec![b'x'; 16 * 1024 + 1]);
     assert!(
-        format!("{:#}", crate::metadata::read(&selected).unwrap_err()).contains("exceeds 16384")
+        format!("{:#}", super::metadata::read(&selected).unwrap_err()).contains("exceeds 16384")
     );
 }
 
@@ -507,16 +507,16 @@ fn metadata_rejects_wrong_modes_and_symlinks() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, &config_name("tracked")).unwrap();
-    let path = crate::metadata::metadata_path(&selected);
+    let path = super::metadata::metadata_path(&selected);
     write_private(&path, b"{}");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(format!("{:#}", crate::metadata::read(&selected).unwrap_err()).contains("mode 0600"));
+    assert!(format!("{:#}", super::metadata::read(&selected).unwrap_err()).contains("mode 0600"));
 
     fs::remove_file(&path).unwrap();
     let target = root.path().join("foreign-metadata.json");
     write_private(&target, b"{}");
     symlink(&target, &path).unwrap();
-    assert!(crate::metadata::read(&selected).is_err());
+    assert!(super::metadata::read(&selected).is_err());
 }
 
 #[test]

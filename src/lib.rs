@@ -17,7 +17,6 @@ mod config;
 mod docker;
 mod execution;
 mod foundation;
-mod metadata;
 mod request;
 mod sandbox;
 mod service;

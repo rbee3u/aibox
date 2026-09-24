@@ -4,11 +4,11 @@ use super::catalog::{inspect_named_config_directory, read_named_config_definitio
 use super::files::{
     capture_optional_agent_file, snapshot_text, temporary_file_prefix, write_temporary_file,
 };
+use super::metadata::{self, PreparedMetadataWrite};
 use super::{
     ApplicationStatus, ConfigDrift, LAST_APPLICATION_SECTION, LastApplication, NamedConfigName,
 };
 use crate::foundation::safe_fs::FileSnapshot;
-use crate::metadata::{self, PreparedMetadataWrite};
 use crate::tenant::{self, TenantAgent};
 use anyhow::{Context, Result};
 use time::OffsetDateTime;

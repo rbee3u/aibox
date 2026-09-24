@@ -1,4 +1,4 @@
-// Generated from Rust wire DTOs by make console-contract. Do not edit.
+// Generated from Rust wire DTOs by make web-contract. Do not edit.
 
 export type JsonValue = number | boolean | string | JsonValue[] | { [key: string]: JsonValue };
 export type AgentKind = "claude" | "codex";

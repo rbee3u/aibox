@@ -17,7 +17,8 @@ Tenants.
 ## Quick Start
 
 AIBox supports Linux and macOS hosts with Docker. Building from source requires
-Rust 1.97 or newer, Make, and Node/npm matching `console/package.json`.
+Rust meeting `rust-version` in [Cargo.toml](Cargo.toml), Make, and Node/npm
+matching [web/package.json](web/package.json).
 `make install` installs the locked frontend dependencies, builds the Console,
 and installs the CLI. The installed binary embeds the Console and needs no
 Node runtime. The Runtime Image supports Linux `amd64` and `arm64`.
@@ -86,9 +87,9 @@ applying if you need a more restrictive policy. See the complete
 Managed Tenant Homes, Named Configs, and recorded Requests persist under
 `$HOME/.aibox` by default. `AIBOX_ROOT` selects another location; dedicate that
 directory to AIBox because lifecycle operations remove selected subtrees.
-Request recording preserves raw headers and bodies, which can include API keys,
-prompts, tool data, and model output. AIBox provides no automatic redaction or
-retention policy.
+[Request recording](docs/requests.md) preserves raw headers and bodies, which
+can include API keys, prompts, tool data, and model output. AIBox provides no
+automatic redaction or retention policy.
 
 ## Learn More
 
@@ -98,9 +99,12 @@ retention policy.
 - [Configs](docs/configs.md): Named and Current Configs, application, drift, and
   Credential Propagation.
 - [Filesystem Sandbox and Mounts](docs/sandbox.md): mounts, cleanup, Runtime
-  Image, and Request Proxy behavior.
-- [Console UI Development](docs/console-ui.md): frontend architecture, tests,
-  generated assets, and interaction contracts.
+  Image behavior.
+- [Requests and Request Proxy](docs/requests.md): proxy setup, routing, recorded
+  evidence, diagnostics, and deletion.
+- [Console Architecture](docs/console-architecture.md): frontend architecture,
+  dependency boundaries, Control API ownership, and test organization.
+- [Console UI](docs/console-ui.md): shared interaction and feature contracts.
 
 ## Development
 
@@ -110,11 +114,13 @@ locked Console dependencies once per environment and after dependency changes,
 then run:
 
 ```sh
-make console-ci
+make web-ci
 make check
 ```
 
-Use `make help` for focused commands.
+See [Development](docs/development.md) for build outputs, focused checks,
+contract generation, and optional socket checks. Use `make help` for the
+authoritative target list.
 
 ## License
 

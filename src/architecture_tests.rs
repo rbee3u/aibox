@@ -336,8 +336,8 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             BTreeSet::from([
                 "config::catalog",
                 "config::files",
+                "config::metadata",
                 "foundation::safe_fs",
-                "metadata",
                 "tenant",
             ]),
         ),
@@ -394,6 +394,10 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             BTreeSet::from(["config::layout", "foundation::safe_fs", "tenant"]),
         ),
         ("config::layout", BTreeSet::from(["tenant"])),
+        (
+            "config::metadata",
+            BTreeSet::from(["foundation::safe_fs", "tenant"]),
+        ),
         ("config::native", BTreeSet::new()),
         (
             "config::visual",
@@ -424,10 +428,6 @@ fn allowed_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
             BTreeSet::from(["agent", "cli", "execution", "service", "tenant"]),
         ),
         ("main", BTreeSet::new()),
-        (
-            "metadata",
-            BTreeSet::from(["foundation::safe_fs", "tenant"]),
-        ),
         ("request", BTreeSet::new()),
         ("request::assessment", BTreeSet::from(["request::model"])),
         (

@@ -12,8 +12,11 @@ read its canonical reference and the relevant ADRs:
 | --- | --- |
 | Tenants, Sessions, Components, Tenant Environment | `docs/tenants.md` |
 | Named and Current Configs | `docs/configs.md` |
-| Mounts, Runtime Image, cleanup, Request Proxy | `docs/sandbox.md` |
-| Console development and UI contracts | `docs/console-ui.md` |
+| Mounts, Runtime Image, cleanup | `docs/sandbox.md` |
+| Requests and Request Proxy | `docs/requests.md` |
+| Development environment, builds, checks, contract generation | `docs/development.md` |
+| Console architecture, Control API ownership, and test organization | `docs/console-architecture.md` |
+| Console interaction and feature contracts | `docs/console-ui.md` |
 
 Keep examples, Clap help, code, and these references aligned. Do not copy a
 complete behavioral contract into another document.
@@ -32,14 +35,14 @@ complete behavioral contract into another document.
   discovery; Agent-specific Transcript parsing stays in `session/claude.rs`
   and `session/codex.rs`.
 - `src/tenant/`, `src/config/`, and `src/component/` own their domain
-  lifecycles and facades. `src/metadata.rs` owns shared Tenant-and-Agent
-  observational metadata.
+  lifecycles and facades. `src/config/metadata.rs` owns the Tenant-and-Agent
+  metadata used by Config Application.
 - `src/request/` owns Request observation, persistence, reporting, and proxy
   forwarding. Storage and proxy lifecycles stay private behind its facades.
 - `src/service/` is the Root-local composition root. Coordinators own
   Management Operations; `control/` owns routes, wire DTOs, response helpers,
   Console assets, contract export, and adapters.
-- `console/src/` is feature-first and acyclic: `domain` is independent; `api`
+- `web/src/` is feature-first and acyclic: `domain` is independent; `api`
   and `shared` depend only on it; `features/common` may use both; features use
   those inner layers; `app` composes the application.
 
@@ -121,9 +124,9 @@ complete behavioral contract into another document.
   deterministic streams; keep real-socket Reqwest and Chromium checks explicit
   and optional.
 - Follow the feature-local Console test-support conventions documented in
-  `docs/console-ui.md`. Do not share one `node_modules` between host and
-  container platforms.
-- Edit Console source, never generated `assets/console.*`. Update Rust-owned
+  `docs/console-architecture.md`. Follow `docs/development.md` for environment setup;
+  do not share one `node_modules` between host and container platforms.
+- Edit Console source, never generated `web/dist/console.*`. Update Rust-owned
   wire artifacts only through the documented contract command.
 
 ## Checks
@@ -134,5 +137,6 @@ Run the complete socket-free check before handoff:
 make check
 ```
 
-Use `make rust-check`, `make rust-doc-check`, or `make console-check` during
-focused iteration. Use `make help` for the authoritative target list.
+Use `make rust-check` or `make web-check` during focused iteration.
+See `docs/development.md` for native single-tool commands and `make help` for
+the authoritative target list.
