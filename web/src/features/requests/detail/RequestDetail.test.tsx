@@ -194,7 +194,7 @@ describe("RequestDetail", () => {
     expect(screen.queryByText("No diagnostics.")).not.toBeInTheDocument();
   });
 
-  it("shows the retry count and first and last 429 times", () => {
+  it("keeps Timing focused on request timings when retries are recorded", () => {
     renderDetail({
       ...completedDetail,
       summary: {
@@ -208,10 +208,9 @@ describe("RequestDetail", () => {
     });
 
     const timing = screen.getByRole("region", { name: "Timing" });
-    expect(definitionValue(timing, "HTTP 429 retries")).toHaveTextContent("2");
-    expect(definitionValue(timing, "First 429")).toHaveTextContent("+300 ms");
-    expect(definitionValue(timing, "Last 429")).toHaveTextContent("+11.00 s");
-    expect(timing).toHaveTextContent("Response wait includes retry delays.");
+    expect(terms(timing)).toEqual(["First token", "Duration"]);
+    expect(within(timing).getByRole("list", { name: "Timing stages" })).toBeInTheDocument();
+    expect(timing).not.toHaveTextContent("Response wait includes retry delays.");
   });
 
   it("nests the Claude TTL breakdown under a summed Cache writes metric", () => {

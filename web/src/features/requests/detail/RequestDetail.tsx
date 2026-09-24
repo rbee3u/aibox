@@ -195,7 +195,6 @@ function Summary({ detail }: { detail: RequestDetailData }) {
   const sessionCopied = sessionId !== null && copiedSessionId === sessionId;
   const stages = timingStages(detail);
   const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
-  const retry = detail.summary.retry;
   const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
   const responseMode = mode === "stream" ? "Stream" : mode === "normal" ? "Non-stream" : null;
   const diagnostics = detail.diagnostics;
@@ -249,18 +248,7 @@ function Summary({ detail }: { detail: RequestDetailData }) {
         <dl className={styles.timingMetrics}>
           <Metric label="First token" value={duration(firstToken)} />
           <Metric label="Duration" value={duration(total)} />
-          {retry && (
-            <>
-              <Metric label="HTTP 429 retries" value={String(retry.retry_count)} />
-              <Metric
-                label="First 429"
-                value={`+${duration(elapsedNsMs(retry.first_429_at_ns))}`}
-              />
-              <Metric label="Last 429" value={`+${duration(elapsedNsMs(retry.last_429_at_ns))}`} />
-            </>
-          )}
         </dl>
-        {retry && <p className={styles.sectionState}>Response wait includes retry delays.</p>}
         {stages.length > 0 ? (
           <div className={styles.timelineContainer}>
             {axisMs > 0 && (
