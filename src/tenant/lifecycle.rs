@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 const CREATING_PREFIX: &str = "$creating-";
 const DELETING_PREFIX: &str = "$deleting-";
-const GITCONFIG: &[u8] = b"[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n";
+const GITCONFIG: &[u8] = b"[url \"https://github.com/\"]\n    insteadOf = git@github.com:\n    insteadOf = ssh://git@github.com/\n[safe]\n    directory = /workspace/*\n";
 
 impl ManagedTenant {
     /// Create or repair the complete Tenant Home baseline.

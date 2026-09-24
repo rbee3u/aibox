@@ -25,6 +25,11 @@ directories use `0700`; existing Host Home modes never change. Interrupted
 lifecycle staging is recoverable, but separate processes are not coordinated.
 `AIBOX_ROOT` defaults to `$HOME/.aibox` and must be dedicated to AIBox.
 
+Tenant initialization creates a missing `.gitconfig` with GitHub SSH-to-HTTPS
+URL rewrites and `safe.directory = /workspace/*`, allowing Git to use Workspace
+repositories whose ownership differs from the container user. Existing
+`.gitconfig` files are preserved.
+
 ```text
 $AIBOX_ROOT/
   tenants/<name>/       # Managed Tenant Home
