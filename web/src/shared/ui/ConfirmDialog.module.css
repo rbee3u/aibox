@@ -147,43 +147,33 @@
   user-select: text;
 }
 
-.confirmationPill {
+.confirmationShortcuts {
   display: inline-flex;
-  align-items: stretch;
-  border: 1px solid var(--line-control);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset);
-  vertical-align: middle;
-  overflow: hidden;
-  transition: border-color var(--transition-fast);
-}
-
-.confirmationPill:hover {
-  border-color: var(--line-control-strong);
-}
-
-.confirmationPill:focus-within {
-  border-color: var(--accent);
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .confirmationFill {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 24px;
   margin: 0;
-  padding: 2px 7px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
+  padding: 0 1px;
+  border: 0;
+  border-radius: 0;
   font: inherit;
-  color: inherit;
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
+  line-height: inherit;
+  text-align: left;
+  color: var(--code-text);
+  background: transparent;
 }
 
-.confirmationFill:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
+.confirmationPrompt .confirmationFill:is(:hover, :active):not(:disabled) {
+  background: transparent;
 }
 
 .confirmationFill:focus-visible,
@@ -193,48 +183,66 @@
 }
 
 .confirmationName {
-  display: inline;
-  border: none;
-  padding: 0;
-  color: var(--code-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: inherit;
   font-family: var(--font-mono);
   font-size: inherit;
-  font-weight: var(--weight-semibold);
-  background: transparent;
-  transition: color var(--transition-fast);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-decoration-color: var(--line-control-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition:
+    color var(--transition-fast),
+    text-decoration-color var(--transition-fast);
 }
 
-.confirmationFill:hover .confirmationName {
+.confirmationFill:is(:hover, :active, :focus-visible) .confirmationName {
   color: var(--accent);
-}
-
-.confirmationDivider {
-  width: 1px;
-  background: var(--line-control);
-  flex-shrink: 0;
+  text-decoration-color: var(--accent);
 }
 
 .confirmationCopy {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 6px;
-  background: transparent;
-  border: none;
+  flex: 0 0 24px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  cursor: pointer;
+  background: transparent;
   transition:
     background-color var(--transition-fast),
     color var(--transition-fast);
 }
 
-.confirmationCopy:hover {
+.confirmationPrompt .confirmationCopy:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--ink);
 }
 
-.confirmationCopy:active {
+.confirmationPrompt .confirmationCopy:active:not(:disabled) {
   background: var(--surface-pressed);
+}
+
+@media (pointer: coarse) {
+  .confirmationFill,
+  .confirmationCopy {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .confirmationCopy {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .actions {

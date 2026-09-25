@@ -116,7 +116,7 @@ export function ConfirmDialog({
           <div className={styles.confirmation}>
             <div className={styles.confirmationPrompt}>
               <span>Type</span>
-              <div className={styles.confirmationPill}>
+              <div className={styles.confirmationShortcuts}>
                 <button
                   type="button"
                   className={styles.confirmationFill}
@@ -129,7 +129,6 @@ export function ConfirmDialog({
                 >
                   <code className={styles.confirmationName}>{confirmation}</code>
                 </button>
-                <span className={styles.confirmationDivider} aria-hidden="true" />
                 <button
                   type="button"
                   className={styles.confirmationCopy}
@@ -152,7 +151,7 @@ export function ConfirmDialog({
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
               aria-label={`Type ${confirmation} to confirm`}
-              placeholder={`Type "${confirmation}" or click badge above`}
+              placeholder={`Type "${confirmation}" or click the text above`}
             />
           </div>
         )}
