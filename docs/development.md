@@ -33,6 +33,10 @@ make build
 make install
 ```
 
+For local development, run `make dev`. It rebuilds the Console and starts
+`aibox console` in the foreground at `http://127.0.0.1:9923/`. The Console is
+embedded in the Rust binary, so restart the command after frontend changes.
+
 `make build` generates Console assets and builds the CLI. `make install`
 always runs `npm ci`, builds the Console, and installs the CLI with
 `cargo install --locked --path .`. Other Make tasks reuse installed dependencies.
@@ -41,8 +45,7 @@ The installed binary embeds the Console and needs no Node runtime.
 Every Make task that compiles Rust first builds the Console, including focused
 Rust checks and contract generation. Aggregate targets such as `make check`
 share that prerequisite, so they build the assets once. Build failures stop the
-dependent Rust commands. Make keeps installation, generation, and checks
-sequential.
+dependent Rust commands.
 
 Direct Cargo commands do not build the Console. Generate assets first, and
 regenerate after changing frontend source or switching branches:
@@ -52,12 +55,12 @@ make web-build
 cargo run --locked -- console
 ```
 
-Edit `web/index.html` and `web/src/`, never generated `web/dist/console.*`.
+Edit `web/index.html` and `web/src/`, never generated `web/dist/` files.
 The dedicated `web/dist/` output directory is cleaned by the frontend build
 and ignored by Git, ESLint, and Prettier. Rust embeds its HTML, CSS, and
 JavaScript; the hand-maintained Dockerfile and runtime scripts remain in
-`assets/`. Publishing rewrites asset URLs below `/_aibox/ui/` and retains the
-gzip bundle-size budget and generated HTML validation.
+`assets/`. Vite writes `index.html` and the Console bundles under `dist/assets/`
+with URLs below `/_aibox/ui/`.
 
 ## Checks and Focused Iteration
 

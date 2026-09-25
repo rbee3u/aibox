@@ -1,15 +1,11 @@
-.DEFAULT_GOAL := help
-
-# Keep dependency installation, asset generation, and checks sequential.
-.NOTPARALLEL:
-
-.PHONY: help install format build test lint check rust-check \
+.PHONY: help install format build test lint check rust-check dev \
 	web-ci web-build web-check web-contract web-contract-check
 
 help:
 	@printf '%s\n' \
 		"Project:" \
 		"  make install             Install frontend dependencies, build, and install the CLI" \
+		"  make dev                 Build and run the local Console" \
 		"  make format              Format Rust and Console sources" \
 		"  make build               Build Console assets and the CLI" \
 		"  make test                Run Rust and Console tests" \
@@ -76,3 +72,6 @@ web-contract-check: web-build
 		diff -u web/src/api/generated/wire.ts "$$aibox_contract_tmp/wire.ts"; \
 		diff -u web/src/api/generated/routes.ts "$$aibox_contract_tmp/routes.ts"; \
 		diff -u web/src/api/generated/samples.json "$$aibox_contract_tmp/samples.json"
+
+dev: web-build
+	cargo run --locked -- console

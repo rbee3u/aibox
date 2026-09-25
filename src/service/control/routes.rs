@@ -49,8 +49,8 @@ macro_rules! control_routes {
 
 control_routes! {
     UI = "/_aibox/ui" { "GET" => "ui" }
-    UI_CSS = "/_aibox/ui/app.css" { "GET" => "ui_css" }
-    UI_JS = "/_aibox/ui/app.js" { "GET" => "ui_js" }
+    UI_CSS = "/_aibox/ui/assets/style.css" { "GET" => "ui_css" }
+    UI_JS = "/_aibox/ui/assets/index.js" { "GET" => "ui_js" }
     UI_ASSET = "/_aibox/ui/{*path}" { "GET" => "ui_asset" }
     BOOTSTRAP = "/_aibox/api/bootstrap" { "GET" => "bootstrap" }
     OVERVIEW = "/_aibox/api/overview" { "GET" => "overview" }

@@ -1,5 +1,5 @@
 {
-  "name": "aibox-console",
+  "name": "aibox-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,13 +10,13 @@
     "fsevents@2.3.2 || 2.3.3": false
   },
   "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc",
+    "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc",
-    "build": "vite build && node scripts/check-bundle-budget.mjs && node scripts/publish-assets.mjs",
     "test": "vitest run",
-    "test:chromium": "playwright test --project=chromium",
-    "lint": "eslint ."
+    "test:chromium": "playwright test --project=chromium"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

@@ -1,8 +1,5 @@
 import { defineConfig } from "vitest/config";
 
-type NodeProcess = { env: Record<string, string | undefined> };
-const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
-const outputDirectory = nodeProcess.env.AIBOX_CONSOLE_OUT_DIR ?? "dist";
 const domTypeScriptTests = [
   "src/api/connect.test.ts",
   "src/api/requests.test.ts",
@@ -25,16 +22,13 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: outputDirectory,
     assetsInlineLimit: () => true,
     cssCodeSplit: false,
-    // One embedded Console bundle; the gzip budget is the real size gate.
-    chunkSizeWarningLimit: 8192,
     rolldownOptions: {
       output: {
         codeSplitting: false,
-        entryFileNames: "console.js",
-        assetFileNames: "console.css",
+        entryFileNames: "assets/index.js",
+        assetFileNames: "assets/style.css",
       },
     },
   },

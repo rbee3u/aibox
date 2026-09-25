@@ -104,7 +104,7 @@ const concernBoundaries = features.flatMap((feature) => {
 });
 
 export default defineConfig(
-  { ignores: ["dist/**"] },
+  { ignores: ["dist/**", "src/api/generated/**"] },
   eslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],

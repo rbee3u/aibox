@@ -770,6 +770,8 @@ async fn console_page_authorizes_its_code_mirror_styles_with_a_fresh_nonce() {
     assert!(first_policy.contains(&format!("style-src 'self' 'nonce-{first_nonce}'")));
     assert!(!first_policy.contains("'unsafe-inline'"));
     assert!(!first_body.contains("__AIBOX_CSP_NONCE__"));
+    assert!(first_body.contains("src=\"/_aibox/ui/assets/index.js\""));
+    assert!(first_body.contains("href=\"/_aibox/ui/assets/style.css\""));
 
     let second = load_page().await.unwrap();
     let second_body = second.into_body().collect().await.unwrap().to_bytes();
@@ -1668,8 +1670,8 @@ async fn control_router_exposes_the_complete_method_and_path_surface() {
     let app = control::router().with_state(test_state(root.path()));
     let routes = [
         (Method::GET, "/_aibox/ui"),
-        (Method::GET, "/_aibox/ui/app.css"),
-        (Method::GET, "/_aibox/ui/app.js"),
+        (Method::GET, "/_aibox/ui/assets/style.css"),
+        (Method::GET, "/_aibox/ui/assets/index.js"),
         (Method::GET, "/_aibox/ui/configs"),
         (Method::GET, "/_aibox/api/bootstrap"),
         (Method::GET, "/_aibox/api/overview"),

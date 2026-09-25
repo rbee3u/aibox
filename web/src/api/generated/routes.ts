@@ -2,8 +2,8 @@
 
 export const routes = {
   ui: { method: "GET", path: "/_aibox/ui" },
-  ui_css: { method: "GET", path: "/_aibox/ui/app.css" },
-  ui_js: { method: "GET", path: "/_aibox/ui/app.js" },
+  ui_css: { method: "GET", path: "/_aibox/ui/assets/style.css" },
+  ui_js: { method: "GET", path: "/_aibox/ui/assets/index.js" },
   ui_asset: { method: "GET", path: "/_aibox/ui/{*path}" },
   bootstrap: { method: "GET", path: "/_aibox/api/bootstrap" },
   overview: { method: "GET", path: "/_aibox/api/overview" },
