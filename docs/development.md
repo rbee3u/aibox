@@ -11,13 +11,14 @@ contracts belong in [Console UI](console-ui.md).
 
 Use Rust meeting `rust-version` in [Cargo.toml](../Cargo.toml), Make, and
 Node/npm matching [web/package.json](../web/package.json). Cargo and npm use
-the committed lockfiles.
+the committed lockfiles. Rust formatting and lint checks require rustfmt and
+Clippy in the selected toolchain.
 
 Install the frontend dependencies once per environment and again after
 dependency changes:
 
 ```sh
-make web-ci
+make deps
 ```
 
 Native build bindings are platform-specific. Do not share one `node_modules`
@@ -29,29 +30,34 @@ separate directory over `/workspace/<directory name>/web/node_modules`.
 Use `make help` for the authoritative target list.
 
 ```sh
-make build
-make install
+make web && make build
+make deps && make web && cargo install --locked --path .
 ```
 
-For local development, run `make dev`. It rebuilds the Console and starts
-`aibox console` in the foreground at `http://127.0.0.1:9923/`. The Console is
-embedded in the Rust binary, so restart the command after frontend changes.
-
-`make build` generates Console assets and builds the CLI. `make install`
-always runs `npm ci`, builds the Console, and installs the CLI with
-`cargo install --locked --path .`. Other Make tasks reuse installed dependencies.
-The installed binary embeds the Console and needs no Node runtime.
-
-Every Make task that compiles Rust first builds the Console, including focused
-Rust checks and contract generation. Aggregate targets such as `make check`
-share that prerequisite, so they build the assets once. Build failures stop the
-dependent Rust commands.
-
-Direct Cargo commands do not build the Console. Generate assets first, and
-regenerate after changing frontend source or switching branches:
+For local development, build the Console assets and start the foreground
+Service at `http://127.0.0.1:9923/`:
 
 ```sh
-make web-build
+make web && make console
+```
+
+Pass Console arguments through `ARGS`, for example
+`make console ARGS="--listen 127.0.0.1:9924"`.
+
+`make build` uses the development profile and writes `target/debug/aibox`.
+Install the CLI with `cargo install --locked --path .` after building the
+Console assets. The installed binary embeds the Console and needs no Node
+runtime.
+
+Make targets run independently. Only `make deps` installs frontend dependencies;
+other targets reuse them. Build Console assets with `make web` before commands
+that compile Rust, including `make build`, `make test`, `make lint`,
+`make generate`, `make console`, and direct Cargo commands. Rebuild after
+frontend changes or switching branches, and restart the Service to use the new
+embedded assets:
+
+```sh
+make web
 cargo run --locked -- console
 ```
 
@@ -65,17 +71,16 @@ with URLs below `/_aibox/ui/`.
 ## Checks and Focused Iteration
 
 ```sh
-make check
+make web && make style test lint
 ```
 
-The complete check is socket-free. `make rust-check` runs Rust formatting,
-tests, Clippy, and private-item documentation checks. `make web-check` runs
-frontend formatting, type checking, tests, lint, and Rust-owned contract
-verification. Both use the shared Console build prerequisite; the latter
-requires Rust as well as Node.
+The complete check is socket-free. `make style` checks Rust and Console
+formatting. `make test` runs Rust and Console tests. `make lint` runs Clippy,
+TypeScript type checking, ESLint, private-item documentation checks with warnings
+treated as errors, and Rust-owned contract verification.
 
-`make format`, `make test`, and `make lint` cover both Rust and Console.
-For individual checks, use the native tools from the repository root:
+Use these targets for focused iteration, or run individual native tools from
+the repository root:
 
 ```sh
 # Rust commands require the generated Console assets described above.
@@ -90,7 +95,8 @@ npm --prefix web run test
 npm --prefix web run lint
 ```
 
-Use `cargo fmt` or `npm --prefix web run format` to format only one language.
+Use `make format` to format both languages, or `cargo fmt` or
+`npm --prefix web run format` to format only one language.
 
 ## Contract Generation
 
@@ -98,20 +104,22 @@ Rust owns the wire types, route manifest, and samples committed under
 `web/src/api/generated/`. For intentional contract or exporter changes, run:
 
 ```sh
-make web-contract
+make web && make generate
 ```
 
 Review and commit the resulting artifacts alongside the Rust changes. Do not
-edit generated files manually. Verify them without updating committed files:
+edit generated files manually. Rebuild Console assets after generation, then
+verify the contracts without updating committed files:
 
 ```sh
-make web-contract-check
+make web && make lint
 ```
 
 Verification regenerates into a temporary directory and compares all three
-artifacts byte-for-byte. It is included in `make web-check` and `make check`.
-Unlike these reviewable contracts, compiled Console bundles are rebuilt locally
-and are not committed to Git.
+artifacts byte-for-byte. Any export or comparison failure fails `make lint`,
+and the temporary directory is removed on exit. Unlike these reviewable
+contracts, compiled Console bundles are rebuilt locally and are not committed
+to Git.
 
 ## Optional Socket Checks
 
@@ -129,6 +137,6 @@ The Runtime Image contains Chromium ABI libraries and fonts, but not a browser.
 The optional Reqwest TCP smoke test uses real loopback connections:
 
 ```sh
-make web-build
+make web
 cargo test --locked request::tests::reqwest_tcp_smoke_preserves_bytes_headers_query_and_redirect_policy -- --ignored --exact
 ```

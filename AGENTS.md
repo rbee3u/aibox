@@ -134,9 +134,10 @@ complete behavioral contract into another document.
 Run the complete socket-free check before handoff:
 
 ```sh
-make check
+make web && make style test lint
 ```
 
-Use `make rust-check` or `make web-check` during focused iteration.
-See `docs/development.md` for native single-tool commands and `make help` for
-the authoritative target list.
+Use `make style`, `make test`, or `make lint` during focused iteration, and
+build Console assets with `make web` before compiling Rust. See
+`docs/development.md` for native single-tool commands and `make help` for the
+authoritative target list.

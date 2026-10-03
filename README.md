@@ -19,14 +19,14 @@ Tenants.
 AIBox supports Linux and macOS hosts with Docker. Building from source requires
 Rust meeting `rust-version` in [Cargo.toml](Cargo.toml), Make, and Node/npm
 matching [web/package.json](web/package.json).
-`make install` installs the locked frontend dependencies, builds the Console,
-and installs the CLI. The installed binary embeds the Console and needs no
-Node runtime. The Runtime Image supports Linux `amd64` and `arm64`.
+Install the locked frontend dependencies and build the Console before installing
+the CLI. The installed binary embeds the Console and needs no Node runtime.
+The Runtime Image supports Linux `amd64` and `arm64`.
 
 ```sh
 git clone https://github.com/rbee3u/aibox.git
 cd aibox
-make install
+make deps && make web && cargo install --locked --path .
 aibox console
 ```
 
@@ -114,8 +114,8 @@ locked Console dependencies once per environment and after dependency changes,
 then run:
 
 ```sh
-make web-ci
-make check
+make deps
+make web && make style test lint
 ```
 
 See [Development](docs/development.md) for build outputs, focused checks,
