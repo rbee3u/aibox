@@ -135,7 +135,7 @@ fn config_templates_use_expected_model_ids() {
     let codex = AgentKind::Codex
         .parse_main_config(AgentKind::Codex.config_template())
         .unwrap();
-    assert_eq!(codex["model"], "gpt-6-sol");
+    assert_eq!(codex["model"], "gpt-6.1-sol");
 
     let claude = AgentKind::Claude
         .parse_main_config(AgentKind::Claude.config_template())

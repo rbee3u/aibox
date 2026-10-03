@@ -210,7 +210,7 @@ fn new_and_repaired_named_configs_use_current_templates_without_changing_existin
         let existing = fs::read_to_string(&existing_path).unwrap();
         let customized = match agent {
             AgentKind::Claude => existing.replace("claude-opus-5-5[1m]", "existing-opus"),
-            AgentKind::Codex => existing.replace("gpt-6-sol", "existing-codex"),
+            AgentKind::Codex => existing.replace("gpt-6.1-sol", "existing-codex"),
         };
         assert_ne!(customized, existing, "{agent:?}");
         write_private(&existing_path, customized.as_bytes());
@@ -406,7 +406,7 @@ fn application_status_reports_all_five_drift_states() {
     let current = fs::read_to_string(&current_path).unwrap();
     write_private(
         &current_path,
-        current.replace("gpt-6-sol", "different-model").as_bytes(),
+        current.replace("gpt-6.1-sol", "different-model").as_bytes(),
     );
     assert_eq!(application_status(&selected).drift, ConfigDrift::Dirty);
 
