@@ -9,25 +9,10 @@ use base64::Engine as _;
 use std::collections::HashSet;
 
 pub(super) fn forwarded_headers(headers: &HeaderMap) -> HeaderMap {
-    let mut remove: HashSet<String> = [
-        "host",
-        "connection",
-        "proxy-connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    ]
-    .map(str::to_string)
-    .into_iter()
-    .collect();
-    remove.extend(connection_named_headers(headers));
+    let connection_named = connection_named_headers(headers);
     let mut forwarded = HeaderMap::new();
     for (name, value) in headers {
-        if !remove.contains(name.as_str()) {
+        if !is_hop_by_hop(name.as_str()) && !connection_named.contains(name.as_str()) {
             forwarded.append(name.clone(), value.clone());
         }
     }

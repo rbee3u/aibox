@@ -1,6 +1,6 @@
 use super::{ComponentStatusWire, component_counts_as_installed, topology_tenant};
 use crate::component::{ComponentInspection, ComponentKind, ComponentStatus};
-use crate::service::coordination::TopologyTenantSnapshot;
+use crate::management::TopologyTenantSnapshot;
 
 fn inspection(kind: ComponentKind, status: ComponentStatus) -> ComponentInspection {
     ComponentInspection {

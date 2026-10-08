@@ -1,6 +1,6 @@
 use super::super::layout::RequestFile;
 use super::super::{
-    FORMAT_VERSION, Outcome, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY, RequestAssessment,
+    FORMAT_VERSION, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY, RequestAssessment, RequestOutcome,
     RequestStore, SUMMARY_JSON, SummaryMetadata,
 };
 use super::{GROUP_SIZE, UNGROUPED_COMPACT_THRESHOLD};
@@ -34,7 +34,7 @@ fn seed_terminal(store: &RequestStore, index: usize) -> (String, std::path::Path
     summary.request.incoming_uri = format!("/r{index}");
     summary.terminal = true;
     summary.timing.finished_at_ns = Some("0".to_string());
-    summary.outcome = Some(Outcome::Completed);
+    summary.outcome = Some(RequestOutcome::Completed);
     summary.assessment = RequestAssessment::ok();
     write_json(directory.join(SUMMARY_JSON), &summary);
     (id, directory)

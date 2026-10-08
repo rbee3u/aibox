@@ -2,8 +2,6 @@ import type { Bootstrap } from "@/api/core";
 import type { BootstrapResponse } from "@/api/generated/wire";
 import { HttpError, readHttpError } from "@/api/httpError";
 
-export { HttpError as ApiError } from "@/api/httpError";
-
 export class ControlApi {
   readonly bootstrap: Bootstrap;
   private readonly fetchImpl: typeof fetch;
@@ -46,11 +44,7 @@ export class ControlApi {
     return (await response.json()) as T;
   }
 
-  /**
-   * Reads a newline-delimited JSON response and hands each complete record to
-   * `onRecord`. Records may straddle body chunks, so the trailing partial line
-   * is retained until its terminator arrives.
-   */
+  /** Emits newline-terminated records only; discards any unterminated tail. */
   async streamNdjson<T>(
     path: string,
     onRecord: (record: T) => void,

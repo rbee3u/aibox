@@ -27,3 +27,15 @@ export function configWorkflowReducer(
   }
   return { ...state, ...catalogSelectionReducer(state, action) };
 }
+
+export type ConfigDeleteTarget = {
+  names: string[];
+};
+export type ConfigApplyTarget = {
+  name: string;
+};
+export type ConfigPendingAction = {
+  run: () => void | Promise<void>;
+  /** A mode switch stays on the file; anything else leaves it. */
+  kind: "leave" | { switchTo: "visual" | "raw" };
+};

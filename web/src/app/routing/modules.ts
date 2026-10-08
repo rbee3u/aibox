@@ -16,7 +16,7 @@ export const consoleModules: readonly ConsoleModule[] = [
   { id: "requests", label: "Requests", icon: moduleIcons.requests },
 ];
 
-export const DEFAULT_MODULE: ModuleId = "overview";
+const DEFAULT_MODULE: ModuleId = "overview";
 
 export function moduleFromPath(pathname: string): ModuleId {
   const value = pathname.split("/").filter(Boolean).at(-1);

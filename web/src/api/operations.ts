@@ -20,10 +20,10 @@ export interface OperationApi {
 
 export function operationsApi(client: ControlApi): OperationApi {
   return {
-    current: () =>
-      client
-        .get<OperationEnvelope>("/_aibox/api/operations/current")
-        .then((value) => value.operation),
+    current: async () => {
+      const response = await client.get<OperationEnvelope>("/_aibox/api/operations/current");
+      return response.operation;
+    },
     cancel: async (id) => {
       await client.post(`/_aibox/api/operations/${encodeURIComponent(id)}/cancel`);
     },
@@ -32,8 +32,8 @@ export function operationsApi(client: ControlApi): OperationApi {
       source.addEventListener("open", () => handlers.onConnection("connected"));
       source.addEventListener("error", () => handlers.onConnection("reconnecting"));
       source.addEventListener("operation", (event) => {
-        const value = JSON.parse((event as MessageEvent<string>).data) as OperationEnvelope;
-        handlers.onOperation(value.operation, value.gap);
+        const envelope = JSON.parse((event as MessageEvent<string>).data) as OperationEnvelope;
+        handlers.onOperation(envelope.operation, envelope.gap);
       });
       return () => source.close();
     },

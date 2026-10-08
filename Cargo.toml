@@ -39,6 +39,7 @@ zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 http-body-util = "0.1"
+proptest = { version = "1", default-features = false, features = ["std"] }
 syn = { version = "3", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
 # SummaryMetadata accepts a legacy serde alias that is intentionally absent

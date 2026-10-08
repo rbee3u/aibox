@@ -1,5 +1,8 @@
+import styles from "@/features/configs/catalog/ConfigCatalogPane.module.css";
+import sharedStyles from "@/features/configs/shared.module.css";
 import { AlertTriangle, Check, ListChecks, Plus, Trash2 } from "lucide-react";
 
+import { tenantSelectionValue } from "@/domain/tenant";
 import { ConfigDriftBadge } from "@/features/configs/ConfigDriftBadge";
 import { PropagateCredentialsButton } from "@/features/configs/PropagateCredentialsButton";
 import {
@@ -10,8 +13,9 @@ import {
   lastAppliedDescriptionId,
   lastAppliedMeta,
 } from "@/features/configs/configCatalog";
-import { configTenantSelectionValue, namedConfigName } from "@/features/configs/route";
-import type { ConfigViewModel } from "@/features/configs/useConfigController";
+import { namedConfigName } from "@/features/common/routes/configs";
+
+import type { ConfigViewModel } from "@/features/configs/viewTypes";
 import { catalogMarksInspection, useNarrowLayout } from "@/shared/hooks/useNarrowLayout";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
@@ -25,7 +29,7 @@ import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/configs/ConfigPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const CurrentConfigIcon = resourceIcons.currentConfig;
@@ -123,7 +127,7 @@ export function ConfigCatalogPane({
                 onCommit={selectTenant}
                 options={tenantOptions}
                 pluralLabel="tenants"
-                selected={new Set([configTenantSelectionValue(tenant)])}
+                selected={new Set([tenantSelectionValue(tenant)])}
                 triggerIcon={
                   tenant.kind === "host" ? (
                     <HostTenantIcon size={iconSize.xs} aria-hidden="true" />
@@ -179,7 +183,7 @@ export function ConfigCatalogPane({
           </>
         )}
       </div>
-      <div className={styles.configWarnings} aria-live="polite">
+      <div className={sharedStyles.configWarnings} aria-live="polite">
         {applyFeedback && (
           <AlertBanner
             className={styles.inlineNotice}
@@ -191,7 +195,7 @@ export function ConfigCatalogPane({
         )}
         {data?.application.drift === "source-missing" && (
           <AlertBanner
-            className={styles.inlineWarning}
+            className={sharedStyles.inlineWarning}
             tone="warning"
             icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
           >
@@ -200,7 +204,7 @@ export function ConfigCatalogPane({
         )}
         {data?.application.drift === "comparison-error" && data.application.detail && (
           <AlertBanner
-            className={styles.inlineWarning}
+            className={sharedStyles.inlineWarning}
             tone="warning"
             icon={<AlertTriangle size={iconSize.xs} aria-hidden="true" />}
           >
@@ -213,6 +217,9 @@ export function ConfigCatalogPane({
         <div className={layout.rowGroup}>
           {!managedTenantMissing && (
             <div
+              data-inspected={marksInspection && selection.current ? "true" : undefined}
+              data-selected="false"
+              data-selection-mode={selectionMode ? "true" : undefined}
               className={`${layout.row} ${styles.configRow} ${marksInspection && selection.current ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
             >
               <button
@@ -275,6 +282,9 @@ export function ConfigCatalogPane({
             return (
               <div
                 key={entry.name}
+                data-inspected={selectedForInspection ? "true" : undefined}
+                data-selected={selectedForDeletion ? "true" : undefined}
+                data-selection-mode={selectionMode ? "true" : undefined}
                 className={`${layout.row} ${styles.configRow} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? layout.rowSelectable : ""}`}
               >
                 <button
@@ -347,6 +357,7 @@ export function ConfigCatalogPane({
                       </ActionButton>
                     )}
                     <IconButton
+                      data-row-action="delete"
                       className={`${layout.rowAction} ${layout.rowDeleteAction}`}
                       tone="dangerQuiet"
                       label={`Delete Named Config ${entry.name}`}

@@ -5,6 +5,7 @@
 
 mod compact;
 mod event_index;
+pub(crate) use event_index::SseIndexer;
 mod layout;
 mod reading;
 mod summary;
@@ -16,10 +17,10 @@ use crate::foundation::sync::read_unpoisoned;
 #[cfg(test)]
 use crate::request::assessment::{diagnostic_findings, refresh_assessment};
 pub(crate) use crate::request::model::{
-    DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolSummary, RecordedHeader,
-    RequestAssessment, RequestMetadata, ResponseMetadata, ResponseSource, ResultMetadata,
-    SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata, TerminalRequestEvent,
-    TimingMetadata, anchored_at, utc_now,
+    DiagnosticMetadata, ErrorKind, ErrorMetadata, ProtocolSummary, RecordedHeader,
+    RequestAssessment, RequestMetadata, RequestOutcome, ResponseMetadata, ResponseSource,
+    ResultMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
+    TerminalRequestEvent, TimingMetadata, anchored_at, utc_now,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -164,11 +165,6 @@ impl RequestLocator {
 }
 
 /// The application-visible request that opens one Request.
-///
-/// [`RequestStore::begin`] takes this as a whole because its fields are mostly
-/// interchangeable strings: `method`, `incoming_uri`, and `http_version` share a
-/// type, as do `upstream_url` and `host_hint`, so positional arguments would
-/// accept a wrong order.
 pub(crate) struct ObservedRequest<'a> {
     pub method: &'a str,
     pub incoming_uri: &'a str,
@@ -183,8 +179,6 @@ pub(crate) struct ObservedRequest<'a> {
 
 #[cfg(test)]
 impl<'a> ObservedRequest<'a> {
-    /// A plain HTTP/1.1 request with no upstream target, headers, or host hint.
-    /// Combine with struct-update syntax so a test names only what it varies.
     pub(crate) fn test(method: &'a str, incoming_uri: &'a str) -> Self {
         Self {
             method,

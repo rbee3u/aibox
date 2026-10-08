@@ -1,167 +1,30 @@
-import type { RefObject } from "react";
+import { useTenantMutations } from "@/features/tenants/mutation/useTenantMutations";
+import type { TenantPageProps, TenantViewModel } from "@/features/tenants/viewTypes";
+
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 
-import type { TenantRow } from "@/api/core";
-import type { Operation } from "@/api/operations";
-import type {
-  ComponentKind,
-  ComponentLatestSnapshot,
-  ComponentRow,
-  TenantApi,
-} from "@/api/tenants";
+import type { ComponentKind } from "@/api/tenants";
 import { allSelected } from "@/features/common/catalogSelection";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 import { useSelectionModeFocus } from "@/features/common/useSelectionModeFocus";
 import { hostTenant, managedTenants } from "@/features/common/tenantOptions";
-import { parseComponentKind, type ComponentGroup } from "@/features/tenants/componentCatalog";
-import {
-  fallbackTenantSelectionValue,
-  tenantSelectionValueOf,
-  tenantLocation,
-} from "@/features/tenants/route";
-import {
-  useComponentActions,
-  type ComponentActionProgress,
-  type ComponentRemoveTarget,
-  type ComponentSpecificVersionTarget,
-  type ComponentUpdateTarget,
-} from "@/features/tenants/mutation/useComponentActions";
+import { parseComponentKind } from "@/features/tenants/components/componentCatalog";
+import { fallbackTenantSelectionValue } from "@/features/tenants/route";
+import { useComponents } from "@/features/tenants/components/useComponents";
 import { useTenantCatalog } from "@/features/tenants/catalog/useTenantCatalog";
-import {
-  initialTenantWorkflow,
-  tenantRowSuccessor,
-  tenantWorkflowReducer,
-  type TenantDeleteTarget,
-} from "@/features/tenants/tenantWorkflow";
+import { initialTenantWorkflow, tenantWorkflowReducer } from "@/features/tenants/tenantWorkflow";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
-import { messageOf } from "@/shared/lib/errors";
+
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
-import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
+
 import { abbreviateTenantHome } from "@/shared/lib/hostHome";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
+
 import {
-  DNS_LABEL_PATTERN,
   parseTenantSelectionValue,
+  tenantSelectionValue,
   type TenantSelectionValue,
 } from "@/domain/tenant";
-
-interface ControllerOptions {
-  api: TenantApi;
-  operation?: Operation | null;
-  search: string;
-  onLocationChange: ModuleLocationChange;
-  onOperation?: (operation: Operation) => void;
-}
-
-export interface TenantViewModel {
-  catalog: {
-    hostTenant: TenantRow | null;
-    loadingTenants: boolean;
-    managedTenants: Array<TenantRow & { kind: "managed"; name: string }>;
-    refreshButton: RefObject<HTMLButtonElement | null>;
-    refreshing: boolean;
-    refreshTenants: () => Promise<void>;
-    retryTenantPage: () => Promise<void>;
-    selectButton: RefObject<HTMLButtonElement | null>;
-    tenantCatalogError: string | null;
-  };
-  detail: {
-    copiedHome: string | null;
-    copyHome: (text: string, value: string) => Promise<void>;
-    detailHeadingRef: RefObject<HTMLHeadingElement | null>;
-    detailOpen: boolean;
-    selected: TenantRow | null;
-    selectedHome: string;
-    selectedKey: TenantSelectionValue | null;
-    tenantKindLabel: string;
-  };
-  selection: {
-    allSelectable: boolean;
-    cancelSelection: () => void;
-    selectedCount: number;
-    selectedKeys: Set<TenantSelectionValue>;
-    selectableKeys: TenantSelectionValue[];
-    selectionMode: boolean;
-    enterSelection: () => void;
-    focusTenantRow: (key: TenantSelectionValue) => void;
-    registerTenantRow: (key: TenantSelectionValue, element: HTMLButtonElement | null) => void;
-    toggleAllTenants: () => void;
-    toggleTenant: (key: TenantSelectionValue) => void;
-  };
-  components: {
-    allComponents: ComponentRow[];
-    attentionComponentCount: number;
-    checkingLatest: boolean;
-    checkForUpdates: () => Promise<void>;
-    closeComponentMenu: () => void;
-    componentActionProgress: ComponentActionProgress | null;
-    componentCatalogLoading: boolean;
-    componentGroups: Array<ComponentGroup & { rows: ComponentRow[] }>;
-    componentMenuPosition: { top: number; left: number } | null;
-    componentMenuRef: RefObject<HTMLDivElement | null>;
-    componentTotalCount: number;
-    differingComponentCount: number;
-    installedComponentCount: number;
-    /** Installs, repairs, or updates the row; an overwriting Update confirms first. */
-    installComponent: (row: ComponentRow, requestedVersion?: string | null) => void;
-    issueComponentCount: number;
-    outdatedComponentCount: number;
-    updatableComponentCount: number;
-    latestSnapshot: ComponentLatestSnapshot | null;
-    loadComponents: (target: TenantRow | null, showLoading?: boolean) => Promise<void>;
-    attentionKind: ComponentKind | null;
-    openComponentMenu: (kind: ComponentKind, anchor: HTMLElement, width: number) => void;
-    openMenu: ComponentKind | null;
-    openSpecificVersion: (row: ComponentRow, mode: ComponentSpecificVersionTarget["mode"]) => void;
-    registerComponentMenuButton: (kind: ComponentKind, element: HTMLButtonElement | null) => void;
-    registerComponentMenuItem: (kind: ComponentKind, element: HTMLButtonElement | null) => void;
-    submitSpecificVersion: () => Promise<void>;
-    toggleComponentMenu: (kind: ComponentKind, anchor: HTMLElement, width: number) => void;
-  };
-  mutations: {
-    busy: boolean;
-    createTenant: () => Promise<void>;
-    deleteTenants: () => Promise<void>;
-    mutationBusy: boolean;
-    requestTenantDelete: (names: string[]) => void;
-  };
-  dialogs: {
-    cancelComponentRemove: () => void;
-    cancelComponentUpdate: () => void;
-    cancelDeleteDialog: () => void;
-    changeNewName: (name: string) => void;
-    changeSpecificVersion: (value: string) => void;
-    closeCreateDialog: () => void;
-    closeSpecificVersion: () => void;
-    componentRemoveTarget: ComponentRemoveTarget | null;
-    componentUpdateTarget: ComponentUpdateTarget | null;
-    createError: string | null;
-    createHelpId: string;
-    createNameTaken: boolean;
-    createNameValid: boolean;
-    createOpen: boolean;
-    createTitleId: string;
-    deleteTarget: TenantDeleteTarget | null;
-    newName: string;
-    openCreateDialog: () => void;
-    removeComponent: () => Promise<void>;
-    requestComponentRemove: (row: ComponentRow, tenantLabel: string) => void;
-    specificVersion: string;
-    specificVersionError: string | null;
-    specificVersionHelpId: string;
-    specificVersionTarget: ComponentSpecificVersionTarget | null;
-    specificVersionTitleId: string;
-    specificVersionValid: boolean;
-    specificVersionValidationError: string | null;
-    updateComponent: () => Promise<void>;
-  };
-  feedback: {
-    dismissNotification: (source: NotificationSource) => void;
-    notifications: NotificationItemData[];
-    error: string | null;
-  };
-}
 
 export function useTenantController({
   api,
@@ -169,7 +32,7 @@ export function useTenantController({
   search,
   onLocationChange,
   onOperation,
-}: ControllerOptions): TenantViewModel {
+}: TenantPageProps): TenantViewModel {
   const normalizedComponentSearch = useRef<string | null>(null);
   const route = useMemo(() => new URLSearchParams(search), [search]);
   const routedKey = parseTenantSelectionValue(route.get("tenant"));
@@ -215,8 +78,8 @@ export function useTenantController({
   const [copiedHome, copyHome] = useClipboardFeedback<string>();
   const selectedKey = routedKey ?? fallbackTenantSelectionValue(tenants);
   const detailOpen = routedKey !== null;
-  const selected = tenants.find((row) => tenantSelectionValueOf(row) === selectedKey) ?? null;
-  const componentActions = useComponentActions({
+  const selected = tenants.find((row) => tenantSelectionValue(row) === selectedKey) ?? null;
+  const componentActions = useComponents({
     api,
     loadTenants,
     operation,
@@ -229,7 +92,7 @@ export function useTenantController({
   const sortedManagedTenants = useMemo(() => managedTenants(tenants), [tenants]);
   const selectableKeys = sortedManagedTenants
     .filter((row) => row.name !== "default")
-    .map((row) => tenantSelectionValueOf(row));
+    .map((row) => tenantSelectionValue(row));
   const allSelectable = allSelected(selectableKeys, selectedKeys);
   const { enterSelection, cancelSelection } = useSelectionModeFocus({
     selectionMode,
@@ -240,8 +103,18 @@ export function useTenantController({
     onExit: () => dispatchWorkflow({ type: "selection_cancel" }),
   });
   const selectedCount = selectedKeys.size;
-  const createNameValid = DNS_LABEL_PATTERN.test(newName);
-  const createNameTaken = tenants.some((row) => row.kind === "managed" && row.name === newName);
+  const { createTenant, deleteTenants, requestTenantDelete, createNameValid, createNameTaken } =
+    useTenantMutations({
+      api,
+      workflow,
+      dispatchWorkflow,
+      tenants,
+      sortedManagedTenants,
+      loadTenants,
+      onLocationChange,
+      focusTenantRow: tenantRows.focus,
+      reportActionFailure,
+    });
   const busy = mutationPhase !== "idle";
   const combinedBusy = busy || componentActions.busy;
   const mutationBusy =
@@ -306,7 +179,7 @@ export function useTenantController({
   useNarrowDetailFocus(detailHeadingRef, detailOpen && selectedKey !== null, selectedKey);
   useEffect(() => {
     if (loadingTenants) return;
-    if (routedKey && !tenants.some((row) => tenantSelectionValueOf(row) === routedKey)) {
+    if (routedKey && !tenants.some((row) => tenantSelectionValue(row) === routedKey)) {
       onLocationChange(new URLSearchParams(), true);
     }
     // Catalog refreshes prune batch selections that no longer exist.
@@ -314,7 +187,7 @@ export function useTenantController({
       type: "selection_prune",
       available: new Set(
         tenants
-          .map((row) => tenantSelectionValueOf(row))
+          .map((row) => tenantSelectionValue(row))
           .filter((key) => key !== "host" && key !== "managed:default"),
       ),
     });
@@ -334,33 +207,6 @@ export function useTenantController({
     if (rows) await componentActions.loadComponents(selected, true);
   }
 
-  /**
-   * Moves focus to a row once the reload that produced it has committed. The
-   * dialog that just closed restores focus only when nothing else claimed it,
-   * so a row focused here wins over the control that opened the dialog.
-   */
-  function focusTenantRowSoon(key: TenantSelectionValue) {
-    window.requestAnimationFrame(() => {
-      if (!tenantRows.focus(key)) window.requestAnimationFrame(() => tenantRows.focus(key));
-    });
-  }
-
-  async function createTenant() {
-    if (!createNameValid || createNameTaken) return;
-    dispatchWorkflow({ type: "create_started" });
-    try {
-      await api.createTenant(newName);
-      const created = newName;
-      dispatchWorkflow({ type: "create_succeeded" });
-      await loadTenants();
-      const key = `managed:${created}` as TenantSelectionValue;
-      onLocationChange(tenantLocation(key));
-      focusTenantRowSoon(key);
-    } catch (cause) {
-      dispatchWorkflow({ type: "create_failed", message: messageOf(cause) });
-    }
-  }
-
   function toggleTenant(key: TenantSelectionValue) {
     if (key === "host" || key === "managed:default") return;
     dispatchWorkflow({ type: "selection_toggle", key });
@@ -368,48 +214,6 @@ export function useTenantController({
 
   function toggleAllTenants() {
     dispatchWorkflow({ type: "selection_toggle_all", keys: selectableKeys, clear: allSelectable });
-  }
-
-  function requestTenantDelete(names: string[]) {
-    if (names.length === 0) return;
-    dispatchWorkflow({ type: "delete_requested", names });
-  }
-
-  async function deleteTenants() {
-    if (!deleteTarget || deleteTarget.names.length === 0) return;
-    const requestedNames = deleteTarget.names;
-    const wasSelectionMode = selectionMode;
-    const successor = tenantRowSuccessor(
-      sortedManagedTenants.map((row) => row.name),
-      requestedNames,
-    );
-    dispatchWorkflow({ type: "delete_started" });
-    try {
-      await api.deleteTenants(requestedNames);
-      dispatchWorkflow({ type: "delete_succeeded" });
-      await loadTenants();
-      focusTenantRowSoon(successor ?? "host");
-    } catch (cause) {
-      const refreshed = await loadTenants();
-      if (refreshed) {
-        const remaining = requestedNames.filter((name) =>
-          refreshed.some((row) => row.kind === "managed" && row.name === name),
-        );
-        dispatchWorkflow({
-          type: "delete_failed",
-          remaining: remaining.map((name) => `managed:${name}` as TenantSelectionValue),
-          resumeSelection: wasSelectionMode,
-        });
-      } else {
-        dispatchWorkflow({ type: "delete_failed", remaining: [], resumeSelection: false });
-      }
-      reportActionFailure(
-        requestedNames.length === 1
-          ? `Couldn’t delete Tenant ${requestedNames[0]}`
-          : `Couldn’t delete ${requestedNames.length} Tenants`,
-        cause,
-      );
-    }
   }
 
   return {

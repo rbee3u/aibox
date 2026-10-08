@@ -47,9 +47,16 @@ describe("Requests route codec", () => {
     expect(requestsSearch({ page: 1, request: null, tab: "response" })).toBe("");
   });
 
-  it("round-trips every canonical search", () => {
-    for (const search of ["", "?request=abc", "?page=4", "?page=4&request=abc&tab=response"]) {
-      expect(requestsSearch(readRequestsRoute(search)), search).toBe(search);
-    }
+  it.each(
+    [1, 4, Number.MAX_SAFE_INTEGER].flatMap((page) =>
+      [null, "abc", "请求 +#&"].flatMap((request) =>
+        (["summary", "request", "response"] as const).map((tab) => ({ page, request, tab })),
+      ),
+    ),
+  )("round-trips page $page, Request $request, tab $tab", (state) => {
+    const search = requestsSearch(state);
+    const route = readRequestsRoute(search);
+    expect(route).toEqual({ ...state, tab: state.request ? state.tab : "summary" });
+    expect(requestsSearch(route)).toBe(search);
   });
 });

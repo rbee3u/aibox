@@ -6,7 +6,8 @@ use super::{
 use crate::agent::AgentKind;
 use crate::application_error::{ApplicationErrorKind, application_error};
 use crate::config::{self, CustomProviderInput, VisualConfigOptionInput};
-use crate::service::coordination::{ConfigCoordinator, ConfigFileView, DeleteConfigsCommand};
+use crate::foundation::MAX_NATIVE_CONFIG_BYTES;
+use crate::management::{ConfigFileView, DeleteConfigsCommand};
 use crate::service::state::ServiceState;
 use crate::tenant::TenantSelection;
 use axum::Json;
@@ -42,7 +43,9 @@ pub(super) async fn list_configs(
     Query(query): Query<AgentTenantQuery>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&query.tenant)?;
-    let catalog = ConfigCoordinator::new(state)
+    let catalog = state
+        .management
+        .configs
         .list(selection, query.agent)
         .await?;
     Ok(json_response(
@@ -67,9 +70,7 @@ pub(super) async fn preview_auth_propagation(
     State(state): State<ServiceState>,
     Json(_request): Json<Value>,
 ) -> ControlResult {
-    let preview = ConfigCoordinator::new(state)
-        .preview_auth_propagation()
-        .await?;
+    let preview = state.management.configs.preview_auth_propagation().await?;
     Ok(json_response(
         StatusCode::OK,
         &AuthPropagationPreviewResponse {
@@ -89,7 +90,9 @@ pub(super) async fn execute_auth_propagation(
     State(state): State<ServiceState>,
     Json(request): Json<ExecuteAuthPropagationRequest>,
 ) -> ControlResult {
-    let report = ConfigCoordinator::new(state)
+    let report = state
+        .management
+        .configs
         .execute_auth_propagation(request.plan_id)
         .await?;
     Ok(json_response(StatusCode::OK, &report))
@@ -112,7 +115,9 @@ pub(super) async fn create_config(
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
     let name = config::NamedConfigName::parse(&request.config)?;
-    let created = ConfigCoordinator::new(state)
+    let created = state
+        .management
+        .configs
         .create(selection, request.agent, name)
         .await?;
     Ok(json_response(
@@ -179,9 +184,11 @@ pub(super) async fn reveal_config_file(
     Json(request): Json<ConfigFileRequest>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
-    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let target = decode_config_target(request.config.as_deref(), request.current)?;
     let file = config::ConfigFile::parse(request.agent, &request.file)?;
-    let view = ConfigCoordinator::new(state)
+    let view = state
+        .management
+        .configs
         .reveal(selection, request.agent, target, file)
         .await?;
     Ok(json_response(StatusCode::OK, &config_file_response(view)))
@@ -215,15 +222,17 @@ pub(super) async fn save_config_file(
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
     let content = decode_base64(&request.content_base64)?;
-    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let target = decode_config_target(request.config.as_deref(), request.current)?;
     let file = config::ConfigFile::parse(request.agent, &request.file)?;
-    let edit = config::ConfigEdit::from_wire(
+    let edit = decode_config_edit(
         content,
         request.custom_provider,
         request.visual_options,
         request.visual_auth,
     )?;
-    let view = ConfigCoordinator::new(state)
+    let view = state
+        .management
+        .configs
         .save(
             selection,
             request.agent,
@@ -251,14 +260,7 @@ pub(crate) struct DiagnoseConfigRequest {
     content_base64: String,
 }
 
-/// One Config syntax error as the Console reads it.
-///
-/// This mirrors [`config::ConfigDiagnostic`] rather than reusing it because the
-/// wire shape carries a `severity` the domain has no notion of. Where a wire
-/// shape matches its domain type exactly, pass the domain type straight through
-/// instead — `ProtocolSummary` does — and keep a second
-/// name only for a genuine difference like this one. A field added to the
-/// domain type has to be added here too before it reaches the Console.
+/// Adds wire-only `severity` to [`config::ConfigDiagnostic`].
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct ConfigDiagnostic {
@@ -280,9 +282,11 @@ pub(super) async fn diagnose_config_file(
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
     let content = decode_base64(&request.content_base64)?;
-    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let target = decode_config_target(request.config.as_deref(), request.current)?;
     let file = config::ConfigFile::parse(request.agent, &request.file)?;
-    let diagnostics = ConfigCoordinator::new(state)
+    let diagnostics = state
+        .management
+        .configs
         .diagnose(selection, request.agent, target, file, content)
         .await?;
     Ok(json_response(
@@ -307,7 +311,9 @@ pub(super) async fn apply_config(
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
     let name = config::NamedConfigName::parse(&request.config)?;
-    let application = ConfigCoordinator::new(state)
+    let application = state
+        .management
+        .configs
         .apply(selection, request.agent, name)
         .await?;
     Ok(json_response(StatusCode::OK, &application))
@@ -340,7 +346,7 @@ pub(super) async fn delete_configs(
         all: request.all,
         confirmation: request.confirmation,
     };
-    let deleted = ConfigCoordinator::new(state).delete(command).await?;
+    let deleted = state.management.configs.delete(command).await?;
     Ok(json_response(
         StatusCode::OK,
         &DeletedConfigsResponse {
@@ -426,7 +432,7 @@ pub(super) async fn compare_configs(
     Json(request): Json<CompareConfigsRequest>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&request.tenant)?;
-    let target = config::ConfigTarget::from_wire(request.config.as_deref(), request.current)?;
+    let target = decode_config_target(request.config.as_deref(), request.current)?;
     let drafts = request
         .files
         .into_iter()
@@ -437,7 +443,7 @@ pub(super) async fn compare_configs(
                 file: config::ConfigFile::parse(request.agent, &draft.file)?,
                 revision: draft.revision,
                 original,
-                edit: config::ConfigEdit::from_wire(
+                edit: decode_config_edit(
                     content,
                     draft.custom_provider,
                     draft.visual_options,
@@ -446,8 +452,56 @@ pub(super) async fn compare_configs(
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let comparison = ConfigCoordinator::new(state)
+    let comparison = state
+        .management
+        .configs
         .compare(selection, request.agent, target, drafts)
         .await?;
     Ok(json_response(StatusCode::OK, &comparison))
+}
+
+fn decode_config_target(
+    config: Option<&str>,
+    current: bool,
+) -> anyhow::Result<config::ConfigTarget> {
+    match (current, config) {
+        (true, None) => Ok(config::ConfigTarget::Current),
+        (false, Some(config)) => Ok(config::ConfigTarget::Named(config::NamedConfigName::parse(
+            config,
+        )?)),
+        _ => anyhow::bail!("select exactly one of Current Config or a Named Config"),
+    }
+}
+
+fn decode_config_edit(
+    content: Vec<u8>,
+    custom_provider: Option<CustomProviderInput>,
+    visual_options: Option<Vec<VisualConfigOptionInput>>,
+    visual_auth: Option<crate::config::VisualAuthInput>,
+) -> anyhow::Result<config::ConfigEdit> {
+    if content.len() as u64 > MAX_NATIVE_CONFIG_BYTES {
+        return Err(application_error(
+            ApplicationErrorKind::InputTooLarge,
+            format!("configuration file exceeds {MAX_NATIVE_CONFIG_BYTES} bytes"),
+        ));
+    }
+    match (visual_options, visual_auth) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("select exactly one Visual Config editor operation")
+        }
+        (Some(options), None) => Ok(config::ConfigEdit::VisualMain {
+            options,
+            custom_provider,
+        }),
+        (None, Some(auth)) => {
+            if custom_provider.is_some() {
+                anyhow::bail!("Custom Provider is only available for the main Config file");
+            }
+            Ok(config::ConfigEdit::VisualAuth(auth))
+        }
+        (None, None) => Ok(config::ConfigEdit::Raw {
+            content,
+            custom_provider,
+        }),
+    }
 }

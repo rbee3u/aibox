@@ -13,3 +13,6 @@ mod spec;
 pub(crate) use args::{assemble_component_run_args, assemble_debug_args};
 pub(crate) use mount::reject_colon_in_bind_source;
 pub(crate) use spec::RunSpec;
+
+/// Tenant Home mount target shared by sandboxed operations.
+pub(crate) const CONTAINER_HOME: &str = "/home/aibox";

@@ -3,7 +3,7 @@
 use super::catalog::inspect;
 use super::native::write_atomic;
 use super::{ComponentKind, ComponentSpec, ComponentStatus, MAX_CONFIG_BYTES};
-use crate::foundation::safe_fs::FileSnapshot;
+use crate::foundation::safe_fs::{self, FileSnapshot};
 use crate::tenant::ManagedTenant;
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
@@ -181,7 +181,7 @@ pub(super) fn restore_user_shell_profiles(profiles: &[UserShellProfile]) -> Resu
                     profile.path.display()
                 )
             })?;
-            crate::foundation::safe_fs::sync_dir(
+            safe_fs::sync_dir(
                 profile
                     .path
                     .parent()
@@ -200,7 +200,7 @@ pub(super) fn restore_user_shell_profiles(profiles: &[UserShellProfile]) -> Resu
         {
             fs::remove_file(&profile.path)
                 .with_context(|| format!("remove user shell profile {}", profile.path.display()))?;
-            crate::foundation::safe_fs::sync_dir(
+            safe_fs::sync_dir(
                 profile
                     .path
                     .parent()

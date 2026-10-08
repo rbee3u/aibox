@@ -1,14 +1,7 @@
 /**
- * The batch-selection state machine every catalog page shares.
- *
- * A feature composes this by spreading `CatalogSelectionState` into its own
- * state and delegating the `selection_*` actions, keeping its mutation or
- * dialog state to itself.
- *
- * `Context` is optional per-row data recorded when a row is selected, for
- * features whose selection outlives the view it was made in. Requests records
- * the page for each selection so deletion can return to the earliest selected
- * page. Features that need none leave it `never`.
+ * Shared selection state; features own dialogs and mutations.
+ * `Context` captures optional per-row data at selection time, such as the
+ * Request's page for post-deletion navigation. Use `never` when unnecessary.
  */
 
 export interface CatalogSelectionState<Key extends string, Context = never> {
@@ -24,21 +17,11 @@ export type CatalogSelectionAction<Key extends string, Context = never> =
   /** Leave selection mode and discard the selection. */
   | { type: "selection_cancel" }
   | { type: "selection_toggle"; key: Key; context?: Context }
-  /**
-   * Add every listed key, or remove them all when `clear` is set.
-   *
-   * Adds and removes rather than replacing the whole selection, so a paginated
-   * catalog keeps rows selected on other pages. For a catalog that lists every
-   * selectable key at once the two are equivalent.
-   */
+  /** Change only the listed keys, preserving selections on other pages. */
   | { type: "selection_toggle_all"; keys: readonly Key[]; clear: boolean; context?: Context }
   /** Drop keys a refreshed catalog no longer lists. */
   | { type: "selection_prune"; available: ReadonlySet<Key> }
-  /**
-   * Restore what a failed batch mutation left behind. Selection mode persists
-   * only when something remains and the caller asks to resume, so a fully
-   * successful delete exits instead of leaving an empty selection bar.
-   */
+  /** Resume selection only when requested and unprocessed keys remain. */
   | { type: "selection_recovered"; remaining: ReadonlySet<Key>; resume: boolean };
 
 export function initialCatalogSelection<
@@ -48,7 +31,6 @@ export function initialCatalogSelection<
   return { selectedKeys: new Set(), selectionMode: false, selectionContexts: new Map() };
 }
 
-/** Keep only the contexts whose key is still selected. */
 function retainContexts<Key extends string, Context>(
   contexts: ReadonlyMap<Key, Context>,
   selectedKeys: ReadonlySet<Key>,
@@ -65,7 +47,7 @@ export function catalogSelectionReducer<Key extends string, Context = never>(
     case "selection_enter":
       return { ...state, selectionMode: true };
     case "selection_cancel":
-      return { selectedKeys: new Set(), selectionMode: false, selectionContexts: new Map() };
+      return initialCatalogSelection<Key, Context>();
     case "selection_toggle": {
       const selectedKeys = new Set(state.selectedKeys);
       const selectionContexts = new Map(state.selectionContexts);
@@ -113,7 +95,6 @@ export function catalogSelectionReducer<Key extends string, Context = never>(
   }
 }
 
-/** True when every selectable key is already selected. */
 export function allSelected<Key extends string>(
   selectable: readonly Key[],
   selected: ReadonlySet<Key>,

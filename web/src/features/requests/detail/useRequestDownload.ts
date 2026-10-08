@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
+
 import type { BodyKind, RequestsApi } from "@/api/requests";
+import { requestErrorMessage } from "@/features/requests/requestErrors";
 import type {
   ClearInspectionFailure,
   ReportInspectionFailure,
   RequestInspectionIdentity,
-} from "@/features/requests/detail/inspectionTypes";
-import { requestErrorMessage, requestWasCancelled } from "@/features/requests/requestErrors";
+} from "@/features/requests/viewTypes";
+import { LatestRequest } from "@/shared/lib/latestRequest";
+import { wasCancelled } from "@/shared/lib/errors";
 
 interface DownloadOptions {
   api: RequestsApi;
@@ -26,28 +29,28 @@ export function useRequestDownload({
   useEffect(() => {
     identityRef.current = identity;
   }, [identity]);
-  const controllerRef = useRef<AbortController | null>(null);
+  const requestOwner = useRef(new LatestRequest());
 
   useEffect(() => {
-    controllerRef.current?.abort();
-    controllerRef.current = null;
+    requestOwner.current.cancel();
   }, [identity?.generation, paused]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => {
+    const owner = requestOwner.current;
+    return () => owner.cancel();
+  }, []);
 
   return useCallback(
     async (kind: BodyKind) => {
       const selected = identityRef.current;
       if (!selected || paused) return;
-      controllerRef.current?.abort();
-      const controller = new AbortController();
-      controllerRef.current = controller;
+      const request = requestOwner.current.begin();
       clearFailure("download");
       try {
-        const { bytes: data } = await api.loadBody(selected.id, kind, 0, controller.signal);
+        const { bytes: data } = await api.loadBody(selected.id, kind, 0, request.signal);
         if (
-          controller.signal.aborted ||
-          controllerRef.current !== controller ||
+          request.signal.aborted ||
+          !request.isCurrent() ||
           identityRef.current?.generation !== selected.generation
         ) {
           return;
@@ -63,10 +66,7 @@ export function useRequestDownload({
         anchor.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (cause) {
-        if (
-          controllerRef.current === controller &&
-          !requestWasCancelled(cause, controller.signal)
-        ) {
+        if (request.isCurrent() && !wasCancelled(cause, request.signal)) {
           reportFailure({
             kind: "download",
             message: requestErrorMessage(cause),
@@ -74,7 +74,7 @@ export function useRequestDownload({
           });
         }
       } finally {
-        if (controllerRef.current === controller) controllerRef.current = null;
+        request.release();
       }
     },
     [api, clearFailure, paused, reportFailure],

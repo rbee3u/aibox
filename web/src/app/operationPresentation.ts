@@ -5,17 +5,11 @@ import type { Operation, OperationState } from "@/api/operations";
 import type { StatusTone } from "@/shared/ui/StatusBadge";
 
 interface OperationStatePresentation {
-  /** Sentence-case label; the wire spelling is an enum, not a reading. */
   label: string;
   tone: StatusTone;
   icon: ComponentType<{ size?: number; className?: string }>;
 }
 
-/**
- * What one Operation state looks like and says. An Agent install that
- * fails and one that succeeds have to be distinguishable at a glance, so each
- * terminal state owns a tone and its own mark rather than sharing a stop sign.
- */
 const STATE_PRESENTATION: Record<OperationState, OperationStatePresentation> = {
   running: { label: "Running", tone: "active", icon: LoaderCircle },
   succeeded: { label: "Succeeded", tone: "good", icon: Check },
@@ -28,9 +22,8 @@ export function operationPresentation(state: OperationState): OperationStatePres
 }
 
 /**
- * Milliseconds the Operation has been running, or ran for. A running Operation
- * measures against the caller's clock so the panel can tick; a finished one is
- * fixed. Unparsable timestamps report `null` rather than a wrong number.
+ * Use `ended_at` when valid, otherwise the caller's clock. An invalid start
+ * returns `null`; negative durations clamp to zero.
  */
 export function operationElapsedMs(operation: Operation, now: number): number | null {
   const started = Date.parse(operation.started_at);

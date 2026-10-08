@@ -1,29 +1,12 @@
-//! Best-effort `text/event-stream` recognition and event indexing.
+//! Pure SSE observation and raw-byte ranges; persistence belongs to Store.
 //!
-//! A declared `text/event-stream` response is recognized from its Content-Type.
-//! [`SsePrefixSniffer`] is the fallback for a successful, recognized model
-//! request that asked for streaming but received no Content-Type. Identity
-//! streams are then parsed by [`SseIndexer`] as they are forwarded; its
-//! `response.events.jsonl` entries point into the unchanged `response.body`
-//! rather than copying payloads. Content-encoded streams remain opaque to live
-//! byte-range indexing, while completed bodies or recorded prefixes may still
-//! be decoded and replayed for protocol evidence.
-//!
-//! Indexing is deliberately subordinate to forwarding: a non-contiguous chunk or
-//! a write failure disables it and becomes a Request warning without altering the
-//! recorded bytes or the Request Outcome. The indexer also notes the first token
-//! and the provider terminal event, so an Agent that closes immediately
-//! after a complete stream is not recorded as a client disconnect.
-//!
-//! Raw body recording remains unbounded, but this in-memory observer stops for
-//! the rest of a response when one unterminated line or Event exceeds 16 MiB.
-//! This releases buffered data and bounds diagnostic memory without truncating
-//! forwarding or the raw Request.
+//! [`SsePrefixSniffer`] handles successful recognized streaming responses without
+//! Content-Type. Content-encoded bodies require decoded replay and have no live
+//! raw-byte index. Non-contiguous chunks disable indexing; an unterminated line or
+//! event over 16 MiB stops observation. Neither condition truncates raw recording
+//! or forwarding. Terminal events distinguish normal Agent closure from disconnects.
 
-use crate::request::interpretation::ProtocolFamily;
-use crate::request::store::FORMAT_VERSION;
-use serde::Serialize;
-use std::io::Write as _;
+use crate::request::model::ProtocolFamily;
 
 const MAX_SSE_EVENT_OBSERVATION_BYTES: usize = 16 * 1024 * 1024;
 
@@ -69,16 +52,13 @@ fn classify_sse_prefix(bytes: &[u8]) -> PrefixSniff {
     PrefixSniff::Normal
 }
 
-#[derive(Serialize)]
-struct SseEventIndexEntry {
-    schema_version: u32,
-    request_id: String,
-    kind: String,
-    sequence: u64,
-    body_start: u64,
-    body_end: u64,
-    first_arrival_at_ns: String,
-    completed_at_ns: String,
+/// Location and arrival timing of one dispatchable event in the raw body.
+/// Storage attaches the Request identity, sequence, and schema version.
+pub(crate) struct SseEventRange {
+    pub(crate) body_start: u64,
+    pub(crate) body_end: u64,
+    pub(crate) first_arrival_at_ns: String,
+    pub(crate) completed_at_ns: String,
 }
 
 /// One complete dispatchable Event observed in the raw stream.
@@ -92,9 +72,8 @@ pub(crate) type ObservedSseEvent = (Option<Vec<u8>>, Vec<u8>, String);
 /// Callers feed chunks only after the same bytes have been flushed to the raw
 /// Body file. Index failures may stop observation but must not stop recording
 /// or forwarding the body.
-pub(crate) struct SseIndexer {
-    file: Option<std::fs::File>,
-    request_id: String,
+pub(crate) struct SseObserver {
+    index_ranges: Vec<SseEventRange>,
     buffer: Vec<u8>,
     /// Buffer offset below which no line terminator exists, so feeding one
     /// long line chunk by chunk does not rescan the accumulated prefix.
@@ -112,26 +91,20 @@ pub(crate) struct SseIndexer {
     terminal_at_ns: Option<String>,
     chat_done_at_ns: Option<String>,
     error_at_ns: Option<String>,
-    sequence: u64,
     indexing_disabled: bool,
     observation_disabled: bool,
     max_observation_bytes: usize,
     last_arrival_at_ns: String,
 }
 
-impl SseIndexer {
-    pub(crate) fn new(file: Option<std::fs::File>, request_id: String) -> Self {
-        Self::with_observation_limit(file, request_id, MAX_SSE_EVENT_OBSERVATION_BYTES)
+impl SseObserver {
+    pub(crate) fn new() -> Self {
+        Self::with_observation_limit(MAX_SSE_EVENT_OBSERVATION_BYTES)
     }
 
-    fn with_observation_limit(
-        file: Option<std::fs::File>,
-        request_id: String,
-        max_observation_bytes: usize,
-    ) -> Self {
+    fn with_observation_limit(max_observation_bytes: usize) -> Self {
         Self {
-            file,
-            request_id,
+            index_ranges: Vec::new(),
             buffer: Vec::new(),
             scanned: 0,
             buffer_start: 0,
@@ -147,12 +120,19 @@ impl SseIndexer {
             terminal_at_ns: None,
             chat_done_at_ns: None,
             error_at_ns: None,
-            sequence: 0,
             indexing_disabled: false,
             observation_disabled: false,
             max_observation_bytes,
             last_arrival_at_ns: "0".to_string(),
         }
+    }
+
+    pub(crate) fn take_index_ranges(&mut self) -> Vec<SseEventRange> {
+        std::mem::take(&mut self.index_ranges)
+    }
+
+    pub(crate) fn observation_disabled(&self) -> bool {
+        self.observation_disabled
     }
 
     pub(crate) fn disable_indexing(&mut self) {
@@ -287,7 +267,6 @@ impl SseIndexer {
 
     fn process(&mut self, at_ns: &str, final_input: bool) -> anyhow::Result<()> {
         let mut consumed = 0usize;
-        let mut index_error = None;
         loop {
             // A terminator cannot hide below `scanned`, so a line's content
             // may start there while its end is searched further ahead.
@@ -325,15 +304,8 @@ impl SseIndexer {
                         at_ns.to_string(),
                     ));
                 }
-                if self.data_seen
-                    && !self.indexing_disabled
-                    && let Some(file) = self.file.as_mut()
-                {
-                    let entry = SseEventIndexEntry {
-                        schema_version: FORMAT_VERSION,
-                        request_id: self.request_id.clone(),
-                        kind: "sse_event".to_string(),
-                        sequence: self.sequence,
+                if self.data_seen && !self.indexing_disabled {
+                    self.index_ranges.push(SseEventRange {
                         body_start: self.event_start.unwrap_or(self.buffer_start),
                         body_end: absolute_end,
                         first_arrival_at_ns: self
@@ -341,20 +313,7 @@ impl SseIndexer {
                             .clone()
                             .unwrap_or_else(|| at_ns.to_string()),
                         completed_at_ns: at_ns.to_string(),
-                    };
-                    let write_result = (|| -> anyhow::Result<()> {
-                        serde_json::to_writer(&mut *file, &entry)?;
-                        file.write_all(b"\n")?;
-                        file.flush()?;
-                        Ok(())
-                    })();
-                    match write_result {
-                        Ok(()) => self.sequence = self.sequence.saturating_add(1),
-                        Err(error) => {
-                            self.indexing_disabled = true;
-                            index_error.get_or_insert(error);
-                        }
-                    }
+                    });
                 }
                 self.event_start = None;
                 self.first_arrival_at_ns = None;
@@ -397,24 +356,24 @@ impl SseIndexer {
             self.buffer.drain(..consumed);
             self.buffer_start += consumed as u64;
         }
+        // A partial next event belongs to this arrival, even before its first
+        // line is complete enough to process.
+        if self.event_start.is_none() && !self.buffer.is_empty() {
+            self.event_start = Some(self.buffer_start);
+            self.first_arrival_at_ns = Some(at_ns.to_string());
+        }
         // Everything left is terminator-free except a possible trailing `\r`
         // that must pair with the next chunk's first byte.
         self.scanned = self.buffer.len().saturating_sub(1);
-        match index_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
-    /// Process EOF, sync the optional index, and report an incomplete tail.
+    /// Process EOF and report an incomplete tail.
     ///
     /// The returned boolean concerns SSE framing only; it does not indicate
     /// whether the response or its model protocol reached a terminal event.
     pub(crate) fn finish(&mut self) -> anyhow::Result<bool> {
         if self.observation_disabled {
-            if let Some(file) = self.file.as_mut() {
-                file.sync_all()?;
-            }
             return Ok(false);
         }
         let last_arrival_at_ns = self.last_arrival_at_ns.clone();
@@ -426,9 +385,6 @@ impl SseIndexer {
         }
         if self.indexing_disabled {
             return Ok(false);
-        }
-        if let Some(file) = self.file.as_mut() {
-            file.sync_all()?;
         }
         Ok(self.event_start.is_some() || !self.buffer.is_empty())
     }

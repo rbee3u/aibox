@@ -1,17 +1,6 @@
 /**
- * Human copy for the failures the Console can only observe as error text.
- *
- * Conditions derived from the topology snapshot already read as sentences —
- * "shadow1 · Codex · Current Config differs" — because the Console knows what
- * they mean. Failures arrive instead as a Rust `anyhow` context chain or a
- * browser fetch rejection, and rendering those verbatim put an internal
- * operation name, a developer aside, and an errno in the one panel whose job
- * is telling an operator what to do next.
- *
- * Recognition is deliberately narrow: four causes that name a real next step.
- * Anything else keeps a per-source lead sentence, which states what failed
- * without guessing why. The raw text is never dropped — it moves behind a
- * disclosure as evidence.
+ * Recognize actionable failures without guessing unknown causes.
+ * Keep raw error text behind a disclosure as diagnostic evidence.
  */
 
 /** Which read produced the failure, used when the cause is not recognized. */
@@ -32,14 +21,7 @@ const UNRECOGNIZED: Record<FailureSource, string> = {
 };
 
 /**
- * A dead daemon and a missing binary are the two Docker failures an operator
- * actually hits, and they need opposite actions, so they are told apart rather
- * than folded into one "Docker is unavailable".
- *
- * The daemon message is matched before the missing-binary one because the
- * daemon case reports through a failed `docker image inspect` whose own text
- * can mention a missing socket file, which would otherwise read as the binary
- * being absent.
+ * Match daemon failure first: its missing socket can resemble a missing binary.
  */
 function recognize(raw: string): string | null {
   const text = raw.toLowerCase();
@@ -54,12 +36,6 @@ function recognize(raw: string): string | null {
   return null;
 }
 
-/**
- * The sentence for a failure, plus the raw text when it is worth keeping.
- *
- * The raw text is suppressed only when it would repeat the sentence, which
- * happens when there is no raw text at all.
- */
 export function explainFailure(source: FailureSource, raw: string | null): FailureCopy {
   const text = raw?.trim();
   if (!text) return { detail: UNRECOGNIZED[source] };

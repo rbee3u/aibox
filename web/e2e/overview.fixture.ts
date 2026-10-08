@@ -105,6 +105,10 @@ export async function mockOverview(page: Page, errors = false) {
         contentType: "text/event-stream",
         body: 'event: operation\ndata: {"operation":null}\n\n',
       });
+    if (path.endsWith("/requests"))
+      return route.fulfill({
+        json: { requests: [], total: 12, deletable_count: 12, has_next: false },
+      });
     if (path.endsWith("/overview")) return route.fulfill({ json: overview });
     if (path.endsWith("/topology")) return route.fulfill({ json: data });
     throw new Error("Unexpected Overview request: " + path);

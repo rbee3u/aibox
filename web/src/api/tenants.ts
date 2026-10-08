@@ -1,31 +1,18 @@
 import type { TenantRow } from "@/api/core";
 import type {
-  ComponentKind as GeneratedComponentKind,
-  ComponentRow as GeneratedComponentRow,
-  ComponentStatusWire as GeneratedComponentStatus,
-  LatestEntry as GeneratedLatestEntry,
-  LatestSnapshot as GeneratedLatestSnapshot,
+  ComponentKind,
+  ComponentRow,
+  LatestEntry,
+  LatestSnapshot,
 } from "@/api/generated/wire";
 import type { Operation } from "@/api/operations";
 import type { ControlApi } from "@/api/transport";
 import { tenantBody, tenantQuery } from "@/api/tenantSelection";
 import type { TenantSelection } from "@/domain/tenant";
 
-export type ComponentKind = GeneratedComponentKind;
-export type ComponentStatus = GeneratedComponentStatus;
-export type ComponentRow = GeneratedComponentRow;
-export type ComponentLatestEntry = GeneratedLatestEntry;
-export type ComponentLatestSnapshot = GeneratedLatestSnapshot;
-
-/**
- * Contract boundary for Component row normalization.
- *
- * The current mapping preserves the Rust-owned wire value. Contract tests pass
- * exported Service samples through this function.
- */
-export function decodeComponentRow(value: GeneratedComponentRow): ComponentRow {
-  return value;
-}
+export type { ComponentKind, ComponentRow };
+export type ComponentLatestEntry = LatestEntry;
+export type ComponentLatestSnapshot = LatestSnapshot;
 
 export interface TenantApi {
   listTenants(signal?: AbortSignal): Promise<TenantRow[]>;
@@ -64,10 +51,13 @@ export function listTenantsRequest(client: ControlApi) {
 export function tenantsApi(client: ControlApi): TenantApi {
   return {
     listTenants: listTenantsRequest(client),
-    listComponents: (tenant, signal) =>
-      client
-        .get<GeneratedComponentRow[]>(`/_aibox/api/components?${tenantQuery(tenant)}`, signal)
-        .then((rows) => (Array.isArray(rows) ? rows.map(decodeComponentRow) : [])),
+    listComponents: async (tenant, signal) => {
+      const rows = await client.get<ComponentRow[]>(
+        `/_aibox/api/components?${tenantQuery(tenant)}`,
+        signal,
+      );
+      return Array.isArray(rows) ? rows : [];
+    },
     latestComponents: (signal) =>
       client.get<ComponentLatestSnapshot | null>("/_aibox/api/components/latest", signal),
     checkLatestComponents: () =>

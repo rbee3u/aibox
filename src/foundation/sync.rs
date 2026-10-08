@@ -1,9 +1,5 @@
-//! Lock helpers that recover a poisoned guard instead of propagating it.
-//!
-//! These helpers deliberately favor continued availability after a Request
-//! task panics. Use them only for state that remains safe to inspect or replace
-//! after an interrupted mutation. They do not define the poisoning policy for
-//! every lock in AIBox.
+//! Recover poisoned locks only for state safe to inspect or replace after an
+//! interrupted mutation, allowing Request processing to continue after a panic.
 
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 

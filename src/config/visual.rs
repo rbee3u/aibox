@@ -5,7 +5,7 @@ use super::native::{
     remove_codex_path, remove_codex_provider, remove_json_path, set_codex_path, set_json_path,
     value_at_path,
 };
-use crate::agent::{AgentKind, MainConfigCondition, MainConfigValueKind};
+use crate::agent::{AgentKind, MainConfigCondition, MainConfigField, MainConfigValueKind};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -87,6 +87,15 @@ fn path_string(path: &[&str]) -> String {
     path.join(".")
 }
 
+/// Ordinary Visual options; the Custom provider aggregate edits its fields separately.
+fn visual_fields(agent: AgentKind) -> impl Iterator<Item = &'static MainConfigField> {
+    agent.main_config_fields().iter().filter(move |field| {
+        !(agent == AgentKind::Codex
+            && (field.path == ["model_provider"]
+                || field.path.starts_with(&["model_providers", "custom"])))
+    })
+}
+
 /// Return the fixed-field schema and values represented by a native main file.
 pub(crate) fn inspect_visual_config(agent: AgentKind, content: &str) -> Result<VisualConfigState> {
     let object = if content.trim().is_empty() {
@@ -99,14 +108,7 @@ pub(crate) fn inspect_visual_config(agent: AgentKind, content: &str) -> Result<V
     validate_config_main(agent, &object)?;
     let custom_provider = agent == AgentKind::Codex
         && value_at_path(&object, &["model_provider"]).and_then(Value::as_str) == Some("custom");
-    let options = agent
-        .main_config_fields()
-        .iter()
-        .filter(|field| {
-            !(agent == AgentKind::Codex
-                && (field.path == ["model_provider"]
-                    || field.path.starts_with(&["model_providers", "custom"])))
-        })
+    let options = visual_fields(agent)
         .map(|field| VisualConfigOptionState {
             path: path_string(field.path),
             label: field.label,
@@ -186,66 +188,48 @@ pub(crate) fn render_visual_main(
                     && parent.value.as_ref().and_then(Value::as_str) == Some(condition.value)
             })
         });
-        if input.included && available {
-            let value = input
-                .value
-                .clone()
-                .with_context(|| format!("Visual Config Option {} has no value", input.path))?;
-            let valid = match field.value_kind {
-                MainConfigValueKind::String => value.is_string(),
-                MainConfigValueKind::Bool => value.is_boolean(),
-            };
-            if !valid {
+        if !input.included || !available {
+            continue;
+        }
+        let value = input
+            .value
+            .clone()
+            .with_context(|| format!("Visual Config Option {} has no value", input.path))?;
+        let valid = match field.value_kind {
+            MainConfigValueKind::String => value.is_string(),
+            MainConfigValueKind::Bool => value.is_boolean(),
+        };
+        if !valid {
+            bail!(
+                "Visual Config Option {} must be {}",
+                input.path,
+                match field.value_kind {
+                    MainConfigValueKind::String => "a string",
+                    MainConfigValueKind::Bool => "a boolean",
+                }
+            );
+        }
+        if !field.enum_values.is_empty() {
+            let value = value.as_str().expect("string enum field validated above");
+            let original_value =
+                value_at_path(&original_object, field.path).and_then(Value::as_str);
+            if !field.enum_values.contains(&value) && original_value != Some(value) {
                 bail!(
-                    "Visual Config Option {} must be {}",
-                    input.path,
-                    match field.value_kind {
-                        MainConfigValueKind::String => "a string",
-                        MainConfigValueKind::Bool => "a boolean",
-                    }
+                    "Visual Config Option {} must use a supported enum value",
+                    input.path
                 );
             }
-            if !field.enum_values.is_empty() {
-                let value = value.as_str().expect("string enum field validated above");
-                let original_value =
-                    value_at_path(&original_object, field.path).and_then(Value::as_str);
-                if !field.enum_values.contains(&value) && original_value != Some(value) {
-                    bail!(
-                        "Visual Config Option {} must use a supported enum value",
-                        input.path
-                    );
-                }
-            }
-            values.insert(input.path.clone(), value);
         }
+        values.insert(input.path.clone(), value);
     }
-    let expected_fields = agent
-        .main_config_fields()
-        .iter()
-        .filter(|field| {
-            !(agent == AgentKind::Codex
-                && (field.path == ["model_provider"]
-                    || field.path.starts_with(&["model_providers", "custom"])))
-        })
-        .count();
-    if seen.len() != expected_fields {
+    if seen.len() != visual_fields(agent).count() {
         bail!("Visual Editor must provide every fixed Config Field");
     }
 
     match agent {
         AgentKind::Claude => {
-            let mut object = if original.trim().is_empty() {
-                Map::new()
-            } else {
-                agent
-                    .parse_main_config(original)
-                    .context("parse Visual Editor source")?
-            };
-            for field in agent.main_config_fields().iter().filter(|field| {
-                !(agent == AgentKind::Codex
-                    && (field.path == ["model_provider"]
-                        || field.path.starts_with(&["model_providers", "custom"])))
-            }) {
+            let mut object = original_object;
+            for field in visual_fields(agent) {
                 let key = path_string(field.path);
                 match values.get(&key) {
                     Some(value) => {
@@ -265,11 +249,7 @@ pub(crate) fn render_visual_main(
             } else {
                 DocumentMut::from_str(original).context("parse Visual Editor source")?
             };
-            for field in agent.main_config_fields().iter().filter(|field| {
-                !(agent == AgentKind::Codex
-                    && (field.path == ["model_provider"]
-                        || field.path.starts_with(&["model_providers", "custom"])))
-            }) {
+            for field in visual_fields(agent) {
                 let key = path_string(field.path);
                 match values.get(&key) {
                     Some(value) => {
@@ -322,25 +302,20 @@ pub(crate) fn render_visual_main(
 }
 
 pub(crate) fn render_visual_auth(input: &VisualAuthInput) -> Result<String> {
-    let value = if input.included {
+    let mut object = Map::new();
+    if input.included {
         let value = input
             .value
             .as_deref()
             .context("OPENAI_API_KEY is required when included")?;
-        if value.is_empty() {
-            Value::Object(Map::new())
-        } else {
-            let mut object = Map::new();
+        if !value.is_empty() {
             object.insert(
                 "OPENAI_API_KEY".to_string(),
                 Value::String(value.to_string()),
             );
-            Value::Object(object)
         }
-    } else {
-        Value::Object(Map::new())
-    };
-    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+    }
+    Ok(format!("{}\n", serde_json::to_string_pretty(&object)?))
 }
 
 pub(crate) fn inspect_codex_auth(

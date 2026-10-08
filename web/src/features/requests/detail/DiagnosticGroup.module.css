@@ -1,0 +1,100 @@
+.diagnosticGroup {
+  min-width: 0;
+}
+.diagnosticGroup h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-bold);
+  line-height: var(--line-height-meta);
+}
+.diagnosticGroup h3 span {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  font-size: var(--text-meta);
+}
+.errorDiagnostics h3 span {
+  border-color: var(--danger-line);
+  color: var(--danger-strong);
+  background: var(--danger-soft);
+}
+.warningDiagnostics h3 span {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.diagnosticList {
+  display: grid;
+  gap: 6px;
+}
+.diagnosticItem {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-content);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+.errorDiagnostics .diagnosticItem {
+  border-color: var(--danger-line);
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+.warningDiagnostics .diagnosticItem {
+  border-color: var(--warning-line);
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+.diagnosticMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.diagnosticIcon {
+  flex-shrink: 0;
+}
+.errorDiagnostics .diagnosticIcon {
+  color: var(--danger);
+}
+.warningDiagnostics .diagnosticIcon {
+  color: var(--warning);
+}
+.diagnosticMeta strong {
+  color: var(--ink);
+  font-size: var(--text-xs);
+}
+.diagnosticPhase {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
+  color: var(--muted);
+}
+.diagnosticTime {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  color: var(--muted);
+}
+.diagnosticItem p {
+  margin: 6px 0 0 23px;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--ink);
+}

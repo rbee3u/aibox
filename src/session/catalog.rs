@@ -1,10 +1,9 @@
 //! Session catalog resolution, listing, summaries, and deletion.
 
 use super::backend::SessionBackend;
-use super::filesystem::{
-    SessionDiscoverySummary, remove_session_transcript, safe_path, terminal_safe,
-};
+use super::filesystem::{SessionDiscoverySummary, remove_session_transcript};
 use super::model::{SessionListData, SessionListRow};
+use super::text::{safe_path, terminal_safe};
 use anyhow::{Result, bail};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -16,20 +15,19 @@ pub(super) fn resolve(backend: &dyn SessionBackend, home: &Path, query: &str) ->
     resolve_in(backend, &backend.files(home)?, query)
 }
 
-/// Resolve `query` against an already-discovered file list, so callers with many
-/// ids (`delete a b c`) can walk the transcript tree once instead of per id.
+/// Reuse one discovery snapshot when resolving multiple deletion targets.
 fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> Result<PathBuf> {
     if query.is_empty() {
         bail!("need a session id (or unique suffix)");
     }
-    let mut exact_matches: Vec<PathBuf> = Vec::new();
-    let mut suffix_matches: Vec<PathBuf> = Vec::new();
+    let mut exact_matches = Vec::new();
+    let mut suffix_matches = Vec::new();
     for file in files {
         let id = backend.id_of(file);
         if id == query {
-            exact_matches.push(file.clone());
+            exact_matches.push(file.as_path());
         } else if id.ends_with(query) {
-            suffix_matches.push(file.clone());
+            suffix_matches.push(file.as_path());
         }
     }
     let candidates = if exact_matches.is_empty() {
@@ -37,15 +35,16 @@ fn resolve_in(backend: &dyn SessionBackend, files: &[PathBuf], query: &str) -> R
     } else {
         exact_matches
     };
-    match candidates.len() {
-        0 => bail!("no session matches: {}", terminal_safe(query)),
-        1 => Ok(candidates.into_iter().next().unwrap()),
-        n => {
+    match candidates.as_slice() {
+        [] => bail!("no session matches: {}", terminal_safe(query)),
+        [path] => Ok(path.to_path_buf()),
+        paths => {
             let mut message = format!(
-                "ambiguous id '{}' matches {n} sessions:",
-                terminal_safe(query)
+                "ambiguous id '{}' matches {} sessions:",
+                terminal_safe(query),
+                paths.len()
             );
-            for candidate in &candidates {
+            for candidate in paths {
                 write!(
                     &mut message,
                     "\n     {}  {}",
@@ -81,7 +80,7 @@ fn list_id(id: &str) -> String {
     }
 }
 
-pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<SessionListData> {
+pub(super) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<SessionListData> {
     let discovery = backend.list_files(home)?;
     let mut warnings = discovery
         .errors
@@ -128,7 +127,7 @@ pub(crate) fn list_data(backend: &dyn SessionBackend, home: &Path) -> Result<Ses
     })
 }
 
-pub(crate) fn discovery_summary(
+pub(super) fn discovery_summary(
     backend: &dyn SessionBackend,
     home: &Path,
 ) -> Result<SessionDiscoverySummary> {
@@ -144,7 +143,7 @@ pub(crate) fn discovery_summary(
         warnings,
     })
 }
-pub(crate) fn delete_sessions(
+pub(super) fn delete_sessions(
     backend: &dyn SessionBackend,
     home: &Path,
     ids: &[String],
@@ -179,8 +178,7 @@ fn delete_targets(
         return Ok(targets);
     }
 
-    // Resolve every id against one strict snapshot so one command cannot act on
-    // different views of a changing transcript tree.
+    // Resolve all ids against one strict snapshot of the Transcript tree.
     let files = backend.files(home)?;
     let mut targets = Vec::new();
     for id in ids {
@@ -192,9 +190,7 @@ fn delete_targets(
     Ok(targets)
 }
 
-/// Collapse runs of control characters and non-plain-space whitespace to a
-/// single space (titles are one-liners in the listing). Keep ordinary spaces as
-/// authored so readable prompt snippets do not get over-normalized.
+/// Keep titles on one line while preserving ordinary spaces as authored.
 fn collapse_ws(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_run = false;

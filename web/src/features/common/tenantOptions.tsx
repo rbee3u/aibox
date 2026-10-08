@@ -1,25 +1,23 @@
 import type { TenantRow } from "@/api/core";
-import type { AgentKind } from "@/domain/agent";
-import type { TenantSelectionValue } from "@/domain/tenant";
+import { AGENTS, type AgentKind } from "@/domain/agent";
+import {
+  tenantSelectionValue,
+  type TenantSelection,
+  type TenantSelectionValue,
+} from "@/domain/tenant";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import type { SelectionOption } from "@/shared/ui/SelectionMenu";
 import { iconSize } from "@/shared/icons/iconSizes";
+import { agentLabel } from "@/shared/lib/format";
 
-/**
- * Projects Control API Tenant rows into Selection Menu options.
- *
- * This belongs to `features/common` because it combines an `api/` wire type
- * with a `shared/ui` type; `shared/` may not import `api/`.
- */
+// This combines API and UI types, so it belongs in features/common, not shared.
 
 const HostTenantIcon = resourceIcons.hostTenant;
 const ManagedTenantIcon = resourceIcons.managedTenant;
 
-/** A Managed Tenant row that carries the name its option value needs. */
 type NamedManagedTenant = TenantRow & { kind: "managed"; name: string };
 
-/** Managed Tenants sorted by name, skipping rows with no usable name. */
 export function managedTenants(tenants: readonly TenantRow[]): NamedManagedTenant[] {
   return tenants
     .filter((tenant): tenant is NamedManagedTenant =>
@@ -28,17 +26,10 @@ export function managedTenants(tenants: readonly TenantRow[]): NamedManagedTenan
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-/** The Host Tenant row, when the Control API reported one. */
 export function hostTenant(tenants: readonly TenantRow[]): TenantRow | null {
   return tenants.find((tenant) => tenant.kind === "host") ?? null;
 }
 
-/**
- * Tenant options with the Host Tenant first, then Managed Tenants by name.
- *
- * The Host Tenant is omitted when absent rather than shown as unavailable,
- * matching the Console rule that a missing scope stays quiet.
- */
 export function tenantSelectionOptions(
   tenants: readonly TenantRow[],
 ): SelectionOption<TenantSelectionValue>[] {
@@ -49,14 +40,13 @@ export function tenantSelectionOptions(
           {
             value: "host" as const,
             label: "Host Tenant",
-            // The trigger is 112px wide and the icon already says Host.
             summaryLabel: "Host",
             icon: <HostTenantIcon size={iconSize.xs} aria-hidden="true" />,
           },
         ]
       : []),
     ...managedTenants(tenants).map((tenant) => ({
-      value: `managed:${tenant.name}` as const,
+      value: tenantSelectionValue(tenant),
       label: tenant.display_name,
       summaryLabel: tenant.display_name,
       icon: <ManagedTenantIcon size={iconSize.xs} aria-hidden="true" />,
@@ -64,10 +54,9 @@ export function tenantSelectionOptions(
   ];
 }
 
-/** The display name for a Tenant Selection, falling back to its raw name. */
 export function tenantSelectionLabel(
   tenants: readonly TenantRow[],
-  selection: { kind: "host" } | { kind: "managed"; name: string },
+  selection: TenantSelection,
 ): string {
   if (selection.kind === "host") return "Host Tenant";
   return (
@@ -76,11 +65,10 @@ export function tenantSelectionLabel(
   );
 }
 
-/** Agent options in the Console's fixed presentation order. */
-export function agentSelectionOptions(agents: readonly AgentKind[]): SelectionOption<AgentKind>[] {
-  return agents.map((value) => ({
+export function agentSelectionOptions(): SelectionOption<AgentKind>[] {
+  return AGENTS.map((value) => ({
     value,
-    label: value === "codex" ? "Codex" : "Claude",
+    label: agentLabel(value),
     icon: <BrandIcon brand={brandForAgent(value)} size={iconSize.xs} />,
   }));
 }

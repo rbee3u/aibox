@@ -2,17 +2,18 @@
 
 use super::backend::SessionBackend;
 use super::catalog::resolve;
-use super::filesystem::{MAX_TRANSCRIPT_LINE_BYTES, open_session_transcript, safe_path};
+use super::filesystem::{MAX_TRANSCRIPT_LINE_BYTES, open_session_transcript};
 use super::model::{
     DetailRecord, EvidenceEncoding, SessionDetailMeta, SessionDetailStats, ToolActivity,
     ToolActivityStatus, TranscriptEvidence, TranscriptEvidenceSummary, bounded_preview, ts_of,
 };
+use super::text::safe_path;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::UNIX_EPOCH;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -39,7 +40,7 @@ fn detail_entry_id(line: u64) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn detail_records_for_test(
+pub(super) fn detail_records_for_test(
     backend: &dyn SessionBackend,
     home: &Path,
     query: &str,
@@ -50,10 +51,6 @@ pub(crate) fn detail_records_for_test(
         Ok(true)
     })?;
     Ok(records)
-}
-
-fn detail_file_path(backend: &dyn SessionBackend, home: &Path, query: &str) -> Result<PathBuf> {
-    resolve(backend, home, query)
 }
 
 fn detail_meta(
@@ -78,14 +75,14 @@ fn detail_meta(
     })
 }
 
-pub(crate) fn stream_detail_data(
+pub(super) fn stream_detail_data(
     backend: &dyn SessionBackend,
     home: &Path,
     query: &str,
     begin: &mut dyn FnMut(&SessionDetailMeta) -> Result<bool>,
     visit: &mut dyn FnMut(DetailRecord) -> Result<bool>,
 ) -> Result<(SessionDetailMeta, SessionDetailStats, Vec<String>)> {
-    let path = detail_file_path(backend, home, query)?;
+    let path = resolve(backend, home, query)?;
     let id = backend.id_of(&path);
     let meta = detail_meta(backend, home, &path, &id)?;
     if !begin(&meta)? {
@@ -199,14 +196,14 @@ pub(crate) fn stream_detail_data(
     Ok((meta, stats, warnings))
 }
 
-pub(crate) fn read_evidence(
+pub(super) fn read_evidence(
     backend: &dyn SessionBackend,
     home: &Path,
     query: &str,
     entry: &str,
     snapshot: &str,
 ) -> Result<TranscriptEvidence> {
-    let path = detail_file_path(backend, home, query)?;
+    let path = resolve(backend, home, query)?;
     let file = open_session_transcript(home, &path)?;
     let current_snapshot = snapshot_for_metadata(
         &file

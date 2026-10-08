@@ -1,0 +1,14 @@
+.sessionConversationNavLabel {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .sessionConversationNavLabel {
+    display: block;
+    overflow: hidden;
+    color: var(--ink-secondary);
+    font-size: var(--text-meta);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

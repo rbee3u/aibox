@@ -35,26 +35,35 @@ describe("Control API transport", () => {
     expect(init?.body).toBe('{"name":"work"}');
   });
 
-  it("reads NDJSON records across chunk boundaries", async () => {
-    const encoded = new TextEncoder().encode('{"value":"first"}\n{"value":"second"}\n');
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoded.subarray(0, 11));
-            controller.enqueue(encoded.subarray(11));
-            controller.close();
-          },
-        }),
-      ),
-    );
-    const records: string[] = [];
+  it("preserves NDJSON records across every UTF-8 byte boundary", async () => {
+    const encoded = new TextEncoder().encode('{"value":"你好"}\n{"value":"😀"}\n');
+    const partitions = [
+      ...Array.from({ length: encoded.length + 1 }, (_, split) => [split, encoded.length]),
+      Array.from({ length: encoded.length }, (_, index) => index + 1),
+    ];
+    for (const ends of partitions) {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              let start = 0;
+              for (const end of ends) {
+                controller.enqueue(encoded.subarray(start, end));
+                start = end;
+              }
+              controller.close();
+            },
+          }),
+        ),
+      );
+      const records: string[] = [];
 
-    await client(fetchMock).streamNdjson<{ value: string }>("/stream", (record) =>
-      records.push(record.value),
-    );
+      await client(fetchMock).streamNdjson<{ value: string }>("/stream", (record) =>
+        records.push(record.value),
+      );
 
-    expect(records).toEqual(["first", "second"]);
+      expect(records, `chunk ends: ${ends.join(", ")}`).toEqual(["你好", "😀"]);
+    }
   });
 
   it("propagates a record handler failure out of the stream", async () => {

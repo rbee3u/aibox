@@ -6,10 +6,10 @@ use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 pub(super) fn parse_json_object(content: &str, label: &str) -> Result<Map<String, Value>> {
     let value = serde_json::from_str::<Value>(content).with_context(|| format!("parse {label}"))?;
-    value
-        .as_object()
-        .cloned()
-        .with_context(|| format!("{label} must be a JSON object"))
+    match value {
+        Value::Object(object) => Ok(object),
+        _ => bail!("{label} must be a JSON object"),
+    }
 }
 
 pub(super) fn value_at_path<'a>(
@@ -17,14 +17,11 @@ pub(super) fn value_at_path<'a>(
     path: &[&str],
 ) -> Option<&'a Value> {
     let (first, rest) = path.split_first()?;
-    let value = object.get(*first)?;
-    if rest.is_empty() {
-        Some(value)
-    } else {
-        value
-            .as_object()
-            .and_then(|child| value_at_path(child, rest))
+    let mut value = object.get(*first)?;
+    for key in rest {
+        value = value.as_object()?.get(*key)?;
     }
+    Some(value)
 }
 
 pub(super) fn set_json_path(object: &mut Map<String, Value>, path: &[&str], value: Value) -> bool {
@@ -61,11 +58,10 @@ pub(super) fn remove_json_path(object: &mut Map<String, Value>, path: &[&str]) -
     let Some(existing) = object.get_mut(*first) else {
         return false;
     };
-    if !existing.is_object() {
+    let Value::Object(child) = existing else {
         object.remove(*first);
         return true;
-    }
-    let child = existing.as_object_mut().expect("object checked above");
+    };
     let changed = remove_json_path(child, rest);
     if child.is_empty() {
         object.remove(*first);
@@ -148,46 +144,31 @@ pub(super) fn remove_codex_path(document: &mut DocumentMut, path: &[&str]) -> bo
     }
     debug_assert_eq!(&path[..2], ["model_providers", "custom"]);
 
-    if document.get("model_providers").is_some()
-        && document
-            .get("model_providers")
-            .and_then(Item::as_table_like)
-            .is_none()
-    {
+    let Some(providers) = document.get_mut("model_providers") else {
+        return false;
+    };
+    let Some(providers) = providers.as_table_like_mut() else {
         document.as_table_mut().remove("model_providers");
         return true;
-    }
+    };
 
     let mut changed = false;
-    let mut remove_providers = false;
-    if let Some(providers) = document
-        .get_mut("model_providers")
-        .and_then(Item::as_table_like_mut)
-    {
-        if providers.get("custom").is_some()
-            && providers
-                .get("custom")
-                .and_then(Item::as_table_like)
-                .is_none()
-        {
-            providers.remove("custom");
-            changed = true;
+    let remove_custom = match providers.get_mut("custom") {
+        Some(custom) => {
+            if let Some(custom) = custom.as_table_like_mut() {
+                changed |= custom.remove(path[2]).is_some();
+                custom.iter().next().is_none()
+            } else {
+                true
+            }
         }
-        let mut remove_custom = false;
-        if let Some(custom) = providers
-            .get_mut("custom")
-            .and_then(Item::as_table_like_mut)
-        {
-            changed |= custom.remove(path[2]).is_some();
-            remove_custom = custom.iter().next().is_none();
-        }
-        if remove_custom {
-            providers.remove("custom");
-            changed = true;
-        }
-        remove_providers = providers.iter().next().is_none();
+        None => false,
+    };
+    if remove_custom {
+        providers.remove("custom");
+        changed = true;
     }
-    if remove_providers {
+    if providers.iter().next().is_none() {
         document.as_table_mut().remove("model_providers");
         changed = true;
     }

@@ -19,11 +19,11 @@ fn list_and_detail_data_expose_structured_session_state() {
     let home = tempfile::tempdir().unwrap();
     let path = fixture(home.path());
     let backend = backend_for(AgentKind::Claude);
-    let listed = list_session_data(backend.as_ref(), home.path()).unwrap();
+    let listed = list_session_data(AgentKind::Claude, home.path()).unwrap();
     assert_eq!(listed.sessions.len(), 1);
     assert_eq!(listed.sessions[0].title, "first prompt");
     let id = listed.sessions[0].id.clone();
-    let records = detail_records_for_test(backend.as_ref(), home.path(), &id).unwrap();
+    let records = detail_records_for_test(backend, home.path(), &id).unwrap();
     let messages = records
         .into_iter()
         .filter_map(|record| match record {
@@ -43,8 +43,7 @@ fn malformed_transcripts_remain_visible_with_warnings() {
         ".claude/projects/example/bad.jsonl",
         &["not-json"],
     );
-    let backend = backend_for(AgentKind::Claude);
-    let listed = list_session_data(backend.as_ref(), home.path()).unwrap();
+    let listed = list_session_data(AgentKind::Claude, home.path()).unwrap();
     assert_eq!(listed.sessions.len(), 1);
     assert!(listed.partial);
     assert!(!listed.sessions[0].warnings.is_empty());
@@ -59,13 +58,12 @@ fn deletion_is_format_independent_and_supports_all() {
         &["not-json"],
     );
     write_jsonl(home.path(), ".claude/projects/example/two.jsonl", &[]);
-    let backend = backend_for(AgentKind::Claude);
     assert_eq!(
-        delete_session_catalog(backend.as_ref(), home.path(), &[], true).unwrap(),
+        delete_session_catalog(AgentKind::Claude, home.path(), &[], true).unwrap(),
         2
     );
     assert!(
-        session_discovery_summary(backend.as_ref(), home.path())
+        session_discovery_summary(AgentKind::Claude, home.path())
             .unwrap()
             .count
             == 0
@@ -73,12 +71,129 @@ fn deletion_is_format_independent_and_supports_all() {
 }
 
 #[test]
-fn empty_or_ambiguous_delete_selection_is_rejected() {
-    let home = tempfile::tempdir().unwrap();
-    write_jsonl(home.path(), ".claude/projects/a/one.jsonl", &[]);
-    let backend = backend_for(AgentKind::Claude);
-    assert!(delete_session_catalog(backend.as_ref(), home.path(), &[], false).is_err());
-    assert!(delete_session_catalog(backend.as_ref(), home.path(), &[], true).is_ok());
+fn deletion_resolves_the_entire_selection_before_removing_transcripts() {
+    struct Case {
+        name: &'static str,
+        ids: &'static [&'static str],
+        all: bool,
+        removed: &'static [usize],
+        error: Option<&'static str>,
+    }
+    let cases = [
+        Case {
+            name: "empty selection",
+            ids: &[],
+            all: false,
+            removed: &[],
+            error: Some("provide at least one session id"),
+        },
+        Case {
+            name: "empty id",
+            ids: &[""],
+            all: false,
+            removed: &[],
+            error: Some("need a session id"),
+        },
+        Case {
+            name: "unique suffix",
+            ids: &["ique"],
+            all: false,
+            removed: &[0],
+            error: None,
+        },
+        Case {
+            name: "exact id wins over suffix",
+            ids: &["exact"],
+            all: false,
+            removed: &[1],
+            error: None,
+        },
+        Case {
+            name: "duplicate full id",
+            ids: &["duplicate"],
+            all: false,
+            removed: &[],
+            error: Some("ambiguous id"),
+        },
+        Case {
+            name: "ambiguous suffix after valid id",
+            ids: &["unique", "tail"],
+            all: false,
+            removed: &[],
+            error: Some("ambiguous id"),
+        },
+        Case {
+            name: "missing id after valid id",
+            ids: &["unique", "missing"],
+            all: false,
+            removed: &[],
+            error: Some("no session matches"),
+        },
+        Case {
+            name: "all conflicts with explicit ids",
+            ids: &["unique"],
+            all: true,
+            removed: &[],
+            error: Some("--all cannot be combined"),
+        },
+        Case {
+            name: "repeated selection deletes once",
+            ids: &["unique", "ique", "unique"],
+            all: false,
+            removed: &[0],
+            error: None,
+        },
+        Case {
+            name: "explicit all includes duplicate ids",
+            ids: &[],
+            all: true,
+            removed: &[0, 1, 2, 3, 4, 5, 6],
+            error: None,
+        },
+    ];
+    for case in cases {
+        let home = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = [
+            "a/unique",
+            "a/exact",
+            "a/prefix-exact",
+            "a/one-tail",
+            "b/two-tail",
+            "a/duplicate",
+            "b/duplicate",
+        ]
+        .map(|name| {
+            write_jsonl(
+                home.path(),
+                &format!(".claude/projects/{name}.jsonl"),
+                &["not-json"],
+            )
+        })
+        .into_iter()
+        .collect();
+        let ids: Vec<_> = case.ids.iter().map(|id| (*id).to_string()).collect();
+        let result = delete_session_catalog(AgentKind::Claude, home.path(), &ids, case.all);
+        match case.error {
+            Some(expected) => {
+                let error = result.expect_err(case.name).to_string();
+                assert!(error.contains(expected), "{}: {error}", case.name);
+            }
+            None => assert_eq!(result.unwrap(), case.removed.len(), "{}", case.name),
+        }
+        for (index, path) in paths.iter().enumerate() {
+            if case.removed.contains(&index) {
+                assert!(!path.exists(), "{}: {}", case.name, path.display());
+            } else {
+                assert_eq!(
+                    std::fs::read_to_string(path).unwrap(),
+                    "not-json\n",
+                    "{}: {}",
+                    case.name,
+                    path.display()
+                );
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -136,9 +251,33 @@ fn strict_and_tolerant_discovery_reject_symlinked_and_fifo_session_ancestors() {
 
 #[test]
 fn canonical_uuid_display_uses_a_short_suffix() {
-    let id = "12345678-1234-1234-1234-123456789abc";
-    assert!(is_canonical_uuid(id));
-    assert!(!is_canonical_uuid("short"));
+    let home = tempfile::tempdir().unwrap();
+    let cases = [
+        ("12345678-1234-1234-1234-123456789abc", "123456789abc"),
+        ("ABCDEF12-1234-1234-1234-ABCDEF123456", "ABCDEF123456"),
+        ("short", "short"),
+        (
+            "12345678_1234-1234-1234-123456789abc",
+            "12345678_1234-1234-1234-123456789abc",
+        ),
+        (
+            "12345678-1234-1234-1234-123456789abz",
+            "12345678-1234-1234-1234-123456789abz",
+        ),
+    ];
+    for (id, _) in cases {
+        write_jsonl(
+            home.path(),
+            &format!(".claude/projects/example/{id}.jsonl"),
+            &[],
+        );
+    }
+    let listed = list_session_data(AgentKind::Claude, home.path()).unwrap();
+    assert_eq!(listed.sessions.len(), cases.len());
+    for (id, display) in cases {
+        let row = listed.sessions.iter().find(|row| row.id == id).unwrap();
+        assert_eq!(row.display_id, display, "id={id}");
+    }
 }
 
 #[test]
@@ -155,7 +294,7 @@ fn detail_projection_keeps_chat_order_and_tool_activity() {
         ],
     );
     let backend = backend_for(AgentKind::Claude);
-    let records = detail_records_for_test(backend.as_ref(), home.path(), "conversation").unwrap();
+    let records = detail_records_for_test(backend, home.path(), "conversation").unwrap();
     assert!(path.exists());
     assert!(
         matches!(records[0], DetailRecord::Message(ref message) if message.role == ConversationRole::User)
@@ -183,8 +322,7 @@ fn list_summary_includes_latest_message_and_counts() {
             r#"{"timestamp":"2026-07-30T10:00:01Z","type":"assistant","message":{"role":"assistant","content":"latest"}}"#,
         ],
     );
-    let backend = backend_for(AgentKind::Claude);
-    let listed = list_session_data(backend.as_ref(), home.path()).unwrap();
+    let listed = list_session_data(AgentKind::Claude, home.path()).unwrap();
     assert_eq!(listed.sessions[0].latest_message, "latest");
     assert_eq!(listed.sessions[0].message_count, 2);
     assert_eq!(listed.sessions[0].tool_count, 0);
@@ -208,7 +346,7 @@ fn codex_detail_projects_messages_tools_and_hidden_internal_records() {
         ],
     );
     let backend = backend_for(AgentKind::Codex);
-    let records = detail_records_for_test(backend.as_ref(), home.path(), id).unwrap();
+    let records = detail_records_for_test(backend, home.path(), id).unwrap();
 
     assert!(matches!(
         &records[0],
@@ -255,7 +393,7 @@ fn claude_thinking_is_diagnostic_without_hiding_visible_assistant_text() {
         ],
     );
     let backend = backend_for(AgentKind::Claude);
-    let records = detail_records_for_test(backend.as_ref(), home.path(), "thinking").unwrap();
+    let records = detail_records_for_test(backend, home.path(), "thinking").unwrap();
 
     assert!(matches!(
         &records[0],
@@ -278,10 +416,9 @@ fn detail_stats_include_malformed_entries_and_snapshot() {
             "not-json",
         ],
     );
-    let backend = backend_for(AgentKind::Claude);
     let mut meta_seen = false;
     let (_, stats, warnings) = stream_session_detail(
-        backend.as_ref(),
+        AgentKind::Claude,
         home.path(),
         "partial",
         &mut |_| {
@@ -315,9 +452,8 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
     let mut raw = std::fs::read(&path).unwrap();
     raw.extend_from_slice(b"\xff\n");
     std::fs::write(&path, raw).unwrap();
-    let backend = backend_for(AgentKind::Claude);
     let (_, stats, _) = stream_session_detail(
-        backend.as_ref(),
+        AgentKind::Claude,
         home.path(),
         "evidence",
         &mut |_| Ok(true),
@@ -326,7 +462,7 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
     .unwrap();
 
     let visible = read_session_evidence(
-        backend.as_ref(),
+        AgentKind::Claude,
         home.path(),
         "evidence",
         "line-1",
@@ -337,7 +473,7 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
     assert!(visible.content.contains("hello"));
     assert!(
         read_session_evidence(
-            backend.as_ref(),
+            AgentKind::Claude,
             home.path(),
             "evidence",
             "line-2",
@@ -346,7 +482,7 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
         .is_err()
     );
     let binary = read_session_evidence(
-        backend.as_ref(),
+        AgentKind::Claude,
         home.path(),
         "evidence",
         "line-3",
@@ -358,7 +494,7 @@ fn evidence_reads_utf8_and_base64_and_rejects_stale_or_hidden_entries() {
 
     std::fs::write(&path, b"changed\n").unwrap();
     let stale = read_session_evidence(
-        backend.as_ref(),
+        AgentKind::Claude,
         home.path(),
         "evidence",
         "line-1",

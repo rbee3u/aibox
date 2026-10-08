@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/requests";
+import { HttpError } from "@/api/httpError";
 import {
   activeDetail,
   activeRequestList,
@@ -341,7 +341,7 @@ describe("Requests page body inspection", () => {
     const getRequest = vi
       .fn<RequestsApi["getRequest"]>()
       .mockResolvedValueOnce(activeDetail)
-      .mockRejectedValue(new ApiError("Request not found", 404));
+      .mockRejectedValue(new HttpError("Request not found", 404));
     renderApp({
       listRequests: vi.fn().mockResolvedValue(activeRequestList),
       getRequest,
@@ -362,7 +362,7 @@ describe("Requests page body inspection", () => {
     const incompleteDetail = withIncompleteRequestBody(activeDetail);
     const loadBody = vi
       .fn<RequestsApi["loadBody"]>()
-      .mockRejectedValue(new ApiError("Request not found", 404));
+      .mockRejectedValue(new HttpError("Request not found", 404));
     renderApp({
       listRequests: vi.fn().mockResolvedValue(activeRequestList),
       getRequest: vi.fn().mockResolvedValue(incompleteDetail),

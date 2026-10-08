@@ -3,7 +3,7 @@ export const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 export type TenantSelection = { kind: "host" } | { kind: "managed"; name: string };
 export type TenantSelectionValue = "host" | `managed:${string}`;
 
-export function parseManagedTenantName(value: string): string | null {
+function parseManagedTenantName(value: string): string | null {
   return DNS_LABEL_PATTERN.test(value) ? value : null;
 }
 
@@ -18,6 +18,11 @@ export function parseTenantSelectionValue(value: string | null): TenantSelection
 
 export function tenantSelectionValue(selection: TenantSelection): TenantSelectionValue {
   return selection.kind === "host" ? "host" : `managed:${selection.name}`;
+}
+
+/** Keep only identity when selecting a Tenant from a richer catalog row. */
+export function tenantSelection(tenant: TenantSelection): TenantSelection {
+  return tenant.kind === "host" ? { kind: "host" } : { kind: "managed", name: tenant.name };
 }
 
 export function tenantSelectionFromValue(key: TenantSelectionValue): TenantSelection {

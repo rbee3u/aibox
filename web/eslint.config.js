@@ -5,7 +5,10 @@ import { defineConfig } from "eslint/config";
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
-const features = ["overview", "tenants", "configs", "sessions", "requests"];
+const features = readdirSync(join(import.meta.dirname, "src/features"), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && entry.name !== "common")
+  .map((entry) => entry.name)
+  .sort();
 
 /**
  * Console dependencies point inward from app to features and from features to
@@ -119,6 +122,9 @@ export default defineConfig(
   {
     files: ["src/**/*.{ts,tsx}"],
     extends: [reactHooks.configs.flat.recommended],
+    rules: {
+      "no-duplicate-imports": ["error", { allowSeparateTypeImports: true }],
+    },
   },
   layerBoundary("api", [
     {

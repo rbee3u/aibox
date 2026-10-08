@@ -1,10 +1,8 @@
 # Console Architecture
 
-The Console is the React and TypeScript application under `web/`.
-This document owns frontend architecture, dependency boundaries, Control API
-ownership, and test organization. See [Console UI](console-ui.md) for shared
-interaction and feature contracts, and [Development](development.md) for
-environment setup, build outputs, checks, and contract generation.
+Architecture and tests for the React/TypeScript Console under `web/`. See
+[Console UI](console-ui.md) for interactions and [Development](development.md)
+for builds, checks, and contract generation.
 
 ## Architecture
 
@@ -28,8 +26,34 @@ Concern directories have single ownership and do not import siblings. Move
 values shared by concerns to the feature root, and values shared by features to
 the narrowest valid inner layer.
 
-Each feature owns its route codec, controller, grouped view model, view, and
-workflow state. Focused hooks own loading, polling, streaming, and cancellation.
+Each feature owns its controller, views, workflow, and resource hooks.
+Feature-root `viewTypes` supply shared contracts; views do not import controllers.
+Controllers compose concern hooks and coordinate their policies. Cross-feature
+URL codecs live in `features/common/routes/`; feature-only routes, navigation
+synchronization, and workflow actions stay local.
+
+Configs' `editor/` concern owns a `ConfigEditorSession` per Tenant, Agent, and
+Current/Named Config identity. React manages its lifetime and subscribes to
+immutable snapshots. Drafts, mode, saves, dirty state, and comparison inputs
+share that session; file focus and URLs do not replace it. Comparison revisions
+invalidate old evidence even when edits return to earlier content. CodeMirror
+and difference location remain view bindings. See
+[ADR 0012](adr/0012-config-editing-scope.md).
+
+`LatestRequest` owns replaceable request leases. Its single-response runner
+commits only the current request's callbacks and releases its lease; resource
+hooks keep their own loading, refresh, error, and recovery policies. Streaming
+readers use leases directly rather than being forced into that runner.
+
+Styles stay beside their concern; cross-concern styles stay at the feature root.
+Page styles contain page layout only.
+Shared catalog card rows use explicit `data-inspected`, `data-selected`, and
+`data-selection-mode` state; deletion actions use `data-row-action`. Never infer
+state from CSS Modules class-name fragments.
+
+ESLint discovers feature and concern directories from disk, so a new feature
+receives the same dependency restrictions immediately.
+
 Only `app/` integrates browser history and composes the persistent shell; pages
 receive a location snapshot and navigation writer. Config dirty state must be
 guarded across in-app, history, and browser navigation.
@@ -45,9 +69,17 @@ never import transport or generated wire types.
 
 Rust owns the wire types, route manifest, and contract samples under
 `web/src/api/generated/`. Declare each route once in
-`service/control/routes.rs`; production clients remain handwritten. See
+`service/control/routes.rs`: one declaration of path, method, and handler
+produces both the Axum registration and the generated route manifest.
+Production clients remain handwritten. See
 [Contract Generation](development.md#contract-generation) for the update and
 verification workflow.
+
+The exporter registers endpoint root DTOs and recursively discovers their
+TypeScript dependencies, rejecting conflicting names and ordering declarations
+deterministically. Nested types need no facade re-export merely for export;
+fixtures may still name types they construct. Type overrides must retain their
+Rust dependency information so recursive collection remains complete.
 
 ## Testing
 

@@ -2,7 +2,7 @@
 
 use crate::request::interpretation::{BodyContentCoding, body_reader};
 use crate::request::model::ProtocolFamily;
-use crate::request::sse::{ObservedSseEvent, SseIndexer};
+use crate::request::sse::{ObservedSseEvent, SseObserver};
 use anyhow::{Context, Result, bail};
 use std::fs::File;
 use std::io::Read as _;
@@ -18,14 +18,13 @@ pub(crate) struct ResponseObservation {
 pub(crate) fn replay_complete_encoded_sse(
     file: File,
     coding: BodyContentCoding,
-    request_id: String,
     at_ns: &str,
 ) -> Result<ResponseObservation> {
     if !coding.is_encoded() {
-        bail!("identity SSE should use the live indexer");
+        bail!("identity SSE should use the live observer");
     }
     let mut decoder = body_reader(file, coding).context("create encoded response decoder")?;
-    let mut indexer = SseIndexer::new(None, request_id);
+    let mut observer = SseObserver::new();
     let mut buffer = [0u8; 16 * 1024];
     loop {
         let read = decoder
@@ -34,11 +33,13 @@ pub(crate) fn replay_complete_encoded_sse(
         if read == 0 {
             break;
         }
-        indexer.feed(&buffer[..read], indexer.body_offset(), at_ns)?;
+        observer.feed(&buffer[..read], observer.body_offset(), at_ns)?;
+        // Replay uses protocol evidence only; discard ranges after every bounded read.
+        observer.take_index_ranges();
     }
-    let warning = indexer.finish().err().map(|error| error.to_string());
+    let warning = observer.finish().err().map(|error| error.to_string());
     Ok(ResponseObservation {
-        events: indexer.take_protocol_events(),
+        events: observer.take_protocol_events(),
         terminal_seen: false,
         warning,
     })
@@ -51,31 +52,28 @@ pub(crate) fn replay_complete_encoded_sse(
 pub(crate) fn replay_encoded_sse_prefix(
     file: File,
     coding: BodyContentCoding,
-    request_id: String,
     family: ProtocolFamily,
 ) -> Result<ResponseObservation> {
     if !coding.is_encoded() {
-        bail!("identity SSE should use the live indexer");
+        bail!("identity SSE should use the live observer");
     }
     let mut decoder = body_reader(file, coding).context("create encoded response decoder")?;
-    let mut indexer = SseIndexer::new(None, request_id);
+    let mut observer = SseObserver::new();
     let mut buffer = [0u8; 16 * 1024];
     while let Ok(read) = decoder.read(&mut buffer) {
         if read == 0 {
             break;
         }
-        if indexer
-            .feed(&buffer[..read], indexer.body_offset(), "0")
-            .is_err()
-            || indexer.terminal_seen(family)
-        {
+        let observed = observer.feed(&buffer[..read], observer.body_offset(), "0");
+        observer.take_index_ranges();
+        if observed.is_err() || observer.terminal_seen(family) {
             break;
         }
     }
-    let _ = indexer.finish();
+    let _ = observer.finish();
     Ok(ResponseObservation {
-        terminal_seen: indexer.terminal_seen(family),
-        events: indexer.take_protocol_events(),
+        terminal_seen: observer.terminal_seen(family),
+        events: observer.take_protocol_events(),
         warning: None,
     })
 }

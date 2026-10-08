@@ -6,9 +6,7 @@ import { TenantPage as TenantPageView } from "@/features/tenants/TenantPage";
 import { useTestLocation } from "@/test/useTestLocation";
 
 /**
- * Tenants-specific rows: `default` sits under the Host Home so the page
- * abbreviates it to `~/...`, while `work` is outside and must stay absolute.
- * The shared TENANT_ROWS fixture cannot express that, so these stay local.
+ * Exercise both Host Home abbreviation (`default`) and absolute paths (`work`).
  */
 export const tenantRows = [
   {

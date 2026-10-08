@@ -1,123 +1,30 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import type { RequestList, RequestsApi } from "@/api/requests";
 import { allSelected } from "@/features/common/catalogSelection";
-import { requestWasCancelled } from "@/features/requests/requestErrors";
+import { useRequestCatalog } from "@/features/requests/catalog/useRequestCatalog";
+import { useRequestInspection } from "@/features/requests/detail/useRequestInspection";
+import { useRequestDeletion } from "@/features/requests/mutation/useRequestDeletion";
 import {
-  earliestSelectedPage,
   initialRequestsWorkflow,
   requestsWorkflowReducer,
-  type RequestsDeletion,
-  type RequestsDialog,
 } from "@/features/requests/requestsWorkflow";
 import { readRequestsRoute, requestsSearch, type RequestsRoute } from "@/features/requests/route";
-import {
-  useRequestInspection,
-  type InspectionFailure,
-} from "@/features/requests/detail/useRequestInspection";
-import {
-  focusTargetAfterDelete,
-  removeDeletedFromList,
-  REQUESTS_PER_PAGE,
-} from "@/features/requests/catalog/listModel";
-import type { DetailTab } from "@/features/requests/viewTypes";
+import type {
+  RequestsPageProps,
+  InspectionFailure,
+  RequestsViewModel,
+  DetailTab,
+} from "@/features/requests/viewTypes";
 import { useFailureNotifications } from "@/shared/hooks/useFailureNotifications";
-import { messageOf } from "@/shared/lib/errors";
 import { useNarrowDetailFocus } from "@/shared/hooks/useNarrowDetailFocus";
-import { usePolling } from "@/shared/hooks/usePolling";
-import { LatestRequest } from "@/shared/lib/latestRequest";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
-import type { NotificationItemData, NotificationSource } from "@/shared/ui/notificationTypes";
 
-type Inspection = ReturnType<typeof useRequestInspection>;
-
-const LIST_POLL_INTERVAL_MS = 5000;
-
-const emptyList: RequestList = {
-  requests: [],
-  total: 0,
-  deletable_count: 0,
-  has_next: false,
-};
-
-interface ControllerOptions {
-  api: RequestsApi;
-  search: string;
-  onLocationChange: ModuleLocationChange;
-}
-
-/**
- * What the Requests page reads, grouped the same way the other three catalog
- * pages group their view models: the list, the open Request, batch selection,
- * deletion, its dialog, and page-level feedback.
- */
-export interface RequestsViewModel {
-  catalog: {
-    currentId: string | null;
-    list: RequestList;
-    listError: string | null;
-    loadingList: boolean;
-    navigatePage: (nextPage: number) => void;
-    openRequest: (id: string) => void;
-    page: number;
-    refreshPage: () => Promise<void>;
-    refreshing: boolean;
-    /** Absent in selection mode: reloading the list would discard the selection. */
-    retryList: (() => void) | undefined;
-  };
-  detail: {
-    bodies: Inspection["bodies"];
-    bodyStatus: Inspection["bodyStatus"];
-    currentId: string | null;
-    decodedBodies: Inspection["decodedBodies"];
-    detail: Inspection["detail"];
-    detailBackButton: RefObject<HTMLButtonElement | null>;
-    detailOpen: boolean;
-    download: Inspection["download"];
-    eventTimings: Inspection["eventTimings"];
-    inspectionFailure: Inspection["failure"];
-    loadingBody: Inspection["loadingBody"];
-    loadingDetail: boolean;
-    retryInspectionFailure: () => void;
-    returnToList: () => void;
-    selectTab: (next: DetailTab) => void;
-    tab: DetailTab;
-  };
-  selection: {
-    clearFocusAfterDelete: () => void;
-    clearFocusAfterInspection: () => void;
-    enterSelection: () => void;
-    exitSelection: () => void;
-    focusAfterDelete: string | null | undefined;
-    focusAfterInspection: string | null | undefined;
-    selected: Set<string>;
-    selectionMode: boolean;
-    togglePageSelection: () => void;
-    toggleRequestSelection: (id: string) => void;
-  };
-  mutations: {
-    deletingRequestId: string | null;
-    deletionBusy: boolean;
-    openBatchDeletion: () => void;
-    openRequestDeletion: (id: string) => void;
-  };
-  dialogs: {
-    cancelDialog: () => void;
-    confirmDelete: () => Promise<void>;
-    dialog: RequestsDialog;
-  };
-  feedback: {
-    dismissNotification: (source: NotificationSource) => void;
-    handleNotificationAction: (notification: NotificationItemData) => void;
-    notifications: NotificationItemData[];
-  };
-}
+import type { NotificationItemData } from "@/shared/ui/notificationTypes";
 
 export function useRequestsController({
   api,
   search,
   onLocationChange,
-}: ControllerOptions): RequestsViewModel {
+}: RequestsPageProps): RequestsViewModel {
   const [initialRoute] = useState(() => readRequestsRoute(search));
   const appliedSearch = useRef(requestsSearch(initialRoute));
   const updateLocation = useCallback(
@@ -130,13 +37,9 @@ export function useRequestsController({
   );
   const { dismissNotification, notifications, reportFailure, resolveFailure } =
     useFailureNotifications();
-  const [list, setList] = useState<RequestList>(emptyList);
-  const [page, setPage] = useState(initialRoute.page);
   const pageRef = useRef(initialRoute.page);
   const [workflow, dispatchWorkflow] = useReducer(requestsWorkflowReducer, initialRequestsWorkflow);
   const { deletion, dialog, selectedKeys, selectionMode } = workflow;
-  const [loadingList, setLoadingList] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [focusAfterDelete, setFocusAfterDelete] = useState<string | null | undefined>(undefined);
   const [focusAfterInspection, setFocusAfterInspection] = useState<string | null | undefined>(
     undefined,
@@ -144,24 +47,14 @@ export function useRequestsController({
   const [detailOpen, setDetailOpen] = useState(initialRoute.request !== null);
   const routeApplied = useRef(false);
   const detailBackButton = useRef<HTMLButtonElement>(null);
-  const listRequest = useRef(new LatestRequest());
-  const apiOwner = useRef(api);
   const deletionInProgress = useRef(false);
-  const pageNavigation = useRef(false);
-  const failedListPage = useRef<number | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
   const deletingRequestId = deletion?.kind === "request" ? deletion.id : null;
   const deletionBusy = deletion !== null;
   const dialogOpen = dialog !== null;
 
   const handleInspectionFailure = useCallback(
     (failure: InspectionFailure) => {
-      /*
-       * A retryable detail read keeps the detail pane open, and the pane
-       * already states the failure and offers the same Retry, so a notice
-       * would say it twice. A non-retryable one closes the pane, which leaves
-       * nothing on screen to carry the reason, so that one still notifies.
-       */
+      // Retryable detail errors already appear in the pane; closing it needs a notice.
       const dismissesDetail = failure.kind === "detail" && failure.retryable === false;
       if (failure.kind !== "detail" || dismissesDetail) {
         const title =
@@ -244,66 +137,32 @@ export function useRequestsController({
     [currentId, setTab, tab, updateLocation],
   );
 
-  function beginDeletion(next: Exclude<RequestsDeletion, null>): boolean {
-    if (deletionInProgress.current) return false;
-    deletionInProgress.current = true;
-    listRequest.current.cancel();
-    dispatchWorkflow({ type: "delete_started", deletion: next });
-    return true;
-  }
-
-  function finishDeletion() {
-    deletionInProgress.current = false;
-    dispatchWorkflow({ type: "delete_finished" });
-  }
-
-  const loadPage = useCallback(
-    async (pageToLoad: number, background = false): Promise<RequestList | null> => {
-      if (background && (pageNavigation.current || deletionInProgress.current)) return null;
-      const targetPage = Math.max(1, pageToLoad);
-      const request = listRequest.current.begin();
-      if (!background) {
-        pageNavigation.current = true;
-        setLoadingList(true);
-      }
-      try {
-        const payload = await api.listRequests(targetPage, request.signal);
-        if (request.signal.aborted || !request.isCurrent()) return null;
-        setList(payload);
-        setPage(targetPage);
-        pageRef.current = targetPage;
-        if (
-          !background ||
-          failedListPage.current === null ||
-          failedListPage.current === targetPage
-        ) {
-          failedListPage.current = null;
-          setListError(null);
-        }
-        return payload;
-      } catch (cause) {
-        if (request.isCurrent() && !requestWasCancelled(cause, request.signal)) {
-          if (!background || failedListPage.current === null) failedListPage.current = targetPage;
-          setListError(messageOf(cause));
-        }
-        return null;
-      } finally {
-        if (request.isCurrent() && !background) {
-          pageNavigation.current = false;
-          setLoadingList(false);
-        }
-        request.release();
-      }
-    },
-    [api],
+  const onFallbackPage = useCallback(
+    (candidate: number) =>
+      updateLocation({ page: candidate, request: currentIdRef.current, tab: tabRef.current }, true),
+    [updateLocation],
   );
-
-  useEffect(() => {
-    if (apiOwner.current === api) return;
-    apiOwner.current = api;
-    void loadPage(pageRef.current);
-  }, [api, loadPage]);
-
+  const {
+    list,
+    setList,
+    page,
+    loadingList,
+    refreshing,
+    listError,
+    loadPage,
+    failedListPage,
+    refreshWithFallback,
+    refreshPage,
+    retryListFailure,
+    cancelListRequest,
+  } = useRequestCatalog({
+    api,
+    initialPage: initialRoute.page,
+    pageRef,
+    deletionInProgress,
+    enabled: !selectionMode && !dialogOpen,
+    onFallbackPage,
+  });
   const navigatePage = useCallback(
     (nextPage: number) => {
       const target = Math.max(1, nextPage);
@@ -313,64 +172,8 @@ export function useRequestsController({
         updateLocation({ page: pageRef.current, request: currentId, tab }, true);
       });
     },
-    [currentId, loadPage, tab, updateLocation],
+    [currentId, failedListPage, loadPage, tab, updateLocation],
   );
-
-  const refreshWithFallback = useCallback(
-    async (targetPage = pageRef.current, background = false) => {
-      let candidate = Math.max(1, targetPage);
-      while (true) {
-        const payload = await loadPage(candidate, background);
-        if (!payload) return null;
-        if (payload.requests.length > 0 || candidate === 1) return { page: candidate, payload };
-        const lastPage = Math.max(1, Math.ceil(payload.total / REQUESTS_PER_PAGE));
-        candidate = Math.min(candidate - 1, lastPage);
-        updateLocation(
-          { page: candidate, request: currentIdRef.current, tab: tabRef.current },
-          true,
-        );
-      }
-    },
-    [loadPage, updateLocation],
-  );
-
-  const refreshPage = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await refreshWithFallback(page);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [page, refreshWithFallback]);
-
-  const retryListFailure = useCallback(async () => {
-    const targetPage = failedListPage.current ?? pageRef.current;
-    setRefreshing(true);
-    try {
-      const refreshed = await refreshWithFallback(targetPage);
-      if (!refreshed) return;
-      updateLocation(
-        { page: refreshed.page, request: currentIdRef.current, tab: tabRef.current },
-        true,
-      );
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshWithFallback, updateLocation]);
-
-  const cancelListRequest = useCallback(() => listRequest.current.cancel(), []);
-  const pollList = useCallback(
-    async (first: boolean) => {
-      await refreshWithFallback(pageRef.current, !first);
-    },
-    [refreshWithFallback],
-  );
-  usePolling({
-    enabled: !selectionMode && !dialogOpen,
-    intervalMs: LIST_POLL_INTERVAL_MS,
-    run: pollList,
-    onCancel: cancelListRequest,
-  });
 
   useEffect(() => {
     if (routeApplied.current) return;
@@ -413,86 +216,25 @@ export function useRequestsController({
     .filter((request) => request.state !== "active")
     .map((request) => request.id);
 
-  async function confirmDelete() {
-    if (!dialog) return;
-    if (dialog.kind === "request") {
-      await deleteRequest(dialog.id);
-      return;
-    }
-    if (!beginDeletion({ kind: "batch" })) return;
-    resolveFailure("action");
-    const targetPage = earliestSelectedPage(workflow, dialog.ids, pageRef.current);
-    try {
-      const deletedCount = await api.deleteRequests(dialog.ids);
-      const deletedIds = dialog.ids;
-      setList((current) =>
-        removeDeletedFromList(current, deletedIds, deletedCount, pageRef.current),
-      );
-      // Leaves selection mode whether or not every id was removed. Sessions
-      // resumes a partial selection instead; keeping the two different is
-      // deliberate rather than an oversight.
-      dispatchWorkflow({ type: "selection_cancel" });
-      if (currentId && deletedIds.includes(currentId)) {
-        setDetailOpen(false);
-        clearCurrentRequest();
-        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
-      }
-      dispatchWorkflow({ type: "dialog_dismissed" });
-      resolveFailure("action");
-      await refreshWithFallback(targetPage);
-      setFocusAfterDelete(null);
-    } catch (cause) {
-      const title =
-        dialog.ids.length === 1 ? "Couldn’t delete request" : "Couldn’t delete requests";
-      dispatchWorkflow({ type: "dialog_dismissed" });
-      reportFailure("action", title, cause);
-    } finally {
-      finishDeletion();
-    }
-  }
-
-  async function deleteRequest(id: string) {
-    if (!beginDeletion({ kind: "request", id })) return;
-    const originPage = pageRef.current;
-    const originRequests = list.requests;
-    resolveFailure("action");
-    try {
-      await api.deleteRequests([id]);
-      if (currentId === id) {
-        setDetailOpen(false);
-        clearCurrentRequest();
-        updateLocation({ page: pageRef.current, request: null, tab: "summary" }, true);
-      } else {
-        clearRequestIfCurrent(id);
-      }
-      setList((current) => removeDeletedFromList(current, [id], 1, pageRef.current));
-      setFocusAfterDelete(
-        focusTargetAfterDelete(
-          originRequests,
-          id,
-          originRequests.filter((request) => request.id !== id),
-          false,
-        ),
-      );
-      const refreshed = await refreshWithFallback(originPage);
-      if (refreshed) {
-        setFocusAfterDelete(
-          focusTargetAfterDelete(
-            originRequests,
-            id,
-            refreshed.payload.requests,
-            refreshed.page !== originPage,
-          ),
-        );
-      }
-    } catch (cause) {
-      reportFailure("action", "Couldn’t delete request", cause);
-    } finally {
-      dispatchWorkflow({ type: "dialog_dismissed" });
-      finishDeletion();
-    }
-  }
-
+  const { confirmDelete } = useRequestDeletion({
+    api,
+    workflow,
+    dispatchWorkflow,
+    deletionInProgress,
+    cancelListRequest,
+    list,
+    setList,
+    currentId,
+    setDetailOpen,
+    clearCurrentRequest,
+    clearRequestIfCurrent,
+    updateLocation,
+    pageRef,
+    refreshWithFallback,
+    setFocusAfterDelete,
+    resolveFailure,
+    reportFailure,
+  });
   function handleNotificationAction(notification: NotificationItemData) {
     resolveFailure(notification.source);
     if (notification.source === "inspection") retryInspectionFailure();

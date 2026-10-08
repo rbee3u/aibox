@@ -1,26 +1,14 @@
-//! Token Usage accumulation, validation, and normalization.
+//! Token Usage accumulation and normalization.
 //!
-//! Providers report usage in incompatible shapes, and each family's numbers are
-//! related by a different formula: OpenAI reports a total that its details are
-//! carved out of (`base = total - cached - writes`), while Claude reports a base
-//! that its details add to (`total = base + read + writes`). The two are
-//! inverses, so [`UsageAccumulator::normalized`] and its validation keep both
-//! branches side by side rather than one per provider module — a sign error is
-//! only visible when the opposite formula is on screen next to it.
-//!
-//! Accumulation is field-wise and last-write-wins: a streamed response reports
-//! usage in several events, and a later event's value supersedes an earlier one.
-//! Nothing is published to the Summary until the protocol response is terminal,
-//! so a stream that dies mid-flight leaves no half-summed Token Usage.
+//! OpenAI counts include cache details (`base = total - cached - writes`);
+//! Claude counts exclude them (`total = base + read + writes`). Keep validation
+//! and normalization together to preserve these opposite conventions.
+//! Fields are last-write-wins and publish only at protocol termination.
 
 use super::wire::UsageEnvelope;
 use crate::request::model::{ProtocolFamily, ProtocolSummary, TokenUsage};
 
-/// Raw per-field token counts as reported, before normalization.
-///
-/// Every field is `Option` because "not reported" and "reported as zero" are
-/// different evidence, and this is diagnostic data: collapsing them would
-/// invent a number the provider never sent.
+/// Unnormalized provider counts; `None` distinguishes missing evidence from zero.
 #[derive(Clone, Debug, Default)]
 pub(super) struct UsageAccumulator {
     input_tokens: Option<u64>,
@@ -48,12 +36,10 @@ fn merge_option(target: &mut Option<u64>, value: Option<u64>) {
 }
 
 impl UsageAccumulator {
-    /// Record that the request asked for streamed usage.
     pub(super) fn expect_stream_usage(&mut self, expected: bool) {
         self.expects_stream_usage = expected;
     }
 
-    /// True when streamed usage was requested but none ever arrived.
     pub(super) fn stream_usage_missing(&self) -> bool {
         self.expects_stream_usage && !self.reported
     }
@@ -129,11 +115,6 @@ impl UsageAccumulator {
         self.validate(summary, at_ns)
     }
 
-    /// Warn when a family's reported numbers contradict each other.
-    ///
-    /// Each family is checked against its own formula: OpenAI's details must fit
-    /// inside its reported total, and Claude's 5m/1h breakdown must sum to its
-    /// reported cache-write total.
     fn validate(&mut self, summary: &mut ProtocolSummary, at_ns: Option<String>) -> bool {
         match summary.family {
             ProtocolFamily::OpenaiResponses | ProtocolFamily::OpenaiChatCompletions => {
@@ -192,11 +173,8 @@ impl UsageAccumulator {
         }
     }
 
-    /// Publish normalized Token Usage onto the Summary, once.
-    ///
-    /// The first terminal signal wins: a response can reach a terminal event and
-    /// then be finalized again by the stream ending, and the published Summary
-    /// must not change between them.
+    /// Freeze Token Usage at the first terminal signal; a later EOF must not
+    /// replace an already-published value.
     pub(super) fn commit(&self, summary: &mut ProtocolSummary) -> bool {
         if summary.token_usage.is_some() {
             return false;
@@ -208,14 +186,8 @@ impl UsageAccumulator {
         true
     }
 
-    /// Project raw counts onto the family-independent [`TokenUsage`] shape.
-    ///
-    /// The two branches are inverses of each other. OpenAI reports
-    /// `total_input` with cached and cache-write carved out of it, so the base
-    /// is a subtraction. Claude reports `input_tokens` as the base with cache
-    /// reads and writes alongside, so the total is an addition. Every step is
-    /// checked, and a contradiction yields `None` for that field rather than a
-    /// wrapped or saturated number.
+    /// Normalize provider counts using the formulas above. Inconsistent or
+    /// overflowing arithmetic leaves the affected field unknown.
     fn normalized(&self, family: ProtocolFamily) -> Option<TokenUsage> {
         if !self.reported {
             return None;
@@ -243,13 +215,13 @@ impl UsageAccumulator {
             ProtocolFamily::ClaudeMessages => {
                 let split_reported =
                     self.cache_write_5m_tokens.is_some() || self.cache_write_1h_tokens.is_some();
-                let split_sum = split_reported
-                    .then(|| {
-                        self.cache_write_5m_tokens
-                            .unwrap_or(0)
-                            .checked_add(self.cache_write_1h_tokens.unwrap_or(0))
-                    })
-                    .flatten();
+                let split_sum = if split_reported {
+                    self.cache_write_5m_tokens
+                        .unwrap_or(0)
+                        .checked_add(self.cache_write_1h_tokens.unwrap_or(0))
+                } else {
+                    None
+                };
                 let writes = self.cache_creation_tokens.or(split_sum);
                 let split_valid = split_reported && writes.is_some() && split_sum == writes;
                 let total = self.input_tokens.and_then(|base| {
@@ -260,13 +232,9 @@ impl UsageAccumulator {
                     total_input_tokens: total,
                     base_input_tokens: self.input_tokens,
                     cached_input_tokens: self.cache_read_tokens,
-                    cache_write_tokens: (!split_valid).then_some(writes).flatten(),
-                    cache_write_5m_tokens: split_valid
-                        .then_some(self.cache_write_5m_tokens)
-                        .flatten(),
-                    cache_write_1h_tokens: split_valid
-                        .then_some(self.cache_write_1h_tokens)
-                        .flatten(),
+                    cache_write_tokens: writes.filter(|_| !split_valid),
+                    cache_write_5m_tokens: self.cache_write_5m_tokens.filter(|_| split_valid),
+                    cache_write_1h_tokens: self.cache_write_1h_tokens.filter(|_| split_valid),
                     output_tokens: self.output_tokens,
                     reasoning_output_tokens: None,
                 })

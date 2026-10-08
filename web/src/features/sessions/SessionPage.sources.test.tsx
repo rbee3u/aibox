@@ -1,12 +1,102 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionPage, firstSession, list, fakeApi } from "@/features/sessions/testSupport";
+import type { SessionListData } from "@/api/sessions";
+import { deferred } from "@/test/deferred";
+import {
+  SessionPage,
+  firstSession,
+  secondSession,
+  completeSessionDetail,
+  list,
+  fakeApi,
+} from "@/features/sessions/testSupport";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 describe("SessionPage", () => {
+  it.each(["loaded", "failed"])(
+    "keeps the new scope's detail and selection when an old refresh finishes as %s",
+    async (outcome) => {
+      const oldRefresh = deferred<SessionListData>();
+      let codexReads = 0;
+      let oldDetailSignal: AbortSignal | undefined;
+      let oldListSignal: AbortSignal | undefined;
+      const { api } = fakeApi({
+        sessions: (_tenant, agent, signal) => {
+          if (agent === "claude") return list([secondSession]);
+          if (++codexReads === 1) return list([firstSession]);
+          oldListSignal = signal;
+          // Deliberately ignore cancellation to exercise late-result suppression.
+          return oldRefresh.promise;
+        },
+        streamSessionDetail: (...args) => {
+          if (args[1] === "claude") return completeSessionDetail(...args);
+          oldDetailSignal = args[4];
+          return new Promise<void>((_resolve, reject) => {
+            oldDetailSignal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          });
+        },
+      });
+      const user = userEvent.setup();
+      render(<SessionPage api={api} />);
+      await user.click(await screen.findByRole("button", { name: "First prompt" }));
+      await user.click(screen.getByRole("button", { name: "Refresh Sessions" }));
+      await user.click(screen.getByRole("button", { name: "Agent: Codex" }));
+      await user.click(screen.getByRole("option", { name: "Claude" }));
+      expect(oldListSignal?.aborted).toBe(true);
+      expect(oldDetailSignal?.aborted).toBe(true);
+      await user.click(await screen.findByRole("button", { name: "Second prompt" }));
+      await user.click(screen.getByRole("button", { name: "Select Sessions" }));
+      await user.click(screen.getByRole("button", { name: "Select Second prompt" }));
+
+      await act(async () => {
+        if (outcome === "loaded") oldRefresh.resolve(list([], ["stale traversal warning"]));
+        else oldRefresh.reject(new Error("stale read failure"));
+        await oldRefresh.promise.catch(() => {});
+      });
+      expect(screen.getByRole("heading", { name: "Second prompt" })).toBeInTheDocument();
+      expect(screen.getByText("1 selected")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Deselect Second prompt" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("reconciles a refreshed catalog with the open detail without restarting its stream", async () => {
+    let rows = [firstSession];
+    let detailSignal: AbortSignal | undefined;
+    const { api, streamSessionDetail } = fakeApi({
+      sessions: () => list(rows),
+      streamSessionDetail: (_tenant, _agent, _id, _handlers, signal) => {
+        detailSignal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        });
+      },
+    });
+    const user = userEvent.setup();
+    render(<SessionPage api={api} />);
+    await user.click(await screen.findByRole("button", { name: "First prompt" }));
+    rows = [{ ...firstSession, title: "Renamed Session", latest_message: "Renamed Session" }];
+    await user.click(screen.getByRole("button", { name: "Refresh Sessions" }));
+    expect(await screen.findByRole("heading", { name: "Renamed Session" })).toBeInTheDocument();
+    expect(detailSignal?.aborted).toBe(false);
+    expect(streamSessionDetail).toHaveBeenCalledTimes(1);
+
+    rows = [];
+    await user.click(screen.getByRole("button", { name: "Refresh Sessions" }));
+    expect(await screen.findByRole("heading", { name: "Select a Session" })).toBeInTheDocument();
+    expect(detailSignal?.aborted).toBe(true);
+  });
+
   it("switches Tenant and Agent and inspects from the selected source", async () => {
     const streamSessionDetail = vi.fn().mockResolvedValue(undefined);
     const { api, listSessions } = fakeApi({

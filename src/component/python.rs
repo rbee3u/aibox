@@ -1,10 +1,11 @@
 //! Python and uv native ownership.
 
+use super::links::{LinkState, link_state, map_home_symlink_target, one_relative_component};
 use super::native::{
     capture_limited, executable_file_exists, executable_mode_is_current, remove_local_launcher,
 };
-use super::node_agent::{LinkState, link_state, map_home_symlink_target, one_relative_component};
 use super::{ComponentStatus, validate_stable_version};
+use crate::foundation::safe_fs;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
@@ -411,7 +412,7 @@ fn python_release_version_for_executable(
 }
 
 pub(super) fn remove_python(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::real_dir_exists(home, "Tenant Home")?;
+    safe_fs::real_dir_exists(home, "Tenant Home")?;
     let mut launchers = vec![
         "uv".to_string(),
         "uvx".to_string(),
@@ -426,8 +427,5 @@ pub(super) fn remove_python(home: &Path) -> Result<()> {
     for launcher in launchers {
         remove_local_launcher(home, &launcher, "Python toolchain launcher")?;
     }
-    crate::foundation::safe_fs::remove_real_dir_if_exists(
-        &home.join(".python"),
-        "Python toolchain root",
-    )
+    safe_fs::remove_real_dir_if_exists(&home.join(".python"), "Python toolchain root")
 }

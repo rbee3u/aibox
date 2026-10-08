@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentKind } from "@/domain/agent";
 import type { ConfigApi, ConfigListData } from "@/api/configs";
-import type { TenantSelection } from "@/domain/tenant";
+import {
+  tenantSelectionValue,
+  tenantSelectionFromValue,
+  type TenantSelection,
+} from "@/domain/tenant";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { messageOf } from "@/shared/lib/errors";
 import { LatestRequest } from "@/shared/lib/latestRequest";
@@ -13,7 +17,15 @@ export function useConfigCatalog(
   agent: AgentKind,
   onLoaded?: (catalog: ConfigListData) => void,
 ) {
-  const [catalog, setCatalog] = useState<ConfigListData | null>(null);
+  const tenantKey = tenantSelectionValue(tenant);
+  const selectedTenant = useMemo(() => tenantSelectionFromValue(tenantKey), [tenantKey]);
+  const onLoadedRef = useRef(onLoaded);
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
+  const scopeKey = JSON.stringify([tenantKey, agent]);
+  const [loaded, setLoaded] = useState<{ scopeKey: string; catalog: ConfigListData } | null>(null);
+  const catalog = loaded?.scopeKey === scopeKey ? loaded.catalog : null;
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,34 +33,30 @@ export function useConfigCatalog(
 
   const load = useCallback(
     async (kind: ConfigCatalogLoadKind = "initial") => {
-      const request = requestOwner.current.begin();
       if (kind === "initial") setLoading(true);
       if (kind === "refresh") setRefreshing(true);
-      try {
-        const value = await api.listConfigs(tenant, agent, request.signal);
-        if (request.signal.aborted || !request.isCurrent()) return null;
-        onLoaded?.(value);
-        setCatalog(value);
-        setError(null);
-        return value;
-      } catch (cause) {
-        if (!(request.signal.aborted || cause instanceof DOMException)) setError(messageOf(cause));
-        return null;
-      } finally {
-        if (request.isCurrent()) {
-          request.release();
+      return requestOwner.current.run((signal) => api.listConfigs(selectedTenant, agent, signal), {
+        loaded: (value) => {
+          onLoadedRef.current?.(value);
+          setLoaded({ scopeKey, catalog: value });
+          setError(null);
+        },
+        failed: (cause) => {
+          if (!(cause instanceof DOMException)) setError(messageOf(cause));
+        },
+        settled: () => {
           if (kind === "initial") setLoading(false);
           if (kind === "refresh") setRefreshing(false);
-        }
-      }
+        },
+      });
     },
-    [agent, api, onLoaded, tenant],
+    [agent, api, scopeKey, selectedTenant],
   );
 
   useEffect(() => {
     // A Tenant or Agent selection change starts a fresh catalog lifecycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCatalog(null);
+    setLoaded(null);
     setError(null);
     const owner = requestOwner.current;
     void load();

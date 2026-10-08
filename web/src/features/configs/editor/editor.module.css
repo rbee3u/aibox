@@ -1,0 +1,114 @@
+.visualEditor {
+  padding: 20px 24px 32px;
+  background: var(--surface);
+}
+
+.visualFieldMeta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(5.5em, auto);
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+}
+
+.visualFieldControl {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.visualFieldMeta > .visualInclude {
+  display: grid;
+  grid-column: 2 / 4;
+  grid-template-columns: 24px minmax(5.5em, auto);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.visualFieldMeta > .visualInclude > span:first-of-type,
+.proxyToggle > span:first-of-type {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: none;
+  justify-self: center;
+  align-self: center;
+}
+
+.visualFieldMeta > .visualInclude input:checked + span:first-of-type::after,
+.proxyToggle input:checked + span:first-of-type::after {
+  top: 1px;
+  left: 4px;
+  width: 5px;
+  height: 9px;
+}
+
+.visualTextControl {
+  display: flex;
+  width: 100%;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.proxyToggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.visualTextControl input {
+  flex: 1 1 0%;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: var(--text-xs);
+}
+
+.visualTextControl [data-icon-button] {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.visualFieldControl > input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 760px) {
+  .visualEditor {
+    padding: 10px;
+  }
+
+  .visualFieldMeta {
+    align-items: center;
+  }
+
+  .visualFieldControl {
+    width: 100%;
+  }
+}

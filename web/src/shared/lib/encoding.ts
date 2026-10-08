@@ -20,11 +20,6 @@ export function encodeBase64(value: Uint8Array): string {
   return window.btoa(binary);
 }
 
-/**
- * Binary-prefix byte sizes (KiB/MiB). Decimal-prefix sizes remain in
- * `shared/lib/format` because existing surfaces intentionally use different
- * wording.
- */
 export function formatBinaryByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;

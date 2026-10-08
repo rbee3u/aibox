@@ -51,18 +51,12 @@
   gap: 8px;
 }
 
-/*
- * Two readings of the same fact: the tone answers what happened, the elapsed
- * time answers whether it is moving. The time stays a caption so the state
- * remains the thing the eye lands on.
- */
 .elapsed {
   color: var(--muted);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
 }
 
-/* The mark carries the state's tone, matching the label beside it. */
 .stateIcon.active {
   color: var(--accent);
 }

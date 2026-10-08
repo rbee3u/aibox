@@ -17,11 +17,8 @@ export interface RefreshButtonProps extends Omit<
 }
 
 /**
- * A `busy` Refresh stays focusable. Disabling the button the user just
- * activated makes the browser drop focus to `<body>`, so the reload the user
- * asked for would end with no idea where they are; the spinning icon and
- * `aria-disabled` already say it cannot be pressed again. `disabled` still
- * applies for the caller's other reasons once the reload is over.
+ * Use `aria-disabled` while busy to preserve focus during reload. Apply the
+ * caller's native `disabled` only after reload finishes.
  */
 export const RefreshButton = forwardRef<HTMLButtonElement, RefreshButtonProps>(
   function RefreshButton(

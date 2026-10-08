@@ -1,9 +1,9 @@
 use super::*;
 use crate::request::{
-    ObservedRequest, Outcome, ProtocolDiagnostic, RequestProxyState, RequestStore,
+    ObservedRequest, ProtocolDiagnostic, RequestOutcome, RequestProxyState, RequestStore,
     RuntimeMeasurements,
 };
-use crate::service::tests::test_state;
+use crate::service::testutil::test_state;
 use axum::body::Body;
 use axum::http::Response;
 use axum::response::IntoResponse as _;
@@ -35,7 +35,7 @@ fn finished_request(
             &request,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
@@ -74,7 +74,7 @@ fn request_summaries_distinguish_active_interrupted_and_completed_state() {
             &completed,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
@@ -156,7 +156,7 @@ fn request_summaries_distinguish_active_interrupted_and_completed_state() {
             &responded,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
@@ -226,7 +226,7 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
                 &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
-                Outcome::Completed,
+                RequestOutcome::Completed,
                 None,
             )
             .unwrap();
@@ -251,7 +251,9 @@ async fn http_and_provider_failures_remain_independent_in_list_and_detail() {
             }
         );
 
-        let response = request_detail(State(state.clone()), Path(id)).await;
+        let response = request_detail(State(state.clone()), Path(id))
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let detail = response_json(response).await;
         assert_eq!(detail["response"]["status"], status);
@@ -341,7 +343,9 @@ async fn active_durations_do_not_depend_on_the_wall_clock_anchor() {
     let list = list_requests_inner(&state.inspection(), None).unwrap();
     let list_total_ms = list.requests[0].total_ms.unwrap();
 
-    let response = request_detail(State(state), Path(request.id)).await;
+    let response = request_detail(State(state), Path(request.id))
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
     let detail_total_ms = json["live_total_ms"].as_u64().unwrap();
@@ -366,7 +370,9 @@ async fn request_detail_adds_event_timing_index_diagnostics_on_demand() {
     writeln!(index, "not json").unwrap();
     index.flush().unwrap();
 
-    let response = request_detail(State(state), Path(request.id)).await;
+    let response = request_detail(State(state), Path(request.id))
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
     let warnings = json["summary"]["warnings"].as_array().unwrap();
@@ -390,13 +396,17 @@ async fn request_detail_ignores_only_an_active_unterminated_event_index_tail() {
     write!(index, "{{\"schema_version\":").unwrap();
     index.flush().unwrap();
 
-    let response = request_detail(State(state.clone()), Path(request.id.clone())).await;
+    let response = request_detail(State(state.clone()), Path(request.id.clone()))
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
     assert!(json["summary"]["warnings"].as_array().unwrap().is_empty());
 
     state.store().abandon_active(&request.id);
-    let response = request_detail(State(state), Path(request.id)).await;
+    let response = request_detail(State(state), Path(request.id))
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
     assert_eq!(json["summary"]["warnings"].as_array().unwrap().len(), 1);
@@ -451,12 +461,12 @@ async fn detail_response_includes_timeline_and_persisted_protocol_summary() {
             &request,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
 
-    let response = request_detail(State(state), Path(id)).await;
+    let response = request_detail(State(state), Path(id)).await.into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
     assert_eq!(json["state"], "completed");
@@ -492,7 +502,9 @@ async fn body_api_streams_exact_offsets_and_reports_invalid_ranges() {
         (false, 5, &b""[..], "0", "5"),
         (true, 1, &b"esponse"[..], "7", "8"),
     ] {
-        let response = body_response(inspection(&store), &id, response_body, offset).await;
+        let response = body_response(inspection(&store), &id, response_body, offset)
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CONTENT_LENGTH], length);
         assert_eq!(
@@ -503,128 +515,14 @@ async fn body_api_streams_exact_offsets_and_reports_invalid_ranges() {
         assert_eq!(body.as_ref(), expected);
     }
 
-    let invalid_range = body_response(inspection(&store), &id, false, 6).await;
+    let invalid_range = body_response(inspection(&store), &id, false, 6)
+        .await
+        .into_response();
     assert_eq!(invalid_range.status(), StatusCode::RANGE_NOT_SATISFIABLE);
-    let missing = body_response(inspection(&store), &Uuid::now_v7().to_string(), false, 0).await;
+    let missing = body_response(inspection(&store), &Uuid::now_v7().to_string(), false, 0)
+        .await
+        .into_response();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn decoded_body_api_handles_identity_zstd_and_gzip_without_changing_raw_bytes() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = RequestStore::open(temp.path()).unwrap();
-    let identity_id = finished_request(&store, "/identity", b"plain request", b"");
-    let identity = decoded_body_response(inspection(&store), &identity_id, false).await;
-    assert_eq!(identity.status(), StatusCode::OK);
-    assert_eq!(
-        identity.into_body().collect().await.unwrap().to_bytes(),
-        "plain request"
-    );
-
-    let request_source = br#"{"model":"compressed-request"}"#;
-    let response_source = br#"{"result":"compressed-response"}"#;
-    let request_compressed = zstd::stream::encode_all(request_source.as_slice(), 0).unwrap();
-    let response_compressed = zstd::stream::encode_all(response_source.as_slice(), 0).unwrap();
-    let (mut request, _) = store
-        .begin(ObservedRequest {
-            headers: vec![recorded_header("content-encoding", " ZsTd ")],
-            ..ObservedRequest::test("POST", "/zstd")
-        })
-        .unwrap();
-    request.request_body.write_all(&request_compressed).unwrap();
-    request
-        .response_body
-        .write_all(&response_compressed)
-        .unwrap();
-    store
-        .write_response(
-            &request.locator,
-            &request.summary,
-            &ResponseMetadata {
-                format_version: crate::request::format_version(),
-                source: ResponseSource::Upstream,
-                headers_at: "2026-08-09T00:00:00Z".to_string(),
-                status: 200,
-                http_version: "HTTP/2".to_string(),
-                headers: vec![recorded_header("content-encoding", "zstd")],
-            },
-        )
-        .unwrap();
-    let id = request.id.clone();
-    store
-        .finish(
-            &request,
-            std::time::Instant::now(),
-            &RuntimeMeasurements::default(),
-            Outcome::Completed,
-            None,
-        )
-        .unwrap();
-
-    for (response_body, expected) in [
-        (false, request_source.as_slice()),
-        (true, response_source.as_slice()),
-    ] {
-        let decoded = decoded_body_response(inspection(&store), &id, response_body).await;
-        assert_eq!(decoded.status(), StatusCode::OK);
-        assert_eq!(
-            decoded.into_body().collect().await.unwrap().to_bytes(),
-            expected
-        );
-        let raw = body_response(inspection(&store), &id, response_body, 0).await;
-        let expected_raw = if response_body {
-            &response_compressed
-        } else {
-            &request_compressed
-        };
-        assert_eq!(
-            raw.into_body().collect().await.unwrap().to_bytes(),
-            expected_raw.as_slice()
-        );
-    }
-
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    let gzip_source = br#"{"result":"gzip-response"}"#;
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(gzip_source).unwrap();
-    let gzip_compressed = encoder.finish().unwrap();
-    let (mut gzip_request, _) = store.begin(ObservedRequest::test("POST", "/gzip")).unwrap();
-    gzip_request.request_body.write_all(b"{}").unwrap();
-    gzip_request
-        .response_body
-        .write_all(&gzip_compressed)
-        .unwrap();
-    store
-        .write_response(
-            &gzip_request.locator,
-            &gzip_request.summary,
-            &ResponseMetadata {
-                format_version: crate::request::format_version(),
-                source: ResponseSource::Upstream,
-                headers_at: "2026-08-09T00:00:00Z".to_string(),
-                status: 200,
-                http_version: "HTTP/2".to_string(),
-                headers: vec![recorded_header("content-encoding", "gzip")],
-            },
-        )
-        .unwrap();
-    let gzip_id = gzip_request.id.clone();
-    store
-        .finish(
-            &gzip_request,
-            std::time::Instant::now(),
-            &RuntimeMeasurements::default(),
-            Outcome::Completed,
-            None,
-        )
-        .unwrap();
-    let gzip_decoded = decoded_body_response(inspection(&store), &gzip_id, true).await;
-    assert_eq!(gzip_decoded.status(), StatusCode::OK);
-    assert_eq!(
-        gzip_decoded.into_body().collect().await.unwrap().to_bytes(),
-        gzip_source.as_slice()
-    );
 }
 
 fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
@@ -649,19 +547,52 @@ fn deflate_encode(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn decoded_body_api_handles_brotli_and_deflate_without_changing_raw_bytes() {
+async fn decoded_body_api_preserves_raw_bytes_for_each_supported_encoding() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
-    let source = br#"{"result":"compressed-response"}"#;
-    for (encoding, encoded) in [
-        ("br", brotli_encode(source)),
-        ("deflate", deflate_encode(source)),
+    let source = br#"{"result":"compressed-body"}"#;
+    let zstd = zstd::stream::encode_all(source.as_slice(), 0).unwrap();
+    let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+    gzip.write_all(source).unwrap();
+
+    // Exercise both body directions and header normalization without multiplying
+    // every encoding by the same independent routing cases.
+    for (name, encoding, response_body, encoded) in [
+        ("absent", None, false, source.to_vec()),
+        ("identity", Some("identity"), true, source.to_vec()),
+        ("zstd-request", Some(" ZsTd "), false, zstd.clone()),
+        ("zstd-response", Some("zstd"), true, zstd),
+        ("gzip", Some("gzip"), true, gzip.finish().unwrap()),
+        ("brotli", Some("br"), true, brotli_encode(source)),
+        ("deflate", Some("deflate"), true, deflate_encode(source)),
     ] {
+        let headers: Vec<_> = encoding
+            .map(|value| recorded_header("content-encoding", value))
+            .into_iter()
+            .collect();
         let (mut request, _) = store
-            .begin(ObservedRequest::test("POST", &format!("/{encoding}")))
+            .begin(ObservedRequest {
+                headers: if response_body {
+                    vec![]
+                } else {
+                    headers.clone()
+                },
+                ..ObservedRequest::test("POST", &format!("/{name}"))
+            })
             .unwrap();
-        request.request_body.write_all(b"{}").unwrap();
-        request.response_body.write_all(&encoded).unwrap();
+        // Distinct opposite-side evidence detects routing to the wrong body.
+        let other = b"other body";
+        request
+            .request_body
+            .write_all(if response_body { other } else { &encoded })
+            .unwrap();
+        request
+            .response_body
+            .write_all(if response_body { &encoded } else { other })
+            .unwrap();
         store
             .write_response(
                 &request.locator,
@@ -672,7 +603,7 @@ async fn decoded_body_api_handles_brotli_and_deflate_without_changing_raw_bytes(
                     headers_at: "2026-08-09T00:00:00Z".to_string(),
                     status: 200,
                     http_version: "HTTP/2".to_string(),
-                    headers: vec![recorded_header("content-encoding", encoding)],
+                    headers: if response_body { headers } else { vec![] },
                 },
             )
             .unwrap();
@@ -682,23 +613,28 @@ async fn decoded_body_api_handles_brotli_and_deflate_without_changing_raw_bytes(
                 &request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
-                Outcome::Completed,
+                RequestOutcome::Completed,
                 None,
             )
             .unwrap();
 
-        let decoded = decoded_body_response(inspection(&store), &id, true).await;
-        assert_eq!(decoded.status(), StatusCode::OK, "{encoding}");
+        let decoded = decoded_body_response(inspection(&store), &id, response_body)
+            .await
+            .into_response();
+        assert_eq!(decoded.status(), StatusCode::OK, "{name}");
         assert_eq!(
             decoded.into_body().collect().await.unwrap().to_bytes(),
             source.as_slice(),
-            "{encoding}"
+            "{name}: decoded body"
         );
-        let raw = body_response(inspection(&store), &id, true, 0).await;
+        let raw = body_response(inspection(&store), &id, response_body, 0)
+            .await
+            .into_response();
+        assert_eq!(raw.status(), StatusCode::OK, "{name}");
         assert_eq!(
             raw.into_body().collect().await.unwrap().to_bytes(),
             encoded.as_slice(),
-            "{encoding}"
+            "{name}: raw evidence after decoding"
         );
     }
 }
@@ -714,7 +650,9 @@ async fn decoded_body_api_rejects_incomplete_unsupported_and_corrupt_content() {
         })
         .unwrap();
     active.request_body.write_all(b"partial").unwrap();
-    let waiting = decoded_body_response(inspection(&store), &active.id, false).await;
+    let waiting = decoded_body_response(inspection(&store), &active.id, false)
+        .await
+        .into_response();
     assert_eq!(waiting.status(), StatusCode::CONFLICT);
 
     let (mut unsupported, _) = store
@@ -730,11 +668,13 @@ async fn decoded_body_api_rejects_incomplete_unsupported_and_corrupt_content() {
             &unsupported,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
-    let response = decoded_body_response(inspection(&store), &unsupported_id, false).await;
+    let response = decoded_body_response(inspection(&store), &unsupported_id, false)
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
     let (mut corrupt, _) = store
@@ -750,11 +690,13 @@ async fn decoded_body_api_rejects_incomplete_unsupported_and_corrupt_content() {
             &corrupt,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
-    let response = decoded_body_response(inspection(&store), &corrupt_id, false).await;
+    let response = decoded_body_response(inspection(&store), &corrupt_id, false)
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.into_body().collect().await.is_err());
 }
@@ -794,7 +736,7 @@ async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() 
             &request,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
@@ -804,7 +746,8 @@ async fn event_timing_api_returns_incremental_valid_entries_and_partial_state() 
         Path(id),
         Query(EventTimingQuery { after_sequence: 1 }),
     )
-    .await;
+    .await
+    .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["state"], "partial");
@@ -842,7 +785,8 @@ async fn event_timing_api_reports_a_missing_index_as_unavailable() {
         Path(id),
         Query(EventTimingQuery { after_sequence: 7 }),
     )
-    .await;
+    .await
+    .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["state"], "unavailable");
@@ -877,7 +821,7 @@ async fn deletion_api_maps_selection_conflicts_and_successes() {
             &active,
             std::time::Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
@@ -987,7 +931,7 @@ fn request_list_uses_terminal_end_order() {
                 request,
                 std::time::Instant::now(),
                 &RuntimeMeasurements::default(),
-                Outcome::Completed,
+                RequestOutcome::Completed,
                 None,
             )
             .unwrap();

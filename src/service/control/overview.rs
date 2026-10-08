@@ -5,9 +5,7 @@ use super::{
 };
 use crate::agent::AgentKind;
 use crate::config;
-use crate::service::coordination::{
-    OverviewCoordinator, OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot,
-};
+use crate::management::{OverviewSnapshot, TopologyAgentSnapshot, TopologyTenantSnapshot};
 use crate::service::state::ServiceState;
 use axum::Json;
 use axum::extract::State;
@@ -50,11 +48,6 @@ pub(crate) struct ServiceOverview {
     aibox_root: String,
 }
 
-/// Whether the Docker client answered.
-///
-/// A closed enum rather than a `&'static str` so the generated Console binding
-/// is a union of the states this actually emits. The Console decides what to
-/// render from it, and a bare `string` there would push that check to runtime.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
@@ -70,10 +63,7 @@ pub(crate) struct DockerOverview {
     error: Option<String>,
 }
 
-/// Whether the Runtime Image is present, absent, or unobservable.
-///
-/// `Unknown` is what Docker being unreachable looks like from here, which is why
-/// this is not an `Option`: the Console renders all three differently.
+/// `Unknown` means Docker is unreachable, not that the image is missing.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
@@ -95,11 +85,20 @@ pub(crate) struct RuntimeImageOverview {
 }
 
 pub(super) async fn overview(State(state): State<ServiceState>) -> ControlResult {
-    let snapshot = OverviewCoordinator::new(state).overview().await?;
-    Ok(json_response(StatusCode::OK, &overview_response(snapshot)))
+    let listen = state.listen().to_string();
+    let uptime_seconds = state.uptime_seconds();
+    let snapshot = state.management.overview.overview().await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &overview_response(snapshot, listen, uptime_seconds),
+    ))
 }
 
-fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
+fn overview_response(
+    snapshot: OverviewSnapshot,
+    listen: String,
+    uptime_seconds: u64,
+) -> OverviewResponse {
     let (docker, runtime_image) = match snapshot.runtime_image {
         Ok(inspection) => (
             DockerOverview {
@@ -137,8 +136,8 @@ fn overview_response(snapshot: OverviewSnapshot) -> OverviewResponse {
     OverviewResponse {
         service: ServiceOverview {
             version: env!("CARGO_PKG_VERSION"),
-            listen: snapshot.listen,
-            uptime_seconds: snapshot.uptime_seconds,
+            listen,
+            uptime_seconds,
             aibox_root: snapshot.aibox_root,
         },
         docker,
@@ -155,11 +154,6 @@ pub(crate) struct TopologyResponse {
     tenants: Vec<TopologyTenant>,
 }
 
-/// One Tenant of the Topology view: the Tenant catalog row plus its state.
-///
-/// The row is the same `TenantRow` the Tenants module lists, flattened in rather
-/// than restated, so a Tenant identity is one shape everywhere on the wire and
-/// the Console reads the Host/Managed distinction off the same discriminant.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct TopologyTenant {
@@ -199,11 +193,7 @@ pub(crate) struct TopologyNamedConfigs {
     error: Option<String>,
 }
 
-/// Discovered Sessions for one Agent, as a count only.
-///
-/// Discovery counts Transcripts; it names none and parses none. A failed walk
-/// reports zero beside its error rather than dropping the Agent, matching how
-/// `TopologyNamedConfigs` carries its own failure.
+/// Counts Transcripts without parsing. With `error`, zero is a placeholder.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct TopologySessions {
@@ -225,7 +215,7 @@ pub(crate) struct TopologyComponents {
 }
 
 pub(super) async fn topology(State(state): State<ServiceState>) -> ControlResult {
-    let tenants = OverviewCoordinator::new(state).topology().await?;
+    let tenants = state.management.overview.topology().await?;
     Ok(json_response(
         StatusCode::OK,
         &TopologyResponse {
@@ -243,8 +233,6 @@ fn topology_tenant(snapshot: TopologyTenantSnapshot) -> TopologyTenant {
         agents,
         components,
     } = snapshot;
-    // A Managed row carries its name and the Host row has none, which is the one
-    // distinction between the two variants here.
     let row = match name {
         Some(name) => TenantRow::Managed {
             name,
@@ -343,11 +331,7 @@ fn topology_agent(snapshot: TopologyAgentSnapshot) -> TopologyAgent {
     }
 }
 
-/// Present Components, matching the Tenants catalog count.
-///
-/// `modified` is installed-but-dirty: the Component is there, and attention
-/// already carries the dirty signal. Counting only exact `installed` made
-/// Overview report fewer installed Components than Tenants for the same Tenant.
+/// Modified Components still count as installed; attention reports their drift.
 fn component_counts_as_installed(status: Option<ComponentStatusWire>) -> bool {
     matches!(
         status,

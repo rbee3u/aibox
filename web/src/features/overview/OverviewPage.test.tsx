@@ -658,11 +658,6 @@ describe("OverviewPage attention panel", () => {
 });
 
 describe("OverviewPage Tenant table", () => {
-  /*
-   * A third of this table's tab stops used to land where a sibling in the same
-   * cell already landed: the Component count repeated "Manage components", and
-   * a drift warning repeated the Current Config link beside it.
-   */
   it("gives each cell one link per destination and states the rest as facts", async () => {
     render(
       <OverviewPage api={fakeApi()} operation={null} onNavigate={vi.fn()} onOperation={vi.fn()} />,

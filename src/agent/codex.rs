@@ -1,6 +1,6 @@
 //! OpenAI Codex's fixed Config Fields and built-in Named Config templates.
 
-use super::{MainConfigField, MainConfigValueKind, NO_ENUM_VALUES};
+use super::{MainConfigField, MainConfigValueKind};
 
 const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
@@ -41,7 +41,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Model selected for Codex sessions.",
         visible_when: None,
         group: "Model & reasoning",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: true,
         required_for_custom_provider: false,
@@ -93,7 +93,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Display name for the fixed custom provider.",
         visible_when: None,
         group: "Provider",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: true,
@@ -106,7 +106,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "API base URL for the fixed custom provider.",
         visible_when: None,
         group: "Provider",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: true,
@@ -119,7 +119,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Whether the custom provider uses OpenAI authentication.",
         visible_when: None,
         group: "Provider",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: true,

@@ -16,7 +16,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub(crate) trait SessionBackend {
+pub(super) trait SessionBackend {
     /// Path components of the transcript tree beneath the tenant home
     /// (e.g. `[".claude", "projects"]`), resolved only through real directory
     /// entries so agent-created symlinks are never followed.
@@ -50,10 +50,8 @@ pub(crate) trait SessionBackend {
     /// The session id for a transcript path.
     fn id_of(&self, path: &Path) -> String;
 
-    /// Classify one line for list titles and detail parsing, filtering injected
-    /// turns while distinguishing recognized non-prompts from unsupported
-    /// user-like records. Claude keys off `promptSource:typed`; Codex uses a
-    /// wrapper-filtered `response_item` user message.
+    /// Distinguish human prompts, injected records, and unsupported user-like
+    /// shapes for title selection and diagnostics.
     fn prompt_record(&self, value: &Value) -> PromptRecord;
 
     /// Project one native Transcript Entry into the Console's shared detail
@@ -80,20 +78,12 @@ pub(crate) trait SessionBackend {
         None
     }
 
-    /// A `list` row title candidate from one parsed line. The *last* non-empty
-    /// candidate wins; a session with none falls back to its first readable
-    /// user message. Default: no candidates (Codex has no ai-title); Claude overrides
-    /// to surface `ai-title` lines.
+    /// The last nonempty native title wins; otherwise use the first user prompt.
     fn title_of(&self, _value: &Value) -> Option<String> {
         None
     }
 
-    /// Summarize one transcript for `list`. Every transcript summarizes — a
-    /// session with no readable message just gets an empty title (unless a backend's
-    /// `title_of` finds something else, like Claude's `ai-title`), so tool/
-    /// injected-only shells still list and can be cleared. One streaming pass
-    /// with O(1) state; the Agent-specific answers come from the methods
-    /// above.
+    /// Summarize in one bounded-memory pass, including message-free Transcripts.
     /// `home` anchors no-follow traversal of every path component.
     fn summarize_in(&self, home: &Path, path: &Path) -> Result<SessionSummary> {
         let mut start_ts: Option<String> = None;
@@ -203,11 +193,10 @@ pub(crate) trait SessionBackend {
     }
 }
 
-/// Resolve `AgentKind` to its backend. The one bridge between the enum and the
-/// session trait objects.
-pub(crate) fn backend_for(agent: AgentKind) -> Box<dyn SessionBackend> {
+/// Borrow the stateless Transcript parser for one Agent.
+pub(super) fn backend_for(agent: AgentKind) -> &'static dyn SessionBackend {
     match agent {
-        AgentKind::Claude => Box::new(crate::session::claude::Claude),
-        AgentKind::Codex => Box::new(crate::session::codex::Codex),
+        AgentKind::Claude => &crate::session::claude::Claude,
+        AgentKind::Codex => &crate::session::codex::Codex,
     }
 }

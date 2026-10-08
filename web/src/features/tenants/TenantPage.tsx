@@ -1,24 +1,17 @@
-import type { Operation } from "@/api/operations";
-import type { TenantApi } from "@/api/tenants";
+import { ComponentDialogs } from "@/features/tenants/components/ComponentDialogs";
+import styles from "@/features/tenants/TenantPage.module.css";
+
 import { TenantCatalogPane } from "@/features/tenants/catalog/TenantCatalogPane";
-import { TenantDetailPane } from "@/features/tenants/detail/TenantDetailPane";
+import { TenantDetailPane } from "@/features/tenants/components/TenantDetailPane";
 import { TenantDialogs } from "@/features/tenants/mutation/TenantDialogs";
 import { useTenantController } from "@/features/tenants/useTenantController";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
+
 import { MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/tenants/TenantPage.module.css";
+import type { TenantPageProps } from "@/features/tenants/viewTypes";
 
-interface PageProps {
-  api: TenantApi;
-  operation?: Operation | null;
-  search: string;
-  onLocationChange: ModuleLocationChange;
-  onOperation?: (operation: Operation) => void;
-}
-
-export function TenantPage(props: PageProps) {
+export function TenantPage(props: TenantPageProps) {
   const viewModel = useTenantController(props);
   const { catalog, components, detail, dialogs, feedback, mutations, selection } = viewModel;
   return (
@@ -53,7 +46,8 @@ export function TenantPage(props: PageProps) {
         onAction={() => undefined}
         onDismiss={feedback.dismissNotification}
       />
-      <TenantDialogs components={components} dialogs={dialogs} mutations={mutations} />
+      <TenantDialogs dialogs={dialogs} mutations={mutations} />
+      <ComponentDialogs components={components} dialogs={dialogs} mutations={mutations} />
     </div>
   );
 }

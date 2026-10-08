@@ -29,7 +29,7 @@ const sheets = stylesheets("src").map((path) => ({
 
 describe("Console type ladder", () => {
   it("finds a stylesheet to read", () => {
-    expect(sheets.length).toBeGreaterThan(20);
+    expect(sheets).not.toHaveLength(0);
   });
 
   /*

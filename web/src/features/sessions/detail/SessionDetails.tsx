@@ -1,10 +1,11 @@
+import styles from "@/features/sessions/detail/SessionDetails.module.css";
+import conversationStyles from "@/features/sessions/detail/conversation.module.css";
 import type { SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import { SessionCopyValue } from "@/features/sessions/detail/SessionCopyValue";
 import { transcriptAttentionWarnings } from "@/features/sessions/detail/sessionDetail";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
 import { compactDuration, formatByteSize, formatTimestamp } from "@/shared/lib/format";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
-import styles from "@/features/sessions/SessionPage.module.css";
 
 interface SessionDetailsProps {
   session: SourcedSession;
@@ -29,8 +30,8 @@ export function SessionDetails({
 }: SessionDetailsProps) {
   const attentionWarnings = transcriptAttentionWarnings(warnings);
   return (
-    <div className={styles.sessionDetailsScroll}>
-      <div className={styles.sessionDetailsContent}>
+    <div className={conversationStyles.sessionDetailsScroll}>
+      <div className={conversationStyles.sessionDetailsContent}>
         <section className={styles.sessionDetailsSection}>
           <h3>Session</h3>
           <dl className={styles.sessionDetailsGrid}>

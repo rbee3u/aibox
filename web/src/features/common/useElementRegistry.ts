@@ -1,10 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 
-/**
- * Keeps a keyed map of live DOM elements so a page can move focus to a row it
- * does not otherwise hold a ref to. Registration affects focus, not rendering,
- * so the map remains in a ref.
- */
+/** Registration affects focus, not rendering, so elements stay in a ref. */
 export function useElementRegistry<Element extends HTMLElement, Key extends string = string>() {
   const elements = useRef(new Map<Key, Element>());
 
@@ -13,7 +9,6 @@ export function useElementRegistry<Element extends HTMLElement, Key extends stri
     else elements.current.delete(key);
   }, []);
 
-  /** Focus a registered element, skipping one that is absent or disabled. */
   const focus = useCallback((key: Key) => {
     const target = elements.current.get(key);
     if (!target) return false;
@@ -24,7 +19,6 @@ export function useElementRegistry<Element extends HTMLElement, Key extends stri
 
   const get = useCallback((key: Key) => elements.current.get(key) ?? null, []);
 
-  // A stable object so an effect that focuses a row can list the registry as a
-  // dependency without re-running on every render.
+  // Stable identity lets focus effects depend on the registry.
   return useMemo(() => ({ register, focus, get }), [focus, get, register]);
 }

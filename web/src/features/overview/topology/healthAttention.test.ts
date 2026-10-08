@@ -7,7 +7,7 @@ import {
   sessionAttentions,
   topologyAttentions,
 } from "@/features/overview/topology/healthAttention";
-import type { AttentionItem } from "@/features/overview/resourceTree";
+import type { AttentionItem } from "@/features/overview/viewTypes";
 import type { TopologyData } from "@/api/overview";
 
 type Tenant = TopologyData["tenants"][number];

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
-import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 import actionStyles from "@/shared/ui/ActionButton.module.css";
 
 afterEach(() => {
@@ -190,7 +190,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "old content",
     );

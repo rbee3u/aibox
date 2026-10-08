@@ -17,6 +17,7 @@ mod config;
 mod docker;
 mod execution;
 mod foundation;
+mod management;
 mod request;
 mod sandbox;
 mod service;
@@ -56,7 +57,7 @@ impl CommandContext {
         match self {
             Self::System => execution::DockerSource::System,
             #[cfg(test)]
-            Self::Injected(context) => execution::injected_docker(context.docker.clone()),
+            Self::Injected(context) => execution::DockerSource::Injected(context.docker.clone()),
         }
     }
 }
@@ -65,7 +66,7 @@ impl CommandContext {
 pub fn main_entry() -> ExitCode {
     let (left, passthrough) = cli::split_passthrough(std::env::args_os().collect());
     let cli = Cli::parse_from(left);
-    match run_os(cli, &passthrough) {
+    match dispatch_command(cli, &passthrough, &CommandContext::System) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(error) => {
             eprintln!("!! {error:#}");
@@ -74,16 +75,7 @@ pub fn main_entry() -> ExitCode {
     }
 }
 
-/// Execute one parsed `aibox` command, preserving opaque operating-system
-/// strings after the pass-through boundary.
-///
-/// `passthrough` must contain only the arguments after the first `--`; they are
-/// forwarded unchanged for the `run` command and rejected for other commands.
-/// The returned value is the process exit code to expose to the caller.
-fn run_os(cli: Cli, passthrough: &[OsString]) -> Result<i32> {
-    dispatch_command(cli, passthrough, &CommandContext::System)
-}
-
+/// `passthrough` contains only arguments after the first `--`, as opaque OS strings.
 fn dispatch_command(cli: Cli, passthrough: &[OsString], context: &CommandContext) -> Result<i32> {
     match cli.command {
         Command::Run(args) => {

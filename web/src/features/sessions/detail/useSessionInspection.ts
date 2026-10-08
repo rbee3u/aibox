@@ -1,14 +1,14 @@
 import { useCallback, useReducer, useRef, useState } from "react";
+
 import type { SessionApi, SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
 import {
   appendActivityItem,
   appendConversationMessage,
   emptySessionDetail,
   sessionDetailReducer,
-  type SessionActivityItem,
-  type SessionTimelineItem,
 } from "@/features/sessions/detail/sessionDetail";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
+import type { SessionActivityItem, SessionTimelineItem } from "@/features/sessions/viewTypes";
 
 function requestCancelled(cause: unknown, signal: AbortSignal): boolean {
   return signal.aborted || (cause instanceof DOMException && cause.name === "AbortError");

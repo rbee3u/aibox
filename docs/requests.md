@@ -71,8 +71,8 @@ wildcard listener can serve containers without exposing management routes.
 The path after the first slash is the complete absolute upstream URL. AIBox
 preserves the method, path, repeated query values, headers, and body. Only
 `http` and `https` targets are accepted. Redirects pass through without being
-followed. Host and hop-by-hop headers are rebuilt
-or removed; CONNECT and Upgrade/WebSocket are unsupported.
+followed. Host and hop-by-hop headers are rebuilt or removed; CONNECT and
+Upgrade/WebSocket are unsupported.
 
 Before connecting, AIBox resolves the target and pins the resolved addresses
 to the connection. It accepts public, private, and loopback upstream addresses;
@@ -121,10 +121,11 @@ that disconnects before response headers may not be detected immediately.
 
 ## Recording and Storage
 
-Request and response chunks are written to disk before forwarding. AIBox
-preserves application-visible header values and body bytes without parsing,
-truncation, redaction, decompression, or whole-message buffering. Disk latency
-therefore applies backpressure, and a recording error aborts forwarding.
+Request and response chunks are written to disk before forwarding. Raw evidence
+preserves application-visible header values and body bytes without truncation,
+redaction, or decompression. Forwarding streams bodies except for the request
+recording required by [HTTP 429 retries](#http-429-retries). Disk latency applies
+backpressure, and a recording error aborts forwarding.
 
 Before downstream headers commit, a recording failure can replace the response
 with 507. After commit, the body is truncated and the downstream stream errors.
@@ -177,13 +178,9 @@ records, and HTTP/2 frames are not preserved.
 
 ## Retention and Deletion
 
-There is no body limit, retention policy, redaction, database, or cross-process
-lock. Authorization values, API keys, prompts, tool data, and model output
-persist in full after the Service exits.
+There is no body limit, automatic retention, or redaction. Authorization values,
+API keys, prompts, tool data, and model output persist after the Service exits.
 
 Delete evidence from the Requests module when debugging ends. Active Requests
 cannot be deleted. Selected deletion validates every target before removing
 any; a grouped deletion updates or removes its Group. Deletion is irreversible.
-
-Claude Messages, OpenAI Responses, and Chat Completions streams work as HTTP
-SSE. WebSocket and CONNECT transports are outside the supported surface.

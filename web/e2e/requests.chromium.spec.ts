@@ -1,6 +1,67 @@
 import { expect, test } from "@playwright/test";
 import { mockRequests } from "./requests.fixture";
 
+for (const hasTouch of [false, true]) {
+  test.describe(`Pretty body controls with ${hasTouch ? "coarse" : "fine"} pointers`, () => {
+    test.use({ hasTouch });
+
+    test("have consistent hit areas and visible interaction feedback", async ({ page }) => {
+      await mockRequests(page);
+      await page.goto("./");
+      await page
+        .getByRole("button", { name: "POST relay.example.test/v1/responses", exact: true })
+        .click();
+
+      let controlSize: number | undefined;
+      for (const [tab, name] of [
+        ["Request", "Collapse JSON root"],
+        ["Request", "Copy object value"],
+        ["Response", "Copy SSE Event data"],
+      ]) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
+        const control = page.getByRole("button", { name, exact: true });
+        await expect(control).toBeVisible();
+        const bounds = await control.boundingBox();
+        expect(bounds, name).not.toBeNull();
+        // Minimum pointer targets are a usability boundary, not a CSS token snapshot.
+        expect(bounds!.width, name).toBeGreaterThanOrEqual(hasTouch ? 44 : 24);
+        expect(bounds!.height, name).toBe(bounds!.width);
+        controlSize ??= bounds!.width;
+        expect(bounds!.width, name).toBe(controlSize);
+
+        await page.mouse.move(0, 0);
+        const background = () =>
+          control.evaluate((element) => getComputedStyle(element).backgroundColor);
+        const resting = await background();
+        await control.hover();
+        await expect.poll(background, { message: `${name}: hover feedback` }).not.toBe(resting);
+        const hovered = await background();
+        await page.mouse.down();
+        try {
+          await expect.poll(background, { message: `${name}: press feedback` }).not.toBe(hovered);
+        } finally {
+          // Release outside the control so this geometry check does not toggle or copy.
+          await page.mouse.move(0, 0);
+          await page.mouse.up();
+        }
+        await page.keyboard.press("Tab");
+        await control.focus();
+        await expect(control).toBeFocused();
+        await expect
+          .poll(
+            () =>
+              control.evaluate((element) => {
+                const style = getComputedStyle(element);
+                return style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0;
+              }),
+            { message: `${name}: keyboard focus ring` },
+          )
+          .toBe(true);
+      }
+    });
+  });
+}
+
 test("Request inspection preserves responsive and keyboard workflows", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await mockRequests(page);

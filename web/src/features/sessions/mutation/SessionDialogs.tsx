@@ -1,12 +1,13 @@
 import type { Operation } from "@/api/operations";
-import { sessionTenantSelectionValue } from "@/features/sessions/route";
-import { agentLabel, sessionListTenantLabel } from "@/features/sessions/sessionSource";
-import type { SessionViewModel } from "@/features/sessions/useSessionController";
+import { tenantSelectionValue } from "@/domain/tenant";
+import { sessionListTenantLabel } from "@/features/sessions/sessionSource";
+import type { SessionViewModel } from "@/features/sessions/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
 import { ConfirmDialog, ContextPill } from "@/shared/ui/ConfirmDialog";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
+import { agentLabel } from "@/shared/lib/format";
 
 const HostTenantIcon = resourceIcons.hostTenant;
 const ManagedTenantIcon = resourceIcons.managedTenant;
@@ -35,7 +36,7 @@ export function SessionDialogs({
           )
         }
         label="Tenant"
-        value={sessionListTenantLabel(sessionTenantSelectionValue(tenant))}
+        value={sessionListTenantLabel(tenantSelectionValue(tenant))}
       />
       <ContextPill
         icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}

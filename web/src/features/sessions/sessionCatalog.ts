@@ -6,7 +6,10 @@ import {
   type SessionSource,
 } from "@/features/sessions/sessionSource";
 
-/** Projects a single source read into the list contract. */
+/** A completed catalog read, delivered before its request lease is released. */
+export type SessionCatalogResult =
+  { kind: "loaded"; data: AggregatedSessionData } | { kind: "failed"; cause: unknown };
+
 export function projectSessionCatalog(
   source: SessionSource,
   result: SessionListData,
@@ -19,7 +22,6 @@ export function projectSessionCatalog(
   };
 }
 
-/** Counts a row and its detail both state, so they must say them the same way. */
 export function messageCountLabel(count: number): string {
   return `${count} message${count === 1 ? "" : "s"}`;
 }

@@ -9,7 +9,21 @@ const fileSystem = (
     };
   }
 ).process.getBuiltinModule("fs");
-const css = fileSystem.readFileSync("src/features/sessions/SessionPage.module.css", "utf8");
+const css = [
+  "src/features/sessions/detail/SessionDetailPane.module.css",
+  "src/features/sessions/catalog/SessionCatalogPane.module.css",
+  "src/features/sessions/catalog/SessionRow.module.css",
+  "src/features/sessions/SessionPage.module.css",
+  "src/features/sessions/detail/SessionConversation.module.css",
+  "src/features/sessions/detail/conversation.module.css",
+  "src/features/sessions/detail/SessionConversationNav.module.css",
+  "src/features/sessions/detail/SessionDetails.module.css",
+  "src/features/sessions/detail/SessionCopyValue.module.css",
+  "src/features/sessions/detail/SessionEvidenceDisclosure.module.css",
+  "src/features/sessions/detail/SessionActivityGroup.module.css",
+]
+  .map((path) => fileSystem.readFileSync(path, "utf8"))
+  .join("\n");
 const component = fileSystem.readFileSync(
   "src/features/sessions/detail/SessionCopyValue.tsx",
   "utf8",
@@ -20,13 +34,6 @@ describe("Session detail copy controls", () => {
     expect(component).toMatch(/<IconButton\b[^>]*size="sm"/s);
   });
 
-  /*
-   * Sizing or restyling the control from this stylesheet is what once dropped
-   * it to 24px on touch and later left it at 0.3 opacity while Overview and
-   * Tenants drew theirs at rest: a feature stylesheet loads after the
-   * primitive's, so an override here silently outranks it. The control now
-   * has no feature-side class at all.
-   */
   it("leaves the control's box and rest state to the primitive", () => {
     const control = /<IconButton\b([^>]*)>/s.exec(component);
     expect(control).not.toBeNull();
@@ -34,10 +41,6 @@ describe("Session detail copy controls", () => {
     expect(css).not.toMatch(/\.sessionCopyAction\b/);
   });
 
-  /*
-   * A path is read for its tail: the Transcript path ends in the file name.
-   * Truncating it left the copy control as the only way to read the value.
-   */
   it("wraps a long value instead of truncating it", () => {
     const rule = /\.sessionCopyValue code\s*\{([^}]*)\}/s.exec(css);
     expect(rule).not.toBeNull();

@@ -1,0 +1,81 @@
+.dialogActions {
+  composes: dialogActions from "@/shared/ui/layout/catalog.module.css";
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialogHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.dialogIconContainer {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface-inset));
+  border: 1px solid var(--line-soft);
+  color: var(--ink-secondary);
+}
+
+.dialogTitle {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-panel-title);
+  font-weight: var(--weight-panel-title);
+  line-height: var(--line-height-panel-title);
+}
+
+.dialogSubtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.dialogField {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.fieldLabel {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.pathPreview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  font-size: var(--text-meta);
+  overflow: hidden;
+}
+
+.pathPreviewLabel {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.pathPreview code {
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

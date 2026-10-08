@@ -1,3 +1,6 @@
+import styles from "@/features/sessions/detail/SessionConversation.module.css";
+import conversationStyles from "@/features/sessions/detail/conversation.module.css";
+import type { SessionTimelineItem } from "@/features/sessions/viewTypes";
 import { AlertTriangle, ArrowDown, Ban, User, type LucideIcon } from "lucide-react";
 import type { RefObject, UIEvent } from "react";
 import type { ConversationMessage, ConversationNotice, SessionApi } from "@/api/sessions";
@@ -7,7 +10,6 @@ import { SessionMessageContent } from "@/features/sessions/detail/SessionMessage
 import {
   conversationReadingTimeline,
   sessionItemKey,
-  type SessionTimelineItem,
 } from "@/features/sessions/detail/sessionDetail";
 import { compactMessageTimestamp, messageAnchorId } from "@/features/sessions/detail/sessionFormat";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
@@ -17,15 +19,14 @@ import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons, toneIcons } from "@/shared/icons/consoleIcons";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
 
 /**
- * A notice is a line the CLI wrote in a speaker's slot. It keeps its verbatim
- * text but drops the author, so a failed request never reads as the Agent's
- * last sentence and an interruption never reads as something the user typed.
+ * CLI notices retain their text but no speaker attribution: neither the Agent
+ * nor the user authored them.
  */
 const conversationNotices: Record<
   ConversationNotice,
@@ -57,7 +58,6 @@ interface SessionConversationProps {
   onTranscriptStale: () => Promise<string | null>;
 }
 
-/** The Conversation tab: a centered reading stream with its message navigator. */
 export function SessionConversation({
   api,
   session,
@@ -80,22 +80,26 @@ export function SessionConversation({
   const singleTurn = userMessages.length <= 1;
   return (
     <div
-      className={`${styles.sessionConversationLayout} ${singleTurn ? styles.singleTurnLayout : ""}`}
+      className={`${styles.sessionConversationLayout} ${singleTurn ? conversationStyles.singleTurnLayout : ""}`}
     >
       <SessionConversationNav
         messages={userMessages}
         activeEntryId={activeUserMessage}
         onSelect={onSelectMessage}
       />
-      <div className={styles.sessionConversationMain}>
+      <div className={conversationStyles.sessionConversationMain}>
         <SessionConversationNav
           messages={userMessages}
           activeEntryId={activeUserMessage}
           mobile
           onSelect={onSelectMessage}
         />
-        <div ref={scrollRef} className={styles.sessionConversationScroll} onScroll={onScroll}>
-          <div className={styles.sessionConversationContent}>
+        <div
+          ref={scrollRef}
+          className={conversationStyles.sessionConversationScroll}
+          onScroll={onScroll}
+        >
+          <div className={conversationStyles.sessionConversationContent}>
             {attentionNotice !== null && (
               <button
                 type="button"
@@ -142,7 +146,7 @@ export function SessionConversation({
                       const entryId = item.value.entry_ids[0];
                       if (entryId) registerMessage(entryId, element);
                     }}
-                    className={`${styles.sessionMessage} ${isUser ? styles.sessionMessageUser : styles.sessionMessageAssistant}`}
+                    className={`${conversationStyles.sessionMessage} ${isUser ? styles.sessionMessageUser : styles.sessionMessageAssistant}`}
                   >
                     <header>
                       <div className={styles.sessionMessageSender}>

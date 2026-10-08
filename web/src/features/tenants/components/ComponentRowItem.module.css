@@ -1,0 +1,295 @@
+.componentCardBusy {
+  background: var(--accent-subtle);
+}
+
+.componentCardMain {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 88px;
+  flex: 1 1 auto;
+}
+
+.componentHeaderVersion {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.componentHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.componentInputGroup {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-height: 34px;
+}
+
+.componentVersionInputWrapper {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  cursor: text;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.componentVersionInputWrapper:focus-within {
+  border-color: var(--accent);
+  background: var(--surface);
+  z-index: 1;
+}
+
+.componentInputGroupError .componentVersionInputWrapper {
+  border-color: var(--danger);
+}
+
+.componentVersionPrefix {
+  padding-left: 10px;
+  padding-right: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  user-select: none;
+  pointer-events: none;
+}
+
+.componentVersionInput {
+  width: 100%;
+  height: 100%;
+  min-height: 32px;
+  padding: 4px 8px 4px 2px;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.componentVersionInput:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.componentVersionInput::placeholder {
+  color: var(--line-content);
+  opacity: 0.8;
+}
+
+.componentInputGroupButton {
+  flex: 0 0 auto;
+  min-width: 90px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+  justify-content: center;
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.componentCardUpToDate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.componentSubPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "left actions"
+    "diagnostic diagnostic";
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 -16px -16px -16px;
+  padding: 10px 16px;
+  background: var(--surface-inset);
+  border-top: 1px solid var(--line-structural);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  transition: background-color var(--transition-fast);
+}
+
+.componentSubPanelBusy {
+  background: var(--accent-subtle);
+}
+
+.componentSubPanel[data-attention="true"] {
+  background: var(--warning-soft);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.componentSubPanelLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.componentSubPanelIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  flex-shrink: 0;
+}
+
+.componentSubPanelLeft strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.componentSubPanelActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.componentSubPanelAction {
+  min-height: 28px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-left: 10px;
+  padding-right: 10px;
+  font-size: var(--text-xs);
+}
+
+.versionCheckIcon {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.componentState,
+.componentRelease {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.componentStateValue,
+.componentProgress,
+.componentReleaseValue {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 3px 7px;
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.componentStateValue strong,
+.componentReleaseValue strong {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-content);
+  background: var(--surface-raised);
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.componentProgress {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+}
+
+.componentSplitAction {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  gap: 0;
+}
+
+.componentPrimaryAction {
+  width: 100%;
+  justify-content: center;
+  min-height: 34px;
+}
+
+.componentSplitTrigger {
+  width: 36px;
+  min-width: 36px;
+  flex: 0 0 36px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding-right: 8px;
+  padding-left: 8px;
+  justify-content: center;
+  min-height: 34px;
+}
+
+.componentSplitAction:hover .componentSplitTrigger:not(:disabled) {
+  border-color: var(--action-primary-soft-hover-line);
+  color: var(--action-primary-soft-hover-ink);
+  background: var(--action-primary-soft-hover-surface);
+}
+.componentDiagnostic {
+  grid-area: diagnostic;
+  margin: 2px 0 3px;
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .componentPrimaryAction,
+  .componentSplitAction {
+    width: 108px;
+  }
+
+  .componentSplitTrigger {
+    width: 44px;
+    min-width: 44px;
+    flex-basis: 44px;
+  }
+}

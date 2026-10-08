@@ -21,24 +21,11 @@
 .warning {
   color: var(--warning);
 }
-.help {
-  color: var(--muted);
-}
 .indicator.error:hover {
   background: var(--danger-soft);
 }
 .indicator.warning:hover {
   background: var(--warning-soft);
-}
-.indicator.help:hover {
-  background: var(--surface-hover);
-}
-
-.indicator.help:active {
-  background: var(--surface-pressed);
-}
-.indicator:focus-visible {
-  outline-offset: var(--focus-offset);
 }
 .tooltip {
   border: 1px solid var(--line-control-strong);

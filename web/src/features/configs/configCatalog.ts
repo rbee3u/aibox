@@ -6,8 +6,8 @@ import type {
   PropagationOutcome,
 } from "@/api/configs";
 import type { AgentKind } from "@/domain/agent";
-import type { TenantSelection } from "@/domain/tenant";
-import { configTenantSelectionValue } from "@/features/configs/route";
+import { tenantSelectionValue, type TenantSelection } from "@/domain/tenant";
+
 import { driftCatalogLabel, formatTimestamp } from "@/shared/lib/format";
 import type { IssueTone } from "@/shared/ui/IssueIndicator";
 
@@ -52,7 +52,7 @@ export function configIssueDescriptionId(
   agent: AgentKind,
   name: string,
 ): string {
-  return `config-issue-${configTenantSelectionValue(tenant).replace(":", "-")}-${agent}-${name}`;
+  return `config-issue-${tenantSelectionValue(tenant).replace(":", "-")}-${agent}-${name}`;
 }
 
 export const lastAppliedDescriptionId = "config-last-applied";
@@ -68,14 +68,9 @@ export interface AppliedConfigPresentation {
   label: string;
   tone: "good" | "warning";
   variant: "inline" | "badge";
-  /** Whether Apply still has work to do: a clean application converges to nothing. */
+  /** False when the saved Current Config already matches. */
   applicable: boolean;
 }
-/**
- * How the Last Application source announces itself, on its catalog row and in
- * its detail header. Clean drift reads `Applied` — the fact a reader is after —
- * rather than the drift word; every other state keeps the shared drift label.
- */
 export function appliedConfigPresentation(status: ApplicationStatus): AppliedConfigPresentation {
   if (status.drift === "clean") {
     return { label: "Applied", tone: "good", variant: "inline", applicable: false };
@@ -88,7 +83,6 @@ export function appliedConfigPresentation(status: ApplicationStatus): AppliedCon
   };
 }
 export type PropagationGroup = "failed" | "updated" | "attention" | "skipped";
-/** Display order: a write that failed is the one thing the reader believed happened and did not. */
 export const propagationGroups: readonly PropagationGroup[] = [
   "failed",
   "updated",
@@ -96,8 +90,7 @@ export const propagationGroups: readonly PropagationGroup[] = [
   "skipped",
 ];
 /**
- * `newer` is a target already fresher than the source, which is a skip by
- * rule rather than something to act on; `conflict` and `invalid` need a person.
+ * Newer targets are skipped; conflicts and invalid credentials need attention.
  */
 export function propagationGroup(status: PropagationOutcome["status"]): PropagationGroup {
   switch (status) {
@@ -147,7 +140,6 @@ export function propagationStatus(
       return { tone: "error", label: "Failed" };
   }
 }
-/** The sentence beside the status: why this target got that outcome. */
 export function propagationDetail(outcome: PropagationOutcome, preview = false): string | null {
   switch (outcome.status) {
     case "updated":

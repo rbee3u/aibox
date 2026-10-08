@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, type RequestDetail, type RequestLookup, type RequestsApi } from "@/api/requests";
+
+import {
+  isRequestNotFound,
+  type RequestDetail,
+  type RequestLookup,
+  type RequestsApi,
+} from "@/api/requests";
+import { requestErrorMessage } from "@/features/requests/requestErrors";
 import type {
   ClearInspectionFailure,
   ReportInspectionFailure,
   RequestInspectionIdentity,
-} from "@/features/requests/detail/inspectionTypes";
-import { requestErrorMessage, requestWasCancelled } from "@/features/requests/requestErrors";
-import type { DetailTab } from "@/features/requests/viewTypes";
+  DetailTab,
+} from "@/features/requests/viewTypes";
+import { wasCancelled } from "@/shared/lib/errors";
 
 const ACTIVE_DETAIL_POLL_INTERVAL_MS = 3000;
 
@@ -78,8 +85,8 @@ export function useRequestDetailResource({
         setDetail(lookup);
         clearFailure("detail");
       } catch (cause) {
-        if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
-          const notFound = isNotFound(cause);
+        if (ownsRequest() && !wasCancelled(cause, controller.signal)) {
+          const notFound = isRequestNotFound(cause);
           if (notFound) clear();
           reportFailure({
             kind: "detail",
@@ -141,8 +148,8 @@ export function useRequestDetailResource({
         clearFailure("detail");
         shouldContinue = lookup.state === "active";
       } catch (cause) {
-        if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
-          const notFound = isNotFound(cause);
+        if (ownsRequest() && !wasCancelled(cause, controller.signal)) {
+          const notFound = isRequestNotFound(cause);
           if (notFound) {
             shouldContinue = false;
             clear();
@@ -183,10 +190,6 @@ export function useRequestDetailResource({
     setTab,
     tab,
   };
-}
-
-function isNotFound(cause: unknown): cause is ApiError {
-  return cause instanceof ApiError && cause.status === 404;
 }
 
 function isMissing(value: RequestLookup): value is { kind: "missing" } {

@@ -106,44 +106,44 @@ impl OfficialLatestProvider {
     }
 
     async fn fetch_kind(client: Client, kind: ComponentKind) -> LatestResult {
-        match kind {
-            ComponentKind::Node => match fetch_node(&client).await {
-                Ok((version, newest)) => LatestResult::Available {
-                    version,
-                    newest: Some(newest),
-                    source: "nodejs.org",
-                },
-                Err(error) => unavailable("nodejs.org", error.to_string()),
-            },
-            ComponentKind::Go => match fetch_go(&client).await {
-                Ok(version) => available(version, "go.dev"),
-                Err(error) => unavailable("go.dev", error.to_string()),
-            },
-            ComponentKind::Rust => match fetch_rust(&client).await {
-                Ok(version) => available(version, "static.rust-lang.org"),
-                Err(error) => unavailable("static.rust-lang.org", error.to_string()),
-            },
-            ComponentKind::Python => match fetch_python(&client).await {
-                Ok(version) => available(version, "github.com/astral-sh/python-build-standalone"),
-                Err(error) => unavailable(
-                    "github.com/astral-sh/python-build-standalone",
-                    error.to_string(),
-                ),
-            },
-            ComponentKind::Codex => match fetch_codex(&client).await {
-                Ok(version) => available(version, "github.com/openai/codex"),
-                Err(error) => unavailable("github.com/openai/codex", error.to_string()),
-            },
-            ComponentKind::Claude => match fetch_claude(&client).await {
-                Ok(version) => available(version, "registry.npmjs.org/@anthropic-ai/claude-code"),
-                Err(error) => unavailable(
-                    "registry.npmjs.org/@anthropic-ai/claude-code",
-                    error.to_string(),
-                ),
-            },
+        let (source, result) = match kind {
+            ComponentKind::Node => (
+                "nodejs.org",
+                fetch_node(&client)
+                    .await
+                    .map(|(version, newest)| (version, Some(newest))),
+            ),
+            ComponentKind::Go => (
+                "go.dev",
+                fetch_go(&client).await.map(|version| (version, None)),
+            ),
+            ComponentKind::Rust => (
+                "static.rust-lang.org",
+                fetch_rust(&client).await.map(|version| (version, None)),
+            ),
+            ComponentKind::Python => (
+                "github.com/astral-sh/python-build-standalone",
+                fetch_python(&client).await.map(|version| (version, None)),
+            ),
+            ComponentKind::Codex => (
+                "github.com/openai/codex",
+                fetch_codex(&client).await.map(|version| (version, None)),
+            ),
+            ComponentKind::Claude => (
+                "registry.npmjs.org/@anthropic-ai/claude-code",
+                fetch_claude(&client).await.map(|version| (version, None)),
+            ),
             ComponentKind::ClaudeStatusline | ComponentKind::CodexStatusline => {
                 unreachable!("statusline Components do not have remote release entries")
             }
+        };
+        match result {
+            Ok((version, newest)) => LatestResult::Available {
+                version,
+                newest,
+                source,
+            },
+            Err(error) => unavailable(source, error.to_string()),
         }
     }
 }
@@ -404,14 +404,6 @@ async fn read_limited(response: reqwest::Response) -> Result<Vec<u8>> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-fn available(version: String, source: &'static str) -> LatestResult {
-    LatestResult::Available {
-        version,
-        newest: None,
-        source,
-    }
 }
 
 fn unavailable(source: &'static str, error: impl Into<String>) -> LatestResult {

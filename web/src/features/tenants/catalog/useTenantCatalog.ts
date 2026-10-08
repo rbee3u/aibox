@@ -5,11 +5,7 @@ import { messageOf } from "@/shared/lib/errors";
 import { LatestRequest } from "@/shared/lib/latestRequest";
 
 /**
- * Owns the asynchronous Tenant catalog snapshot used by the Tenants page.
- *
- * `loading` is true only until the first snapshot arrives. A reload keeps the
- * rows it already has on screen, so a create, delete, or Refresh neither
- * blanks the list nor unmounts the row or control that focus should return to.
+ * Keep loaded rows mounted during reload so mutation and Refresh preserve focus.
  */
 export function useTenantCatalog(api: Pick<TenantApi, "listTenants">) {
   const [tenants, setTenants] = useState<TenantRow[]>([]);
@@ -20,27 +16,18 @@ export function useTenantCatalog(api: Pick<TenantApi, "listTenants">) {
 
   const load = useCallback(async (): Promise<TenantRow[] | null> => {
     if (!loadedOnce.current) setLoading(true);
-    const request = requestOwner.current.begin();
-    try {
-      const rows = await api.listTenants(request.signal);
-      if (request.signal.aborted || !request.isCurrent()) return null;
-      loadedOnce.current = true;
-      setTenants(rows);
-      setError(null);
-      return rows;
-    } catch (cause) {
-      if (!request.signal.aborted) setError(messageOf(cause));
-      return null;
-    } finally {
-      if (request.isCurrent()) {
-        request.release();
-        setLoading(false);
-      }
-    }
+    return requestOwner.current.run((signal) => api.listTenants(signal), {
+      loaded: (rows) => {
+        loadedOnce.current = true;
+        setTenants(rows);
+        setError(null);
+      },
+      failed: (cause) => setError(messageOf(cause)),
+      settled: () => setLoading(false),
+    });
   }, [api]);
 
   useEffect(() => {
-    // The catalog is an external resource; the page consumes its immutable snapshot.
     void load();
     const owner = requestOwner.current;
     return () => owner.cancel();

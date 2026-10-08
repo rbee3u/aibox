@@ -5,6 +5,7 @@ import {
   type LosslessNumber,
 } from "lossless-json";
 import type { BodyKind, EventTimingIndex, HeaderValue, RequestDetail } from "@/api/requests";
+import { messageOrFallback } from "@/shared/lib/errors";
 import { formatTimestampWithMilliseconds, hex } from "@/shared/lib/format";
 import { tryDecodeHeader } from "@/features/requests/requestFormat";
 
@@ -102,7 +103,7 @@ export function parseJson(text: string): JsonParseResult {
   } catch (cause) {
     return {
       ok: false,
-      message: cause instanceof Error ? cause.message : "Body is not valid JSON",
+      message: messageOrFallback(cause, "Body is not valid JSON"),
     };
   }
 }
@@ -296,9 +297,9 @@ export function presentSseEvent(event: ParsedSseEvent): PresentedSseEvent {
 }
 
 /** A card preview shorter than this is only a fragment, not a readable row. */
-export const USEFUL_SSE_PREVIEW_CHARACTERS = 8;
+const USEFUL_SSE_PREVIEW_CHARACTERS = 8;
 
-export function sseCardPreviewKind(preview: string | null): "none" | "short" | "useful" {
+function sseCardPreviewKind(preview: string | null): "none" | "short" | "useful" {
   if (!preview) return "none";
   return [...preview].length >= USEFUL_SSE_PREVIEW_CHARACTERS ? "useful" : "short";
 }

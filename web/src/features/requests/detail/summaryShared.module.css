@@ -1,0 +1,49 @@
+.summary {
+  display: grid;
+  max-width: var(--measure-data);
+  margin-inline: auto;
+  gap: var(--space-section);
+}
+.summary h2,
+.sectionTitle h2 {
+  margin: 0;
+  color: var(--ink-section-title);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
+}
+.modelSummary,
+.tokenSection,
+.timingSection {
+  padding: 16px 20px;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+.modelEffort {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
+}
+.sectionTitle {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin: 0 0 var(--space-section-title);
+}
+.sectionTitle:not(:first-child) {
+  margin-top: var(--space-section);
+}
+.sectionTitle h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sectionTitle h2 span {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}

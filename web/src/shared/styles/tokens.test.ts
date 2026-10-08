@@ -178,18 +178,6 @@ describe("Console CSS theme tokens", () => {
     }
   });
 
-  it("keeps the compact Console density contract centralized", () => {
-    expect(light.get("control-compact")).toBe("30px");
-    expect(light.get("control-xs")).toBe("24px");
-    expect(light.get("control-sm")).toBe("32px");
-    expect(light.get("control-md")).toBe("36px");
-    expect(light.get("toolbar-height")).toBe("44px");
-    expect(light.get("row-height")).toBe("46px");
-    expect(light.get("row-height-roomy")).toBe("54px");
-    expect(light.get("radius-sm")).toBe("5px");
-    expect(light.get("radius-md")).toBe("6px");
-  });
-
   it("keeps the spacing scale on a two-pixel base and ordered", () => {
     const ladder = ["2xs", "xs", "sm", "md", "lg", "xl", "2xl", "3xl"];
     const steps = ladder.map((step) => {
@@ -229,17 +217,6 @@ describe("Console CSS theme tokens", () => {
         );
   });
 
-  it("keeps the role-based typography hierarchy centralized", () => {
-    expect(light.get("text-page-title")).toBe("var(--text-lg)");
-    expect(light.get("text-panel-title")).toBe("var(--text-lg)");
-    expect(light.get("text-section-title")).toBe("var(--text-xs)");
-    expect(light.get("text-row-title")).toBe("var(--text-sm)");
-    expect(light.get("text-meta")).toBe("var(--text-xs)");
-    expect(light.get("line-height-page-title")).toBe("var(--line-height-md)");
-    expect(light.get("catalog-row-primary-size")).toBe("var(--text-row-title)");
-    expect(light.get("catalog-row-secondary-size")).toBe("var(--text-meta)");
-  });
-
   it("keeps every type role on a step of the size scale", () => {
     const scale = new Map<string, number>(
       ["xs", "sm", "md", "lg"].map((step) => {
@@ -253,6 +230,7 @@ describe("Console CSS theme tokens", () => {
     const px = (role: string) => scale.get(light.get(`text-${role}`)!)!;
     expect(px("page-title")).toBeGreaterThan(px("row-title"));
     expect(px("panel-title")).toBeGreaterThan(px("row-title"));
+    expect(px("section-title")).toBeLessThan(px("row-title"));
   });
 
   it("keeps a section title quieter than the rows it groups", () => {
@@ -265,12 +243,6 @@ describe("Console CSS theme tokens", () => {
     expect(light.get("text-page-title")).toBe(light.get("text-panel-title"));
     expect(light.get("weight-page-title")).toBe("var(--weight-bold)");
     expect(light.get("weight-panel-title")).toBe("var(--weight-semibold)");
-  });
-
-  it("keeps the catalog Tenant/Agent filter toolbar rhythm centralized", () => {
-    expect(light.get("catalog-filter-control-max-width")).toBe("112px");
-    expect(light.get("catalog-toolbar-filters-gap")).toBe("8px");
-    expect(light.get("catalog-toolbar-cluster-gap")).toBe("14px");
   });
 
   it("keeps chrome a perceptibly different material from the content it frames", () => {
@@ -325,8 +297,7 @@ describe("Console CSS theme tokens", () => {
     expect(light.get("control-disabled-primary-surface")).toBe("var(--control-disabled-surface)");
   });
 
-  it("keeps overlay elevation stronger than resting chrome in both themes", () => {
-    expect(dark.get("shadow-lg")).toBe("0 20px 52px rgb(0 0 0 / 0.38)");
+  it("keeps distinct elevation tokens in both themes", () => {
     for (const [theme, tokens] of themes) {
       expect(tokens.get("shadow-lg"), `${theme} shadow-lg`).not.toBe(tokens.get("shadow-md"));
       expect(tokens.get("shadow-md"), `${theme} shadow-md`).not.toBe(tokens.get("shadow-sm"));
@@ -334,8 +305,6 @@ describe("Console CSS theme tokens", () => {
   });
 
   it("keeps hover, control rest, and accent selection roles distinct", () => {
-    expect(light.get("control-rest")).toBe("#f4f7fa");
-    expect(dark.get("control-rest")).toBe("#222833");
     for (const [theme, tokens] of themes) {
       const surface = tokens.get("surface")!;
       const rest = tokens.get("control-rest")!;

@@ -49,7 +49,7 @@ pub(crate) struct ResponseMetadata {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Outcome {
+pub(crate) enum RequestOutcome {
     Completed,
     Rejected,
     UpstreamError,
@@ -92,11 +92,7 @@ impl RequestState {
     }
 }
 
-/// Domain-facing name for the terminal result enum. Persistence and protocol
-/// code use the internal `Outcome` spelling.
-pub(crate) type RequestOutcome = Outcome;
-
-impl Outcome {
+impl RequestOutcome {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Completed => "completed",
@@ -351,7 +347,7 @@ pub(crate) struct SummaryMetadata {
     pub protocol: Option<ProtocolSummary>,
     #[serde(default)]
     pub retry: Option<RetryMetadata>,
-    pub outcome: Option<Outcome>,
+    pub outcome: Option<RequestOutcome>,
     pub errors: Vec<DiagnosticMetadata>,
     pub warnings: Vec<DiagnosticMetadata>,
     pub assessment: RequestAssessment,
@@ -366,7 +362,7 @@ pub(crate) struct ResultMetadata {
     pub response_bytes: u64,
     pub request_body_ms: Option<u64>,
     pub total_ms: u64,
-    pub outcome: Outcome,
+    pub outcome: RequestOutcome,
     pub error: Option<ErrorMetadata>,
 }
 

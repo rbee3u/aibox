@@ -122,7 +122,7 @@ export function isHumanReadableSessionText(text: string): boolean {
  * First paragraph or first CJK sentence of promoted latest copy. Collapsed
  * list titles also cut leftover markdown severity bullets.
  */
-export function sessionHeadlineLead(text: string): string {
+function sessionHeadlineLead(text: string): string {
   const line =
     text
       .trim()

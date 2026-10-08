@@ -1,0 +1,11 @@
+.sessionCopyValue {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 6px;
+}
+.sessionCopyValue code {
+  min-width: 0;
+  padding-block: calc((var(--control-xs) - 1lh) / 2);
+  overflow-wrap: anywhere;
+}

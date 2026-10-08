@@ -498,13 +498,7 @@
   margin-left: auto;
 }
 
-/*
- * The Operation panel is fixed, so the workspace reserves whatever it actually
- * occupies. A collapsed bar is short but still opaque: without the reservation
- * the last catalog row sat under it with no scroll available to recover it, and
- * the panel starts collapsed for a succeeded Operation, so every successful
- * install swallowed a row until the panel was dismissed.
- */
+/* Reserve the fixed Operation panel's height so it cannot obscure catalog rows. */
 .workspace {
   position: relative;
   display: grid;
@@ -620,12 +614,6 @@
   display: none;
 }
 
-/*
- * The shell's own targets, stated rather than inherited from whatever token a
- * rule happened to borrow. Every other surface in the Console declares this;
- * the sidebar was the one that did not, and it is the part of the application
- * a touch user reaches for first.
- */
 @media (pointer: coarse) {
   .moduleNav a,
   .resourceLink,

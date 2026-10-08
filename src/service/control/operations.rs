@@ -1,7 +1,6 @@
 //! Management Operation Control API handlers and wire commands.
 
 use super::{ControlResult, json_response};
-use crate::service::coordination::OperationCoordinator;
 use crate::service::state::ServiceState;
 use async_stream::stream;
 use axum::Json;
@@ -23,7 +22,7 @@ pub(crate) struct OperationQuery {
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct OperationEnvelope {
-    operation: Option<crate::service::operation::OperationSnapshot>,
+    operation: Option<crate::management::OperationSnapshot>,
     gap: bool,
 }
 
@@ -31,7 +30,7 @@ pub(super) async fn current_operation(
     State(state): State<ServiceState>,
     Query(query): Query<OperationQuery>,
 ) -> Response<Body> {
-    let view = OperationCoordinator::new(state).current(query.after_sequence);
+    let view = state.management.operations.current(query.after_sequence);
     json_response(
         StatusCode::OK,
         &OperationEnvelope {
@@ -44,8 +43,8 @@ pub(super) async fn current_operation(
 pub(super) async fn operation_events(
     State(state): State<ServiceState>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let coordinator = OperationCoordinator::new(state.clone());
-    let shutdown = state.request().shutdown_token();
+    let coordinator = state.management.operations.clone();
+    let shutdown = state.shutdown_token();
     let mut changes = coordinator.subscribe();
     let events = stream! {
         let mut cursor = coordinator.event_cursor();
@@ -80,7 +79,7 @@ pub(super) async fn start_build(
     State(state): State<ServiceState>,
     Json(request): Json<BuildRequest>,
 ) -> ControlResult {
-    let operation = OperationCoordinator::new(state).start_build(request.force)?;
+    let operation = state.management.operations.start_build(request.force)?;
     Ok(json_response(StatusCode::ACCEPTED, &operation))
 }
 
@@ -89,7 +88,7 @@ pub(super) async fn cancel_operation(
     Path(id): Path<String>,
     Json(_request): Json<Value>,
 ) -> ControlResult {
-    OperationCoordinator::new(state).cancel(&id)?;
+    state.management.operations.cancel(&id)?;
     Ok(json_response(
         StatusCode::ACCEPTED,
         &CancelledOperationResponse { cancelled: id },

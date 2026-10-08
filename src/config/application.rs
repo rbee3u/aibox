@@ -1,10 +1,10 @@
 //! One-shot Config Application and Last Application drift observation.
 
-use super::catalog::{inspect_named_config_directory, read_named_config_definition};
-use super::files::{
+use super::metadata::{self, PreparedMetadataWrite};
+use super::storage::{
     capture_optional_agent_file, snapshot_text, temporary_file_prefix, write_temporary_file,
 };
-use super::metadata::{self, PreparedMetadataWrite};
+use super::storage::{inspect_named_config_directory, read_named_config_definition};
 use super::{
     ApplicationStatus, ConfigDrift, LAST_APPLICATION_SECTION, LastApplication, NamedConfigName,
 };
@@ -92,40 +92,27 @@ fn application_status_inner(selected: &TenantAgent) -> Result<ApplicationStatus>
         });
     };
     let applied = NamedConfigName::parse(&last_application.applied)?;
-    let layout = match inspect_named_config_directory(selected, &applied) {
-        Ok(Some(layout)) if layout.complete(selected) => layout,
-        Ok(_) => {
-            return Ok(ApplicationStatus {
-                last_application: Some(last_application),
-                drift: ConfigDrift::SourceMissing,
-                detail: None,
-            });
+    let comparison = match inspect_named_config_directory(selected, &applied) {
+        Ok(Some(layout)) if layout.complete(selected) => {
+            compare_application_source(selected, &applied).map(|clean| {
+                if clean {
+                    ConfigDrift::Clean
+                } else {
+                    ConfigDrift::Dirty
+                }
+            })
         }
-        Err(error) => {
-            return Ok(ApplicationStatus {
-                last_application: Some(last_application),
-                drift: ConfigDrift::ComparisonError,
-                detail: Some(format!("{error:#}")),
-            });
-        }
+        Ok(_) => Ok(ConfigDrift::SourceMissing),
+        Err(error) => Err(error),
     };
-    let _ = layout;
-    let comparison = compare_application_source(selected, &applied);
-    Ok(match comparison {
-        Ok(clean) => ApplicationStatus {
-            last_application: Some(last_application),
-            drift: if clean {
-                ConfigDrift::Clean
-            } else {
-                ConfigDrift::Dirty
-            },
-            detail: None,
-        },
-        Err(error) => ApplicationStatus {
-            last_application: Some(last_application),
-            drift: ConfigDrift::ComparisonError,
-            detail: Some(format!("{error:#}")),
-        },
+    let (drift, detail) = match comparison {
+        Ok(drift) => (drift, None),
+        Err(error) => (ConfigDrift::ComparisonError, Some(format!("{error:#}"))),
+    };
+    Ok(ApplicationStatus {
+        last_application: Some(last_application),
+        drift,
+        detail,
     })
 }
 

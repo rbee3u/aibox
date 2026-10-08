@@ -1,0 +1,192 @@
+.sessionSelectionIndicator {
+  composes: selectionIndicator from "@/shared/ui/layout/catalog.module.css";
+}
+
+.sessionRow {
+  composes: cardRow from "@/shared/ui/layout/catalog.module.css";
+  position: relative;
+  display: grid;
+  min-height: var(--row-height-roomy);
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: stretch;
+  gap: 4px;
+  padding: var(--catalog-row-roomy-padding);
+  background: var(--surface);
+}
+
+.currentSessionRow {
+  composes: inspectedMarker from "@/shared/ui/layout/catalog.module.css";
+}
+
+.sessionRowMain svg[data-icon="session-record"] {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: color var(--transition-fast);
+}
+
+.currentSessionRow .sessionRowMain svg[data-icon="session-record"] {
+  color: var(--accent);
+}
+
+.sessionRow:hover .sessionRowMain svg[data-icon="session-record"] {
+  color: var(--ink);
+}
+
+.currentSessionRow .sessionRowMain,
+.sessionRowSelected .sessionRowMain {
+  color: var(--ink);
+}
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected) {
+  background: var(--surface) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):hover,
+.sessionSelectionRow.currentSessionRow:not(.sessionRowSelected):focus-within {
+  background: var(--surface-hover);
+}
+
+.sessionSelectionRow.currentSessionRow:active:not(.sessionRowSelected) {
+  background: var(--surface-pressed);
+}
+
+.sessionSelectionRow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sessionRowMain {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  gap: var(--catalog-row-leading-gap);
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.sessionRowMain:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.sessionRowMain > span:not(.sessionSelectionIndicator) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.sessionRowMain strong,
+.sessionRowMain small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionRowPreview {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: var(--text-meta);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.sessionRowMain strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--catalog-row-primary-size);
+  font-weight: var(--catalog-row-primary-weight);
+  line-height: var(--catalog-row-primary-line-height);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.sessionRowMain small {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--catalog-row-secondary-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--catalog-row-secondary-line-height);
+}
+.sessionRowMetadata {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionRowMetadata time {
+  font-family: var(--font-mono);
+}
+
+.sessionRowWarning {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--warning);
+}
+
+.sessionDelete {
+  align-self: center;
+  opacity: 0.45;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.sessionRow:hover .sessionDelete,
+.sessionRow:focus-within .sessionDelete {
+  opacity: 0.75;
+}
+
+.sessionRow .sessionDelete:hover,
+.sessionRow .sessionDelete:focus-visible {
+  opacity: 1;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (pointer: coarse) {
+  .sessionDelete {
+    opacity: 0.7;
+  }
+}
+
+.sessionSelectionRow .sessionRowMain {
+  padding-right: 38px;
+}
+
+.sessionRow:hover:not(.sessionRowSelected) .sessionSelectionIndicator {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-control-strong));
+}
+
+.sessionRowSelected .sessionSelectionIndicator {
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .sessionRowMain {
+    min-height: 56px;
+  }
+}

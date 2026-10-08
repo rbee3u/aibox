@@ -10,12 +10,12 @@
 //! does not roll back earlier writes or prevent later attempts. Propagation
 //! creates no Configs and retains no synchronization state.
 
-use super::catalog::inspect_named_config_directory;
-use super::files::{
+use super::storage::inspect_named_config_directory;
+use super::storage::{
     capture_optional_agent_file, replace_existing_atomic, validate_private_directory,
     validate_private_file,
 };
-use super::{ConfigFile, MAX_CONFIG_BYTES, NamedConfigName, layout};
+use super::{ConfigFile, MAX_CONFIG_BYTES, NamedConfigName, storage};
 use crate::agent::AgentKind;
 use crate::foundation::safe_fs::FileSnapshot;
 use crate::tenant::{self, ManagedTenant, TENANTS_DIR, Tenant, TenantAgent};
@@ -345,16 +345,16 @@ fn discover_named_auth_candidates(
         }
         let layout = inspect_named_config_directory(selected, &config)?
             .expect("discovered Named Config directory exists");
-        validate_private_directory(&layout::named_config_dir(selected, &config))?;
+        validate_private_directory(&storage::named_config_dir(selected, &config))?;
         if layout.main {
-            validate_private_file(&super::layout::named_config_file(
+            validate_private_file(&super::storage::named_config_file(
                 selected,
                 &config,
                 ConfigFile::Main,
             ))?;
         }
         if selected.agent().native_auth_file().is_some() && layout.auth {
-            validate_private_file(&super::layout::named_config_file(
+            validate_private_file(&super::storage::named_config_file(
                 selected,
                 &config,
                 ConfigFile::Auth,
@@ -367,7 +367,7 @@ fn discover_named_auth_candidates(
             .agent()
             .native_auth_file()
             .expect("Codex Named Config has a native auth file");
-        let path = super::layout::named_config_file(selected, &config, ConfigFile::Auth);
+        let path = super::storage::named_config_file(selected, &config, ConfigFile::Auth);
         let snapshot = FileSnapshot::capture_with_limit(&path, MAX_CONFIG_BYTES)?;
         debug_assert!(snapshot.present);
         candidates.push(AuthCandidate {

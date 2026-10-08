@@ -1,8 +1,9 @@
+import styles from "@/features/sessions/catalog/SessionCatalogPane.module.css";
 import { AlertTriangle, ListChecks, Trash2 } from "lucide-react";
 
+import { tenantSelectionValue } from "@/domain/tenant";
 import { SessionRow } from "@/features/sessions/catalog/SessionRow";
-import { sessionTenantSelectionValue } from "@/features/sessions/route";
-import type { SessionViewModel } from "@/features/sessions/useSessionController";
+import type { SessionViewModel } from "@/features/sessions/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { ActionButton } from "@/shared/ui/ActionButton";
@@ -13,7 +14,7 @@ import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { SelectionMenu } from "@/shared/ui/SelectionMenu";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
@@ -103,7 +104,7 @@ export function SessionCatalogPane({
                 onCommit={selectTenant}
                 options={tenantOptions}
                 pluralLabel="tenants"
-                selected={new Set([sessionTenantSelectionValue(tenant)])}
+                selected={new Set([tenantSelectionValue(tenant)])}
                 triggerIcon={
                   tenant.kind === "host" ? (
                     <HostTenantIcon size={iconSize.xs} aria-hidden="true" />

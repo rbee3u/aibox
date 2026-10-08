@@ -29,20 +29,9 @@ pub(crate) use model::{
     RequestAssessment, RequestMetadata, RequestState, ResponseMetadata, ResponseSource,
     ResultMetadata, SummaryMetadata, anchored_at,
 };
-/// Wire types the Rust-owned Console contract exporter names directly.
-///
-/// `ts_rs` does not export a nested type on its own, so
-/// `service/control/contract.rs` must name every type that appears inside a
-/// Control API response — including ones no production caller mentions, such as
-/// `TokenUsage` inside [`ProtocolSummary`]. That exporter is test-only in its
-/// entirety, so these are `cfg(test)` rather than a permanently wider facade.
-/// See `docs/adr/0009-rust-owned-console-contract.md`.
+/// Types explicitly constructed by Request and Control test fixtures.
 #[cfg(test)]
-pub(crate) use model::{
-    AssessmentPrimary, DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic,
-    ProtocolFamily, RequestedEffective, RequestedObserved, ResponseModeValue, RetryMetadata,
-    SummaryRequestMetadata, SummaryResponseMetadata, TimingMetadata, TokenUsage,
-};
+pub(crate) use model::{ProtocolDiagnostic, RequestOutcome};
 pub(crate) use proxy::handle as handle_proxy;
 pub(crate) use reporter::RequestReporter;
 pub(crate) use store::{
@@ -104,21 +93,11 @@ impl RequestProxyState {
         self.store.compact_once()
     }
 
-    /// The writable store handle, for suites that seed recorded Requests before
-    /// exercising a reader.
-    ///
-    /// This is on the owning state rather than on [`RequestInspection`] because
-    /// that facade is the read path; a writable handle reached through it let a
-    /// test bypass the very boundary the facade exists to hold. Sharing this
-    /// handle matters: the active-Request map is per-handle, so a separately
-    /// opened store would not see this state's in-flight Requests.
+    /// Fixture writes must share this state's active-Request map; reopening
+    /// the store would lose visibility of in-flight Requests.
     #[cfg(test)]
     pub(crate) fn store(&self) -> Store {
         self.store.clone()
-    }
-
-    pub(crate) fn shutdown_token(&self) -> CancellationToken {
-        self.shutdown.clone()
     }
 
     pub(crate) fn spawn_response_task<F>(&self, task: F)

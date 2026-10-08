@@ -9,11 +9,11 @@ use super::reading::terminal_summary_matches;
 use super::summary::{error_phase, summary_ended_at, summary_to_result};
 use super::{
     DiagnosticMetadata, ErrorMetadata, FORMAT_VERSION, FinishedRequest, NewRequest,
-    ObservedRequest, Outcome, ProtocolSummary, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
+    ObservedRequest, ProtocolSummary, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
     RESPONSE_EVENTS_JSONL, RESPONSE_JSON, RequestAssessment, RequestLocator, RequestMetadata,
-    RequestStore, RequestWarningSink, ResponseMetadata, ResultMetadata, RuntimeMeasurements,
-    SUMMARY_JSON, SummaryHandle, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
-    TerminalRequestEvent, TimingMetadata, offset_ns, utc_now,
+    RequestOutcome, RequestStore, RequestWarningSink, ResponseMetadata, ResultMetadata,
+    RuntimeMeasurements, SUMMARY_JSON, SummaryHandle, SummaryMetadata, SummaryRequestMetadata,
+    SummaryResponseMetadata, TerminalRequestEvent, TimingMetadata, offset_ns, utc_now,
 };
 use crate::foundation::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
 use crate::request::assessment::refresh_assessment;
@@ -254,7 +254,7 @@ impl RequestStore {
         request: &NewRequest,
         started: Instant,
         measurements: &RuntimeMeasurements,
-        outcome: Outcome,
+        outcome: RequestOutcome,
         error: Option<ErrorMetadata>,
     ) -> Result<FinishedRequest> {
         let _namespace = write_unpoisoned(&self.namespace);

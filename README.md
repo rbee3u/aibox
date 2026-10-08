@@ -4,16 +4,6 @@
 Sandbox while keeping sign-in, settings, Sessions, and toolchains in persistent
 Tenants.
 
-## Why AIBox
-
-- Run Codex or Claude in the same disposable container environment.
-- Keep each Managed Tenant's credentials, settings, and tools isolated.
-- Expose only the Workspace, Tenant Home, and explicitly requested mounts.
-- Apply reusable Configs to the Agents' native files without hiding them behind
-  a proprietary format.
-- Manage Tenants, Components, Configs, Sessions, the Runtime Image, and recorded
-  Requests from a local Console.
-
 ## Quick Start
 
 AIBox supports Linux and macOS hosts with Docker. Building from source requires
@@ -102,25 +92,13 @@ automatic redaction or retention policy.
   Image behavior.
 - [Requests and Request Proxy](docs/requests.md): proxy setup, routing, recorded
   evidence, diagnostics, and deletion.
-- [Console Architecture](docs/console-architecture.md): frontend architecture,
-  dependency boundaries, Control API ownership, and test organization.
 - [Console UI](docs/console-ui.md): shared interaction and feature contracts.
 
 ## Development
 
-Before changing behavior, read [AGENTS.md](AGENTS.md),
-[CONTEXT.md](CONTEXT.md), and the [ADR index](docs/adr/README.md). Install the
-locked Console dependencies once per environment and after dependency changes,
-then run:
-
-```sh
-make deps
-make web && make style test lint
-```
-
-See [Development](docs/development.md) for build outputs, focused checks,
-contract generation, and optional socket checks. Use `make help` for the
-authoritative target list.
+Follow [AGENTS.md](AGENTS.md) for contribution constraints and
+[Development](docs/development.md) for setup, checks, and contract generation.
+`make help` lists targets.
 
 ## License
 

@@ -1,7 +1,8 @@
+import styles from "@/features/sessions/detail/SessionCopyValue.module.css";
 import { Check, Clipboard } from "lucide-react";
 import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { IconButton } from "@/shared/ui/IconButton";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 /** Technical fact with an inline copy control, such as the Session ID. */

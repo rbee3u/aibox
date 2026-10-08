@@ -13,24 +13,16 @@ export function useAsyncResource<T>(load: (signal: AbortSignal) => Promise<T>, i
 
   useEffect(() => {
     const owner = requestOwner.current;
-    const request = owner.begin();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    void load(request.signal)
-      .then((value) => {
-        if (request.signal.aborted || !request.isCurrent()) return;
+    void owner.run(load, {
+      loaded: (value) => {
         setData(value);
         setError(null);
-      })
-      .catch((cause: unknown) => {
-        if (!request.signal.aborted && request.isCurrent()) setError(messageOf(cause));
-      })
-      .finally(() => {
-        if (request.isCurrent()) {
-          request.release();
-          setLoading(false);
-        }
-      });
+      },
+      failed: (cause) => setError(messageOf(cause)),
+      settled: () => setLoading(false),
+    });
     return () => owner.cancel();
   }, [generation, load]);
 

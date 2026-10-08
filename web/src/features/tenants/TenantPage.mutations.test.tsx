@@ -7,11 +7,6 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 describe("TenantPage", () => {
-  /*
-   * A refused delete leaves the Tenant in place, so the Component catalog
-   * reload that follows it succeeds — and that success used to clear the very
-   * message explaining the refusal, leaving the whole failure silent.
-   */
   it("states why a refused Tenant delete failed instead of reloading the reason away", async () => {
     const { api } = tenantApi({
       deleteTenants: () =>

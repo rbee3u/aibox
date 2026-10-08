@@ -9,7 +9,17 @@ const fileSystem = (
     };
   }
 ).process.getBuiltinModule("fs");
-const css = fileSystem.readFileSync("src/features/tenants/TenantPage.module.css", "utf8");
+const css = [
+  "src/features/tenants/catalog/TenantCatalogPane.module.css",
+  "src/features/tenants/components/TenantDetailPane.module.css",
+  "src/features/tenants/mutation/TenantDialogs.module.css",
+  "src/features/tenants/TenantPage.module.css",
+  "src/features/tenants/components/components.module.css",
+  "src/features/tenants/components/ComponentRowItem.module.css",
+  "src/features/tenants/components/ComponentCatalogSkeleton.module.css",
+]
+  .map((path) => fileSystem.readFileSync(path, "utf8"))
+  .join("\n");
 
 describe("Tenant Component rows", () => {
   it("keeps trailing actions on the identity row instead of wrapping under status", () => {
@@ -19,20 +29,8 @@ describe("Tenant Component rows", () => {
   });
 });
 
-describe("Tenant home copy", () => {
-  it("keeps Copy Tenant Home on the same 24px hit area as Visual help", () => {
-    expect(css).toMatch(
-      /\.componentHomeCopy\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;[^}]*min-width:\s*24px;[^}]*min-height:\s*24px/s,
-    );
-  });
-
-  it("keeps the home path and copy visible when the detail pane is under 900px", () => {
-    expect(css).not.toMatch(
-      /@container \(max-width: 900px\)[\s\S]*\.componentHome\s*\{[^}]*display:\s*none/s,
-    );
-    expect(css).toMatch(/\.componentHome\s*\{[^}]*display:\s*flex/s);
-  });
-});
+// Home visibility and copy-control geometry are checked on the rendered page
+// in e2e/catalogs.chromium.spec.ts; the old selectors were unused by the view.
 
 describe("Tenant header alignment", () => {
   it("aligns catalog toolbar and detail header heights to 56px", () => {

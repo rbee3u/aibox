@@ -1,4 +1,3 @@
-import { CircleHelp } from "lucide-react";
 import type { ReactNode } from "react";
 import { AnchoredTooltip } from "@/shared/ui/AnchoredTooltip";
 import styles from "@/shared/ui/IssueIndicator.module.css";
@@ -8,30 +7,15 @@ import { toneIcons } from "@/shared/icons/consoleIcons";
 const TOOLTIP_DELAY_MS = 150;
 
 export type IssueTone = "error" | "warning";
-type TooltipTone = IssueTone | "help";
 
 export interface IssueTooltipProps {
-  tone: TooltipTone;
+  tone: IssueTone;
   label: string;
   message: string;
   className: string;
   children: ReactNode;
   ariaLabel?: string;
   interactive?: boolean;
-}
-
-export function HelpTooltip({ label, message }: { label: string; message: string }) {
-  return (
-    <IssueTooltip
-      tone="help"
-      label={label}
-      message={message}
-      className={`${styles.indicator} ${styles.help}`}
-      ariaLabel={`Help for ${label}`}
-    >
-      <CircleHelp size={iconSize.xs} aria-hidden="true" />
-    </IssueTooltip>
-  );
 }
 
 export function IssueIndicator({
@@ -69,7 +53,7 @@ export function IssueTooltip({
   ariaLabel,
   interactive = true,
 }: IssueTooltipProps) {
-  const toneLabel = tone === "error" ? "Error" : tone === "warning" ? "Warning" : "Help";
+  const toneLabel = tone === "error" ? "Error" : "Warning";
 
   return (
     <AnchoredTooltip<HTMLElement>

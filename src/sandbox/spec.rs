@@ -25,23 +25,12 @@ impl ResolvedWorkspace {
     }
 }
 
-/// An extra bind mount that has completed host-side resolution. Keeping this
-/// distinct from the raw CLI string prevents execution from re-parsing or
-/// partially validating mounts after the sandbox boundary has been checked.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ExtraMount(String);
-
-/// Fully resolved and validated inputs for an Agent Run.
-///
-/// Constructing one is the only way to reach mount resolution, so the
-/// resolve-then-validate order is a property of the type rather than a rule
-/// callers must remember. Runtime Image, Tenant, Component, and environment
-/// checks intentionally remain in `execution`; this value owns only the
-/// workspace/mount boundary.
+/// Validated Workspace and Extra Mounts for a Run. Construction enforces
+/// resolve-before-validate; execution owns Image, Tenant, and Component preflight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunSpec {
     workspace: ResolvedWorkspace,
-    extra_mounts: Vec<ExtraMount>,
+    extra_mounts: Vec<String>,
 }
 
 impl RunSpec {
@@ -53,16 +42,9 @@ impl RunSpec {
         aibox_root: &Path,
     ) -> Result<Self> {
         let workspace = ResolvedWorkspace::resolve(workspace)?;
-        let extra_mounts = mount::resolve_mounts(mounts)?
-            .into_iter()
-            .map(ExtraMount)
-            .collect::<Vec<_>>();
-        let mount_strings = extra_mounts
-            .iter()
-            .map(|mount| mount.0.clone())
-            .collect::<Vec<_>>();
-        mount::validate_extra_mount_targets(&mount_strings, &workspace.target)?;
-        mount::validate_aibox_mount_sources(&workspace.source, &mount_strings, aibox_root)?;
+        let extra_mounts = mount::resolve_mounts(mounts)?;
+        mount::validate_extra_mount_targets(&extra_mounts, &workspace.target)?;
+        mount::validate_aibox_mount_sources(&workspace.source, &extra_mounts, aibox_root)?;
         Ok(Self {
             workspace,
             extra_mounts,
@@ -70,16 +52,11 @@ impl RunSpec {
     }
 
     pub(crate) fn assemble_run_args(&self, home_dir: &Path) -> Vec<String> {
-        let mounts = self
-            .extra_mounts
-            .iter()
-            .map(|mount| mount.0.clone())
-            .collect::<Vec<_>>();
         args::assemble_run_args(
             &self.workspace.source,
             &self.workspace.target,
             home_dir,
-            &mounts,
+            &self.extra_mounts,
         )
     }
 }

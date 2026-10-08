@@ -3,7 +3,9 @@
 //! These functions operate on [`SummaryMetadata`] without filesystem access and
 //! are shared by the store layout, read, and write paths.
 
-use super::{ErrorKind, ErrorMetadata, FORMAT_VERSION, Outcome, ResultMetadata, SummaryMetadata};
+use super::{
+    ErrorKind, ErrorMetadata, FORMAT_VERSION, RequestOutcome, ResultMetadata, SummaryMetadata,
+};
 use crate::request::assessment::calculate_assessment;
 use anyhow::{Result, bail};
 use time::OffsetDateTime;
@@ -90,7 +92,7 @@ pub(super) fn validate_summary(summary: &SummaryMetadata) -> Result<()> {
 }
 
 pub(super) fn summary_to_result(summary: &SummaryMetadata) -> ResultMetadata {
-    let outcome = summary.outcome.unwrap_or(Outcome::RecordingFailed);
+    let outcome = summary.outcome.unwrap_or(RequestOutcome::RecordingFailed);
     let total_ms = summary
         .timing
         .finished_at_ns

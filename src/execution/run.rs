@@ -1,11 +1,14 @@
 //! Agent Run orchestration.
 
-use super::{DockerSource, canonical_tenant_home, require_runtime_image, tenant_capabilities};
+use super::{
+    DockerSource, build_command, canonical_tenant_home, require_runtime_image, tenant_capabilities,
+};
 use crate::agent::AgentKind;
 use crate::component;
 use crate::docker;
 use crate::sandbox;
-use crate::tenant::{CONTAINER_HOME, ManagedTenant, build_agent_command};
+use crate::sandbox::CONTAINER_HOME;
+use crate::tenant::ManagedTenant;
 use anyhow::Result;
 use std::ffi::OsString;
 use std::path::Path;
@@ -41,7 +44,7 @@ pub(crate) fn run(
     let invocation = command
         .agent
         .invocation(Path::new(CONTAINER_HOME), passthrough);
-    let agent_command = build_agent_command(&invocation, components);
+    let agent_command = build_command(&invocation, components);
     let run_args = run_spec.assemble_run_args(&home_dir);
 
     docker.run(&run_args, image, &agent_command)

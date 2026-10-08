@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigListData } from "@/api/configs";
 import { configFile } from "@/features/configs/testFixtures";
 import { deferred } from "@/test/deferred";
-import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 import layout from "@/shared/ui/layout/catalog.module.css";
 
 afterEach(() => {
@@ -33,7 +33,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     expect(editor).toHaveValue("current:config.toml");
     await user.clear(editor);
@@ -55,7 +54,6 @@ describe("ConfigPage", () => {
       expect.objectContaining({ current: true, file: "auth.json" }),
       expect.any(Object),
     );
-    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "other:config.toml",
     );
@@ -88,7 +86,6 @@ describe("ConfigPage", () => {
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "other" }));
-    await revealConfigFiles(user);
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     expect(editor).toHaveValue("other:config.toml");
     await user.clear(editor);
@@ -96,7 +93,6 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Current Config" }));
     const dialog = screen.getByRole("dialog", { name: "Unsaved changes" });
     await user.click(within(dialog).getByRole("button", { name: "Save and continue" }));
-    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "current:config.toml",
     );
@@ -106,12 +102,6 @@ describe("ConfigPage", () => {
     expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
   });
 
-  /*
-   * The scope pickers were disabled while the catalog reloaded, so the focus
-   * SelectionMenu handed back to its trigger fell to <body> a frame later.
-   * A superseded reload is already cancelled by the catalog hook, so the
-   * pickers stay live and keep focus like the same pickers on Sessions.
-   */
   it("keeps the Tenant picker focused and live while its catalog loads", async () => {
     const empty = {
       configs: [],
@@ -166,7 +156,6 @@ describe("ConfigPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "config.toml content" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "ag-github" }));
-    await revealConfigFiles(user);
     expect(await screen.findByRole("textbox", { name: "config.toml content" })).toHaveValue(
       "ag-github:config.toml",
     );
@@ -250,7 +239,6 @@ describe("ConfigPage", () => {
     const onContinueLeave = vi.fn();
     const user = userEvent.setup();
     const view = render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const editor = await screen.findByRole("textbox", { name: "config.toml content" });
     await user.type(editor, "changed");
     view.rerender(

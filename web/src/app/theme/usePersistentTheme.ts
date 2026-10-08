@@ -36,7 +36,7 @@ export function applyThemePreference(theme: ThemePreference): void {
   root.dataset.resolvedTheme = resolved;
 }
 
-export function readThemePreference(): ThemePreference {
+function readThemePreference(): ThemePreference {
   const value = readPreference(STORAGE_KEY);
   return value === "light" || value === "dark" || value === "system" ? value : "system";
 }

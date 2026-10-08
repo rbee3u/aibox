@@ -5,7 +5,7 @@ use super::error_response::finish_proxy_response;
 use super::headers::is_upgrade;
 use super::request_stream::reject_with_body;
 use crate::request::RequestProxyState;
-use crate::request::model::{ErrorKind, Outcome};
+use crate::request::model::{ErrorKind, RequestOutcome};
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::http::request::Parts;
@@ -106,7 +106,7 @@ pub(super) fn upstream_host(url: &Url) -> String {
 pub(super) struct RequestRejection {
     pub(super) status: StatusCode,
     pub(super) message: &'static str,
-    pub(super) outcome: Outcome,
+    pub(super) outcome: RequestOutcome,
     pub(super) kind: ErrorKind,
 }
 
@@ -115,21 +115,21 @@ pub(super) fn request_rejection(parts: &Parts, upstream: Option<&Url>) -> Option
         Some(RequestRejection {
             status: StatusCode::METHOD_NOT_ALLOWED,
             message: "CONNECT is not supported by AIBox Request Proxy",
-            outcome: Outcome::Rejected,
+            outcome: RequestOutcome::Rejected,
             kind: ErrorKind::ConnectNotSupported,
         })
     } else if is_upgrade(&parts.headers) {
         Some(RequestRejection {
             status: StatusCode::UPGRADE_REQUIRED,
             message: "Upgrade and WebSocket request are not supported by AIBox Request Proxy",
-            outcome: Outcome::Rejected,
+            outcome: RequestOutcome::Rejected,
             kind: ErrorKind::UpgradeNotSupported,
         })
     } else if upstream.is_none() {
         Some(RequestRejection {
             status: StatusCode::BAD_REQUEST,
             message: "proxy path must contain an absolute http:// or https:// target URL",
-            outcome: Outcome::Rejected,
+            outcome: RequestOutcome::Rejected,
             kind: ErrorKind::InvalidTargetUrl,
         })
     } else {
@@ -153,51 +153,45 @@ where
                 guard,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "AIBox Request Proxy is shutting down",
-                Outcome::ServerShutdown,
+                RequestOutcome::ServerShutdown,
                 ErrorKind::ServerShutdown,
             )));
         }
         result = sender.connect(url) => result,
     };
-    match connection {
-        Ok(connection) => Ok((connection, body)),
-        Err(UpstreamConnectError::InvalidTarget(message)) => Err(Box::new(
-            reject_with_body(
-                guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::BAD_REQUEST,
-                &message,
-                Outcome::Rejected,
-                ErrorKind::InvalidTargetUrl,
-            )
-            .await,
-        )),
-        Err(UpstreamConnectError::Dns(message)) => Err(Box::new(
-            reject_with_body(
-                guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::BAD_GATEWAY,
-                &message,
-                Outcome::UpstreamError,
-                ErrorKind::DnsError,
-            )
-            .await,
-        )),
-        Err(UpstreamConnectError::ClientConfiguration(message)) => Err(Box::new(
-            reject_with_body(
-                guard,
-                body,
-                state.shutdown.clone(),
-                StatusCode::BAD_GATEWAY,
-                &message,
-                Outcome::UpstreamError,
-                ErrorKind::ClientConfiguration,
-            )
-            .await,
-        )),
-    }
+    let (status, message, outcome, kind) = match connection {
+        Ok(connection) => return Ok((connection, body)),
+        Err(UpstreamConnectError::InvalidTarget(message)) => (
+            StatusCode::BAD_REQUEST,
+            message,
+            RequestOutcome::Rejected,
+            ErrorKind::InvalidTargetUrl,
+        ),
+        Err(UpstreamConnectError::Dns(message)) => (
+            StatusCode::BAD_GATEWAY,
+            message,
+            RequestOutcome::UpstreamError,
+            ErrorKind::DnsError,
+        ),
+        Err(UpstreamConnectError::ClientConfiguration(message)) => (
+            StatusCode::BAD_GATEWAY,
+            message,
+            RequestOutcome::UpstreamError,
+            ErrorKind::ClientConfiguration,
+        ),
+    };
+    Err(Box::new(
+        reject_with_body(
+            guard,
+            body,
+            state.shutdown.clone(),
+            status,
+            &message,
+            outcome,
+            kind,
+        )
+        .await,
+    ))
 }
 
 pub(super) fn upstream_request_failure(
@@ -208,10 +202,16 @@ pub(super) fn upstream_request_failure(
     if let Some(failure) = recording {
         let (status, outcome) = match failure.kind {
             ErrorKind::ClientDisconnected | ErrorKind::RequestBodyFailed => {
-                (StatusCode::BAD_REQUEST, Outcome::ClientDisconnected)
+                (StatusCode::BAD_REQUEST, RequestOutcome::ClientDisconnected)
             }
-            ErrorKind::ServerShutdown => (StatusCode::SERVICE_UNAVAILABLE, Outcome::ServerShutdown),
-            _ => (StatusCode::INSUFFICIENT_STORAGE, Outcome::RecordingFailed),
+            ErrorKind::ServerShutdown => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                RequestOutcome::ServerShutdown,
+            ),
+            _ => (
+                StatusCode::INSUFFICIENT_STORAGE,
+                RequestOutcome::RecordingFailed,
+            ),
         };
         return finish_proxy_response(guard, status, &failure.message, outcome, failure.kind);
     }
@@ -224,7 +224,7 @@ pub(super) fn upstream_request_failure(
         guard,
         status,
         &format!("upstream request failed: {}", error.message),
-        Outcome::UpstreamError,
+        RequestOutcome::UpstreamError,
         kind,
     )
 }

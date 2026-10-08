@@ -5,6 +5,7 @@ import {
   type TenantSelection,
   type TenantSelectionValue,
 } from "@/domain/tenant";
+import { agentLabel } from "@/shared/lib/format";
 
 /** A Session list combines several Tenant-and-Agent scopes, tracked per row. */
 export interface SessionSource {
@@ -27,23 +28,7 @@ export interface AggregatedSessionData {
   partial: boolean;
 }
 
-export const SESSION_AGENT_OPTIONS: readonly {
-  value: AgentKind;
-  label: string;
-}[] = [
-  { value: "codex", label: "Codex" },
-  { value: "claude", label: "Claude" },
-];
-
-export function agentLabel(agent: AgentKind): string {
-  return SESSION_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
-}
-
-export function tenantSelectionFromSessionValue(key: TenantSelectionValue): TenantSelection {
-  return tenantSelectionFromValue(key);
-}
-
-export function sessionTenantLabel(key: TenantSelectionValue): string {
+function sessionTenantLabel(key: TenantSelectionValue): string {
   return key === "host" ? "Host Tenant" : `Tenant ${key.slice(8)}`;
 }
 
@@ -59,17 +44,13 @@ export function visibleSessionListSource(source: SessionSource): string {
   return `${sessionListTenantLabel(source.tenantSelectionValue)} ${source.agentLabel}`;
 }
 
-export function accessibleSessionSource(source: SessionSource): string {
-  return `${source.tenantLabel} · ${source.agentLabel}`;
-}
-
 export function sessionSource(
   tenantSelectionValue: TenantSelectionValue,
   agent: AgentKind,
 ): SessionSource {
   return {
     key: JSON.stringify([tenantSelectionValue, agent]),
-    tenant: tenantSelectionFromSessionValue(tenantSelectionValue),
+    tenant: tenantSelectionFromValue(tenantSelectionValue),
     tenantSelectionValue,
     tenantLabel: sessionTenantLabel(tenantSelectionValue),
     agent,

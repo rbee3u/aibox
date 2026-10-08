@@ -9,12 +9,12 @@ import type {
   AuthPropagationPreviewResponse,
   AuthPropagationReport,
   ConfigCatalogEntry,
-  ConfigFileResponse as GeneratedConfigFileResponse,
-  ConfigListResponse as GeneratedConfigListResponse,
-  ConfigAuthResponse as GeneratedConfigAuthResponse,
-  LinkedConfigFileResponse as GeneratedLinkedConfigFileResponse,
-  CustomProviderState as GeneratedCustomProviderState,
-  VisualConfigOptionState as GeneratedVisualConfigOptionState,
+  ConfigFileResponse,
+  ConfigListResponse,
+  ConfigAuthResponse,
+  LinkedConfigFileResponse,
+  CustomProviderState,
+  VisualConfigOptionState,
   DiagnoseConfigResponse,
   LastApplication,
   PropagationOutcome,
@@ -35,24 +35,24 @@ export type {
   PropagationOutcome,
 };
 
-export type ConfigListData = GeneratedConfigListResponse;
+export type ConfigListData = ConfigListResponse;
 
-export type ConfigLinkedFileData = GeneratedLinkedConfigFileResponse;
+export type ConfigLinkedFileData = LinkedConfigFileResponse;
 
-export type ConfigCustomProvider = GeneratedCustomProviderState;
+export type ConfigCustomProvider = CustomProviderState;
 
-export type ConfigAuthData = Omit<GeneratedConfigAuthResponse, "mode"> & {
+export type ConfigAuthData = Omit<ConfigAuthResponse, "mode"> & {
   mode: "chatgpt" | "api-key";
 };
 
-export type ConfigVisualOption = Omit<GeneratedVisualConfigOptionState, "value" | "value_kind"> & {
+export type ConfigVisualOption = Omit<VisualConfigOptionState, "value" | "value_kind"> & {
   value_kind: "string" | "bool";
   value?: string | boolean;
   proxy_routed: boolean;
 };
 
 export type ConfigFileData = Omit<
-  GeneratedConfigFileResponse,
+  ConfigFileResponse,
   "visual_options" | "custom_provider" | "visual_error" | "warnings" | "auth" | "linked_file"
 > & {
   visual_options?: ConfigVisualOption[];
@@ -125,7 +125,17 @@ function configTargetBody(target: ConfigFileTarget) {
   };
 }
 
-function visualOption(value: GeneratedVisualConfigOptionState): ConfigVisualOption {
+function configEditBody(input: ConfigFileInput) {
+  return {
+    revision: input.revision,
+    content_base64: input.contentBase64,
+    visual_options: input.visualOptions,
+    custom_provider: input.customProvider,
+    visual_auth: input.visualAuth,
+  };
+}
+
+function visualOption(value: VisualConfigOptionState): ConfigVisualOption {
   if (value.value_kind !== "string" && value.value_kind !== "bool") {
     throw new Error(`Unsupported Visual Config value kind: ${value.value_kind}`);
   }
@@ -146,14 +156,14 @@ function visualOption(value: GeneratedVisualConfigOptionState): ConfigVisualOpti
   };
 }
 
-function authData(value: GeneratedConfigAuthResponse): ConfigAuthData {
+function authData(value: ConfigAuthResponse): ConfigAuthData {
   if (value.mode !== "chatgpt" && value.mode !== "api-key") {
     throw new Error(`Unsupported Config auth mode: ${value.mode}`);
   }
   return { ...value, mode: value.mode };
 }
 
-function configFileData(value: GeneratedConfigFileResponse): ConfigFileData {
+function configFileData(value: ConfigFileResponse): ConfigFileData {
   return {
     file: value.file,
     exists: value.exists,
@@ -175,12 +185,15 @@ export function configsApi(client: ControlApi): ConfigApi {
     listConfigs: (tenant, agent, signal) => {
       const query = tenantQuery(tenant);
       query.set("agent", agent);
-      return client.get<GeneratedConfigListResponse>(`/_aibox/api/configs?${query}`, signal);
+      return client.get<ConfigListResponse>(`/_aibox/api/configs?${query}`, signal);
     },
-    revealConfigFile: (target) =>
-      client
-        .post<GeneratedConfigFileResponse>("/_aibox/api/configs/reveal", configTargetBody(target))
-        .then(configFileData),
+    revealConfigFile: async (target) => {
+      const response = await client.post<ConfigFileResponse>(
+        "/_aibox/api/configs/reveal",
+        configTargetBody(target),
+      );
+      return configFileData(response);
+    },
     diagnoseConfigFile: (target, contentBase64) =>
       client.post<DiagnoseConfigResponse>("/_aibox/api/configs/diagnose", {
         ...configTargetBody(target),
@@ -194,25 +207,17 @@ export function configsApi(client: ControlApi): ConfigApi {
         config: target.config,
         files: files.map((input) => ({
           file: input.file,
-          revision: input.revision,
           original_base64: input.originalBase64,
-          content_base64: input.contentBase64,
-          visual_options: input.visualOptions,
-          custom_provider: input.customProvider,
-          visual_auth: input.visualAuth,
+          ...configEditBody(input),
         })),
       }),
-    saveConfigFile: (target, input) =>
-      client
-        .post<GeneratedConfigFileResponse>("/_aibox/api/configs/save", {
-          ...configTargetBody(target),
-          revision: input.revision,
-          content_base64: input.contentBase64,
-          ...(input.visualOptions ? { visual_options: input.visualOptions } : {}),
-          ...(input.customProvider ? { custom_provider: input.customProvider } : {}),
-          ...(input.visualAuth ? { visual_auth: input.visualAuth } : {}),
-        })
-        .then(configFileData),
+    saveConfigFile: async (target, input) => {
+      const response = await client.post<ConfigFileResponse>("/_aibox/api/configs/save", {
+        ...configTargetBody(target),
+        ...configEditBody(input),
+      });
+      return configFileData(response);
+    },
     createConfig: async (tenant, agent, config) => {
       await client.post("/_aibox/api/configs/create", { ...tenantBody(tenant), agent, config });
     },

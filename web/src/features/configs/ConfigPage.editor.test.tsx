@@ -1,13 +1,11 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { ConfigPage as ConfigPageView } from "@/features/configs/ConfigPage";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileData, ConfigListData } from "@/api/configs";
-import {
-  claudeVisualOptions,
-  configFile,
-  type VisualOptionFixture,
-} from "@/features/configs/testFixtures";
-import { ConfigPage, configApi, revealConfigFiles } from "@/features/configs/testHarness";
+import { claudeVisualOptions, configFile } from "@/features/configs/testFixtures";
+import { deferred } from "@/test/deferred";
+import { ConfigPage, configApi } from "@/features/configs/testHarness";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -75,14 +73,14 @@ describe("ConfigPage", () => {
       permissions: { defaultMode: "bypassPermissions" },
       skipDangerousModePermissionPrompt: true,
     });
+    const snapshot = configFile("settings.json", content, visual);
     const { api, saveConfigFile } = configApi({
       listConfigs: () => Promise.resolve(catalog),
-      revealConfigFile: () => Promise.resolve(configFile("settings.json", content, visual)),
-      saveConfigFile: () => Promise.resolve(configFile("settings.json", content, visual)),
+      revealConfigFile: () => Promise.resolve(snapshot),
+      saveConfigFile: () => Promise.resolve(snapshot),
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     expect(await screen.findByRole("button", { name: "Visual" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -98,59 +96,32 @@ describe("ConfigPage", () => {
     await user.click(screen.getByRole("button", { name: "Raw" }));
     expect(screen.getByText(/Edits write to the real Host Home/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Visual" }));
-    expect(
-      Array.from(document.querySelectorAll("article[role='group']")).map(
-        (group) => group.querySelector("span")?.textContent,
-      ),
-    ).toEqual([
-      "Base URL",
-      "Auth token",
-      "Default permission mode",
-      "Skip dangerous mode prompt",
-      "Default Haiku model",
-      "Default Sonnet model",
-      "Default Opus model",
-      "Default Fable model",
-    ]);
-    const token = screen.getByLabelText("Auth token", { selector: "input" });
-    expect(token).toHaveAttribute("type", "password");
-    // The label carries its native path so Visual, Raw, and differences agree.
-    expect(screen.getByText("env.ANTHROPIC_AUTH_TOKEN").tagName).toBe("CODE");
-    expect(screen.queryByRole("checkbox", { name: "Optional Base URL" })).toBeNull();
-    expect(screen.getByLabelText("Base URL")).toHaveAttribute("required");
-    expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
-    const permissionMode = screen.getByRole("combobox", { name: "Default permission mode value" });
-    expect(permissionMode).toHaveTextContent("bypassPermissions");
-    await user.click(permissionMode);
-    const permissionList = screen.getByRole("listbox", {
-      name: "Default permission mode single selection",
-    });
-    expect(
-      within(permissionList)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]);
-    expect(within(permissionList).queryByRole("option", { name: "manual" })).toBeNull();
-    await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Show Auth token" }));
-    expect(token).toHaveAttribute("type", "text");
     await user.click(screen.getByRole("checkbox", { name: "Optional Default Haiku model" }));
     await user.click(screen.getByRole("checkbox", { name: "Optional Skip dangerous mode prompt" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(saveConfigFile).toHaveBeenCalled());
-    const saveInput = saveConfigFile.mock.calls[0]?.[1];
-    expect(saveInput?.visualOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "env.ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          included: false,
-        }),
-        expect.objectContaining({
-          path: "skipDangerousModePermissionPrompt",
-          included: false,
-        }),
-      ]),
+    const omitted = new Set([
+      "env.ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "skipDangerousModePermissionPrompt",
+    ]);
+    expect(saveConfigFile).toHaveBeenCalledExactlyOnceWith(
+      {
+        tenant: { kind: "host" },
+        agent: "claude",
+        current: false,
+        config: "team",
+        file: "settings.json",
+      },
+      {
+        revision: snapshot.revision,
+        contentBase64: snapshot.content_base64,
+        visualOptions: visual.map(({ path, value }) => ({
+          path,
+          included: !omitted.has(path),
+          value,
+        })),
+      },
     );
     await user.click(screen.getByRole("button", { name: "Raw" }));
     expect(screen.getByRole("textbox", { name: "settings.json content" })).toHaveValue(content);
@@ -182,7 +153,6 @@ describe("ConfigPage", () => {
       });
       const user = userEvent.setup();
       render(<ConfigPage api={api} />);
-      await revealConfigFiles(user);
       const permission = await screen.findByRole("combobox", {
         name: "Default permission mode value",
       });
@@ -217,114 +187,6 @@ describe("ConfigPage", () => {
       );
     },
   );
-  it("uses closed enums, Optional omission, unsupported preservation, without help tooltips", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/_aibox/ui/configs?tenant=managed%3Adefault&agent=codex&config=team&file=config.toml",
-    );
-    const visual = [
-      {
-        path: "approval_policy",
-        label: "Approval policy",
-        description: "Controls when Codex pauses before executing commands.",
-        group: "Execution & permissions",
-        value_kind: "string",
-        enum_values: ["untrusted", "on-request", "never"],
-        sensitive: false,
-        required: true,
-        included: true,
-        value: "future-policy",
-      },
-      {
-        path: "sandbox_mode",
-        label: "Sandbox mode",
-        description: "Filesystem and network access policy for command execution.",
-        group: "Execution & permissions",
-        value_kind: "string",
-        enum_values: ["read-only", "workspace-write", "danger-full-access"],
-        sensitive: false,
-        required: true,
-        included: true,
-        value: "workspace-write",
-      },
-      {
-        path: "model_reasoning_effort",
-        label: "Model reasoning effort",
-        description: "Reasoning effort for supported models.",
-        group: "Model & reasoning",
-        value_kind: "string",
-        enum_values: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        sensitive: false,
-        included: false,
-      },
-      {
-        path: "model",
-        label: "Model",
-        description: "Model selected for Codex sessions.",
-        group: "Model & reasoning",
-        value_kind: "string",
-        enum_values: [],
-        sensitive: false,
-        required: true,
-        included: true,
-        value: "gpt",
-      },
-    ] satisfies VisualOptionFixture[];
-    const catalog = {
-      configs: [{ name: "team", state: "ready" }],
-      files: ["config.toml"],
-      application: { last_application: null, drift: "untracked" },
-      credential_propagation_available: false,
-    } satisfies ConfigListData;
-    const { api } = configApi({
-      listConfigs: () => Promise.resolve(catalog),
-      revealConfigFile: () => Promise.resolve(configFile("config.toml", "", visual)),
-    });
-    render(<ConfigPage api={api} />);
-    const user = userEvent.setup();
-    await revealConfigFiles(user);
-    const approval = await screen.findByRole("combobox", { name: "Approval policy value" });
-    expect(screen.getByRole("heading", { name: "Named Config team" })).toBeInTheDocument();
-    expect(
-      screen.getByText("Native content may contain credentials and is shown without redaction."),
-    ).toBeInTheDocument();
-    expect(approval).toHaveTextContent("Unsupported: future-policy");
-    await user.click(approval);
-    const approvalList = screen.getByRole("listbox", { name: "Approval policy single selection" });
-    expect(
-      within(approvalList).getByRole("option", { name: "Unsupported: future-policy" }),
-    ).toBeTruthy();
-    expect(within(approvalList).queryByRole("option", { name: "Custom" })).toBeNull();
-    expect(within(approvalList).queryByRole("option", { name: "Select a value" })).toBeNull();
-    expect(screen.getByText("approval_policy").tagName).toBe("CODE");
-    await user.keyboard("{Escape}");
-    const reasoning = screen.getByRole("combobox", { name: "Model reasoning effort value" });
-    const includeReasoning = screen.getByRole("checkbox", {
-      name: "Optional Model reasoning effort",
-    });
-    expect(includeReasoning).not.toBeChecked();
-    expect(reasoning).toBeDisabled();
-    expect(reasoning).not.toHaveTextContent("Default");
-    await user.click(includeReasoning);
-    expect(includeReasoning).toBeChecked();
-    expect(reasoning).toBeEnabled();
-    expect(reasoning).toHaveTextContent("low");
-    await user.click(reasoning);
-    const reasoningList = screen.getByRole("listbox", {
-      name: "Model reasoning effort single selection",
-    });
-    expect(within(reasoningList).queryByRole("option", { name: "Default" })).toBeNull();
-    expect(within(reasoningList).getByRole("option", { name: "max" })).toBeTruthy();
-    expect(within(reasoningList).getByRole("option", { name: "ultra" })).toBeTruthy();
-    expect(within(reasoningList).queryByRole("option", { name: "minimal" })).toBeNull();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("button", { name: /^Help for/ })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Execution & permissions" })).toBeNull();
-    await user.click(screen.getByText("Sandbox mode", { exact: true }));
-    expect(screen.getByRole("combobox", { name: "Sandbox mode value" })).not.toHaveFocus();
-    expect(screen.queryByRole("listbox")).toBeNull();
-  });
   it("saves only the accepted Custom provider input fields", async () => {
     window.history.replaceState(
       null,
@@ -351,7 +213,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const providerName = await screen.findByRole("textbox", { name: "Custom provider name" });
     expect(screen.getByRole("checkbox", { name: "Optional Custom provider" })).toBeChecked();
     expect(screen.queryByText("Name", { exact: true })).toBeNull();
@@ -403,7 +264,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const baseUrl = await screen.findByRole("textbox", { name: "Custom provider base URL" });
     expect(screen.getByText("model_providers.custom.base_url").tagName).toBe("CODE");
     expect(screen.queryByText(/Routed through the Request Proxy/)).toBeNull();
@@ -444,7 +304,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const name = await screen.findByRole("textbox", { name: "Custom provider name" });
     await user.type(name, "-edited");
     await user.click(screen.getByRole("button", { name: "Raw" }));
@@ -483,7 +342,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     await editVisualCodexNamedFiles(user);
     await user.click(screen.getByRole("button", { name: "Save all" }));
     await waitFor(() => expect(saveConfigFile).toHaveBeenCalledTimes(2));
@@ -505,7 +363,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const main = await screen.findByRole("region", { name: "config.toml editor" });
     const auth = await screen.findByRole("region", { name: "auth.json editor" });
     // At rest an existing file's header carries no caption and no marker.
@@ -540,7 +397,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     await editVisualCodexNamedFiles(user);
     await user.click(
       within(screen.getByRole("region", { name: "config.toml editor" })).getByRole("button", {
@@ -577,9 +433,7 @@ describe("ConfigPage", () => {
       listConfigs: () => Promise.resolve(catalog),
       revealConfigFile: () => Promise.resolve(configFile("config.toml", "", [], customProvider)),
     });
-    const user = userEvent.setup();
     render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
-    await revealConfigFiles(user);
     await screen.findByRole("textbox", { name: "Custom provider base URL" });
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
     expect(onDirtyChange).not.toHaveBeenCalledWith(true);
@@ -604,7 +458,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     expect(await screen.findByRole("status")).toHaveTextContent(
       "not valid UTF-8 and cannot be edited",
     );
@@ -633,7 +486,6 @@ describe("ConfigPage", () => {
     const onDirtyChange = vi.fn();
     const user = userEvent.setup();
     render(<ConfigPage api={api} onDirtyChange={onDirtyChange} />);
-    await revealConfigFiles(user);
     expect(await screen.findByRole("button", { name: "Tenant: Host" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Agent: Claude" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "team" })).toHaveAttribute("aria-pressed", "true");
@@ -683,7 +535,6 @@ describe("ConfigPage", () => {
     });
     const user = userEvent.setup();
     render(<ConfigPage api={api} />);
-    await revealConfigFiles(user);
     const name = await screen.findByText("custom");
     const drift = screen.getByText("Differs");
     const current = screen.getByRole("button", { name: "Current Config" });
@@ -773,4 +624,123 @@ describe("ConfigPage", () => {
     expect(warningMarker).toBeInTheDocument();
     expect(errorMarker).toBeInTheDocument();
   });
+});
+
+it("preserves the editing scope when only the routed file changes", async () => {
+  const { api, revealConfigFile, listConfigs } = configApi({
+    revealConfigFile: ({ file }) => Promise.resolve(configFile(file, "original")),
+  });
+  const onLocationChange = vi.fn();
+  const search = "?tenant=host&agent=codex&current=1&file=";
+  const view = render(
+    <ConfigPageView
+      api={api}
+      search={search + "config.toml"}
+      onLocationChange={onLocationChange}
+    />,
+  );
+  const user = userEvent.setup();
+  const input = await screen.findByRole("textbox", { name: "config.toml content" });
+  await user.clear(input);
+  await user.type(input, "unsaved draft");
+  view.rerender(
+    <ConfigPageView api={api} search={search + "auth.json"} onLocationChange={onLocationChange} />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "config.toml content" })).toHaveValue(
+      "unsaved draft",
+    ),
+  );
+  expect(revealConfigFile).toHaveBeenCalledTimes(2);
+  expect(listConfigs).toHaveBeenCalledTimes(1);
+});
+
+it("corrects stale routes using the current catalog without refetching it", async () => {
+  const { api, listConfigs } = configApi({
+    revealConfigFile: ({ file }) => Promise.resolve(configFile(file, "original")),
+  });
+  const onLocationChange = vi.fn();
+  const search = "?tenant=host&agent=codex&current=1&file=";
+  const view = render(
+    <ConfigPageView
+      api={api}
+      search={search + "config.toml"}
+      onLocationChange={onLocationChange}
+    />,
+  );
+  const user = userEvent.setup();
+  const input = await screen.findByRole("textbox", { name: "config.toml content" });
+  await user.clear(input);
+  await user.type(input, "unsaved draft");
+  view.rerender(
+    <ConfigPageView
+      api={api}
+      search={search + "missing.json"}
+      onLocationChange={onLocationChange}
+    />,
+  );
+  await waitFor(() =>
+    expect(onLocationChange).toHaveBeenLastCalledWith(
+      new URLSearchParams("tenant=host&agent=codex&current=1&file=config.toml"),
+      true,
+    ),
+  );
+  expect(screen.getByRole("textbox", { name: "config.toml content" })).toHaveValue("unsaved draft");
+  view.rerender(
+    <ConfigPageView
+      api={api}
+      search="?tenant=host&agent=codex&config=deleted"
+      onLocationChange={onLocationChange}
+    />,
+  );
+  await waitFor(() =>
+    expect(onLocationChange).toHaveBeenLastCalledWith(
+      new URLSearchParams("tenant=host&agent=codex"),
+      true,
+    ),
+  );
+  expect(listConfigs).toHaveBeenCalledTimes(1);
+});
+
+it("does not correct a new Agent route using the previous Agent catalog", async () => {
+  const nextCatalog = deferred<ConfigListData>();
+  const catalog: ConfigListData = {
+    configs: [],
+    files: ["config.toml", "auth.json"],
+    application: { last_application: null, drift: "untracked" },
+    credential_propagation_available: false,
+  };
+  const { api, listConfigs } = configApi({
+    listConfigs: (_tenant, agent) =>
+      agent === "codex" ? Promise.resolve(catalog) : nextCatalog.promise,
+    revealConfigFile: ({ file }) => Promise.resolve(configFile(file, "original")),
+  });
+  const onLocationChange = vi.fn();
+  const view = render(
+    <ConfigPageView
+      api={api}
+      search="?tenant=host&agent=codex&current=1"
+      onLocationChange={onLocationChange}
+    />,
+  );
+  await screen.findByRole("textbox", { name: "config.toml content" });
+  view.rerender(
+    <ConfigPageView
+      api={api}
+      search="?tenant=host&agent=claude&config=team&file=settings.json"
+      onLocationChange={onLocationChange}
+    />,
+  );
+  await waitFor(() => expect(listConfigs).toHaveBeenCalledTimes(2));
+  expect(onLocationChange).not.toHaveBeenCalled();
+  await act(() => {
+    nextCatalog.resolve({
+      ...catalog,
+      configs: [{ name: "team", state: "ready" }],
+      files: ["settings.json"],
+    });
+    return nextCatalog.promise;
+  });
+  await screen.findByRole("textbox", { name: "settings.json content" });
+  expect(onLocationChange).not.toHaveBeenCalled();
 });

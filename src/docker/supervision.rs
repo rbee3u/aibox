@@ -28,18 +28,12 @@ pub(crate) const CONTAINER_GRACE: Duration = Duration::from_secs(10);
 pub(crate) const CONTAINER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) const COMMAND_OUTPUT_LIMIT: u64 = 1024 * 1024;
-// Main-thread fallback when a signal raced with `docker run` exiting. Covers
-// cid discovery on the *late-cidfile* path (the first bounded wait fails, then
-// the longer late wait succeeds), a graceful kill + bounded state probe, the
-// full grace window (including one last bounded probe), the final SIGKILL, and
-// scheduling slack — so the main thread never exits before the watcher can
-// finish its worst-case bounded cleanup.
+// Must cover late cidfile discovery, graceful stop, bounded probes and kills,
+// plus scheduling slack before the main thread exits without the watcher.
 pub(crate) const SIGNAL_FINISH_WAIT: Duration = Duration::from_secs(27);
 
-/// Whether the watcher thread is up. A `Mutex<bool>` rather than a `OnceLock`
-/// so a failed install (Signals::new or thread spawn error) isn't remembered as
-/// "installed" — the next run registration gets to retry instead of silently
-/// running without interrupt-path cleanup.
+/// A failed signal-handler installation must remain retryable; `OnceLock`
+/// would retain the failure and leave later Runs without signal cleanup.
 pub(crate) static HANDLER_INSTALLED: Mutex<bool> = Mutex::new(false);
 
 /// Number of watched fatal signals delivered to this process. A raw handler
@@ -53,11 +47,8 @@ pub(crate) const RUN_IDLE: usize = 0;
 pub(crate) const RUN_ACTIVE: usize = 1;
 pub(crate) const RUN_SIGNALLED: usize = 2;
 
-/// Coordinates the signal watcher with the main thread reaping `docker run`.
-/// A foreground Ctrl-C reaches both processes: the Docker CLI can exit before
-/// the watcher has read the cidfile. Marking the active run here lets the main
-/// thread keep the cidfile registered until the watcher has stopped the
-/// container, instead of racing ahead and clearing the only daemon-side handle.
+/// Keep the cidfile registered until signal cleanup completes, even if the
+/// Docker client exits before the watcher reads it.
 pub(crate) static RUN_STATE: AtomicUsize = AtomicUsize::new(RUN_IDLE);
 
 #[cfg(test)]
@@ -96,13 +87,9 @@ pub(crate) fn set_cidfile(cidfile_path: &Path, docker: &DockerCli) -> Result<()>
     set_cidfile_mode(cidfile_path, docker, true)
 }
 
-/// Register the `--cidfile` of an upcoming `docker run` for signal handling.
-/// Call *before* spawning the child: the path is known upfront, and registering
-/// it first closes the window where a signal lands after spawn but before any
-/// registration — the watcher could then stop the container via the daemon even
-/// with no child pid recorded yet. If spawning fails, call [`clear_child`];
-/// otherwise register the child with [`set_child`] and finish it with
-/// [`finish_child`]. A second registration is rejected while a run is active.
+/// Register before spawning so signal cleanup can find the container even
+/// before its child pid is known. Reject overlapping Runs. On spawn failure,
+/// call [`clear_child`]; otherwise call [`set_child`] then [`finish_child`].
 pub(crate) fn set_cidfile_mode(
     cidfile_path: &Path,
     docker: &DockerCli,
@@ -129,10 +116,8 @@ pub(crate) fn cancel_active_container_operation() {
     stop_active_run(signal_hook::consts::SIGTERM);
 }
 
-/// Register the spawned `docker run` child's pid for signal forwarding. Call
-/// right after spawn (after [`set_cidfile_mode`]). Once the child has been reaped,
-/// call [`finish_child`] so a container that outlived the Docker client is
-/// detected before the registration is cleared.
+/// Register immediately after spawn, following [`set_cidfile_mode`]. Reap the
+/// child and call [`finish_child`] before clearing its registration.
 pub(crate) fn set_child(pid: u32) {
     CHILD_PID.store(pid as i32, Ordering::SeqCst);
 }
@@ -149,14 +134,10 @@ pub(crate) fn clear_child() {
     *active_docker().lock().unwrap() = None;
 }
 
-/// Finish a successfully spawned child after `wait` returns. An attached Docker
-/// CLI can exit while its container remains alive (most visibly via Docker's
-/// detach key sequence, but also after some client/daemon disconnects), so use
-/// the cidfile to stop a still-running container before unregistering the run.
-/// If a fatal signal raced with the wait, clear the now-stale pid, retain the
-/// cidfile, and keep this thread alive until the watcher terminates the process
-/// after daemon-side cleanup. Returns `true` when a live or uninspectable
-/// lingering container required a kill attempt.
+/// Call after reaping the child; a detached or disconnected Docker client may
+/// leave its container alive. Retain the cidfile through cleanup, waiting for
+/// the signal watcher if it took ownership. Return `true` when a live or
+/// uninspectable container required a kill attempt.
 pub(crate) fn finish_child() -> bool {
     CHILD_PID.store(0, Ordering::SeqCst);
     let stopped_lingering_container = stop_container_left_by_child();
@@ -169,13 +150,8 @@ pub(crate) fn finish_child() -> bool {
         }
         Err(RUN_SIGNALLED) => {
             drop(registered_cidfile);
-            // The watcher is stopping the container and will terminate the
-            // whole process (`process::exit(128+sig)`) once daemon-side cleanup
-            // is done, tearing down this parked thread with it. Park until it
-            // does — but not forever: if the watcher thread died unexpectedly
-            // (e.g. it panicked), parking with no bound would hang the wrapper.
-            // The deadline covers the container grace period plus slack for the
-            // bounded docker commands; past it, exit here as the signal would.
+            // Wait for watcher cleanup and process exit, bounded in case the
+            // watcher panics. The deadline covers its worst-case cleanup.
             let deadline = Instant::now() + SIGNAL_FINISH_WAIT;
             while Instant::now() < deadline {
                 std::thread::park_timeout(Duration::from_secs(1));
@@ -493,17 +469,9 @@ fn stop_active_run_with(
     }
 }
 
-/// Stop one container through the daemon: deliver `sig` to its PID 1 (what
-/// `--sig-proxy` would have done, had the CLI not had a TTY), then escalate to a
-/// plain `docker kill` (SIGKILL) if it lingers. A container process without a
-/// handler for the signal never exits on it as PID 1. The 10s grace mirrors
-/// `docker stop`'s default.
-///
-/// On the signal path, the main thread normally stays blocked in `child.wait()`
-/// while the watcher performs this escalation, so the grace wait cannot race
-/// the exit path; [`stop_active_run`] decides whether it runs before or after
-/// the CLI child is signalled. The post-wait orphan check takes a separate
-/// immediate-kill path because no attached client remains.
+/// Signal container PID 1 through the daemon, including when a TTY prevents
+/// CLI signal proxying. Escalate to SIGKILL after the grace period or a second
+/// signal. The post-client-exit orphan check instead kills immediately.
 pub(crate) fn stop_container_id(docker: &DockerCli, sig: i32, cid: &str) {
     let mut grace_started = None;
     stop_container_id_with(
@@ -532,9 +500,6 @@ fn continue_container_grace(signal_count: usize, elapsed: Duration) -> bool {
     signal_count <= 1 && elapsed < CONTAINER_GRACE
 }
 
-/// Apply graceful container-stop policy using caller-provided process and time
-/// adapters. Production supplies Docker commands, the signal counter, and
-/// bounded sleeping; tests script each observation and verify exact ordering.
 fn stop_container_id_with(
     sig: i32,
     cid: &str,
@@ -553,11 +518,6 @@ fn stop_container_id_with(
     if container_state(cid) == ContainerState::Stopped {
         return;
     }
-    // Say what the silence is (the grace wait), and how to cut it short: a
-    // second signal (Ctrl-C again, or a service manager re-kill) skips the
-    // rest of the wait and SIGKILLs the container now — better than lingering
-    // under a supervisor that would escalate to an uncatchable SIGKILL and
-    // leave the container running unsupervised.
     eprintln!(">> stopping the container (up to 10s; signal again to kill it now)");
     while continue_grace() {
         wait(CONTAINER_POLL_INTERVAL);

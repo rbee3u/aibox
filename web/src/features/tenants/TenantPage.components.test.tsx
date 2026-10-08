@@ -162,17 +162,14 @@ describe("TenantPage", () => {
     expect(input).toHaveValue("3.15.0");
     expect(update).toBeEnabled();
 
-    // Type currently installed version
     await user.clear(input);
     await user.type(input, "3.12.0");
     expect(update).toBeDisabled();
 
-    // Type older version
     await user.clear(input);
     await user.type(input, "3.11.9");
     expect(update).toBeDisabled();
 
-    // Type with leading 'v' to test smart prefix normalization
     await user.clear(input);
     await user.type(input, "v3.16.0");
     expect(input).toHaveValue("3.16.0");
@@ -338,11 +335,6 @@ describe("TenantPage", () => {
         "24.19.0",
       ),
     );
-    /*
-     * The freshness is drawn, not only announced. It used to reach the
-     * accessible name alone, so a sighted reader was invited to act on the
-     * Update controls below without being told how old the observation was.
-     */
     expect(screen.getByText(/^Checked/)).toBeVisible();
     expect(screen.getByRole("button", { name: /Check for updates, checked/ })).toBeInTheDocument();
     expect(checkLatestComponents).toHaveBeenCalledWith();

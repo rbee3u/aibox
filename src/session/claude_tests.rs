@@ -304,7 +304,7 @@ fn cli_written_lines_carry_a_notice_and_spoken_ones_do_not() {
     );
     let backend = crate::session::backend_for(crate::agent::AgentKind::Claude);
     let records = crate::session::detail_records_for_test(
-        backend.as_ref(),
+        backend,
         home.path(),
         "3f2a1b6c-0000-0000-0000-000000000001",
     )

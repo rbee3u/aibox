@@ -44,11 +44,6 @@
   color: var(--code-text);
 }
 
-.sourceWrap,
-.sseWrap {
-  min-width: 0;
-}
-
 .sensitiveContext {
   margin: 0 0 10px;
   padding: 8px 12px;
@@ -58,18 +53,6 @@
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.45;
-}
-
-.bodyNotice {
-  margin-bottom: 8px;
-}
-
-.bodyNotice button {
-  padding: 5px 9px;
-  border-color: var(--warning-line);
-  background: var(--surface-raised);
-  color: var(--warning);
-  font-size: var(--text-xs);
 }
 
 .encodedLabel {
@@ -86,158 +69,6 @@
 
 .encodedLabel + .body {
   padding-top: 38px;
-}
-
-.eventList {
-  max-height: 58vh;
-  overflow: auto;
-  border: 1px solid var(--line-content);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset);
-}
-
-.eventCard + .eventCard {
-  border-top: 1px solid var(--line-content);
-}
-
-.eventHeader {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 24px;
-  min-height: 43px;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  background: var(--surface);
-}
-
-.eventToggle {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  border: 0;
-  padding: 5px 3px;
-  background: transparent;
-  color: var(--ink);
-  text-align: left;
-}
-
-.eventToggleLead {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-}
-
-.eventToggle strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--weight-bold) var(--text-xs) / 1.4 var(--font-mono);
-}
-
-.eventRunLabel {
-  font-family: var(--font-sans);
-}
-
-.eventRunList {
-  border-top: 1px solid var(--line-content);
-}
-
-.eventPreview {
-  overflow: hidden;
-  min-width: 0;
-  padding-left: 22px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.eventSequence,
-.eventSecondary,
-.eventTime {
-  color: var(--muted);
-  font: var(--text-xs) / 1.4 var(--font-mono);
-}
-
-.eventSecondary {
-  overflow: hidden;
-  border: 1px solid var(--info-line);
-  border-radius: var(--radius-pill);
-  padding: 2px 6px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.eventTime {
-  white-space: nowrap;
-}
-
-.eventCopy {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
-  min-height: 24px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.eventCopy:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-
-.eventCopy:active {
-  background: var(--surface-pressed);
-  color: var(--ink);
-}
-
-.eventCopy:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
-
-.eventBody {
-  border-top: 1px solid var(--line-content);
-  padding: 8px;
-  background: var(--code-bg);
-}
-
-.eventBody pre {
-  margin: 0;
-  color: var(--code-text);
-  font: var(--text-xs) / 1.55 var(--font-mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.emptyEvents,
-.partialEvent {
-  margin: 0;
-  padding: 14px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-align: center;
-}
-
-.partialEvent {
-  border-top: 1px dashed var(--line-content);
-  background: var(--warning-soft);
-  color: var(--warning);
 }
 
 .body {
@@ -262,17 +93,4 @@
 .loading {
   flex: 0 0 auto;
   color: var(--accent);
-}
-
-@media (pointer: coarse) {
-  .eventHeader {
-    grid-template-columns: minmax(0, 1fr) auto 44px;
-  }
-
-  .eventCopy {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
 }

@@ -3,7 +3,7 @@
 use super::ComponentStatus;
 use super::native::{capture_limited, executable_mode_is_current, parse_json_config, write_atomic};
 use crate::agent::AgentKind;
-use crate::foundation::safe_fs::FileSnapshot;
+use crate::foundation::safe_fs::{self, FileSnapshot};
 use crate::tenant::{Tenant, TenantAgent};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -45,7 +45,7 @@ fn statusline_status_from_parts(
 
 pub(super) fn inspect_claude_statusline(home: &Path) -> Result<ComponentStatus> {
     let dir = home.join(AgentKind::Claude.state_dir_name());
-    if !crate::foundation::safe_fs::real_dir_exists(&dir, "Claude state directory")? {
+    if !safe_fs::real_dir_exists(&dir, "Claude state directory")? {
         return Ok(ComponentStatus::NotInstalled);
     }
     let script = capture_limited(
@@ -87,7 +87,7 @@ fn claude_statusline_setting_state(settings: &FileSnapshot) -> Result<Statusline
 
 pub(super) fn inspect_codex_statusline(home: &Path) -> Result<ComponentStatus> {
     let dir = home.join(AgentKind::Codex.state_dir_name());
-    if !crate::foundation::safe_fs::real_dir_exists(&dir, "Codex state directory")? {
+    if !safe_fs::real_dir_exists(&dir, "Codex state directory")? {
         return Ok(ComponentStatus::NotInstalled);
     }
     let config = capture_limited(
@@ -215,7 +215,7 @@ fn prepare_statusline_install(tenant: &Tenant, agent: AgentKind) -> Result<Tenan
 pub(super) fn remove_claude_statusline(tenant: &Tenant) -> Result<()> {
     let selected = tenant.for_agent(AgentKind::Claude);
     let script = selected.state_file(CLAUDE_STATUSLINE_SCRIPT);
-    crate::foundation::safe_fs::remove_real_file_if_exists(&script, "Claude statusline script")?;
+    safe_fs::remove_real_file_if_exists(&script, "Claude statusline script")?;
 
     let settings_path = selected.state_file(AgentKind::Claude.main_config_file());
     let settings = capture_limited(&settings_path, "Claude settings")?;

@@ -14,41 +14,28 @@ interface OverviewKpisProps {
 
 export function OverviewKpis({ overview, topology, requestsTotal, onNavigate }: OverviewKpisProps) {
   const managedCount = topology
-    ? topology.tenants.filter((t) => t.kind === "managed").length
+    ? topology.tenants.filter((tenant) => tenant.kind === "managed").length
     : (overview?.managed_tenants ?? 0);
   const hostCount = topology
-    ? topology.tenants.filter((t) => t.kind === "host").length
+    ? topology.tenants.filter((tenant) => tenant.kind === "host").length
     : overview?.host_available
       ? 1
       : 0;
 
-  const totalNamedConfigs = topology
-    ? topology.tenants.reduce(
-        (acc, t) => acc + t.agents.reduce((a, ag) => a + (ag.named_configs?.count ?? 0), 0),
-        0,
-      )
-    : 0;
-
-  const totalCurrentConfigs = topology
-    ? topology.tenants.reduce(
-        (acc, t) => acc + t.agents.filter((ag) => ag.current_config.present_files > 0).length,
-        0,
-      )
-    : 0;
-
-  const totalSessions = topology
-    ? topology.tenants.reduce(
-        (acc, t) => acc + t.agents.reduce((a, ag) => a + (ag.sessions?.count ?? 0), 0),
-        0,
-      )
-    : 0;
-
-  const componentsInstalled = topology
-    ? topology.tenants.reduce((acc, t) => acc + (t.components?.installed ?? 0), 0)
-    : 0;
-  const componentsTotal = topology
-    ? topology.tenants.reduce((acc, t) => acc + (t.components?.total ?? 0), 0)
-    : 0;
+  let totalNamedConfigs = 0;
+  let totalCurrentConfigs = 0;
+  let totalSessions = 0;
+  let componentsInstalled = 0;
+  let componentsTotal = 0;
+  for (const tenant of topology?.tenants ?? []) {
+    componentsInstalled += tenant.components?.installed ?? 0;
+    componentsTotal += tenant.components?.total ?? 0;
+    for (const agent of tenant.agents) {
+      totalNamedConfigs += agent.named_configs?.count ?? 0;
+      totalSessions += agent.sessions?.count ?? 0;
+      if (agent.current_config.present_files > 0) totalCurrentConfigs += 1;
+    }
+  }
 
   const hasRequestsCount = requestsTotal !== null && requestsTotal !== undefined;
 

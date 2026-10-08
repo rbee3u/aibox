@@ -17,14 +17,9 @@ function currentLocation(): string {
 }
 
 /**
- * Owns the Console's only `history` and `popstate` integration. Pages receive an
- * immutable route snapshot plus a writer for their own query, so no page
- * subscribes to browser history itself.
- *
- * A module holding unsaved edits can mark itself dirty; in-app and history
- * navigation are then deferred until the caller resolves `pendingNavigation`,
- * so Configs shows one Unsaved changes dialog for every leave. Only unload
- * (reload, close) falls back to the native confirmation.
+ * Own browser history and defer dirty navigation through `pendingNavigation`.
+ * Pages receive route snapshots and query writers; only unload uses the native
+ * confirmation prompt.
  */
 export function useConsoleRouter() {
   const [route, setRoute] = useState<RouteSnapshot>(currentRoute);

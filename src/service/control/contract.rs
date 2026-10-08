@@ -2,52 +2,32 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::{AgentKind, MainConfigCondition};
+    use crate::agent::AgentKind;
     use crate::component::{ComponentKind, LatestEntry, LatestEntryState, LatestSnapshot};
-    use crate::config::{
-        ApplicationStatus, ConfigCatalogEntry, ConfigCatalogState, ConfigComparison,
-        ConfigComparisonFile, ConfigComparisonSide, ConfigDifference, ConfigDrift, LastApplication,
-    };
-    use crate::config::{
-        AuthPropagationPreview, AuthPropagationReport, PropagationEntry, PropagationOutcome,
-        PropagationPreviewEntry,
-    };
-    use crate::config::{
-        CustomProviderInput, CustomProviderState, VisualAuthInput, VisualConfigOptionInput,
-        VisualConfigOptionState, VisualConfigState,
-    };
-    use crate::request::{
-        AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource,
-        DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolDiagnostic, ProtocolFamily,
-        ProtocolSummary, RecordedHeader, RequestAssessment, RequestMetadata, RequestedEffective,
-        RequestedObserved, ResponseMetadata, ResponseModeValue, ResponseSource, ResultMetadata,
-        RetryMetadata, SummaryMetadata, SummaryRequestMetadata, SummaryResponseMetadata,
-        TimingMetadata, TokenUsage,
-    };
+    use crate::config::{ApplicationStatus, ConfigComparison, ConfigDrift, LastApplication};
+    use crate::config::{AuthPropagationReport, PropagationOutcome};
+
+    use crate::management::{OperationLog, OperationSnapshot, OperationState};
+    use crate::request::{AssessmentLevel, RequestOutcome};
     use crate::service::control::components::{
         ComponentMutation, ComponentQuery, ComponentRow, ComponentStatusWire,
         InstalledComponentResponse, RemovedComponentResponse,
     };
     use crate::service::control::configs::{
-        AuthPropagationPreviewResponse, CompareConfigDraft, CompareConfigsRequest,
-        ConfigAuthResponse, ConfigDiagnostic, ConfigFileRequest, ConfigFileResponse,
-        ConfigListResponse, ConfigMutationBase, CreatedConfigResponse, DeleteConfigsRequest,
-        DeletedConfigsResponse, DiagnoseConfigRequest, DiagnoseConfigResponse,
-        ExecuteAuthPropagationRequest, LinkedConfigFileResponse, SaveConfigFileRequest,
+        AuthPropagationPreviewResponse, CompareConfigsRequest, ConfigFileRequest,
+        ConfigFileResponse, ConfigListResponse, ConfigMutationBase, CreatedConfigResponse,
+        DeleteConfigsRequest, DeletedConfigsResponse, DiagnoseConfigRequest,
+        DiagnoseConfigResponse, ExecuteAuthPropagationRequest, SaveConfigFileRequest,
     };
     use crate::service::control::operations::{
         BuildRequest, CancelledOperationResponse, OperationEnvelope, OperationQuery,
     };
     use crate::service::control::overview::{
-        BootstrapResponse, DockerOverview, DockerStatus, OverviewResponse, RuntimeImageOverview,
-        RuntimeImageStatus, ServiceOverview, TopologyAgent, TopologyComponents,
-        TopologyCurrentConfig, TopologyNamedConfigs, TopologyResponse, TopologySessions,
-        TopologyTenant,
+        BootstrapResponse, OverviewResponse, TopologyResponse,
     };
     use crate::service::control::requests::{
-        BodyQuery, DeleteRequest, DeletedRequestsResponse, DiagnosticGroups, EventTimingEntry,
-        EventTimingQuery, EventTimingResponse, EventTimingState, ListQuery, RequestDetail,
-        RequestList, RequestState, RequestSummary, ResponseDetail,
+        BodyQuery, DeleteRequest, DeletedRequestsResponse, EventTimingQuery, EventTimingResponse,
+        ListQuery, RequestDetail, RequestList,
     };
     use crate::service::control::routes::ENDPOINTS;
     use crate::service::control::sessions::{
@@ -59,12 +39,10 @@ mod tests {
         TenantRow,
     };
     use crate::service::control::{AgentTenantQuery, ControlErrorResponse};
-    use crate::service::operation::{OperationLog, OperationSnapshot, OperationState};
     use crate::session::{
-        ConversationMessage, ConversationNotice, ConversationRole, EvidenceEncoding,
-        SessionDetailMeta, SessionDetailStats, SessionDiscoverySummary, SessionListData,
-        SessionListRow, ToolActivity, ToolActivityStatus, TranscriptEvidence,
-        TranscriptEvidenceSummary,
+        ConversationMessage, ConversationNotice, ConversationRole, SessionDetailMeta,
+        SessionDetailStats, SessionDiscoverySummary, SessionListData, ToolActivity,
+        ToolActivityStatus, TranscriptEvidence, TranscriptEvidenceSummary,
     };
     use serde::Serialize;
     use std::collections::VecDeque;
@@ -72,158 +50,105 @@ mod tests {
     use std::path::PathBuf;
     use ts_rs::{Config, TS};
 
-    fn declaration<T: TS>(config: &Config) -> String {
-        format!("export {}\n", T::decl(config))
+    struct Declarations<'a> {
+        config: &'a Config,
+        seen: std::collections::HashSet<std::any::TypeId>,
+        by_name: std::collections::BTreeMap<String, String>,
+    }
+
+    impl ts_rs::TypeVisitor for Declarations<'_> {
+        fn visit<T: TS + 'static + ?Sized>(&mut self) {
+            if T::output_path().is_none() || !self.seen.insert(std::any::TypeId::of::<T>()) {
+                return;
+            }
+            let name = T::ident(self.config);
+            // Preserve the existing explicit JSON representation, including its null policy.
+            if name == "JsonValue" {
+                return;
+            }
+            let declaration = format!("export {}\n", T::decl(self.config));
+            if let Some(previous) = self.by_name.insert(name.clone(), declaration.clone()) {
+                assert_eq!(previous, declaration, "conflicting TypeScript type {name}");
+            }
+            T::visit_dependencies(self);
+        }
     }
 
     fn bindings() -> String {
+        use ts_rs::TypeVisitor as _;
         let config = Config::default().with_large_int("number");
-        let mut output = String::from(
-            "// Generated from Rust wire DTOs by make generate. Do not edit.\n\n\
-             export type JsonValue = number | boolean | string | JsonValue[] | { [key: string]: JsonValue };\n",
-        );
-        macro_rules! export_types {
-            ($($type:ty),+ $(,)?) => {
-                $(output.push_str(&declaration::<$type>(&config));)+
-            };
+        let mut declarations = Declarations {
+            config: &config,
+            seen: Default::default(),
+            by_name: Default::default(),
+        };
+        // Only endpoint inputs, outputs and stream frames belong here. Nested
+        // domain types are discovered without exposing them through facades.
+        macro_rules! export_roots {
+            ($($type:ty),+ $(,)?) => { $(declarations.visit::<$type>();)+ };
         }
-        export_types!(
-            AgentKind,
+        export_roots!(
             AgentTenantQuery,
             ControlErrorResponse<'static>,
             ComponentQuery,
             ComponentMutation,
-            ComponentKind,
-            ComponentStatusWire,
-            BootstrapResponse,
-            TenantRow,
             ComponentRow,
             InstalledComponentResponse,
             RemovedComponentResponse,
+            LatestSnapshot,
             ConfigListResponse,
             AuthPropagationPreviewResponse,
             ExecuteAuthPropagationRequest,
             ConfigMutationBase,
             ConfigFileRequest,
             ConfigFileResponse,
-            LinkedConfigFileResponse,
-            ConfigAuthResponse,
             SaveConfigFileRequest,
             CompareConfigsRequest,
-            CompareConfigDraft,
             ConfigComparison,
-            ConfigComparisonFile,
-            ConfigComparisonSide,
-            ConfigDifference,
             DiagnoseConfigRequest,
-            ConfigDiagnostic,
             DiagnoseConfigResponse,
             DeleteConfigsRequest,
             CreatedConfigResponse,
             DeletedConfigsResponse,
+            ApplicationStatus,
+            AuthPropagationReport,
             OperationQuery,
             OperationEnvelope,
             BuildRequest,
             CancelledOperationResponse,
+            OperationSnapshot,
+            BootstrapResponse,
             OverviewResponse,
-            ServiceOverview,
-            DockerStatus,
-            DockerOverview,
-            RuntimeImageStatus,
-            RuntimeImageOverview,
             TopologyResponse,
-            TopologyTenant,
-            TopologyAgent,
-            TopologyCurrentConfig,
-            TopologyNamedConfigs,
-            TopologySessions,
-            TopologyComponents,
             SessionDetailQuery,
             SessionEvidenceQuery,
             DeleteSessionsRequest,
             SessionDetailFrame,
             DeletedSessionsResponse,
+            SessionListData,
+            SessionDiscoverySummary,
+            TranscriptEvidence,
             CreateTenantRequest,
+            TenantRow,
             DeleteSelection,
             CreatedTenantResponse,
             DeletedTenantsResponse,
             ListQuery,
-            RequestSummary,
             RequestList,
-            RequestState,
-            ResponseDetail,
             RequestDetail,
-            DiagnosticGroups,
             BodyQuery,
             EventTimingQuery,
-            EventTimingEntry,
             EventTimingResponse,
-            EventTimingState,
             DeleteRequest,
             DeletedRequestsResponse,
-            RecordedHeader,
-            RequestMetadata,
-            ResponseSource,
-            ResponseMetadata,
-            Outcome,
-            ErrorMetadata,
-            ErrorKind,
-            TimingMetadata,
-            RetryMetadata,
-            DiagnosticMetadata,
-            SummaryRequestMetadata,
-            SummaryResponseMetadata,
-            AssessmentLevel,
-            AssessmentSource,
-            AssessmentPrimary,
-            RequestAssessment,
-            AssessmentFinding,
-            ProtocolFamily,
-            ResponseModeValue,
-            RequestedEffective<String>,
-            RequestedObserved<String>,
-            TokenUsage,
-            ProtocolDiagnostic,
-            ProtocolSummary,
-            SummaryMetadata,
-            ResultMetadata,
-            VisualConfigOptionInput,
-            CustomProviderInput,
-            VisualAuthInput,
-            MainConfigCondition,
-            VisualConfigOptionState,
-            CustomProviderState,
-            VisualConfigState,
-            LatestEntry,
-            LatestEntryState,
-            LatestSnapshot,
-            LastApplication,
-            ConfigDrift,
-            ApplicationStatus,
-            ConfigCatalogState,
-            ConfigCatalogEntry,
-            PropagationOutcome,
-            PropagationEntry,
-            AuthPropagationReport,
-            PropagationPreviewEntry,
-            AuthPropagationPreview,
-            OperationState,
-            OperationLog,
-            OperationSnapshot,
-            SessionDiscoverySummary,
-            SessionListRow,
-            SessionListData,
-            ConversationMessage,
-            ConversationNotice,
-            ConversationRole,
-            ToolActivity,
-            ToolActivityStatus,
-            TranscriptEvidenceSummary,
-            SessionDetailStats,
-            SessionDetailMeta,
-            TranscriptEvidence,
-            EvidenceEncoding,
         );
+        let mut output = String::from(
+            "// Generated from Rust wire DTOs by make generate. Do not edit.\n\n\
+             export type JsonValue = number | boolean | string | JsonValue[] | { [key: string]: JsonValue };\n",
+        );
+        for declaration in declarations.by_name.values() {
+            output.push_str(declaration);
+        }
         output
     }
 
@@ -237,7 +162,7 @@ mod tests {
         application: ApplicationStatus,
         config_drifts: Vec<ConfigDrift>,
         propagation_outcomes: Vec<PropagationOutcome>,
-        outcomes: Vec<Outcome>,
+        outcomes: Vec<RequestOutcome>,
         assessment_levels: Vec<AssessmentLevel>,
         operation_states: Vec<OperationState>,
         session_frames: Vec<SessionDetailFrame>,
@@ -338,12 +263,12 @@ mod tests {
                 },
             ],
             outcomes: vec![
-                Outcome::Completed,
-                Outcome::Rejected,
-                Outcome::UpstreamError,
-                Outcome::ClientDisconnected,
-                Outcome::RecordingFailed,
-                Outcome::ServerShutdown,
+                RequestOutcome::Completed,
+                RequestOutcome::Rejected,
+                RequestOutcome::UpstreamError,
+                RequestOutcome::ClientDisconnected,
+                RequestOutcome::RecordingFailed,
+                RequestOutcome::ServerShutdown,
             ],
             assessment_levels: vec![
                 AssessmentLevel::Active,

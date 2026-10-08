@@ -1,10 +1,5 @@
-//! Host-platform probes for Linux-specific flags, uid/gid, and TTY detection,
-//! plus process file-descriptor limit adjustments.
-//!
-//! These decide the Linux-only `--user`/`--add-host` flags and the `-it` vs `-i`
-//! Docker flag, so they must reflect the *host* the wrapper runs on — not the
-//! container. The Service also raises `RLIMIT_NOFILE` here before it opens
-//! sockets or Request files.
+//! Host probes for Docker flags and process file-descriptor limits.
+//! These inspect the invoking host, not the container.
 
 use std::io::IsTerminal;
 
@@ -42,14 +37,8 @@ pub(crate) fn has_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
-/// Raise the process file-descriptor soft limit when the inherited ceiling is
-/// too low.
-///
-/// macOS and some service-manager environments start processes with a soft
-/// `RLIMIT_NOFILE` of 256. Each in-flight proxied Request holds several
-/// descriptors, so that ceiling is easy to hit; the next `mkdir` or directory
-/// walk then fails with `Too many open files`. This never lowers the current
-/// limit and never fails the caller.
+/// Best-effort increase of the soft file-descriptor limit; never lowers it.
+/// Low inherited limits (often 256 on macOS) can exhaust a busy Request Proxy.
 pub(crate) fn raise_nofile_limit() {
     #[cfg(unix)]
     {

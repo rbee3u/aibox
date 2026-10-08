@@ -1,20 +1,6 @@
-//! Codex transcript format:
-//! `<home>/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`.
-//!
-//! Mapped from the codex-rs `rollout` crate: each line is a `RolloutLine` that
-//! flattens a top-level `timestamp` + `type` + `payload`. The first line is a
-//! `session_meta` (its `payload.timestamp` is the session start). User turns are
-//! `response_item` messages with `role:"user"` whose `payload.content` is an
-//! array of `{type:"input_text"|"text", text:"…"}` items.
-//!
-//! Codex has no ai-title, so a session's preview is its first *real* prompt. It
-//! also records injected wrapper turns (environment/instructions context blocks,
-//! `!`-shell commands, skill payloads, the per-Workspace AGENTS.md preamble) as
-//! text-like content items; [`real_text_fragment`] removes those prefixes. A
-//! turn left with no text after filtering is skipped for previews and detail.
-//!
-//! The session id is the trailing uuid of the filename (last 36 chars of the
-//! stem after `rollout-<date>-`).
+//! Codex rollout parsing. Injected context can occupy user-message records;
+//! [`real_text_fragment`] removes wrappers before title and conversation projection.
+//! Filtered records remain Transcript Evidence.
 
 use crate::session::{
     self, ConversationMessage, ConversationRole, DetailRecord, PromptRecord, SessionBackend,

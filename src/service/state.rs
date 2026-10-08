@@ -1,83 +1,24 @@
-//! Shared state carried by the foreground Service and its Control API.
+//! Service process information, HTTP security state, and composed capabilities.
 
-use crate::application_error::{ApplicationErrorKind, application_error};
-use crate::component::{LatestProvider, LatestSnapshot, check_snapshot};
-use crate::config;
-use crate::docker;
+use crate::management::Management;
 use crate::request::RequestProxyState;
-use crate::service::operation::{OperationContext, OperationManager, OperationSnapshot};
-use anyhow::Result;
 use axum::extract::FromRef;
 use base64::Engine as _;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, broadcast};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct ServiceState {
-    root: Arc<PathBuf>,
-    host_home: Arc<PathBuf>,
-    image: Arc<String>,
     listen: SocketAddr,
     started: Instant,
     csrf: Arc<String>,
     request: RequestProxyState,
-    management: ManagementState,
-    component_updates: ComponentUpdateState,
+    shutdown: CancellationToken,
+    pub(crate) management: Management,
 }
-
-/// Concrete management state owned by the Service composition root.
-#[derive(Clone)]
-struct ManagementState {
-    operations: OperationManager,
-    gate: ManagementGate,
-    credential_propagation: CredentialPropagationState,
-}
-
-#[derive(Clone)]
-struct ManagementGate {
-    lock: Arc<Mutex<()>>,
-}
-
-#[derive(Clone)]
-struct CredentialPropagationState {
-    pending: Arc<std::sync::Mutex<Option<PendingAuthPropagation>>>,
-}
-
-#[derive(Clone)]
-struct ComponentUpdateState {
-    cache: Arc<RwLock<ComponentUpdateCache>>,
-    check: Arc<Mutex<()>>,
-    provider: Arc<dyn LatestProvider>,
-}
-
-#[derive(Default)]
-struct ComponentUpdateCache {
-    generation: u64,
-    completed: Option<LatestSnapshot>,
-    published: Option<LatestSnapshot>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ComponentUpdateTrigger {
-    Startup,
-    Explicit,
-}
-
-pub(crate) struct PendingAuthPropagation {
-    id: String,
-    plan: config::AuthPropagationPlan,
-}
-
-/// Exclusive ownership of one mutation participating in the shared management
-/// gate.
-pub(crate) struct ManagementMutation {
-    _guard: OwnedMutexGuard<()>,
-}
-
 #[derive(Clone)]
 pub(crate) struct ConsoleCspNonce(String);
 
@@ -99,49 +40,23 @@ impl FromRef<ServiceState> for RequestProxyState {
 
 impl ServiceState {
     pub(crate) fn new(
-        root: PathBuf,
-        host_home: PathBuf,
-        image: String,
         listen: SocketAddr,
         csrf: String,
+        shutdown: CancellationToken,
         request: RequestProxyState,
-        latest_provider: Arc<dyn LatestProvider>,
+        management: Management,
     ) -> Self {
         Self {
-            root: Arc::new(root),
-            host_home: Arc::new(host_home),
-            image: Arc::new(image),
             listen,
             started: Instant::now(),
             csrf: Arc::new(csrf),
             request,
-            management: ManagementState {
-                operations: OperationManager::new(),
-                gate: ManagementGate {
-                    lock: Arc::new(Mutex::new(())),
-                },
-                credential_propagation: CredentialPropagationState {
-                    pending: Arc::new(std::sync::Mutex::new(None)),
-                },
-            },
-            component_updates: ComponentUpdateState {
-                cache: Arc::new(RwLock::new(ComponentUpdateCache::default())),
-                check: Arc::new(Mutex::new(())),
-                provider: latest_provider,
-            },
+            shutdown,
+            management,
         }
     }
-
-    pub(crate) fn root(&self) -> Arc<PathBuf> {
-        self.root.clone()
-    }
-
-    pub(crate) fn host_home(&self) -> Arc<PathBuf> {
-        self.host_home.clone()
-    }
-
-    pub(crate) fn image(&self) -> Arc<String> {
-        self.image.clone()
+    pub(crate) fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
     }
 
     pub(crate) fn listen(&self) -> SocketAddr {
@@ -158,133 +73,5 @@ impl ServiceState {
 
     pub(crate) fn request(&self) -> RequestProxyState {
         self.request.clone()
-    }
-
-    pub(crate) fn begin_management_mutation(&self) -> Result<ManagementMutation> {
-        self.management
-            .gate
-            .lock
-            .clone()
-            .try_lock_owned()
-            .map(|guard| ManagementMutation { _guard: guard })
-            .map_err(|_| {
-                application_error(
-                    ApplicationErrorKind::Busy,
-                    "another management mutation is running",
-                )
-            })
-    }
-
-    pub(crate) fn auth_propagation_plan(&self, id: String, plan: config::AuthPropagationPlan) {
-        *self
-            .management
-            .credential_propagation
-            .pending
-            .lock()
-            .expect("Credential Propagation plan store poisoned") =
-            Some(PendingAuthPropagation { id, plan });
-    }
-
-    pub(crate) fn take_auth_propagation_plan(
-        &self,
-        id: &str,
-    ) -> anyhow::Result<config::AuthPropagationPlan> {
-        let mut pending = self
-            .management
-            .credential_propagation
-            .pending
-            .lock()
-            .expect("Credential Propagation plan store poisoned");
-        if !pending.as_ref().is_some_and(|plan| plan.id == id) {
-            anyhow::bail!("Credential Propagation plan is missing or obsolete");
-        }
-        Ok(pending.take().expect("plan checked above").plan)
-    }
-
-    pub(crate) async fn latest_component_snapshot(&self) -> Option<LatestSnapshot> {
-        self.component_updates.cache.read().await.published.clone()
-    }
-
-    pub(crate) async fn prefetch_latest_components(&self) {
-        self.refresh_latest_components(ComponentUpdateTrigger::Startup)
-            .await;
-    }
-
-    pub(crate) async fn check_latest_components(&self) -> LatestSnapshot {
-        self.refresh_latest_components(ComponentUpdateTrigger::Explicit)
-            .await
-    }
-
-    async fn refresh_latest_components(&self, trigger: ComponentUpdateTrigger) -> LatestSnapshot {
-        let observed_generation = self.component_updates.cache.read().await.generation;
-        let _guard = self.component_updates.check.lock().await;
-
-        {
-            let mut cache = self.component_updates.cache.write().await;
-            if cache.generation != observed_generation {
-                let snapshot = cache
-                    .completed
-                    .clone()
-                    .expect("a completed Component update generation has a snapshot");
-                if trigger == ComponentUpdateTrigger::Explicit {
-                    cache.published = Some(snapshot.clone());
-                }
-                return snapshot;
-            }
-        }
-
-        let snapshot = check_snapshot(self.component_updates.provider.clone()).await;
-        let mut cache = self.component_updates.cache.write().await;
-        cache.generation = cache.generation.wrapping_add(1);
-        cache.completed = Some(snapshot.clone());
-        if trigger == ComponentUpdateTrigger::Explicit || snapshot.has_available_release() {
-            cache.published = Some(snapshot.clone());
-        }
-        snapshot
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_latest_provider(&mut self, provider: Arc<dyn LatestProvider>) {
-        self.component_updates.provider = provider;
-    }
-
-    pub(crate) fn operation_snapshot(&self) -> Option<OperationSnapshot> {
-        self.management.operations.snapshot()
-    }
-
-    pub(crate) fn subscribe_operations(&self) -> broadcast::Receiver<()> {
-        self.management.operations.subscribe()
-    }
-
-    pub(crate) fn start_management_operation<F>(
-        &self,
-        kind: impl Into<String>,
-        operation: F,
-    ) -> Result<OperationSnapshot>
-    where
-        F: FnOnce(OperationContext) -> Result<String> + Send + 'static,
-    {
-        self.management.operations.start(kind, operation)
-    }
-
-    pub(crate) fn management_operation_is_running(&self) -> bool {
-        self.management.operations.is_running()
-    }
-
-    /// Cancel the management operation and the container operation it owns.
-    /// OperationManager itself stays independent of Docker lifecycle policy.
-    pub(crate) fn cancel_operation(&self, id: &str) -> anyhow::Result<()> {
-        self.management.operations.cancel(id)?;
-        docker::cancel_active_container_operation();
-        Ok(())
-    }
-
-    pub(crate) fn cancel_current_operation(&self) {
-        let Some(snapshot) = self.operation_snapshot() else {
-            return;
-        };
-        if snapshot.state == crate::service::operation::OperationState::Running {
-            let _ = self.cancel_operation(&snapshot.id);
-        }
     }
 }

@@ -4,7 +4,7 @@
 //! this terminal path.
 
 use super::attempt::RequestAttempt;
-use crate::request::model::{ErrorKind, ErrorMetadata, Outcome};
+use crate::request::model::{ErrorKind, ErrorMetadata, RequestOutcome};
 use axum::body::Body;
 use axum::http::{HeaderMap, Response, StatusCode, header};
 
@@ -12,7 +12,7 @@ pub(super) fn finish_proxy_response(
     guard: &mut RequestAttempt,
     status: StatusCode,
     message: &str,
-    outcome: Outcome,
+    outcome: RequestOutcome,
     kind: ErrorKind,
 ) -> Response<Body> {
     let body = format!("{message}\n");
@@ -50,7 +50,7 @@ pub(super) fn recording_failure(
 ) -> Response<Body> {
     let message = message.into();
     let _ = guard.finish(
-        Outcome::RecordingFailed,
+        RequestOutcome::RecordingFailed,
         Some(ErrorMetadata {
             kind: ErrorKind::RecordingFailed,
             message: message.clone(),

@@ -1,16 +1,6 @@
-//! Claude transcript format: `<home>/.claude/projects/**/<uuid>.jsonl`.
-//!
-//! Each line is a JSON object. The fields we read:
-//! - a top-level `timestamp` (first one seen = session start);
-//! - `{"type":"ai-title","aiTitle":"…"}` — the agent-generated title;
-//! - `{"type":"user", …, "message":{"content":"…"}}` — a prompt the user
-//!   actually typed (as opposed to injected/tool turns). Accepted records use
-//!   either `promptSource:"typed"` or `userType:"external"`; injected messages
-//!   may carry `isMeta:true`. The text lives in the nested `message.content` (a
-//!   plain string, or an array of text-bearing blocks), *not* a top-level
-//!   `content`.
-//!
-//! The session id is just the transcript filename without `.jsonl`.
+//! Claude Transcript parsing. Human prompts use `promptSource:typed` or
+//! `userType:external`; injected and tool records can share the user-message shape.
+//! Titles use the last nonempty `ai-title`, falling back to the first prompt.
 
 use crate::session::{
     ConversationMessage, ConversationNotice, ConversationRole, DetailRecord, PromptRecord,
@@ -279,16 +269,8 @@ impl SessionBackend for Claude {
     }
 }
 
-/// Pull a user turn's text out of its `message.content` — Claude nests the turn
-/// under a `message` object (`{"role":"user","content":…}`), not at the top level.
-/// The content is typically a plain string; some turns use an array of blocks,
-/// so we join supported text blocks, ignore known non-text blocks, and flag
-/// unknown shapes without hiding text that was still readable.
-/// The CLI writes two kinds of line in a speaker's slot that nobody said: an
-/// assistant turn flagged `isApiErrorMessage` when the model request failed,
-/// and a user turn holding `[Request interrupted by user…]` when the turn was
-/// cut short. The text is kept verbatim; the notice tells the reader whose
-/// voice it is not.
+/// Classify CLI-authored error and interruption markers without attributing them
+/// to a conversation speaker. Preserve their text verbatim.
 fn notice_for(value: &Value, role: &str, text: &str) -> Option<ConversationNotice> {
     match role {
         "assistant" if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) => {

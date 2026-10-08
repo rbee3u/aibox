@@ -1,35 +1,16 @@
 :root {
   color-scheme: light;
-  /*
-   * Surface fill ladder, deepest first: canvas < shell < inset < surface.
-   * Chrome (sidebar, toolbars, detail headers, catalog panels) takes a real
-   * step away from the content it frames, so a region reads as a region
-   * without depending on a hairline to say so.
-   *
-   * A light theme cannot go brighter than its content plane, so elevation
-   * above the surface is carried by shadow instead of a lighter fill. That is
-   * why raised matches surface here while the dark theme gives it its own
-   * step, and why every shadow level below carries a contact layer.
-   */
+  /* Light-theme elevation needs shadows because surface is already white. */
   --bg-canvas: #e5eaf1;
   --bg-shell: #edf1f6;
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-inset: #f4f7fa;
-  /*
-   * Neutral hover for chrome and actions; selection stays a quiet gray step.
-   * Both are ink overlays rather than fixed fills: one token has to darken a
-   * white row and a tinted toolbar by the same amount, which an opaque value
-   * cannot do once chrome and content no longer share a fill.
-   */
+  /* Overlays keep interaction states relative to their underlying surface. */
   --surface-hover: color-mix(in srgb, var(--ink) 6%, transparent);
   /* Neutral open and selected controls. */
   --surface-selected: color-mix(in srgb, var(--ink) 13%, transparent);
-  /*
-   * The moment a pointer is down, deeper than any resting state so a press
-   * reads on a selected row too. Only ink sits on it; a transient state is the
-   * wrong place to spend the accent.
-   */
+  /* Press must remain visible over selection. */
   --surface-pressed: color-mix(in srgb, var(--ink) 18%, transparent);
   /* Quiet neutral resting fill with no selected or Primary semantics. */
   --control-rest: #f4f7fa;
@@ -48,20 +29,10 @@
   /* Checked disabled controls retain a neutral checked mark. */
   --control-disabled-primary-ink: var(--control-disabled-ink);
   --control-disabled-primary-surface: var(--control-disabled-surface);
-  /*
-   * Text prominence, loudest first. Each step is quieter than the one above
-   * it, so a role named faint can never outrank one named muted.
-   */
   --ink: #18202c;
   --ink-secondary: #465264;
   --muted: #59667a;
   --faint: #657187;
-  /*
-   * The accent answers "where am I" and "what am I engaging with" — the
-   * current module, a primary action, a hovered link, a focus ring. It does
-   * not mark every navigable thing; a table where most cells navigate would
-   * spend the whole budget saying nothing.
-   */
   --accent: #4f46e5;
   --accent-strong: #4338ca;
   --accent-soft: #eef2ff;
@@ -83,11 +54,6 @@
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
   --focus: var(--accent);
-  /*
-   * One ring, one distance. The offset is a token because a ring that sits at
-   * a different remove on every control reads as a rendering accident rather
-   * than as the same signal.
-   */
   --focus-ring: 2px solid var(--focus);
   --focus-offset: 2px;
   --danger: #b91c1c;
@@ -118,22 +84,13 @@
   --viz-wait: #d99b45;
   --viz-model: #6366f1;
   --viz-finalize: #8b929d;
-  /*
-   * Two layers per level: a tight contact shadow that draws the edge of a
-   * white panel resting on white, plus a broad ambient one for distance.
-   * The contact layer is what carries elevation in this theme.
-   */
+  /* Contact shadows separate white panels; ambient shadows convey height. */
   --shadow-sm: 0 1px 1px rgb(18 28 45 / 0.05), 0 1px 3px rgb(18 28 45 / 0.06);
   --shadow-md: 0 1px 2px rgb(18 28 45 / 0.07), 0 10px 24px rgb(18 28 45 / 0.12);
   --shadow-lg: 0 2px 4px rgb(18 28 45 / 0.08), 0 20px 48px rgb(18 28 45 / 0.22);
   --radius-sm: 5px;
   --radius-md: 6px;
   --radius-lg: 6px;
-  /*
-   * Spacing steps on a two-pixel base. The half steps are load-bearing: an
-   * icon and its label, or a dot and its status, read as one thing and come
-   * apart if forced up to a four-pixel jump.
-   */
   --space-2xs: 2px;
   --space-xs: 4px;
   --space-sm: 6px;
@@ -142,13 +99,6 @@
   --space-xl: 16px;
   --space-2xl: 24px;
   --space-3xl: 32px;
-  /*
-   * Spacing roles. A section title belongs to the content under it, so that
-   * gap stays several times tighter than the gap to the next section; the
-   * ratio is what makes a group read as a group. Both values are shared, so
-   * one distance cannot mean "these belong together" in one module and "a new
-   * group starts here" in another.
-   */
   --space-section-title: var(--space-md);
   --space-section: var(--space-2xl);
   --text-xs: 12px;
@@ -165,19 +115,7 @@
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
-  /*
-   * Role-based type hierarchy: page > panel/detail > section/row > metadata.
-   * Every role takes a step from the scale above; none carries a raw size.
-   *
-   * A section title is a quiet label for the group below it, not a title over
-   * it: it stays smaller and dimmer than the rows it groups, so a row title
-   * remains the primary scanning target. Content headings inside Agent output
-   * have their own scale and do not borrow these roles.
-   *
-   * Page and panel titles share a size because they never compete on desktop,
-   * where the page title is only an accessible name. Bold stays reserved for
-   * the page title so the narrow top bar still outranks a panel below it.
-   */
+  /* Page and panel titles never compete on desktop; section labels recede. */
   --text-page-title: var(--text-lg);
   --text-panel-title: var(--text-lg);
   --text-section-title: var(--text-xs);
@@ -202,13 +140,6 @@
   --control-compact: 30px;
   --control-padding-x: 12px;
   --control-gap: 8px;
-  /*
-   * Content measures by role. Detail content is left-aligned and capped, so a
-   * wider viewport gains whitespace instead of spreading the same content
-   * thinner. Trailing metadata and row actions align to the measure edge; they
-   * never track the end of the available space. Code editors, JSON trees, and
-   * raw bodies stay unmeasured.
-   */
   --measure-compact: 560px;
   --measure-text: 720px;
   --measure-data: 1040px;
@@ -233,7 +164,6 @@
   --catalog-row-secondary-size: var(--text-meta);
   --catalog-row-secondary-line-height: var(--line-height-meta);
   /* Filters share width with Refresh/Select actions; wrap before min-width. */
-  /* Tenant/Agent filters use the compact historical catalog width. */
   --catalog-filter-control-max-width: 112px;
   --catalog-toolbar-filters-gap: 8px;
   --catalog-toolbar-cluster-gap: 14px;
@@ -264,20 +194,11 @@
   --surface: #191e28;
   --surface-raised: #1d2330;
   --surface-inset: #151a23;
-  /*
-   * Neutral hover for chrome and actions; selection stays a quiet gray step.
-   * The overlay runs lighter here than in the light theme because accent text
-   * on a selected row has to stay at AA, and every step of overlay pushes the
-   * fill toward the accent.
-   */
+  /* Dark-theme selection must preserve AA contrast for accent text. */
   --surface-hover: color-mix(in srgb, var(--ink) 5%, transparent);
   /* Neutral open and selected controls. */
   --surface-selected: color-mix(in srgb, var(--ink) 8%, transparent);
-  /*
-   * The moment a pointer is down. Selection is capped here by the accent-text
-   * floor, so the press has to reach past it on its own budget; only ink sits
-   * on a pressed surface, which leaves the room to do that.
-   */
+  /* Press uses ink text, allowing a stronger overlay than selection. */
   --surface-pressed: color-mix(in srgb, var(--ink) 13%, transparent);
   /* Quiet neutral resting fill with no selected or Primary semantics. */
   --control-rest: #222833;
@@ -306,11 +227,6 @@
   --action-primary-soft-hover-surface: var(--accent-soft);
   --action-primary-soft-hover-line: var(--accent);
   --focus: var(--accent);
-  /*
-   * One ring, one distance. The offset is a token because a ring that sits at
-   * a different remove on every control reads as a rendering accident rather
-   * than as the same signal.
-   */
   --focus-ring: 2px solid var(--focus);
   --focus-offset: 2px;
   --danger: #ff858c;
@@ -416,12 +332,7 @@ textarea {
     transform var(--transition-fast);
 }
 
-/*
- * A press arrives instantly and eases back on release. Overriding the token
- * rather than each rule works because a transition reads the duration of the
- * state it is moving into: pressing drops it to nothing, and letting go
- * restores the inherited value in time for the return trip.
- */
+/* Transition duration comes from the destination state: instant press, eased release. */
 *:active {
   --transition-fast: 0s;
 }
@@ -453,10 +364,6 @@ select:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
-/*
- * Anything that lifts under the pointer has to answer the press as well, or
- * the gap between click and result reads as the application having missed it.
- */
 button:active:not(:disabled),
 select:active:not(:disabled) {
   background: var(--surface-pressed);

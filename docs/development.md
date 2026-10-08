@@ -1,11 +1,6 @@
 # Development
 
-This document owns project environment setup, build outputs, check commands,
-and contract generation. Read [AGENTS.md](../AGENTS.md) for change constraints,
-[CONTEXT.md](../CONTEXT.md) for domain language, and the [ADR index](adr/README.md)
-for architectural decisions. Console architecture and test organization belong
-in [Console Architecture](console-architecture.md); interaction and feature
-contracts belong in [Console UI](console-ui.md).
+Contribution constraints live in [AGENTS.md](../AGENTS.md).
 
 ## Environment and Dependencies
 
@@ -27,15 +22,17 @@ separate directory over `/workspace/<directory name>/web/node_modules`.
 
 ## Build and Install
 
-Use `make help` for the authoritative target list.
+Use `make help` for the target list. Targets run independently; only `make deps`
+installs dependencies. Build Console assets with `make web` before compiling
+Rust. Rebuild after frontend changes or switching branches, then restart the
+Service to load the embedded assets.
 
 ```sh
 make web && make build
 make deps && make web && cargo install --locked --path .
 ```
 
-For local development, build the Console assets and start the foreground
-Service at `http://127.0.0.1:9923/`:
+Start the foreground Service at `http://127.0.0.1:9923/`:
 
 ```sh
 make web && make console
@@ -44,29 +41,11 @@ make web && make console
 Pass Console arguments through `ARGS`, for example
 `make console ARGS="--listen 127.0.0.1:9924"`.
 
-`make build` uses the development profile and writes `target/debug/aibox`.
-Install the CLI with `cargo install --locked --path .` after building the
-Console assets. The installed binary embeds the Console and needs no Node
-runtime.
+`make build` writes `target/debug/aibox`. The installed binary embeds the
+Console and needs no Node runtime.
 
-Make targets run independently. Only `make deps` installs frontend dependencies;
-other targets reuse them. Build Console assets with `make web` before commands
-that compile Rust, including `make build`, `make test`, `make lint`,
-`make generate`, `make console`, and direct Cargo commands. Rebuild after
-frontend changes or switching branches, and restart the Service to use the new
-embedded assets:
-
-```sh
-make web
-cargo run --locked -- console
-```
-
-Edit `web/index.html` and `web/src/`, never generated `web/dist/` files.
-The dedicated `web/dist/` output directory is cleaned by the frontend build
-and ignored by Git, ESLint, and Prettier. Rust embeds its HTML, CSS, and
-JavaScript; the hand-maintained Dockerfile and runtime scripts remain in
-`assets/`. Vite writes `index.html` and the Console bundles under `dist/assets/`
-with URLs below `/_aibox/ui/`.
+Edit `web/index.html` and `web/src/`; the build replaces `web/dist/`.
+The repository's `assets/` holds the hand-maintained Dockerfile and runtime scripts.
 
 ## Checks and Focused Iteration
 
@@ -79,11 +58,9 @@ formatting. `make test` runs Rust and Console tests. `make lint` runs Clippy,
 TypeScript type checking, ESLint, private-item documentation checks with warnings
 treated as errors, and Rust-owned contract verification.
 
-Use these targets for focused iteration, or run individual native tools from
-the repository root:
+For focused checks, run individual tools from the repository root:
 
 ```sh
-# Rust commands require the generated Console assets described above.
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
@@ -115,11 +92,8 @@ verify the contracts without updating committed files:
 make web && make lint
 ```
 
-Verification regenerates into a temporary directory and compares all three
-artifacts byte-for-byte. Any export or comparison failure fails `make lint`,
-and the temporary directory is removed on exit. Unlike these reviewable
-contracts, compiled Console bundles are rebuilt locally and are not committed
-to Git.
+Verification regenerates all three artifacts in a temporary directory and
+compares them byte-for-byte; any failure fails `make lint`.
 
 ## Optional Socket Checks
 

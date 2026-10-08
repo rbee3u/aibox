@@ -1,8 +1,12 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionApi, SessionDetailMeta, SessionDetailStats } from "@/api/sessions";
-import type { SessionDetailHandlers } from "@/api/sessions";
+import type {
+  SessionApi,
+  SessionDetailMeta,
+  SessionDetailStats,
+  SessionDetailHandlers,
+} from "@/api/sessions";
 import { controlRefusal } from "@/test/controlApi";
 import { deferred } from "@/test/deferred";
 import { SessionPage, firstSession, list, fakeApi } from "@/features/sessions/testSupport";
@@ -374,8 +378,6 @@ describe("SessionPage", () => {
       );
       return Promise.resolve();
     });
-    // The file grows under the reader: the first read conflicts, the read
-    // against the snapshot the re-read reports succeeds.
     const conflict = () =>
       Promise.reject(
         controlRefusal(
@@ -411,7 +413,6 @@ describe("SessionPage", () => {
     expect(streamSessionDetail).toHaveBeenCalledTimes(2);
     expect(loadSessionEvidence).toHaveBeenCalledTimes(2);
     expect(loadSessionEvidence.mock.calls[1][4]).toBe("256:2");
-    // The re-read kept the page: the disclosure the reader opened is still open.
     expect(disclosure).toHaveAttribute("open");
     expect(screen.queryByText(/changed since it was inspected/)).not.toBeInTheDocument();
   });
@@ -528,11 +529,9 @@ describe("SessionPage", () => {
     expect(screen.getByRole("note", { name: "Turn interrupted" })).toHaveTextContent(
       "[Request interrupted by user]",
     );
-    // The reply before the failure keeps its own text: the error is not merged in.
     const reply = screen.getAllByRole("article").find((a) => a.textContent?.includes("Starting."));
     expect(reply).not.toHaveTextContent("API Error");
     expect(failure.closest("article")).toBeNull();
-    // Neither line is anyone's speech: no author, and the interruption is not a navigator stop.
     expect(screen.queryByText("[Request interrupted by user]")?.closest("article")).toBeNull();
     expect(screen.getAllByRole("button", { name: /Jump to message/ })).toHaveLength(2);
     expect(
@@ -589,7 +588,6 @@ describe("SessionPage", () => {
     render(<SessionPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "First prompt" }));
     expect(screen.getByRole("article")).toHaveTextContent("Please inspect this.");
-    // Both groups hold only routine housekeeping, so neither reaches the reading stream.
     expect(screen.queryByText("Transcript activity")).not.toBeInTheDocument();
     expect(screen.queryByText("session_meta")).not.toBeInTheDocument();
     expect(screen.queryByText("event_msg")).not.toBeInTheDocument();
@@ -649,8 +647,6 @@ describe("SessionPage", () => {
     expect(activityDisclosure).toHaveAttribute("open");
     await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
     await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
-    // The refreshed group is the same group — same first entry — so the
-    // disclosure the reader opened is still the one on screen, still open.
     expect(screen.getByText("Transcript activity").closest("details")).toBe(activityDisclosure);
     expect(activityDisclosure).toHaveAttribute("open");
   });
@@ -757,7 +753,6 @@ describe("SessionPage", () => {
     expect(
       screen.getAllByRole("button", { name: /Jump to message 2: Second request/ }),
     ).toHaveLength(2);
-    // Each stop carries its number; the text stays in the accessible name and title.
     const secondStop = screen.getAllByRole("button", { name: /Jump to message 2/ })[0];
     expect(secondStop.querySelector("[aria-hidden]")).toHaveTextContent("2");
     expect(secondStop).toHaveAttribute("title", "Second request");
@@ -769,7 +764,6 @@ describe("SessionPage", () => {
         .getAllByRole("button", { name: /Jump to message 2/ })
         .every((button) => button.getAttribute("aria-current") === "location"),
     ).toBe(true);
-    // The rail follows the current stop, so a long Session never hides it.
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
     expect(scrollIntoView.mock.instances).toContain(secondStop);
   });
@@ -805,8 +799,7 @@ describe("SessionPage", () => {
     const user = userEvent.setup();
     render(<SessionPage api={api} />);
     await user.click(await screen.findByRole("button", { name: "First prompt" }));
-    // Opening a Session scrolls to its top and reads the position on the next
-    // frames; let those land before the reader moves.
+    // Let the initial scroll and position read finish before simulating movement.
     const articles = await screen.findAllByRole("article");
     await act(
       () =>
@@ -814,7 +807,6 @@ describe("SessionPage", () => {
           window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
         ),
     );
-    // Lay the reading out: the reader has scrolled to the second message.
     const scrollContainer = articles[0].parentElement?.parentElement as HTMLDivElement;
     Object.defineProperties(scrollContainer, {
       scrollHeight: { configurable: true, value: 3000 },
@@ -834,7 +826,6 @@ describe("SessionPage", () => {
     expect(current()).toEqual(["Second request", "Second request"]);
     await user.click(screen.getByRole("button", { name: "Refresh Session detail" }));
     await waitFor(() => expect(streamSessionDetail).toHaveBeenCalledTimes(2));
-    // The reading did not move, so neither does the mark: never back to 1.
     await waitFor(() => expect(current()).toEqual(["Second request", "Second request"]));
   });
   it("reports an incomplete Transcript as a diagnostic", async () => {

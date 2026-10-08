@@ -1,7 +1,9 @@
+import styles from "@/features/tenants/catalog/TenantCatalogPane.module.css";
 import { Check, Clipboard, ListChecks, Plus, Trash2 } from "lucide-react";
 
-import { tenantLocation, tenantSelectionValueOf } from "@/features/tenants/route";
-import type { TenantViewModel } from "@/features/tenants/useTenantController";
+import { tenantLocation } from "@/features/common/routes/tenants";
+import { tenantSelectionValue } from "@/domain/tenant";
+import type { TenantViewModel } from "@/features/tenants/viewTypes";
 import { catalogMarksInspection, useNarrowLayout } from "@/shared/hooks/useNarrowLayout";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { abbreviateTenantHome } from "@/shared/lib/hostHome";
@@ -13,7 +15,7 @@ import { IconButton } from "@/shared/ui/IconButton";
 import { Loading } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/tenants/TenantPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const HostTenantIcon = resourceIcons.hostTenant;
@@ -92,7 +94,7 @@ export function TenantCatalogPane({
                 // Catalog order, so the dialog reads against the list beside it.
                 requestTenantDelete(
                   managedTenants
-                    .filter((row) => selectedKeys.has(tenantSelectionValueOf(row)))
+                    .filter((row) => selectedKeys.has(tenantSelectionValue(row)))
                     .map((row) => row.name),
                 )
               }
@@ -142,6 +144,9 @@ export function TenantCatalogPane({
           <div className={layout.rowGroup}>
             {hostTenant && (
               <div
+                data-inspected={inspectedKey === "host" ? "true" : undefined}
+                data-selected="false"
+                data-selection-mode={selectionMode ? "true" : undefined}
                 className={`${layout.row} ${styles.tenantRow} ${inspectedKey === "host" ? layout.rowInspected : ""} ${selectionMode ? `${layout.rowSelectable} ${layout.rowProtected}` : ""}`}
               >
                 <button
@@ -207,13 +212,16 @@ export function TenantCatalogPane({
               </IconButton>
             </div>
             {managedTenants.map((row) => {
-              const key = tenantSelectionValueOf(row);
+              const key = tenantSelectionValue(row);
               const isDefault = row.name === "default";
               const selectedForInspection = key === inspectedKey;
               const selectedForDeletion = selectedKeys.has(key);
               return (
                 <div
                   key={key}
+                  data-inspected={selectedForInspection ? "true" : undefined}
+                  data-selected={selectedForDeletion ? "true" : undefined}
+                  data-selection-mode={selectionMode ? "true" : undefined}
                   className={`${layout.row} ${styles.tenantRow} ${selectedForInspection ? layout.rowInspected : ""} ${selectedForDeletion ? layout.rowSelected : ""} ${selectionMode ? `${layout.rowSelectable} ${isDefault ? layout.rowProtected : ""}` : ""}`}
                 >
                   <button
@@ -281,6 +289,7 @@ export function TenantCatalogPane({
                       </IconButton>
                       {!isDefault && (
                         <IconButton
+                          data-row-action="delete"
                           className={`${layout.rowAction} ${layout.rowDeleteAction}`}
                           tone="dangerQuiet"
                           label={`Delete Tenant ${row.display_name}`}

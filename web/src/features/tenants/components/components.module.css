@@ -1,0 +1,241 @@
+.componentRow button:not([data-refresh-button]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.componentCatalog,
+.componentCatalogSkeleton {
+  display: grid;
+  gap: var(--space-section);
+}
+
+.componentGroup {
+  min-width: 0;
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.componentGroupHeader {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 8px 18px;
+  background: var(--surface-inset);
+  border-bottom: 1px solid var(--line-structural);
+}
+
+.componentGroupHeader::after {
+  display: none;
+}
+
+.componentGroupHeader h3 {
+  margin: 0;
+  color: var(--ink-section-title);
+  font-size: var(--text-section-title);
+  font-weight: var(--weight-section-title);
+  line-height: var(--line-height-section-title);
+}
+
+.componentGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+@container (max-width: 580px) {
+  .componentGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.componentCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 120px;
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+  position: relative;
+  overflow: hidden;
+}
+
+.componentCard:hover {
+  border-color: var(--line-content);
+  box-shadow: var(--shadow-md);
+}
+
+.componentCard[data-attention="true"] {
+  background: var(--warning-soft);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.componentCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.componentHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.componentHeaderLeft .componentIconTile {
+  flex-shrink: 0;
+}
+
+.componentHeaderLeft .componentIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.componentHeaderLeft .componentIdentity strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.componentCardFooter {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  margin-top: auto;
+}
+
+.componentRow {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "icon content actions"
+    ". diagnostic diagnostic";
+  align-items: center;
+  gap: 0 14px;
+  min-height: 58px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line-structural);
+  background: var(--surface);
+  transition:
+    background-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.componentRow:hover {
+  background: var(--surface-hover);
+}
+
+.componentRow:active {
+  background: var(--surface-pressed);
+}
+
+.componentRow:last-child {
+  border-bottom: 0;
+}
+
+.componentRow[data-attention="true"] {
+  background: var(--warning-soft);
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.componentIdentity,
+.componentMetadata {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.componentIdentity {
+  text-align: left;
+}
+
+.componentIconTile {
+  display: grid;
+  grid-area: icon;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-structural);
+  color: var(--ink-secondary);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.componentRow:hover .componentIconTile {
+  border-color: var(--line-content);
+}
+
+.componentIdentity strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.componentMetadata {
+  min-height: var(--line-height-xs);
+  gap: 7px;
+  overflow: hidden;
+}
+
+.componentRemoveButton {
+  opacity: 0.45;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.componentCard:hover .componentRemoveButton,
+.componentCard:focus-within .componentRemoveButton,
+.componentRow:hover .componentRemoveButton,
+.componentRow:focus-within .componentRemoveButton {
+  opacity: 0.75;
+}
+
+.componentRemoveButton:hover,
+.componentRemoveButton:focus-visible {
+  opacity: 1;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (pointer: coarse) {
+  .componentRemoveButton {
+    opacity: 0.7;
+  }
+}

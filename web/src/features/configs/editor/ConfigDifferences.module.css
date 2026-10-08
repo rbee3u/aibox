@@ -1,0 +1,273 @@
+.comparisonStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 16px 4px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-content);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+  align-self: flex-start;
+}
+
+.comparisonStatus svg {
+  flex-shrink: 0;
+}
+
+.comparisonClean {
+  color: var(--ink-secondary);
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line-content));
+}
+
+.comparisonClean svg {
+  color: var(--success);
+}
+
+.comparisonError {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--line-content));
+}
+
+.fileDifferences {
+  margin: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--ink);
+  padding: 10px 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fileDifferencesSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--warning);
+  cursor: pointer;
+  user-select: none;
+}
+
+.fileDifferencesSummary:hover {
+  color: var(--ink);
+}
+
+.differenceList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--warning-line) 50%, transparent);
+}
+
+.differenceCard {
+  border: 1px solid color-mix(in srgb, var(--warning-line) 60%, var(--line-content));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.differenceCardSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warning-soft) 50%, var(--surface));
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.differencePathBadge {
+  display: inline-flex;
+  align-items: center;
+}
+
+.differencePathBadge code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+  background: var(--surface-inset);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+}
+
+.differenceCardBody {
+  padding: 10px 14px;
+}
+
+.differenceValues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.revealDiffButton {
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  cursor: pointer;
+}
+
+.revealDiffButton:hover {
+  color: var(--ink);
+  border-color: var(--line-control);
+}
+
+.differenceCompareGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@container (max-width: 580px) {
+  .differenceCompareGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.differenceSide {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.differenceSideHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+}
+
+.differenceBadgeNamed,
+.differenceBadgeCurrent {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.differenceBadgeNamed {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.differenceBadgeCurrent {
+  background: var(--surface-inset);
+  color: var(--muted);
+  border: 1px solid var(--line-soft);
+}
+
+.differenceSourceName {
+  color: var(--ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.differenceCodeBlock {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--code-text);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+}
+
+.differenceAbsent {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.differenceCardActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.locateRawButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--ink-secondary);
+  background: var(--surface);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.locateRawButton:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.fieldDifference {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-inline-start: 2px solid var(--warning-line);
+  padding: var(--space-md) var(--space-xl);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  grid-column: 1 / -1;
+}
+
+.fieldDifference summary {
+  cursor: pointer;
+}
+.differenceCount {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.differenceCount:hover {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning-soft) 80%, var(--surface));
+}
+
+.differenceCount:active {
+  background: var(--surface-pressed);
+}

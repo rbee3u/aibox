@@ -25,7 +25,7 @@ use target::{
 use crate::foundation::sync::lock_unpoisoned;
 use crate::request::RequestProxyState;
 use crate::request::interpretation::ProtocolObserver;
-use crate::request::model::{ErrorKind, Outcome, RequestMetadata};
+use crate::request::model::{ErrorKind, RequestMetadata, RequestOutcome};
 use crate::request::store::{ObservedRequest, RuntimeMeasurements};
 use axum::body::Body;
 use axum::http::request::Parts;
@@ -237,7 +237,7 @@ fn retry_connection_failure(
             message,
         ),
     };
-    finish_proxy_response(guard, status, &message, Outcome::UpstreamError, kind)
+    finish_proxy_response(guard, status, &message, RequestOutcome::UpstreamError, kind)
 }
 
 fn shutdown_response(guard: &mut RequestAttempt) -> Response<Body> {
@@ -245,7 +245,7 @@ fn shutdown_response(guard: &mut RequestAttempt) -> Response<Body> {
         guard,
         StatusCode::SERVICE_UNAVAILABLE,
         "AIBox Request Proxy is shutting down",
-        Outcome::ServerShutdown,
+        RequestOutcome::ServerShutdown,
         ErrorKind::ServerShutdown,
     )
 }

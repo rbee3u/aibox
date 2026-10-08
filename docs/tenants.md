@@ -14,15 +14,16 @@ The **Host Tenant** is a separate Console view backed by the real Host Home. It
 can manage host Configs, Sessions, and statuslines, but cannot Run or Debug and
 never appears in Managed Tenant listing or deletion.
 
-After acquiring `$AIBOX_ROOT/.service.lock`, `aibox console` creates or repairs
-the Default Tenant baseline and fails before listening if that cannot be done
-safely. A validated Run or Debug Shell may initialize another missing Managed
-Tenant after Runtime Image preflight even if Docker or the invoked process then
-fails.
+`aibox console` holds `$AIBOX_ROOT/.service.lock` to exclude another Service on
+the same Root. It creates or repairs the Default Tenant baseline before
+listening and fails if that cannot be done safely. A validated Run or Debug
+Shell may initialize another missing Managed Tenant after Runtime Image
+preflight even if Docker or the invoked process then fails.
 
 Managed Tenant names are lowercase DNS labels of 1–63 characters. New managed
 directories use `0700`; existing Host Home modes never change. Interrupted
-lifecycle staging is recoverable, but separate processes are not coordinated.
+lifecycle staging is recoverable. The Service lock does not serialize Run,
+Debug Shell, or external filesystem changes.
 `AIBOX_ROOT` defaults to `$HOME/.aibox` and must be dedicated to AIBox.
 
 Tenant initialization creates a missing `.gitconfig` with GitHub SSH-to-HTTPS
@@ -60,9 +61,9 @@ starting Docker:
 
 Canonical UUIDs display their final 12 hexadecimal characters. A full id or
 unique suffix selects one Transcript; duplicate or ambiguous suffixes fail.
-List rows use the newest timestamp and available native title or first readable
-message. Transcripts without readable conversation remain visible and
-deletable.
+List rows sort by Session start time, newest first, and use the latest native
+title or first readable user message. Transcripts without readable conversation
+remain visible and deletable.
 
 Detail streams a best-effort projection in native order. User and assistant
 text becomes Conversation Messages; function and custom tool records become
@@ -70,9 +71,10 @@ Tool Activity; unsupported, injected, system, malformed, and diagnostic records
 remain Transcript Evidence or warnings. Internal reasoning text is not
 exposed.
 
-Malformed JSONL and unsupported user-like records warn and make listing or
-detail nonzero without hiding otherwise readable Transcripts. Missing Managed
-Tenant state returns an empty read-only view and creates nothing.
+Malformed JSONL and unsupported user-like records produce warnings; listing
+marks the result partial without hiding readable Transcripts. Detail streams
+readable records and reports warnings on completion. Missing Managed Tenant
+state returns an empty read-only view and creates nothing.
 
 Container-writable paths are untrusted. Listing may return safe rows alongside
 traversal warnings, but detail and deletion fail on a partial filesystem view
@@ -151,7 +153,3 @@ its HOME-local path, while a nonempty value selects its custom directory.
 AIBox creates no environment file and modifies no profile. Debug enters Bash
 in `/home/aibox` without rereading profiles or rc files and mounts no Workspace
 or Extra Mount. Environment changes do not hot-reload into active containers.
-
-One AIBox process supports only one active Run, Debug Shell, or Component
-installation. Config edits and applications commit one file at a time without
-rollback; see [Configs](configs.md).

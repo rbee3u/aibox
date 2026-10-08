@@ -1,34 +1,14 @@
-//! Agent-specific runtime and configuration contracts.
-//!
-//! [`AgentKind`] centralizes matches that define shared runtime and Config
-//! contracts for the closed Agent set. Domain-owned behavior matches the Agent
-//! in its owning module. Each Agent's Config Field table and templates live in
-//! its own module.
-//!
-//! Shared orchestration asks [`AgentKind`] for paths, Named Config files, and
-//! command construction. Transcript parsing remains in the two Session backend
-//! modules because the Agents use different on-disk formats.
+//! Shared Agent paths, Config files, templates, and invocation through [`AgentKind`].
+//! Each Agent module owns its Config Field table and templates; native Transcript
+//! parsing belongs to Session backends.
 
 mod claude;
 mod codex;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::Path;
-
-/// Native executable and opaque arguments for one Agent launch.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AgentInvocation {
-    command: Vec<OsString>,
-}
-
-impl AgentInvocation {
-    /// Return the native command before Tenant Environment composition.
-    pub(crate) fn command(&self) -> &[OsString] {
-        &self.command
-    }
-}
 
 /// Primitive value accepted by one fixed main-configuration Config Field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,8 +40,6 @@ pub(crate) struct MainConfigField {
     pub(crate) required_for_custom_provider: bool,
     pub(crate) request_proxy_route: bool,
 }
-
-const NO_ENUM_VALUES: &[&str] = &[];
 
 /// Agent identity used across execution and management domains.
 #[derive(
@@ -163,10 +141,10 @@ impl AgentKind {
             Self::Codex => toml_edit::de::from_str::<Value>(content)?,
             Self::Claude => serde_json::from_str::<Value>(content)?,
         };
-        value
-            .as_object()
-            .cloned()
-            .with_context(|| format!("{} main configuration must be an object", self.tag()))
+        match value {
+            Value::Object(object) => Ok(object),
+            _ => anyhow::bail!("{} main configuration must be an object", self.tag()),
+        }
     }
 
     /// Render a JSON object in the Agent's native main format.
@@ -182,10 +160,10 @@ impl AgentKind {
 
     /// Build the native Agent invocation without Tenant Environment
     /// wrapping or Named Config data.
-    pub(crate) fn invocation(self, home: &Path, passthrough: &[OsString]) -> AgentInvocation {
+    pub(crate) fn invocation(self, home: &Path, passthrough: &[OsString]) -> Vec<OsString> {
         let mut command = vec![home.join(".local/bin").join(self.tag()).into_os_string()];
         command.extend(passthrough.iter().cloned());
-        AgentInvocation { command }
+        command
     }
 }
 

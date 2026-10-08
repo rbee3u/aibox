@@ -10,11 +10,7 @@
   box-shadow: none;
 }
 
-/*
- * An icon control riding inside a line of text rather than sitting in its own
- * slot: a copy affordance beside a value, where the default step would set the
- * height of the line it sits in and break the rhythm of the rows around it.
- */
+/* Inline controls must not increase the surrounding text's line height. */
 .sm {
   width: var(--control-xs);
   height: var(--control-xs);
@@ -35,11 +31,7 @@
 }
 
 /*
- * The coarse-pointer floor is stated last, and inside this stylesheet, so it
- * outranks both size steps by source order. A call site reaching for a smaller
- * control therefore cannot take a touch target below the minimum with it: doing
- * that from a feature stylesheet is how the Session copy control ended up at
- * 24px on touch.
+ * Keep this after size rules so small controls retain the touch-target minimum.
  */
 @media (pointer: coarse) {
   .button,

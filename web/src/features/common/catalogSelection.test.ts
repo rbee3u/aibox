@@ -5,6 +5,7 @@ import {
   catalogSelectionReducer,
   initialCatalogSelection,
   type CatalogSelectionState,
+  type CatalogSelectionAction,
 } from "@/features/common/catalogSelection";
 
 type State = CatalogSelectionState<string>;
@@ -71,35 +72,30 @@ describe("catalog selection", () => {
     expect(cancelled).toEqual(initial());
   });
 
-  it("resumes a selection that survived a partial mutation", () => {
-    const recovered = reduce({
-      type: "selection_recovered",
-      remaining: new Set(["survivor"]),
+  it.each([
+    {
+      name: "resumes a surviving selection",
+      remaining: ["survivor"],
       resume: true,
-    });
-
-    expect(recovered.selectionMode).toBe(true);
-    expect([...recovered.selectedKeys]).toEqual(["survivor"]);
-  });
-
-  it("leaves selection mode when nothing survived, so no empty selection bar remains", () => {
-    const recovered = reduce({
-      type: "selection_recovered",
-      remaining: new Set(),
-      resume: true,
-    });
-
-    expect(recovered).toEqual(initial());
-  });
-
-  it("discards the remainder when the caller does not resume", () => {
-    const recovered = reduce({
-      type: "selection_recovered",
-      remaining: new Set(["ignored"]),
+      selected: ["survivor"],
+    },
+    { name: "exits when nothing survived", remaining: [], resume: true, selected: [] },
+    {
+      name: "discards the remainder without resume",
+      remaining: ["ignored"],
       resume: false,
-    });
+      selected: [],
+    },
+  ])("$name after a partial mutation", ({ remaining, resume, selected }) => {
+    const recovered = reduce(
+      { type: "selection_enter" },
+      { type: "selection_toggle", key: "original" },
+      { type: "selection_recovered", remaining: new Set(remaining), resume },
+    );
 
-    expect(recovered).toEqual(initial());
+    expect(recovered.selectedKeys).toEqual(new Set(selected));
+    expect(recovered.selectionMode).toBe(selected.length > 0);
+    expect(recovered.selectionContexts.size).toBe(0);
   });
 
   it("reports all-selected only for a nonempty fully selected list", () => {
@@ -194,5 +190,53 @@ describe("catalog selection context", () => {
 
     expect([...recovered.selectedKeys]).toEqual(["kept"]);
     expect(recovered.selectionContexts.get("kept")).toBe(4);
+  });
+
+  it("preserves snapshots and selection context through bounded action sequences", () => {
+    // Two overlapping pages and three steps cover select → overlap → remove/recover,
+    // including actions repeated without a mode transition. Keep the alphabet small
+    // and deterministic instead of reproducing the reducer in a second model.
+    const actions: CatalogSelectionAction<string, number>[] = [
+      { type: "selection_enter" },
+      { type: "selection_cancel" },
+      { type: "selection_toggle", key: "a", context: 1 },
+      { type: "selection_toggle", key: "b" },
+      { type: "selection_toggle_all", keys: ["a", "b"], clear: false, context: 2 },
+      { type: "selection_toggle_all", keys: ["a"], clear: true },
+      { type: "selection_prune", available: new Set(["b"]) },
+      { type: "selection_recovered", remaining: new Set(["b"]), resume: true },
+      { type: "selection_recovered", remaining: new Set(), resume: true },
+      { type: "selection_recovered", remaining: new Set(["a"]), resume: false },
+    ];
+    for (const first of actions) {
+      for (const second of actions) {
+        for (const third of actions) {
+          let state = initialCatalogSelection<string, number>();
+          const snapshots: { state: ContextState; value: ContextState }[] = [];
+          const sequence = [first, second, third];
+          const context = JSON.stringify(sequence, (_, value: unknown) =>
+            value instanceof Set ? [...value] : value,
+          );
+          for (const action of sequence) {
+            snapshots.push({ state, value: structuredClone(state) });
+            const next = catalogSelectionReducer(state, action);
+            expect(
+              [...next.selectionContexts.keys()].every((key) => next.selectedKeys.has(key)),
+              context,
+            ).toBe(true);
+            // A row that remains selected retains the page where it was first chosen.
+            for (const [key, page] of state.selectionContexts) {
+              if (next.selectedKeys.has(key)) {
+                expect(next.selectionContexts.get(key), context).toBe(page);
+              }
+            }
+            for (const snapshot of snapshots) {
+              expect(snapshot.state, context).toEqual(snapshot.value);
+            }
+            state = next;
+          }
+        }
+      }
+    }
   });
 });

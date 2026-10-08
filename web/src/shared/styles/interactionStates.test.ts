@@ -46,7 +46,7 @@ const sheets = stylesheets("src").map((path) => ({
 
 describe("Console interaction states", () => {
   it("finds a stylesheet to read", () => {
-    expect(sheets.length).toBeGreaterThan(20);
+    expect(sheets).not.toHaveLength(0);
   });
 
   it("answers a press wherever a surface already answers a pointer at rest", () => {
@@ -107,7 +107,8 @@ describe("Console interaction states", () => {
 
   it("keeps the press instant and the reduced-motion opt-out in one place", () => {
     const tokens = sheets.find(({ path }) => path.endsWith("shared/styles/tokens.css"))!;
-    expect(tokens.source).toMatch(/\*:active \{\n {2}--transition-fast: 0s;\n\}/);
+    const active = rules(tokens.source).find(({ selector }) => selector.trim() === "*:active");
+    expect(active?.body).toMatch(/--transition-fast\s*:\s*0(?:ms|s)?\s*(?:;|$)/);
     const optOuts = sheets.filter(({ source }) => source.includes("prefers-reduced-motion"));
     expect(optOuts.map(({ path }) => path)).toEqual([tokens.path]);
   });

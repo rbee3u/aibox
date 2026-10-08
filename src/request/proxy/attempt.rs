@@ -4,7 +4,7 @@ use super::capture::{RequestStreamContext, RequestStreamFailure, RequestTarget};
 use crate::foundation::sync::lock_unpoisoned;
 use crate::request::interpretation::{BodyContentCoding, ProtocolObserver};
 use crate::request::model::{
-    DiagnosticMetadata, ErrorKind, ErrorMetadata, Outcome, ProtocolSummary, RecordedHeader,
+    DiagnosticMetadata, ErrorKind, ErrorMetadata, ProtocolSummary, RecordedHeader, RequestOutcome,
     RetryMetadata, TimingMetadata,
 };
 use crate::request::reporter::RequestReporter;
@@ -18,7 +18,7 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub(super) struct RequestTerminal {
-    pub(super) outcome: Outcome,
+    pub(super) outcome: RequestOutcome,
     pub(super) error: Option<ErrorMetadata>,
 }
 
@@ -306,14 +306,13 @@ impl RequestAttempt {
                 return Ok(());
             }
         };
-        let observation =
-            match replay_complete_encoded_sse(file, coding, self.request.id.clone(), &at_ns) {
-                Ok(observation) => observation,
-                Err(error) => {
-                    self.add_warning("response_interpretation_failed", error.to_string());
-                    return Ok(());
-                }
-            };
+        let observation = match replay_complete_encoded_sse(file, coding, &at_ns) {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.add_warning("response_interpretation_failed", error.to_string());
+                return Ok(());
+            }
+        };
         if let Some(warning) = observation.warning {
             self.add_warning("response_interpretation_failed", warning);
         }
@@ -352,7 +351,7 @@ impl RequestAttempt {
 
     pub(super) fn finish(
         &mut self,
-        outcome: Outcome,
+        outcome: RequestOutcome,
         error: Option<ErrorMetadata>,
     ) -> anyhow::Result<()> {
         self.finish_terminal(RequestTerminal { outcome, error })
@@ -393,7 +392,7 @@ impl Drop for RequestAttempt {
             RequestAttemptState::Finished => return,
             RequestAttemptState::Finalizing(terminal) => terminal.clone(),
             RequestAttemptState::Active => RequestTerminal {
-                outcome: Outcome::ClientDisconnected,
+                outcome: RequestOutcome::ClientDisconnected,
                 error: Some(ErrorMetadata {
                     kind: ErrorKind::ClientDisconnected,
                     message: "client disconnected before the proxy attempt completed".to_string(),

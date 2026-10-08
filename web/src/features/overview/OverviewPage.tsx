@@ -1,8 +1,6 @@
 import { Container, Layers, Server } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import type { OverviewBrowsingMemory } from "@/features/overview/browsingState";
-import type { Operation } from "@/api/operations";
-import type { OverviewApi } from "@/api/overview";
+
 import { RuntimeStatus } from "@/features/overview/components/OverviewFacts";
 import { dockerTone, imageTone } from "@/features/overview/components/statusTone";
 import { RuntimeSection } from "@/features/overview/components/RuntimeSection";
@@ -11,19 +9,13 @@ import { AttentionPanel } from "@/features/overview/components/AttentionPanel";
 import { TenantStatusList } from "@/features/overview/components/TenantStatusList";
 import { OverviewKpis } from "@/features/overview/components/OverviewKpis";
 import { useOverviewController } from "@/features/overview/useOverviewController";
-import type { ConsoleNavigate } from "@/shared/lib/navigation";
+
 import { capitalize } from "@/shared/lib/format";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/overview/OverviewPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
+import type { OverviewPageProps } from "@/features/overview/viewTypes";
 
-interface OverviewPageProps {
-  browsingMemory?: OverviewBrowsingMemory;
-  api: OverviewApi;
-  operation: Operation | null;
-  onNavigate: ConsoleNavigate;
-  onOperation: (operation: Operation) => void;
-}
 export function OverviewPage(props: OverviewPageProps) {
   const [initialBrowsing] = useState(() => props.browsingMemory?.current ?? null);
   const restorePending = useRef(initialBrowsing !== null);
@@ -39,22 +31,31 @@ export function OverviewPage(props: OverviewPageProps) {
     elapsedUptime,
     requestsTotal,
   } = service;
-  const { tree, pageRef, topology, topologyError, topologyRefreshing, loadTopology } = resources;
+  const { tenants, pageRef, topology, topologyError, topologyRefreshing, loadTopology } = resources;
+  const hostCount = topology?.tenants.filter((tenant) => tenant.kind === "host").length ?? 0;
+  const managedCount = topology?.tenants.filter((tenant) => tenant.kind === "managed").length ?? 0;
+  const tenantSummary = topology
+    ? hostCount > 0
+      ? `${hostCount} Host · ${managedCount} Managed`
+      : `${managedCount} Managed Tenants`
+    : topologyError
+      ? "Resource inspection unavailable"
+      : "Loading resources";
 
   useLayoutEffect(() => {
-    if (!restorePending.current || !initialBrowsing || !tree || (!overview && !overviewError))
+    if (!restorePending.current || !initialBrowsing || !tenants || (!overview && !overviewError))
       return;
     if (pageRef.current) pageRef.current.scrollTop = initialBrowsing.scrollTop;
     restorePending.current = false;
-  }, [initialBrowsing, tree, overview, overviewError, pageRef]);
+  }, [initialBrowsing, tenants, overview, overviewError, pageRef]);
   useLayoutEffect(() => {
     const memory = props.browsingMemory;
     const page = pageRef.current;
-    if (!memory || !page || !tree) return;
+    if (!memory || !page || !tenants) return;
     return () => {
       if (!restorePending.current) memory.current = { scrollTop: page.scrollTop };
     };
-  }, [tree, pageRef, props.browsingMemory]);
+  }, [tenants, pageRef, props.browsingMemory]);
 
   return (
     <div ref={pageRef} className={styles.page} data-overview-scroll data-scroll-axis="vertical">
@@ -154,35 +155,19 @@ export function OverviewPage(props: OverviewPageProps) {
         <div className={styles.topologyHeading}>
           <div>
             <h2 id="topology-title">Tenants</h2>
-            <p>
-              {topology
-                ? (() => {
-                    const hostCount = topology.tenants.filter(
-                      (tenant) => tenant.kind === "host",
-                    ).length;
-                    const managedCount = topology.tenants.filter(
-                      (tenant) => tenant.kind === "managed",
-                    ).length;
-                    return hostCount > 0
-                      ? `${hostCount} Host · ${managedCount} Managed`
-                      : `${managedCount} Managed Tenants`;
-                  })()
-                : topologyError
-                  ? "Resource inspection unavailable"
-                  : "Loading resources"}
-            </p>
+            <p>{tenantSummary}</p>
           </div>
         </div>
-        {!tree && !topologyError && (
-          <p className={styles.treeLoading} role="status">
+        {!tenants && !topologyError && (
+          <p className={styles.catalogMessage} role="status">
             Inspecting Tenant state
           </p>
         )}
-        {tree &&
-          (tree.children.length ? (
-            <TenantStatusList root={tree} onNavigate={props.onNavigate} />
+        {tenants &&
+          (tenants.length ? (
+            <TenantStatusList tenants={tenants} onNavigate={props.onNavigate} />
           ) : (
-            <p className={styles.treeLoading}>No Tenants are currently reported.</p>
+            <p className={styles.catalogMessage}>No Tenants are currently reported.</p>
           ))}
       </section>
     </div>

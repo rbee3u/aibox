@@ -9,7 +9,7 @@ use crate::foundation::sync::lock_unpoisoned;
 use crate::request::interpretation::ProtocolObserver;
 #[cfg(test)]
 use crate::request::model::ProtocolSummary;
-use crate::request::model::{ErrorKind, Outcome, RecordedHeader, SummaryMetadata};
+use crate::request::model::{ErrorKind, RecordedHeader, RequestOutcome, SummaryMetadata};
 #[cfg(test)]
 use crate::request::store::RuntimeMeasurements;
 use crate::request::store::{SummaryHandle, offset_ns};
@@ -288,7 +288,7 @@ pub(super) async fn reject_with_body(
     shutdown: tokio_util::sync::CancellationToken,
     status: StatusCode,
     message: &str,
-    outcome: Outcome,
+    outcome: RequestOutcome,
     kind: ErrorKind,
 ) -> Response<Body> {
     let request_file = match guard.clone_request_body() {
@@ -304,7 +304,7 @@ pub(super) async fn reject_with_body(
                     guard,
                     StatusCode::SERVICE_UNAVAILABLE,
                     "AIBox Request Proxy is shutting down",
-                    Outcome::ServerShutdown,
+                    RequestOutcome::ServerShutdown,
                     ErrorKind::ServerShutdown,
                 );
             }
@@ -318,7 +318,7 @@ pub(super) async fn reject_with_body(
                     guard,
                     StatusCode::BAD_REQUEST,
                     &format!("read client request body: {error}"),
-                    Outcome::ClientDisconnected,
+                    RequestOutcome::ClientDisconnected,
                     ErrorKind::RequestBodyFailed,
                 );
             }

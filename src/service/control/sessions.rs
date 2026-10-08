@@ -1,10 +1,11 @@
 //! Session Control API handlers, wire queries, and NDJSON presentation.
 
 use super::{
-    AgentTenantQuery, ControlResult, default_agent, default_tenant_selection, json_response,
+    AgentTenantQuery, ControlResult, content, default_agent, default_tenant_selection,
+    json_response,
 };
 use crate::agent::AgentKind;
-use crate::service::coordination::{DeleteSessionsCommand, SessionCoordinator};
+use crate::management::DeleteSessionsCommand;
 use crate::service::state::ServiceState;
 use crate::session;
 use crate::tenant::TenantSelection;
@@ -12,7 +13,7 @@ use anyhow::{Context, Result};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{HeaderValue, Response, StatusCode, header};
+use axum::http::StatusCode;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,9 @@ pub(super) async fn list_sessions(
     Query(query): Query<AgentTenantQuery>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&query.tenant)?;
-    let data = SessionCoordinator::new(state)
+    let data = state
+        .management
+        .sessions
         .list(selection, query.agent)
         .await?;
     Ok(json_response(StatusCode::OK, &data))
@@ -35,7 +38,9 @@ pub(super) async fn session_summary(
     Query(query): Query<AgentTenantQuery>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&query.tenant)?;
-    let summary = SessionCoordinator::new(state)
+    let summary = state
+        .management
+        .sessions
         .summary(selection, query.agent)
         .await?;
     Ok(json_response(StatusCode::OK, &summary))
@@ -57,7 +62,7 @@ pub(super) async fn session_detail(
     Query(query): Query<SessionDetailQuery>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&query.tenant)?;
-    let access = SessionCoordinator::new(state).access(selection, query.agent)?;
+    let access = state.management.sessions.access(selection, query.agent)?;
     let agent = query.agent;
     let id = query.id;
     let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(8);
@@ -65,40 +70,36 @@ pub(super) async fn session_detail(
         let result = access.stream_detail(
             &id,
             &mut |meta| send_ndjson(&sender, &SessionDetailFrame::Meta { meta: meta.clone() }),
-            &mut |record| match record {
-                session::DetailRecord::Message(message) => {
-                    send_ndjson(&sender, &SessionDetailFrame::Message { message })
-                }
-                session::DetailRecord::Tool(tool_activity) => {
-                    send_ndjson(&sender, &SessionDetailFrame::ToolActivity { tool_activity })
-                }
-                session::DetailRecord::Evidence(evidence) => {
-                    send_ndjson(&sender, &SessionDetailFrame::Evidence { evidence })
-                }
+            &mut |record| {
+                let frame = match record {
+                    session::DetailRecord::Message(message) => {
+                        SessionDetailFrame::Message { message }
+                    }
+                    session::DetailRecord::Tool(tool_activity) => {
+                        SessionDetailFrame::ToolActivity { tool_activity }
+                    }
+                    session::DetailRecord::Evidence(evidence) => {
+                        SessionDetailFrame::Evidence { evidence }
+                    }
+                };
+                send_ndjson(&sender, &frame)
             },
         );
-        match result {
-            Ok((_meta, stats, warnings)) => {
-                let _ = send_ndjson(&sender, &SessionDetailFrame::Complete { stats, warnings });
-            }
-            Err(error) => {
-                let _ = send_ndjson(
-                    &sender,
-                    &SessionDetailFrame::Error {
-                        agent,
-                        error: format!("{error:#}"),
-                    },
-                );
-            }
-        }
+        let frame = match result {
+            Ok((_meta, stats, warnings)) => SessionDetailFrame::Complete { stats, warnings },
+            Err(error) => SessionDetailFrame::Error {
+                agent,
+                error: format!("{error:#}"),
+            },
+        };
+        let _ = send_ndjson(&sender, &frame);
     });
     let stream = ReceiverStream::new(receiver).map(Ok::<Bytes, Infallible>);
-    let mut response = Response::new(Body::from_stream(stream));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-    );
-    Ok(response)
+    Ok(content(
+        StatusCode::OK,
+        "application/x-ndjson; charset=utf-8",
+        Body::from_stream(stream),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -119,7 +120,9 @@ pub(super) async fn session_evidence(
     Query(query): Query<SessionEvidenceQuery>,
 ) -> ControlResult {
     let selection = TenantSelection::parse(&query.tenant)?;
-    let evidence = SessionCoordinator::new(state)
+    let evidence = state
+        .management
+        .sessions
         .evidence(
             selection,
             query.agent,
@@ -183,13 +186,13 @@ pub(super) async fn delete_sessions(
     Json(request): Json<DeleteSessionsRequest>,
 ) -> ControlResult {
     let command = DeleteSessionsCommand {
-        tenant: request.tenant,
+        tenant: TenantSelection::parse(&request.tenant)?,
         agent: request.agent,
         ids: request.ids,
         all: request.all,
         confirmation: request.confirmation,
     };
-    let deleted = SessionCoordinator::new(state).delete(command).await?;
+    let deleted = state.management.sessions.delete(command).await?;
     Ok(json_response(
         StatusCode::OK,
         &DeletedSessionsResponse { deleted },

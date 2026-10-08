@@ -1,3 +1,5 @@
+import styles from "@/features/configs/mutation/ConfigDialogs.module.css";
+import sharedStyles from "@/features/configs/shared.module.css";
 import { AlertTriangle, ArrowRight, Check, LoaderCircle } from "lucide-react";
 
 import {
@@ -7,8 +9,8 @@ import {
   propagationGroups,
   propagationStatus,
 } from "@/features/configs/configCatalog";
-import type { ConfigPendingAction } from "@/features/configs/route";
-import type { ConfigViewModel } from "@/features/configs/useConfigController";
+import type { ConfigPendingAction } from "@/features/configs/configWorkflow";
+import type { ConfigViewModel } from "@/features/configs/viewTypes";
 import { ActionButton } from "@/shared/ui/ActionButton";
 import { ConfirmDialog, ContextPill } from "@/shared/ui/ConfirmDialog";
 import { Dialog } from "@/shared/ui/Dialog";
@@ -16,10 +18,11 @@ import { TextInput } from "@/shared/ui/FormControls";
 import { AlertBanner } from "@/shared/ui/SurfacePrimitives";
 import { StatusBadge } from "@/shared/ui/StatusBadge";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/configs/ConfigPage.module.css";
+
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
+import { agentLabel } from "@/shared/lib/format";
 
 const NamedConfigIcon = resourceIcons.namedConfig;
 const HostTenantIcon = resourceIcons.hostTenant;
@@ -176,7 +179,7 @@ export function ConfigDialogs({
           <section>
             <h2 id={unsavedTitleId}>{pendingCopy.title}</h2>
             <p>{pendingCopy.body}</p>
-            <div className={styles.dialogActions}>
+            <div className={sharedStyles.dialogActions}>
               <ActionButton type="button" tone="secondary" onClick={cancelPending} disabled={busy}>
                 Cancel
               </ActionButton>
@@ -221,8 +224,7 @@ export function ConfigDialogs({
                   Create Named Config
                 </h2>
                 <p className={styles.dialogSubtitle}>
-                  Create a reusable configuration profile template for{" "}
-                  {agent === "codex" ? "Codex" : "Claude"}.
+                  Create a reusable configuration profile template for {agentLabel(agent)}.
                 </p>
               </div>
             </div>
@@ -276,7 +278,7 @@ export function ConfigDialogs({
                 {createError}
               </AlertBanner>
             )}
-            <div className={styles.dialogActions}>
+            <div className={sharedStyles.dialogActions}>
               <ActionButton
                 type="button"
                 tone="secondary"
@@ -310,7 +312,7 @@ export function ConfigDialogs({
             <ApplyConfigDescription
               tenantLabel={configTenantLabel}
               isHost={tenant.kind === "host"}
-              agentLabel={agent === "codex" ? "Codex" : "Claude"}
+              agentLabel={agentLabel(agent)}
               sourceName={applyTarget.name}
             />
           }
@@ -341,7 +343,7 @@ export function ConfigDialogs({
               <ContextPill
                 icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
                 label="Agent"
-                value={agent === "codex" ? "Codex" : "Claude"}
+                value={agentLabel(agent)}
               />
             </>
           }
@@ -371,7 +373,7 @@ export function ConfigDialogs({
               <ContextPill
                 icon={<BrandIcon brand={brandForAgent(agent)} size={iconSize.xs} />}
                 label="Agent"
-                value={agent === "codex" ? "Codex" : "Claude"}
+                value={agentLabel(agent)}
               />
             </>
           }
@@ -459,7 +461,7 @@ export function ConfigDialogs({
                 <p>No matching credentials.</p>
               )}
             </div>
-            <div className={styles.dialogActions}>
+            <div className={sharedStyles.dialogActions}>
               <ActionButton type="button" tone="secondary" onClick={closePropagation}>
                 Close
               </ActionButton>

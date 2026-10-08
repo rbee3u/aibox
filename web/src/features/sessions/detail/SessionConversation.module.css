@@ -1,0 +1,146 @@
+.promptEmptyState {
+  min-height: 100%;
+}
+
+.sessionConversationLayout {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: 48px minmax(0, 1fr);
+  background: var(--bg-canvas);
+}
+
+.sessionConversationWarning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  text-align: left;
+  font-size: var(--text-xs);
+}
+
+.sessionConversationWarning span:nth-of-type(2) {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.jumpLatest {
+  position: sticky;
+  right: 20px;
+  bottom: 18px;
+  display: grid;
+  margin: -50px 20px 18px auto;
+  border-color: var(--line-control-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.sessionMessageAssistant {
+  align-self: flex-start;
+  border: 1px solid var(--line-structural);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  transition: box-shadow var(--transition-fast);
+}
+
+.sessionMessageAssistant:hover {
+  box-shadow: var(--shadow-sm);
+}
+.sessionMessageUser {
+  width: min(100%, calc(var(--measure-text) * 0.84));
+  align-self: flex-end;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line-structural));
+  border-radius: var(--radius-lg);
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+.sessionNotice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.sessionNotice svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.sessionNotice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sessionNotice time {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionNoticeError {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionNoticeMuted {
+  color: var(--muted);
+}
+
+.sessionMessageUser header {
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.sessionMessageSender {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessionMessageAvatar {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.sessionMessageUser .sessionMessageAvatar {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+}
+
+@media (max-width: 760px) {
+  .sessionConversationLayout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sessionMessageUser {
+    width: min(92%, 720px);
+  }
+
+  .sessionConversationWarning {
+    align-items: flex-start;
+  }
+
+  .sessionConversationWarning span:nth-of-type(2) {
+    white-space: nowrap;
+  }
+}

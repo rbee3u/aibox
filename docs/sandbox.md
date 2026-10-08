@@ -50,8 +50,7 @@ selected Tenant Home at `/home/aibox`, mounts the Workspace at
 comes from the resolved Workspace source, so symlink aliases use the real
 directory name. A filesystem root such as `/` cannot be a Workspace because
 it has no directory name. Different host directories with the same name share
-the same container path. Existing Agent state stored for `/workspace` stays
-where it is; AIBox does not migrate it.
+the same container path.
 
 A Debug Shell uses the same disposable image and security flags but mounts only
 the selected Tenant Home. Component installation does the same. Both retain
@@ -82,8 +81,7 @@ Docker for leftovers after such an event.
 
 Ordinary completion propagates the Docker, shell, or Agent exit status. If the
 Docker client reports success but leaves a live or uninspectable container that
-AIBox must kill, AIBox returns failure. One process supports only one active
-Run, Debug Shell, or Component installation.
+AIBox must kill, AIBox returns failure.
 
 See [Requests and Request Proxy](requests.md) for host-side proxy routing,
 recording, and diagnostics.

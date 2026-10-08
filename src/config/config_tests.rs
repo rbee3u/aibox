@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::AgentKind;
+use crate::application_error::{ApplicationError, ApplicationErrorKind};
 use crate::config::visual::inspect_visual_config;
 use crate::tenant::{ManagedTenant, Tenant, TenantAgent};
 use serde_json::{Value, json};
@@ -26,12 +27,12 @@ fn config_name(value: &str) -> NamedConfigName {
 }
 
 fn named_config_dir(selected: &TenantAgent, name: &str) -> std::path::PathBuf {
-    layout::named_config_dir(selected, &config_name(name))
+    storage::named_config_dir(selected, &config_name(name))
 }
 
 fn named_config_file(selected: &TenantAgent, name: &str, file: &str) -> std::path::PathBuf {
     let file = ConfigFile::parse(selected.agent(), file).unwrap();
-    layout::named_config_file(selected, &config_name(name), file)
+    storage::named_config_file(selected, &config_name(name), file)
 }
 
 #[cfg(unix)]
@@ -56,7 +57,7 @@ fn named_and_new_current_configs_use_private_permissions_for_every_agent() {
             "{agent:?}"
         );
         assert_eq!(
-            mode(&layout::named_config_dir(&selected, &name)),
+            mode(&storage::named_config_dir(&selected, &name)),
             0o700,
             "{agent:?}"
         );
@@ -67,16 +68,21 @@ fn named_and_new_current_configs_use_private_permissions_for_every_agent() {
                 "{agent:?}:{file}"
             );
 
-            let before = read_config_file(&selected, None, true, file).unwrap();
-            save_config_file(
+            let before = read_config_file_target(
                 &selected,
-                None,
-                true,
-                file,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
+            )
+            .unwrap();
+            save_config_file_target(
+                &selected,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
                 &before.revision,
-                format!("current {}:{file}", agent.tag()).as_bytes(),
-                None,
-                None,
+                ConfigEdit::Raw {
+                    content: format!("current {}:{file}", agent.tag()).into_bytes(),
+                    custom_provider: None,
+                },
             )
             .unwrap();
             assert_eq!(mode(&selected.state_file(file)), 0o600, "{agent:?}:{file}");
@@ -97,31 +103,41 @@ fn current_config_edits_and_application_preserve_existing_file_modes() {
         create_named_config(&selected, &name).unwrap();
 
         for file in agent.config_files() {
-            let before = read_config_file(&selected, None, true, file).unwrap();
-            save_config_file(
+            let before = read_config_file_target(
                 &selected,
-                None,
-                true,
-                file,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
+            )
+            .unwrap();
+            save_config_file_target(
+                &selected,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
                 &before.revision,
-                b"initial current bytes",
-                None,
-                None,
+                ConfigEdit::Raw {
+                    content: b"initial current bytes".to_vec(),
+                    custom_provider: None,
+                },
             )
             .unwrap();
             let path = selected.state_file(file);
             fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
 
-            let revealed = read_config_file(&selected, None, true, file).unwrap();
-            save_config_file(
+            let revealed = read_config_file_target(
                 &selected,
-                None,
-                true,
-                file,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
+            )
+            .unwrap();
+            save_config_file_target(
+                &selected,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
                 &revealed.revision,
-                b"edited current bytes",
-                None,
-                None,
+                ConfigEdit::Raw {
+                    content: b"edited current bytes".to_vec(),
+                    custom_provider: None,
+                },
             )
             .unwrap();
             assert_eq!(mode(&path), 0o640, "direct edit {agent:?}:{file}");
@@ -157,16 +173,21 @@ fn host_current_config_initialization_does_not_change_host_home_mode() {
     for agent in AgentKind::ALL {
         let selected = host.for_agent(agent);
         for file in agent.config_files() {
-            let before = read_config_file(&selected, None, true, file).unwrap();
-            save_config_file(
+            let before = read_config_file_target(
                 &selected,
-                None,
-                true,
-                file,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
+            )
+            .unwrap();
+            save_config_file_target(
+                &selected,
+                &ConfigTarget::Current,
+                ConfigFile::parse(selected.agent(), file).unwrap(),
                 &before.revision,
-                b"host current bytes",
-                None,
-                None,
+                ConfigEdit::Raw {
+                    content: b"host current bytes".to_vec(),
+                    custom_provider: None,
+                },
             )
             .unwrap();
             assert_eq!(mode(&selected.state_file(file)), 0o600, "{agent:?}:{file}");
@@ -247,40 +268,58 @@ fn named_config_catalog_rejects_unsupported_provider_shapes() {
 }
 
 #[test]
-fn config_file_reads_and_saves_use_revisions_and_native_validation() {
+fn stale_config_saves_cannot_overwrite_a_newer_revision() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Claude);
     create_named_config(&selected, &config_name("custom")).unwrap();
-    let before = read_config_file(&selected, Some("custom"), false, "settings.json").unwrap();
-    assert!(before.exists);
-    let after = save_config_file(
+    let before = read_config_file_target(
         &selected,
-        Some("custom"),
-        false,
-        "settings.json",
-        &before.revision,
-        br#"{"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"token"},"permissions":{"defaultMode":"bypassPermissions"}}"#,
-        None,
-        None,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
     )
     .unwrap();
-    assert!(
-        after
-            .content
-            .windows(b"token".len())
-            .any(|window| window == b"token")
-    );
-    let stale = save_config_file(
+    assert!(before.exists);
+    let content = br#"{"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"token"},"permissions":{"defaultMode":"bypassPermissions"}}"#;
+    let after = save_config_file_target(
         &selected,
-        Some("custom"),
-        false,
-        "settings.json",
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
         &before.revision,
-        b"{}",
-        None,
-        None,
+        ConfigEdit::Raw {
+            content: content.to_vec(),
+            custom_provider: None,
+        },
+    )
+    .unwrap()
+    .snapshot;
+    assert_eq!(after.content, content);
+    assert_ne!(after.revision, before.revision);
+    // The original template is valid, so only revision protection can reject
+    // this attempted overwrite; invalid content would hide a missing guard.
+    let stale = save_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
+        &before.revision,
+        ConfigEdit::Raw {
+            content: before.content.clone(),
+            custom_provider: None,
+        },
+    )
+    .err()
+    .expect("invalid save must fail");
+    assert_eq!(
+        ApplicationError::kind(&stale),
+        Some(ApplicationErrorKind::Conflict)
     );
-    assert!(stale.is_err());
+    let persisted = read_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
+    )
+    .unwrap();
+    assert_eq!(persisted.content, after.content);
+    assert_eq!(persisted.revision, after.revision);
 }
 
 #[test]
@@ -288,24 +327,35 @@ fn named_config_main_save_rejects_missing_required_fields_before_write() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, &config_name("custom")).unwrap();
-    let before = read_config_file(&selected, Some("custom"), false, "config.toml").unwrap();
-    let error = save_config_file(
+    let before = read_config_file_target(
         &selected,
-        Some("custom"),
-        false,
-        "config.toml",
-        &before.revision,
-        b"model = \"gpt-test\"\napproval_policy = \"never\"\n",
-        None,
-        None,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
     )
-    .unwrap_err();
+    .unwrap();
+    let error = save_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
+        &before.revision,
+        ConfigEdit::Raw {
+            content: b"model = \"gpt-test\"\napproval_policy = \"never\"\n".to_vec(),
+            custom_provider: None,
+        },
+    )
+    .err()
+    .expect("invalid save must fail");
     let error_text = format!("{error:#}");
     assert!(
         error_text.contains("required Config Field sandbox_mode is missing"),
         "{error_text}"
     );
-    let after = read_config_file(&selected, Some("custom"), false, "config.toml").unwrap();
+    let after = read_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
+    )
+    .unwrap();
     assert_eq!(after.content, before.content);
     assert_eq!(after.revision, before.revision);
 }
@@ -316,27 +366,30 @@ fn visual_custom_provider_save_materializes_missing_auth_placeholder() {
     let selected = selected(root.path(), AgentKind::Codex);
     create_named_config(&selected, &config_name("custom")).unwrap();
     fs::remove_file(named_config_file(&selected, "custom", "auth.json")).unwrap();
-    let before = read_config_file(&selected, Some("custom"), false, "config.toml").unwrap();
+    let before = read_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
+    )
+    .unwrap();
     let fields = inspect_visual_config(
         AgentKind::Codex,
         &String::from_utf8(before.content.clone()).unwrap(),
     )
     .unwrap();
-    let saved = save_config_file_with_linked(
+    let saved = save_config_file_target(
         &selected,
-        Some("custom"),
-        false,
-        "config.toml",
+        &ConfigTarget::Named(config_name("custom")),
+        ConfigFile::Main,
         &before.revision,
-        &before.content,
-        Some(&CustomProviderInput {
-            included: true,
-            name: "custom".to_string(),
-            base_url: "https://example.com/v1".to_string(),
-            proxy_routed: false,
-        }),
-        Some(
-            &fields
+        ConfigEdit::VisualMain {
+            custom_provider: Some(CustomProviderInput {
+                included: true,
+                name: "custom".to_string(),
+                base_url: "https://example.com/v1".to_string(),
+                proxy_routed: false,
+            }),
+            options: fields
                 .options
                 .iter()
                 .map(|field| VisualConfigOptionInput {
@@ -344,9 +397,8 @@ fn visual_custom_provider_save_materializes_missing_auth_placeholder() {
                     included: field.included,
                     value: field.value.clone(),
                 })
-                .collect::<Vec<_>>(),
-        ),
-        None,
+                .collect(),
+        },
     )
     .unwrap();
     assert_eq!(
@@ -533,19 +585,21 @@ fn named_config_deletion_requires_explicit_selection() {
 fn current_config_can_be_initialized_and_preserves_arbitrary_bytes() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Claude);
-    let before = read_config_file(&selected, None, true, "settings.json").unwrap();
+    let before =
+        read_config_file_target(&selected, &ConfigTarget::Current, ConfigFile::Main).unwrap();
     assert!(!before.exists);
-    let after = save_config_file(
+    let after = save_config_file_target(
         &selected,
-        None,
-        true,
-        "settings.json",
+        &ConfigTarget::Current,
+        ConfigFile::Main,
         &before.revision,
-        b"not json\0bytes",
-        None,
-        None,
+        ConfigEdit::Raw {
+            content: b"not json\0bytes".to_vec(),
+            custom_provider: None,
+        },
     )
-    .unwrap();
+    .unwrap()
+    .snapshot;
     assert_eq!(after.content, b"not json\0bytes");
     let inspection = inspect_current_config(&selected).unwrap();
     assert_eq!(inspection.present_files, 1);
@@ -559,7 +613,12 @@ fn missing_managed_current_config_is_a_read_only_empty_view() {
         .for_agent(AgentKind::Codex);
 
     for file in selected.agent().config_files() {
-        let snapshot = read_config_file(&selected, None, true, file).unwrap();
+        let snapshot = read_config_file_target(
+            &selected,
+            &ConfigTarget::Current,
+            ConfigFile::parse(selected.agent(), file).unwrap(),
+        )
+        .unwrap();
         assert!(!snapshot.exists);
         assert_eq!(
             snapshot.content,
@@ -574,24 +633,30 @@ fn raw_edit_can_create_a_missing_main_file_in_a_safe_incomplete_named_config() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     selected.ensure_named_config_catalog().unwrap();
-    ensure_named_config_directory(&selected, &config_name("partial")).unwrap();
+    storage::ensure_named_config_directory(&selected, &config_name("partial")).unwrap();
 
-    let before = read_config_file(&selected, Some("partial"), false, "config.toml").unwrap();
+    let before = read_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("partial")),
+        ConfigFile::Main,
+    )
+    .unwrap();
     assert!(!before.exists);
     assert!(before.content.is_empty());
     assert!(visual_config_state(&selected, &config_name("partial"), "").is_err());
 
-    let after = save_config_file(
+    let after = save_config_file_target(
         &selected,
-        Some("partial"),
-        false,
-        "config.toml",
+        &ConfigTarget::Named(config_name("partial")),
+        ConfigFile::Main,
         &before.revision,
-        b"approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nmodel = \"custom-model\"\n",
-        None,
-        None,
+        ConfigEdit::Raw {
+            content: b"approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nmodel = \"custom-model\"\n".to_vec(),
+            custom_provider: None,
+        },
     )
-    .unwrap();
+    .unwrap()
+    .snapshot;
     assert!(after.exists);
     assert_eq!(
         fs::read_to_string(named_config_file(&selected, "partial", "config.toml")).unwrap(),
@@ -604,37 +669,19 @@ fn revealing_an_incomplete_named_config_still_rejects_unknown_entries() {
     let root = tempfile::tempdir().unwrap();
     let selected = selected(root.path(), AgentKind::Codex);
     selected.ensure_named_config_catalog().unwrap();
-    ensure_named_config_directory(&selected, &config_name("partial")).unwrap();
+    storage::ensure_named_config_directory(&selected, &config_name("partial")).unwrap();
     fs::write(
         named_config_dir(&selected, "partial").join("unexpected"),
         b"unsafe",
     )
     .unwrap();
 
-    let error = read_config_file(&selected, Some("partial"), false, "config.toml")
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("unknown entry"), "{error}");
-}
-
-#[test]
-fn auth_propagation_preview_is_structured() {
-    let root = tempfile::tempdir().unwrap();
-    let host_home = tempfile::tempdir().unwrap();
-    let host = Tenant::Host {
-        home_dir: host_home.path().to_path_buf(),
-        root_dir: root.path().to_path_buf(),
-    };
-    let selected = host.for_agent(AgentKind::Codex);
-    selected.ensure_agent_state_dir().unwrap();
-    fs::write(
-        selected.state_file("auth.json"),
-        br#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-x","access_token":"access-x","refresh_token":"refresh-x","account_id":"account-x"},"last_refresh":"2026-08-08T04:22:23.476121Z"}"#,
+    let error = read_config_file_target(
+        &selected,
+        &ConfigTarget::Named(config_name("partial")),
+        ConfigFile::Main,
     )
-    .unwrap();
-    let preview = preview_auth_propagation(
-        &plan_auth_propagation_from(root.path(), host_home.path()).unwrap(),
-    );
-    assert!(preview.entries.is_empty() || preview.updates == 0);
-    let _: Value = serde_json::to_value(preview).unwrap();
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unknown entry"), "{error}");
 }

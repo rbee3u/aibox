@@ -1,3 +1,4 @@
+import styles from "@/features/sessions/catalog/SessionRow.module.css";
 import { AlertTriangle, Check, LoaderCircle, Trash2 } from "lucide-react";
 import { sessionListCopy } from "@/features/sessions/sessionListCopy";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
@@ -5,7 +6,8 @@ import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
 import { IconButton } from "@/shared/ui/IconButton";
 import { messageCountLabel, toolCountLabel } from "@/features/sessions/sessionCatalog";
-import styles from "@/features/sessions/SessionPage.module.css";
+import layout from "@/shared/ui/layout/catalog.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;
@@ -49,8 +51,12 @@ export function SessionRow({
   const copy = sessionListCopy(row.title, row.latest_message);
   return (
     <div
+      data-inspected={current ? "true" : undefined}
+      data-selected={selected ? "true" : undefined}
+      data-selection-mode={selectionMode ? "true" : undefined}
       className={[
         styles.sessionRow,
+        layout.accentSelection,
         current ? styles.currentSessionRow : "",
         selectionMode ? styles.sessionSelectionRow : "",
         selected ? styles.sessionRowSelected : "",

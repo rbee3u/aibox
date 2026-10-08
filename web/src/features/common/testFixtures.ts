@@ -1,13 +1,7 @@
 import type { TenantRow } from "@/api/core";
 
 /**
- * The Tenant catalog most Console page tests assume: a Host Tenant plus the
- * protected `default` Managed Tenant and one ordinary `work` Tenant.
- *
- * Tenants page tests deliberately use their own rows instead of these, because
- * that page abbreviates a Tenant Home under the Host Home to `~/...` and must
- * show an unrelated path in full. Home paths are meaningless here, so keep any
- * test that depends on their shape out of this fixture.
+ * Paths are placeholders. Tests of Host Home abbreviation need local fixtures.
  */
 export const TENANT_ROWS = [
   {

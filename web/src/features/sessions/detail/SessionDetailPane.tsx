@@ -1,3 +1,4 @@
+import styles from "@/features/sessions/detail/SessionDetailPane.module.css";
 import { AlertTriangle, ChevronLeft, Wrench } from "lucide-react";
 
 import type { SessionApi } from "@/api/sessions";
@@ -6,14 +7,14 @@ import { SessionDetails } from "@/features/sessions/detail/SessionDetails";
 import { messageCountLabel, toolCountLabel } from "@/features/sessions/sessionCatalog";
 import { sessionListCopy } from "@/features/sessions/sessionListCopy";
 import { sessionListTenantLabel } from "@/features/sessions/sessionSource";
-import type { SessionViewModel } from "@/features/sessions/useSessionController";
+import type { SessionViewModel } from "@/features/sessions/viewTypes";
 import { BrandIcon, brandForAgent } from "@/shared/icons/brandIcons";
 import { resourceIcons } from "@/shared/icons/consoleIcons";
 import { formatTimestamp } from "@/shared/lib/format";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { IconButton } from "@/shared/ui/IconButton";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 const SessionIcon = resourceIcons.session;

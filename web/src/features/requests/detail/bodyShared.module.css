@@ -1,0 +1,16 @@
+.sourceWrap,
+.sseWrap {
+  min-width: 0;
+}
+
+.bodyNotice {
+  margin-bottom: 8px;
+}
+
+.bodyNotice button {
+  padding: 5px 9px;
+  border-color: var(--warning-line);
+  background: var(--surface-raised);
+  color: var(--warning);
+  font-size: var(--text-xs);
+}

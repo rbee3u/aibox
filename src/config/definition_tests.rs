@@ -38,14 +38,9 @@ fn schema_accepts_only_fixed_fields_and_types() {
     let wrong_type = NamedConfigDefinition::parse(AgentKind::Codex, "model = true", Some("{}"))
         .unwrap_err()
         .to_string();
-    assert!(wrong_type.contains("must be a string"), "{wrong_type}");
-    let wrong_base_url_type =
-        NamedConfigDefinition::parse(AgentKind::Codex, "model = true", Some("{}"))
-            .unwrap_err()
-            .to_string();
     assert!(
-        wrong_base_url_type.contains("/config/model must be a string"),
-        "{wrong_base_url_type}"
+        wrong_type.contains("/config/model must be a string"),
+        "{wrong_type}"
     );
     let unknown_provider = NamedConfigDefinition::parse(
         AgentKind::Codex,
@@ -196,9 +191,23 @@ fn codex_unknown_fields_are_preserved_but_not_applied() {
 }
 
 #[test]
-fn semantically_empty_missing_files_remain_absent() {
-    assert!(NamedConfigDefinition::parse(AgentKind::Claude, "{}", None).is_err());
-    assert!(NamedConfigDefinition::parse(AgentKind::Codex, "", Some("{}")).is_err());
+fn empty_auth_application_preserves_absence_and_empties_existing_files() {
+    let config = NamedConfigDefinition::parse(
+        AgentKind::Codex,
+        "approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nmodel = \"gpt\"\n",
+        Some("{}"),
+    )
+    .unwrap();
+    for current in [None, Some("{}"), Some(r#"{"OPENAI_API_KEY":"old"}"#)] {
+        let result = config.apply(None, current).unwrap();
+        match current {
+            None => assert!(result.auth.is_none()),
+            Some(_) => {
+                let auth: Value = serde_json::from_str(result.auth.as_deref().unwrap()).unwrap();
+                assert_eq!(auth, serde_json::json!({}), "current={current:?}");
+            }
+        }
+    }
 }
 
 #[test]

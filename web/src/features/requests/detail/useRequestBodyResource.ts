@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import {
-  ApiError,
+  isRequestNotFound,
   type BodyKind,
   type EventTimingIndex,
   type RequestDetail,
@@ -13,14 +14,17 @@ import {
   isEncodedContentCoding,
   isSseResponse,
 } from "@/features/requests/detail/bodyPresentation";
+import { requestErrorMessage } from "@/features/requests/requestErrors";
+import { mergeEventTimings } from "@/features/requests/requestFormat";
 import type {
   ClearInspectionFailure,
   ReportInspectionFailure,
   RequestInspectionIdentity,
-} from "@/features/requests/detail/inspectionTypes";
-import { requestErrorMessage, requestWasCancelled } from "@/features/requests/requestErrors";
-import { mergeEventTimings } from "@/features/requests/requestFormat";
-import type { BodyLoadStatus, DecodedBodyState, DetailTab } from "@/features/requests/viewTypes";
+  BodyLoadStatus,
+  DecodedBodyState,
+  DetailTab,
+} from "@/features/requests/viewTypes";
+import { wasCancelled } from "@/shared/lib/errors";
 
 const ACTIVE_BODY_POLL_INTERVAL_MS = 3000;
 const EMPTY_DECODED_BODY: DecodedBodyState = { bytes: null, error: null };
@@ -157,8 +161,8 @@ export function useRequestBodyResource({
               [kind]: { bytes: decoded, error: null },
             }));
           } catch (cause) {
-            if (!ownsRequest() || requestWasCancelled(cause, controller.signal)) return;
-            if (isNotFound(cause)) shouldContinue = false;
+            if (!ownsRequest() || wasCancelled(cause, controller.signal)) return;
+            if (isRequestNotFound(cause)) shouldContinue = false;
             decodedLoaded.current[kind] = false;
             setDecodedBodies((current) => ({
               ...current,
@@ -181,8 +185,8 @@ export function useRequestBodyResource({
             timingNextSequence.current = Math.max(timingNextSequence.current, timing.next_sequence);
             setEventTimings((current) => mergeEventTimings(current, timing));
           } catch (cause) {
-            if (!ownsRequest() || requestWasCancelled(cause, controller.signal)) return;
-            if (isNotFound(cause)) shouldContinue = false;
+            if (!ownsRequest() || wasCancelled(cause, controller.signal)) return;
+            if (isRequestNotFound(cause)) shouldContinue = false;
             setEventTimings((current) => ({
               state: "unavailable",
               events: current?.events ?? [],
@@ -193,8 +197,8 @@ export function useRequestBodyResource({
         }
         clearFailure("body");
       } catch (cause) {
-        if (ownsRequest() && !requestWasCancelled(cause, controller.signal)) {
-          if (isNotFound(cause)) shouldContinue = false;
+        if (ownsRequest() && !wasCancelled(cause, controller.signal)) {
+          if (isRequestNotFound(cause)) shouldContinue = false;
           setBodyStatus((current) => ({
             ...current,
             [kind]: current[kind] === "loaded" ? "loaded" : "error",
@@ -246,8 +250,4 @@ export function useRequestBodyResource({
     reset,
     retry: () => setRetryGeneration((value) => value + 1),
   };
-}
-
-function isNotFound(cause: unknown): cause is ApiError {
-  return cause instanceof ApiError && cause.status === 404;
 }

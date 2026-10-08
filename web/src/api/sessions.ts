@@ -76,7 +76,7 @@ function sessionSourceQuery(tenant: TenantSelection, agent: AgentKind, id?: stri
   return query;
 }
 
-export function sessionDetailPath(tenant: TenantSelection, agent: AgentKind, id: string): string {
+function sessionDetailPath(tenant: TenantSelection, agent: AgentKind, id: string): string {
   return `/_aibox/api/sessions/detail?${sessionSourceQuery(tenant, agent, id)}`;
 }
 
@@ -90,15 +90,26 @@ async function streamSessionDetail(
   await client.streamNdjson<SessionDetailFrame>(
     path,
     (record) => {
-      if (record.type === "message") handlers.onMessage(record.message);
-      if (record.type === "tool_activity") handlers.onTool(record.tool_activity);
-      if (record.type === "evidence") handlers.onEvidence(record.evidence);
-      if (record.type === "meta") handlers.onMeta(record.meta);
-      if (record.type === "complete") {
-        complete = true;
-        handlers.onComplete(record.stats, record.warnings);
+      switch (record.type) {
+        case "message":
+          handlers.onMessage(record.message);
+          break;
+        case "tool_activity":
+          handlers.onTool(record.tool_activity);
+          break;
+        case "evidence":
+          handlers.onEvidence(record.evidence);
+          break;
+        case "meta":
+          handlers.onMeta(record.meta);
+          break;
+        case "complete":
+          complete = true;
+          handlers.onComplete(record.stats, record.warnings);
+          break;
+        case "error":
+          throw new Error(record.error);
       }
-      if (record.type === "error") throw new Error(record.error);
     },
     signal,
   );

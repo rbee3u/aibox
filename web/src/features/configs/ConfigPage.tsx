@@ -1,27 +1,14 @@
-import type { ConfigApi } from "@/api/configs";
-import type { Operation } from "@/api/operations";
 import { ConfigCatalogPane } from "@/features/configs/catalog/ConfigCatalogPane";
-import { ConfigDetailPane } from "@/features/configs/detail/ConfigDetailPane";
+import { ConfigDetailPane } from "@/features/configs/editor/ConfigDetailPane";
 import { ConfigDialogs } from "@/features/configs/mutation/ConfigDialogs";
 import { useConfigController } from "@/features/configs/useConfigController";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
+
 import { MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
 import layout from "@/shared/ui/layout/catalog.module.css";
+import type { ConfigPageProps } from "@/features/configs/viewTypes";
 
-interface PageProps {
-  api: ConfigApi;
-  operation?: Operation | null;
-  search: string;
-  onDirtyChange?: (dirty: boolean) => void;
-  onCancelLeave?: () => void;
-  onContinueLeave?: () => void | Promise<void>;
-  onLocationChange: ModuleLocationChange;
-  onOperation?: (operation: Operation) => void;
-  pendingLeave?: boolean;
-}
-
-export function ConfigPage(props: PageProps) {
+export function ConfigPage(props: ConfigPageProps) {
   const viewModel = useConfigController(props);
   const { catalog, detail, dialogs, editor, feedback, mutations, selection } = viewModel;
   return (

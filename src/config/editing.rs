@@ -1,21 +1,20 @@
 //! Direct Config file reveal, validation, editing, and filesystem writes.
 
-use super::catalog::{
-    ensure_named_config_main, ensure_safe_named_config, inspect_named_config_directory,
-};
 use super::definition::NamedConfigDefinition;
-use super::files::{capture_optional_agent_file, file_revision, write_atomic};
+use super::storage::{
+    capture_optional_agent_file, ensure_named_config_main, ensure_safe_named_config, file_revision,
+    inspect_named_config_directory, named_config_file, write_atomic,
+};
 use super::visual::{
-    CodexAuthInspection, CustomProviderInput, VisualAuthInput, VisualConfigOptionInput,
-    VisualConfigState, inspect_codex_auth, inspect_visual_config, render_visual_auth,
-    render_visual_main,
+    CodexAuthInspection, VisualConfigState, inspect_codex_auth, inspect_visual_config,
+    render_visual_auth, render_visual_main,
 };
 use super::{
     ConfigDiagnostic, ConfigEdit, ConfigFile, ConfigFileSnapshot, ConfigSaveResult, ConfigTarget,
     MAX_CONFIG_BYTES, NamedConfigName,
 };
 use crate::application_error::{ApplicationErrorKind, application_error};
-use crate::foundation::safe_fs::FileSnapshot;
+use crate::foundation::safe_fs::{FileSnapshot, real_file_exists};
 use crate::tenant::TenantAgent;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
@@ -40,7 +39,6 @@ pub(crate) fn inspect_named_codex_auth(
 
 pub(crate) fn config_file_warnings(
     selected: &TenantAgent,
-    _config: &NamedConfigName,
     file: &str,
     content: &[u8],
 ) -> Result<Vec<String>> {
@@ -116,26 +114,25 @@ pub(crate) fn read_config_file_target(
     file: ConfigFile,
 ) -> Result<ConfigFileSnapshot> {
     let file_name = file.as_str(selected.agent());
-    let snapshot = if target.is_current() {
-        capture_optional_agent_file(selected, file_name)?
-    } else {
-        let config = target
-            .named()
-            .expect("non-current ConfigTarget must have a name");
-        ensure_safe_named_config(selected, config)?;
-        let path = super::layout::named_config_file(selected, config, file);
-        if crate::foundation::safe_fs::real_file_exists(&path, "Named Config file")? {
-            FileSnapshot::capture_with_limit(&path, MAX_CONFIG_BYTES)?
-        } else {
-            FileSnapshot {
-                present: false,
-                content: Vec::new(),
-                mode: None,
+    let snapshot = match target {
+        ConfigTarget::Current => capture_optional_agent_file(selected, file_name)?,
+        ConfigTarget::Named(config) => {
+            ensure_safe_named_config(selected, config)?;
+            let path = named_config_file(selected, config, file);
+            if real_file_exists(&path, "Named Config file")? {
+                FileSnapshot::capture_with_limit(&path, MAX_CONFIG_BYTES)?
+            } else {
+                FileSnapshot {
+                    present: false,
+                    content: Vec::new(),
+                    mode: None,
+                }
             }
         }
     };
+    let revision = file_revision(snapshot.present, &snapshot.content);
     let content = if snapshot.present {
-        snapshot.content.clone()
+        snapshot.content
     } else {
         selected
             .agent()
@@ -147,71 +144,9 @@ pub(crate) fn read_config_file_target(
     Ok(ConfigFileSnapshot {
         file: file_name.to_string(),
         exists: snapshot.present,
-        revision: file_revision(snapshot.present, &snapshot.content),
+        revision,
         content,
     })
-}
-
-#[allow(dead_code)]
-pub(crate) fn read_config_file(
-    selected: &TenantAgent,
-    config: Option<&str>,
-    current: bool,
-    file: &str,
-) -> Result<ConfigFileSnapshot> {
-    let target = ConfigTarget::from_wire(config, current)?;
-    let file = ConfigFile::parse(selected.agent(), file)?;
-    read_config_file_target(selected, &target, file)
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn save_config_file(
-    selected: &TenantAgent,
-    config: Option<&str>,
-    current: bool,
-    file: &str,
-    expected_revision: &str,
-    content: &[u8],
-    visual: Option<&[VisualConfigOptionInput]>,
-    visual_auth: Option<&VisualAuthInput>,
-) -> Result<ConfigFileSnapshot> {
-    save_config_file_with_linked(
-        selected,
-        config,
-        current,
-        file,
-        expected_revision,
-        content,
-        None,
-        visual,
-        visual_auth,
-    )
-    .map(|result| result.snapshot)
-}
-
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-pub(crate) fn save_config_file_with_linked(
-    selected: &TenantAgent,
-    config: Option<&str>,
-    current: bool,
-    file: &str,
-    expected_revision: &str,
-    content: &[u8],
-    custom_provider: Option<&CustomProviderInput>,
-    visual: Option<&[VisualConfigOptionInput]>,
-    visual_auth: Option<&VisualAuthInput>,
-) -> Result<ConfigSaveResult> {
-    let target = ConfigTarget::from_wire(config, current)?;
-    let file = ConfigFile::parse(selected.agent(), file)?;
-    let edit = ConfigEdit::from_wire(
-        content.to_vec(),
-        custom_provider.cloned(),
-        visual.map(<[VisualConfigOptionInput]>::to_vec),
-        visual_auth.cloned(),
-    )?;
-    save_config_file_target(selected, &target, file, expected_revision, edit)
 }
 
 pub(crate) fn save_config_file_target(
@@ -229,70 +164,65 @@ pub(crate) fn save_config_file_target(
             "configuration file changed since it was revealed",
         ));
     }
-    let (path, mode, content) = if target.is_current() {
-        selected.ensure_agent_state_dir()?;
-        let snapshot = capture_optional_agent_file(selected, file_name)?;
-        let ConfigEdit::Raw { content, .. } = &edit else {
-            bail!("Visual editing is only available for a Named Config");
-        };
-        (
-            selected.state_file(file_name),
-            snapshot.mode.unwrap_or(0o600),
-            content.clone(),
-        )
-    } else {
-        let config = target
-            .named()
-            .expect("non-current ConfigTarget must have a name");
-        ensure_safe_named_config(selected, config)?;
-        let content = match &edit {
-            ConfigEdit::VisualMain {
-                options,
-                custom_provider,
-            } => {
-                if file != ConfigFile::Main {
-                    bail!("Visual main fields are only available for the main Config file");
-                }
-                let original = std::str::from_utf8(&before.content)
-                    .with_context(|| format!("Named Config {file_name} is not valid UTF-8"))?;
-                render_visual_main(
-                    selected.agent(),
-                    original,
-                    options,
-                    custom_provider.as_ref(),
-                )?
-                .into_bytes()
-            }
-            ConfigEdit::VisualAuth(auth) => {
-                if file != ConfigFile::Auth {
-                    bail!("Visual auth is only available for Codex auth.json");
-                }
-                render_visual_auth(auth)?.into_bytes()
-            }
-            ConfigEdit::Raw { content, .. } => content.clone(),
-        };
-        if content.len() as u64 > MAX_CONFIG_BYTES {
-            return Err(application_error(
-                ApplicationErrorKind::InputTooLarge,
-                format!("configuration file exceeds {MAX_CONFIG_BYTES} bytes"),
-            ));
+    let (path, mode, content) = match target {
+        ConfigTarget::Current => {
+            selected.ensure_agent_state_dir()?;
+            let snapshot = capture_optional_agent_file(selected, file_name)?;
+            let ConfigEdit::Raw { content, .. } = &edit else {
+                bail!("Visual editing is only available for a Named Config");
+            };
+            (
+                selected.state_file(file_name),
+                snapshot.mode.unwrap_or(0o600),
+                content.clone(),
+            )
         }
-        let content_text = std::str::from_utf8(&content)
-            .with_context(|| format!("Named Config {file_name} is not valid UTF-8"))?;
-        let layout = inspect_named_config_directory(selected, config)?
-            .context("Named Config directory disappeared while saving")?;
-        let _ = layout;
-        NamedConfigDefinition::validate_file(selected.agent(), file_name, content_text)
-            .with_context(|| format!("validate Named Config '{config}' {file_name}"))?;
-        (
-            super::layout::named_config_file(selected, config, file),
-            0o600,
-            content,
-        )
+        ConfigTarget::Named(config) => {
+            ensure_safe_named_config(selected, config)?;
+            let content = match &edit {
+                ConfigEdit::VisualMain {
+                    options,
+                    custom_provider,
+                } => {
+                    if file != ConfigFile::Main {
+                        bail!("Visual main fields are only available for the main Config file");
+                    }
+                    let original = std::str::from_utf8(&before.content)
+                        .with_context(|| format!("Named Config {file_name} is not valid UTF-8"))?;
+                    render_visual_main(
+                        selected.agent(),
+                        original,
+                        options,
+                        custom_provider.as_ref(),
+                    )?
+                    .into_bytes()
+                }
+                ConfigEdit::VisualAuth(auth) => {
+                    if file != ConfigFile::Auth {
+                        bail!("Visual auth is only available for Codex auth.json");
+                    }
+                    render_visual_auth(auth)?.into_bytes()
+                }
+                ConfigEdit::Raw { content, .. } => content.clone(),
+            };
+            if content.len() as u64 > MAX_CONFIG_BYTES {
+                return Err(application_error(
+                    ApplicationErrorKind::InputTooLarge,
+                    format!("configuration file exceeds {MAX_CONFIG_BYTES} bytes"),
+                ));
+            }
+            let content_text = std::str::from_utf8(&content)
+                .with_context(|| format!("Named Config {file_name} is not valid UTF-8"))?;
+            inspect_named_config_directory(selected, config)?
+                .context("Named Config directory disappeared while saving")?;
+            NamedConfigDefinition::validate_file(selected.agent(), file_name, content_text)
+                .with_context(|| format!("validate Named Config '{config}' {file_name}"))?;
+            (named_config_file(selected, config, file), 0o600, content)
+        }
     };
     write_atomic(&path, &content, mode)?;
     let snapshot = read_config_file_target(selected, target, file)?;
-    let linked = if !target.is_current()
+    let linked = if let ConfigTarget::Named(config) = target
         && file == ConfigFile::Main
         && edit
             .custom_provider()
@@ -315,8 +245,7 @@ pub(crate) fn save_config_file_target(
                 .config_auth_template()
                 .context("Codex auth template is missing")?
                 .as_bytes();
-            let config = target.named().expect("Named Config");
-            let auth_path = super::layout::named_config_file(selected, config, auth_kind);
+            let auth_path = named_config_file(selected, config, auth_kind);
             write_atomic(&auth_path, placeholder, 0o600)?;
             Some(read_config_file_target(selected, target, auth_kind)?)
         } else {

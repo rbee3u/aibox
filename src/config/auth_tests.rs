@@ -1,11 +1,11 @@
 use super::*;
-use crate::config::{NamedConfigName, create_named_config, ensure_named_config_directory};
+use crate::config::{NamedConfigName, create_named_config};
 use serde_json::json;
 
 fn named_config_file(selected: &TenantAgent, name: &str, file: &str) -> PathBuf {
     let name = NamedConfigName::parse(name).unwrap();
     let file = ConfigFile::parse(selected.agent(), file).unwrap();
-    crate::config::layout::named_config_file(selected, &name, file)
+    crate::config::storage::named_config_file(selected, &name, file)
 }
 
 fn credential(account: &str, refreshed: &str, marker: &str) -> Vec<u8> {
@@ -31,6 +31,24 @@ fn host_agent(root: &Path, host_home: &Path) -> TenantAgent {
 fn set_named_auth(selected: &TenantAgent, name: &str, content: &[u8]) {
     create_named_config(selected, &NamedConfigName::parse(name).unwrap()).unwrap();
     fs::write(named_config_file(selected, name, "auth.json"), content).unwrap();
+}
+
+#[test]
+fn planning_without_candidates_is_empty_and_creates_no_catalogs() {
+    let root = tempfile::tempdir().unwrap();
+    let host_home = tempfile::tempdir().unwrap();
+    let host = host_agent(root.path(), host_home.path());
+    let source = credential("same", "2026-08-08T00:00:00Z", "source");
+    fs::write(host.state_file("auth.json"), &source).unwrap();
+
+    let preview = preview_auth_propagation(
+        &plan_auth_propagation_from(root.path(), host_home.path()).unwrap(),
+    );
+
+    assert!(preview.entries.is_empty());
+    assert_eq!(preview.updates, 0);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    assert_eq!(fs::read(host.state_file("auth.json")).unwrap(), source);
 }
 
 #[test]
@@ -64,7 +82,11 @@ fn planning_classifies_candidates_and_orders_existing_complete_targets() {
         &credential("other", "2026-08-01T00:00:00Z", "other"),
     );
     set_named_auth(&host, "api-key", br#"{"auth_mode":"apikey"}"#);
-    ensure_named_config_directory(&host, &NamedConfigName::parse("incomplete").unwrap()).unwrap();
+    crate::config::storage::ensure_named_config_directory(
+        &host,
+        &NamedConfigName::parse("incomplete").unwrap(),
+    )
+    .unwrap();
 
     let managed = ManagedTenant::resolve(root.path(), "work").unwrap();
     managed.ensure_initialized().unwrap();

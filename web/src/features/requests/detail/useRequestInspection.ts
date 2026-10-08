@@ -1,12 +1,10 @@
 import { useCallback, useRef, useState } from "react";
+
 import type { RequestsApi } from "@/api/requests";
-import type { InspectionFailure } from "@/features/requests/detail/inspectionTypes";
 import { useRequestBodyResource } from "@/features/requests/detail/useRequestBodyResource";
 import { useRequestDetailResource } from "@/features/requests/detail/useRequestDetailResource";
 import { useRequestDownload } from "@/features/requests/detail/useRequestDownload";
-import type { DetailTab } from "@/features/requests/viewTypes";
-
-export type { InspectionFailure } from "@/features/requests/detail/inspectionTypes";
+import type { InspectionFailure, DetailTab } from "@/features/requests/viewTypes";
 
 interface UseRequestInspectionOptions {
   api: RequestsApi;

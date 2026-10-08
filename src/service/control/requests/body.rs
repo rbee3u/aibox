@@ -1,8 +1,8 @@
-use super::super::api_error;
+use super::super::{ControlError, ControlResult, content};
 use crate::request::{BodyContentCoding, RequestInspection, RequestProxyState, body_reader};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, Response, StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use bytes::Bytes;
 use serde::Deserialize;
 use std::io::Read as _;
@@ -17,33 +17,33 @@ pub(crate) struct BodyQuery {
     pub(super) offset: u64,
 }
 
-pub(crate) async fn request_body(
+pub(in crate::service::control) async fn request_body(
     State(state): State<RequestProxyState>,
     Path(id): Path<String>,
     Query(query): Query<BodyQuery>,
-) -> Response<Body> {
+) -> ControlResult {
     body_response(state.inspection(), &id, false, query.offset).await
 }
 
-pub(crate) async fn response_body(
+pub(in crate::service::control) async fn response_body(
     State(state): State<RequestProxyState>,
     Path(id): Path<String>,
     Query(query): Query<BodyQuery>,
-) -> Response<Body> {
+) -> ControlResult {
     body_response(state.inspection(), &id, true, query.offset).await
 }
 
-pub(crate) async fn decoded_request_body(
+pub(in crate::service::control) async fn decoded_request_body(
     State(state): State<RequestProxyState>,
     Path(id): Path<String>,
-) -> Response<Body> {
+) -> ControlResult {
     decoded_body_response(state.inspection(), &id, false).await
 }
 
-pub(crate) async fn decoded_response_body(
+pub(in crate::service::control) async fn decoded_response_body(
     State(state): State<RequestProxyState>,
     Path(id): Path<String>,
-) -> Response<Body> {
+) -> ControlResult {
     decoded_body_response(state.inspection(), &id, true).await
 }
 
@@ -52,30 +52,32 @@ pub(super) async fn body_response(
     id: &str,
     response: bool,
     offset: u64,
-) -> Response<Body> {
+) -> ControlResult {
     let id = id.to_string();
-    let opened =
-        tokio::task::spawn_blocking(move || inspection.open_body(&id, response, offset)).await;
-    let (file, length) = match opened {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) if error.to_string().contains("exceeds current length") => {
-            return api_error(StatusCode::RANGE_NOT_SATISFIABLE, &error.to_string());
-        }
-        Ok(Err(error)) => return api_error(StatusCode::NOT_FOUND, &error.to_string()),
-        Err(error) => {
-            return api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("open Request body: {error}"),
-            );
-        }
-    };
+    let (file, length) =
+        tokio::task::spawn_blocking(move || inspection.open_body(&id, response, offset))
+            .await
+            .map_err(|error| {
+                ControlError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("open Request body: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                let status = if error.to_string().contains("exceeds current length") {
+                    StatusCode::RANGE_NOT_SATISFIABLE
+                } else {
+                    StatusCode::NOT_FOUND
+                };
+                ControlError::new(status, error)
+            })?;
     let remaining = length - offset;
     let file = tokio::fs::File::from_std(file).take(remaining);
     let stream = ReaderStream::new(file);
-    let mut response = Response::new(Body::from_stream(stream));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
+    let mut response = content(
+        StatusCode::OK,
+        "application/octet-stream",
+        Body::from_stream(stream),
     );
     response.headers_mut().insert(
         header::CONTENT_LENGTH,
@@ -85,26 +87,25 @@ pub(super) async fn body_response(
         "x-aibox-request-next-offset",
         HeaderValue::from_str(&length.to_string()).expect("body offset is a valid header"),
     );
-    response
+    Ok(response)
 }
 
 pub(super) async fn decoded_body_response(
     inspection: RequestInspection,
     id: &str,
     response: bool,
-) -> Response<Body> {
+) -> ControlResult {
     let lookup = inspection.clone();
     let lookup_id = id.to_string();
-    let request = match tokio::task::spawn_blocking(move || lookup.find(&lookup_id)).await {
-        Ok(Ok(request)) => request,
-        Ok(Err(error)) => return api_error(StatusCode::NOT_FOUND, &error.to_string()),
-        Err(error) => {
-            return api_error(
+    let request = tokio::task::spawn_blocking(move || lookup.find(&lookup_id))
+        .await
+        .map_err(|error| {
+            ControlError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("read Request for body decoding: {error}"),
-            );
-        }
-    };
+                format!("read Request for body decoding: {error}"),
+            )
+        })?
+        .map_err(|error| ControlError::new(StatusCode::NOT_FOUND, error))?;
     let completed = if response {
         request
             .summary
@@ -119,14 +120,14 @@ pub(super) async fn decoded_body_response(
             .is_some()
     };
     if request.active && !completed {
-        return api_error(
+        return Err(ControlError::new(
             StatusCode::CONFLICT,
             if response {
                 "the response body is still being recorded"
             } else {
                 "the request body is still being recorded"
             },
-        );
+        ));
     }
     let headers = if response {
         request
@@ -137,41 +138,33 @@ pub(super) async fn decoded_body_response(
     } else {
         &request.request.headers
     };
-    let coding = match inspection.body_content_coding(headers) {
-        Ok(coding) => coding,
-        Err(error) => return api_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, &error.to_string()),
-    };
-    let opened =
+    let coding = inspection
+        .body_content_coding(headers)
+        .map_err(|error| ControlError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, error))?;
+    let (file, length) =
         tokio::task::spawn_blocking(move || inspection.open_request_body(&request, response, 0))
-            .await;
-    let (file, length) = match opened {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return api_error(StatusCode::NOT_FOUND, &error.to_string()),
-        Err(error) => {
-            return api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("open Request body for decoding: {error}"),
-            );
-        }
-    };
+            .await
+            .map_err(|error| {
+                ControlError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("open Request body for decoding: {error}"),
+                )
+            })?
+            .map_err(|error| ControlError::new(StatusCode::NOT_FOUND, error))?;
     let (body, length) = if coding.is_encoded() {
         (encoded_body(file, coding), None)
     } else {
         let file = tokio::fs::File::from_std(file).take(length);
         (Body::from_stream(ReaderStream::new(file)), Some(length))
     };
-    let mut response = Response::new(body);
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
+    let mut response = content(StatusCode::OK, "application/octet-stream", body);
     if let Some(length) = length {
         response.headers_mut().insert(
             header::CONTENT_LENGTH,
             HeaderValue::from_str(&length.to_string()).expect("body length is a valid header"),
         );
     }
-    response
+    Ok(response)
 }
 
 fn encoded_body(file: std::fs::File, coding: BodyContentCoding) -> Body {

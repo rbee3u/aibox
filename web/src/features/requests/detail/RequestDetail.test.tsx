@@ -1,3 +1,4 @@
+import styles from "@/features/requests/detail/summaryShared.module.css";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
@@ -13,7 +14,6 @@ import {
 } from "@/features/requests/testFixtures";
 import type { RequestDetail as RequestDetailData, TokenUsage } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
-import styles from "@/features/requests/detail/RequestDetail.module.css";
 
 type RequestDetailProps = ComponentProps<typeof RequestDetail>;
 const zstdBytes = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]);

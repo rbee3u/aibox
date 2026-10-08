@@ -86,16 +86,14 @@ export function timingStages(detail: RequestDetail): TimingStage[] {
 
   function finishPending(): TimingStage[] {
     if (pending.length === 0 || axis <= cursor) return stages;
-    if (axis > cursor) {
-      stages.push({
-        label: pending.map((stage) => stage.label).join(" + "),
-        tone: pending[0].tone,
-        status: active ? "ongoing" : "incomplete",
-        startPercent: percent(cursor, axis),
-        widthPercent: percent(axis - cursor, axis),
-        durationMs: nsToMs(axis - cursor),
-      });
-    }
+    stages.push({
+      label: pending.map((stage) => stage.label).join(" + "),
+      tone: pending[0].tone,
+      status: active ? "ongoing" : "incomplete",
+      startPercent: percent(cursor, axis),
+      widthPercent: percent(axis - cursor, axis),
+      durationMs: nsToMs(axis - cursor),
+    });
     pending = [];
     return stages;
   }

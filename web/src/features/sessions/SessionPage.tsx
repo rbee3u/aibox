@@ -1,22 +1,15 @@
-import type { Operation } from "@/api/operations";
-import type { SessionApi } from "@/api/sessions";
+import styles from "@/features/sessions/SessionPage.module.css";
+
 import { SessionCatalogPane } from "@/features/sessions/catalog/SessionCatalogPane";
 import { SessionDetailPane } from "@/features/sessions/detail/SessionDetailPane";
 import { SessionDialogs } from "@/features/sessions/mutation/SessionDialogs";
 import { useSessionController } from "@/features/sessions/useSessionController";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
+
 import { MutationUnavailable, PageError } from "@/shared/ui/ManagementFeedback";
 import layout from "@/shared/ui/layout/catalog.module.css";
-import styles from "@/features/sessions/SessionPage.module.css";
+import type { SessionPageProps } from "@/features/sessions/viewTypes";
 
-interface PageProps {
-  api: SessionApi;
-  operation?: Operation | null;
-  search: string;
-  onLocationChange: ModuleLocationChange;
-}
-
-export function SessionPage(props: PageProps) {
+export function SessionPage(props: SessionPageProps) {
   const viewModel = useSessionController(props);
   const { catalog, detail, dialogs, feedback, mutations, selection } = viewModel;
   return (

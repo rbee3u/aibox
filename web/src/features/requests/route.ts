@@ -1,7 +1,7 @@
 import { readEnum, readPositiveInteger, readTrimmed, searchString } from "@/shared/lib/queryParams";
 import type { DetailTab } from "@/features/requests/viewTypes";
 
-export const DETAIL_TABS: readonly DetailTab[] = ["summary", "request", "response"];
+const DETAIL_TABS: readonly DetailTab[] = ["summary", "request", "response"];
 
 export interface RequestsRoute {
   page: number;

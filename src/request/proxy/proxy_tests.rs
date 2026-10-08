@@ -7,7 +7,7 @@ use crate::request::model::{
     AssessmentLevel, ErrorMetadata, ProtocolFamily, ProtocolSummary, RecordedHeader,
     ResponseModeValue, SummaryMetadata, TimingMetadata,
 };
-use crate::request::sse::{PrefixSniff, SseIndexer, SsePrefixSniffer, is_first_token_data};
+use crate::request::store::SseIndexer;
 use crate::request::store::{RequestStore, SummaryHandle};
 use axum::http::{HeaderMap, Method, header};
 use base64::Engine as _;
@@ -107,6 +107,7 @@ struct RetrySender {
     calls: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     return_first_without_reading_body: bool,
+    responded_at: Arc<Mutex<Vec<tokio::time::Instant>>>,
 }
 
 impl RetrySender {
@@ -116,6 +117,7 @@ impl RetrySender {
             calls: Arc::new(AtomicUsize::new(0)),
             bodies: Arc::new(Mutex::new(Vec::new())),
             return_first_without_reading_body: early_first,
+            responded_at: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -144,6 +146,7 @@ impl UpstreamSender for RetrySender {
             .unwrap_or(StatusCode::TOO_MANY_REQUESTS);
         let bodies = self.bodies.clone();
         let early = self.return_first_without_reading_body && index == 0;
+        let responded_at = self.responded_at.clone();
         Box::pin(async move {
             if !early {
                 let body = request
@@ -166,6 +169,10 @@ impl UpstreamSender for RetrySender {
                     .headers_mut()
                     .insert(header::RETRY_AFTER, "9999".parse().unwrap());
             }
+            responded_at
+                .lock()
+                .unwrap()
+                .push(tokio::time::Instant::now());
             Ok(response)
         })
     }
@@ -202,7 +209,7 @@ async fn finish_response_tasks(state: &RequestProxyState) {
     state.response_tasks.wait().await;
 }
 
-fn single_outcome(state: &RequestProxyState) -> Outcome {
+fn single_outcome(state: &RequestProxyState) -> RequestOutcome {
     state
         .store
         .scan()
@@ -270,18 +277,54 @@ async fn matching_429_stops_at_retry_deadline_and_forwards_last_response() {
     let state = retry_state(root.path(), CancellationToken::new());
     let sender = RetrySender::new([], false);
 
+    let started = tokio::time::Instant::now();
     let response = handle_with_sender(
         state.clone(),
         proxy_request("https://relay.example/v1/responses"),
         &sender,
-    )
-    .await;
+    );
+    tokio::pin!(response);
+    let mut completed = None;
+    for attempt in 0..60 {
+        // Keep the runtime runnable while file I/O finishes, so paused time
+        // advances only at the retry boundaries explicitly chosen below.
+        let waiting_since = Instant::now();
+        loop {
+            if let std::task::Poll::Ready(value) = futures_util::poll!(&mut response) {
+                completed = Some(value);
+            }
+            if sender.responded_at.lock().unwrap().len() > attempt {
+                break;
+            }
+            assert!(completed.is_none(), "finished before attempt {attempt}");
+            assert!(
+                waiting_since.elapsed() < Duration::from_secs(3),
+                "attempt {attempt} stalled"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(sender.calls.load(Ordering::SeqCst), attempt + 1);
+        assert_eq!(
+            sender.responded_at.lock().unwrap()[attempt].duration_since(started),
+            Duration::from_secs(attempt as u64 * 10),
+        );
+        if attempt < 59 {
+            assert!(completed.is_none(), "finished before the retry deadline");
+            tokio::time::advance(Duration::from_secs(9)).await;
+            assert!(futures_util::poll!(&mut response).is_pending());
+            assert_eq!(sender.calls.load(Ordering::SeqCst), attempt + 1);
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+    }
+    // At 590 seconds the next wait would hit the 600-second deadline:
+    // forward the last 429 immediately, without another wait or attempt.
+    let response = completed.expect("the last 429 is forwarded at 590 seconds");
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "9999");
     let body = response.into_body().collect().await.unwrap().to_bytes();
     finish_response_tasks(&state).await;
     let calls = sender.calls.load(Ordering::SeqCst);
-    assert!(calls > 1 && calls <= 60, "{calls}");
+    assert_eq!(calls, 60);
     assert_eq!(body, Bytes::from(format!("attempt {}", calls - 1)));
     let stored = state.store.scan().unwrap();
     let stored = crate::testutil::only(&stored);
@@ -341,7 +384,7 @@ async fn shutdown_during_retry_wait_stops_without_another_send() {
     let response = task.await.unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(sender.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(single_outcome(&state), Outcome::ServerShutdown);
+    assert_eq!(single_outcome(&state), RequestOutcome::ServerShutdown);
 }
 
 #[tokio::test]
@@ -367,7 +410,7 @@ async fn injected_sender_runs_normal_response_through_handle_without_a_socket() 
         Bytes::from_static(br#"{"ok":true}"#)
     );
     finish_response_tasks(&state).await;
-    assert_eq!(single_outcome(&state), Outcome::Completed);
+    assert_eq!(single_outcome(&state), RequestOutcome::Completed);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -387,43 +430,43 @@ async fn proxy_failures_preserve_status_outcome_and_error_kind_without_a_socket(
         (
             ProxyFailureScenario::InvalidTarget,
             StatusCode::BAD_REQUEST,
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             ErrorKind::InvalidTargetUrl,
         ),
         (
             ProxyFailureScenario::Upgrade,
             StatusCode::UPGRADE_REQUIRED,
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             ErrorKind::UpgradeNotSupported,
         ),
         (
             ProxyFailureScenario::InvalidResolvedTarget,
             StatusCode::BAD_REQUEST,
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             ErrorKind::InvalidTargetUrl,
         ),
         (
             ProxyFailureScenario::Dns,
             StatusCode::BAD_GATEWAY,
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             ErrorKind::DnsError,
         ),
         (
             ProxyFailureScenario::ClientConfiguration,
             StatusCode::BAD_GATEWAY,
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             ErrorKind::ClientConfiguration,
         ),
         (
             ProxyFailureScenario::ConnectTimeout,
             StatusCode::GATEWAY_TIMEOUT,
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             ErrorKind::ConnectTimeout,
         ),
         (
             ProxyFailureScenario::SendFailure,
             StatusCode::BAD_GATEWAY,
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             ErrorKind::UpstreamRequestFailed,
         ),
     ] {
@@ -505,7 +548,10 @@ async fn upstream_error_response_passes_through_and_is_recorded_without_a_socket
     let stored = state.store.scan().unwrap();
     let stored = crate::testutil::only(&stored);
     assert_eq!(stored.response.as_ref().unwrap().status, 503);
-    assert_eq!(stored.result.as_ref().unwrap().outcome, Outcome::Completed);
+    assert_eq!(
+        stored.result.as_ref().unwrap().outcome,
+        RequestOutcome::Completed
+    );
     assert!(stored.result.as_ref().unwrap().error.is_none());
     assert_eq!(
         std::fs::read(stored.directory.join("response.body")).unwrap(),
@@ -535,7 +581,7 @@ async fn injected_sender_runs_terminal_sse_through_handle_without_a_socket() {
         Bytes::from_static(b"data: [DONE]\n\n")
     );
     finish_response_tasks(&state).await;
-    assert_eq!(single_outcome(&state), Outcome::Completed);
+    assert_eq!(single_outcome(&state), RequestOutcome::Completed);
 }
 
 #[tokio::test]
@@ -558,7 +604,7 @@ async fn injected_sender_records_client_disconnect_from_handle_without_a_socket(
     drop(response);
 
     finish_response_tasks(&state).await;
-    assert_eq!(single_outcome(&state), Outcome::ClientDisconnected);
+    assert_eq!(single_outcome(&state), RequestOutcome::ClientDisconnected);
 }
 
 #[tokio::test]
@@ -582,7 +628,7 @@ async fn injected_sender_records_streaming_shutdown_from_handle_without_a_socket
     let _ = response.into_body().collect().await;
 
     finish_response_tasks(&state).await;
-    assert_eq!(single_outcome(&state), Outcome::ServerShutdown);
+    assert_eq!(single_outcome(&state), RequestOutcome::ServerShutdown);
 }
 
 #[test]
@@ -638,7 +684,10 @@ async fn unsupported_connect_preserves_url_query_headers_and_body_without_a_sock
         std::fs::read(captured_request.directory.join("request.body")).unwrap(),
         b"request\0\xffbody"
     );
-    assert_eq!(captured_request.result.unwrap().outcome, Outcome::Rejected);
+    assert_eq!(
+        captured_request.result.unwrap().outcome,
+        RequestOutcome::Rejected
+    );
 }
 
 #[test]
@@ -663,7 +712,7 @@ fn terminal_retry_preserves_the_original_outcome() {
     assert!(
         guard
             .finish(
-                Outcome::RecordingFailed,
+                RequestOutcome::RecordingFailed,
                 Some(ErrorMetadata {
                     kind: ErrorKind::ResponseRecordingFailed,
                     message: "response recording failed".to_string(),
@@ -677,7 +726,7 @@ fn terminal_retry_preserves_the_original_outcome() {
     drop(guard);
 
     let result = store.find(&id).unwrap().result.unwrap();
-    assert_eq!(result.outcome, Outcome::RecordingFailed);
+    assert_eq!(result.outcome, RequestOutcome::RecordingFailed);
     assert!(matches!(
         result.error.unwrap().kind,
         ErrorKind::ResponseRecordingFailed
@@ -982,7 +1031,7 @@ async fn sse_chunks_reach_disk_before_the_client_without_a_socket() {
         b"data: first\n\ndata: second\n\n"
     );
     let result = captured_request.result.unwrap();
-    assert_eq!(result.outcome, Outcome::Completed);
+    assert_eq!(result.outcome, RequestOutcome::Completed);
     assert_eq!(result.response_bytes, 27);
 }
 
@@ -1026,7 +1075,7 @@ async fn response_recording_failure_errors_the_downstream_without_forwarding_the
     let stored = store.find(&id).unwrap();
     assert_eq!(
         stored.result.as_ref().unwrap().outcome,
-        Outcome::RecordingFailed
+        RequestOutcome::RecordingFailed
     );
     assert_eq!(
         stored.result.unwrap().error.unwrap().kind,
@@ -1060,7 +1109,7 @@ async fn run_client_close_after_response(
     upstream_url: &'static str,
     chunks: &[&'static [u8]],
     mode: ResponseStreamMode,
-) -> (Outcome, ProtocolSummary, TimingMetadata) {
+) -> (RequestOutcome, ProtocolSummary, TimingMetadata) {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
     let (captured_request, _) = store
@@ -1121,7 +1170,7 @@ async fn client_close_after_claude_terminal_event_is_completed() {
             ResponseStreamMode::EventStream,
         )
         .await;
-    assert_eq!(outcome, Outcome::Completed);
+    assert_eq!(outcome, RequestOutcome::Completed);
     assert!(!protocol.response_terminal);
     assert!(timing.upstream_response_body_completed_at_ns.is_some());
 
@@ -1131,7 +1180,7 @@ async fn client_close_after_claude_terminal_event_is_completed() {
         ResponseStreamMode::EventStream,
     )
     .await;
-    assert_eq!(outcome, Outcome::Completed);
+    assert_eq!(outcome, RequestOutcome::Completed);
     assert!(protocol.response_terminal);
     assert!(timing.upstream_response_body_completed_at_ns.is_some());
 }
@@ -1144,7 +1193,7 @@ async fn client_close_after_codex_terminal_event_is_completed() {
             ResponseStreamMode::EventStream,
         )
         .await;
-    assert_eq!(outcome, Outcome::Completed);
+    assert_eq!(outcome, RequestOutcome::Completed);
     assert!(protocol.response_terminal);
     assert_eq!(protocol.token_usage.unwrap().output_tokens, Some(3));
     assert!(timing.upstream_response_body_completed_at_ns.is_some());
@@ -1162,7 +1211,7 @@ async fn client_close_after_chat_done_is_completed_with_final_usage() {
         )
         .await;
 
-    assert_eq!(outcome, Outcome::Completed);
+    assert_eq!(outcome, RequestOutcome::Completed);
     assert_eq!(protocol.family, ProtocolFamily::OpenaiChatCompletions);
     assert!(protocol.response_terminal);
     assert_eq!(protocol.model.effective.as_deref(), Some("gpt-chat"));
@@ -1179,7 +1228,7 @@ async fn unknown_done_stream_still_records_a_client_disconnect() {
     )
     .await;
 
-    assert_eq!(outcome, Outcome::ClientDisconnected);
+    assert_eq!(outcome, RequestOutcome::ClientDisconnected);
     assert_eq!(protocol.family, ProtocolFamily::Unknown);
     assert!(!protocol.response_terminal);
     assert!(timing.upstream_response_body_completed_at_ns.is_none());
@@ -1211,7 +1260,7 @@ async fn initial_protocol_events_publish_first_token_and_still_parse_metadata() 
                 run_client_close_after_response(url, &[event], ResponseStreamMode::EventStream)
                     .await;
 
-            assert_eq!(outcome, Outcome::ClientDisconnected);
+            assert_eq!(outcome, RequestOutcome::ClientDisconnected);
             assert!(protocol.first_token_at_ns.is_some());
             assert_eq!(protocol.model.effective.as_deref(), Some(model));
         }
@@ -1290,7 +1339,10 @@ async fn client_close_after_zstd_terminal_event_is_completed() {
     drop(upstream_sender);
 
     let captured_request = store.find(&id).unwrap();
-    assert_eq!(captured_request.result.unwrap().outcome, Outcome::Completed);
+    assert_eq!(
+        captured_request.result.unwrap().outcome,
+        RequestOutcome::Completed
+    );
     assert!(captured_request.summary.protocol.unwrap().response_terminal);
     assert!(
         captured_request
@@ -1302,78 +1354,147 @@ async fn client_close_after_zstd_terminal_event_is_completed() {
 }
 
 #[tokio::test]
-async fn zstd_sse_is_interpreted_only_after_eof_without_event_timing() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = RequestStore::open(temp.path()).unwrap();
-    let upstream_url = "https://example.com/v1/responses";
-    let (captured_request, _) = store
-        .begin(ObservedRequest {
-            upstream_url: Some(upstream_url),
-            host_hint: Some("example.com"),
-            ..ObservedRequest::test("POST", upstream_url)
-        })
-        .unwrap();
-    let id = captured_request.id.clone();
-    let headers = vec![
-        RecordedHeader {
-            name: "content-type".to_string(),
-            value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
-        },
-        RecordedHeader {
-            name: "content-encoding".to_string(),
-            value_base64: base64::engine::general_purpose::STANDARD.encode("zstd"),
-        },
-    ];
-    let guard = RequestAttempt::new(
-        store.clone(),
-        captured_request,
-        Arc::new(Mutex::new(RuntimeMeasurements::default())),
-        Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
-    );
-    guard
-        .observe_response_headers(&headers, Some(true))
-        .unwrap();
-    let body = zstd::stream::encode_all(
-        br#"event: response.failed
-data: {"type":"error","error":{"type":"service_unavailable_error","message":"overloaded"}}
-
-"#
-        .as_slice(),
-        0,
-    )
-    .unwrap();
-    let response_file = tokio::fs::File::from_std(guard.clone_response_body().unwrap());
-    let (sender, mut receiver) = mpsc::channel(2);
-    let task = tokio::spawn(async move {
-        let mut guard = guard;
-        record_response_stream_with_index(
-            CancellationToken::new(),
-            futures_util::stream::iter([Ok(Bytes::from(body))]),
-            response_file,
-            sender,
-            ResponseStreamConfig {
-                mode: ResponseStreamMode::OpaqueEventStream,
-                status: 200,
-                headers,
+async fn encoded_sse_preserves_bytes_and_interprets_only_after_eof_without_event_timing() {
+    let failed = b"event: response.failed\ndata: {\"type\":\"error\",\"error\":{\"type\":\"service_unavailable_error\",\"message\":\"overloaded\"}}\n\n";
+    let completed = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    for (encoding, upstream_url, body, expected_errors, assessment) in [
+        (
+            "zstd",
+            "https://example.com/v1/responses",
+            zstd::stream::encode_all(failed.as_slice(), 0).unwrap(),
+            vec!["service_unavailable_error"],
+            AssessmentLevel::Error,
+        ),
+        (
+            "br",
+            "https://example.com/v1/messages",
+            brotli_encode(completed),
+            vec![],
+            AssessmentLevel::Ok,
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = RequestStore::open(temp.path()).unwrap();
+        let (captured_request, _) = store
+            .begin(ObservedRequest {
+                upstream_url: Some(upstream_url),
+                host_hint: Some("example.com"),
+                ..ObservedRequest::test("POST", upstream_url)
+            })
+            .unwrap();
+        let id = captured_request.id.clone();
+        let headers = vec![
+            RecordedHeader {
+                name: "content-type".to_string(),
+                value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
             },
-            &mut guard,
-        )
-        .await;
-    });
-    while receiver.recv().await.is_some() {}
-    task.await.unwrap();
+            RecordedHeader {
+                name: "content-encoding".to_string(),
+                value_base64: base64::engine::general_purpose::STANDARD.encode(encoding),
+            },
+        ];
+        let guard = RequestAttempt::new(
+            store.clone(),
+            captured_request,
+            Arc::new(Mutex::new(RuntimeMeasurements::default())),
+            Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
+        );
+        guard
+            .observe_response_headers(&headers, Some(true))
+            .unwrap();
+        let response_file = tokio::fs::File::from_std(guard.clone_response_body().unwrap());
+        let (upstream_sender, upstream_receiver) = mpsc::channel(1);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let task = tokio::spawn(async move {
+            let mut guard = guard;
+            record_response_stream_with_index(
+                CancellationToken::new(),
+                ReceiverStream::new(upstream_receiver),
+                response_file,
+                sender,
+                ResponseStreamConfig {
+                    mode: ResponseStreamMode::OpaqueEventStream,
+                    status: 200,
+                    headers,
+                },
+                &mut guard,
+            )
+            .await;
+        });
+        upstream_sender
+            .send(Ok(Bytes::from(body.clone())))
+            .await
+            .unwrap();
+        assert_eq!(receiver.recv().await.unwrap().unwrap(), body, "{encoding}");
 
-    let captured_request = store.find(&id).unwrap();
-    let protocol = captured_request.summary.protocol.unwrap();
-    assert!(protocol.response_terminal);
-    assert_eq!(protocol.errors[0].kind, "service_unavailable_error");
-    assert!(protocol.first_token_at_ns.is_none());
-    assert!(
-        !captured_request
-            .directory
-            .join("response.events.jsonl")
-            .exists()
-    );
+        let before_eof = store.find(&id).unwrap();
+        assert!(before_eof.active, "{encoding}");
+        assert_eq!(
+            std::fs::read(before_eof.directory.join("response.body")).unwrap(),
+            body,
+            "{encoding}"
+        );
+        let protocol = before_eof.summary.protocol.unwrap();
+        assert!(!protocol.response_terminal, "{encoding}");
+        assert!(protocol.errors.is_empty(), "{encoding}");
+        assert!(protocol.first_token_at_ns.is_none(), "{encoding}");
+        assert!(
+            before_eof
+                .summary
+                .timing
+                .upstream_response_body_completed_at_ns
+                .is_none(),
+            "{encoding}"
+        );
+
+        drop(upstream_sender);
+        assert!(receiver.recv().await.is_none(), "{encoding}");
+        task.await.unwrap();
+
+        let captured_request = store.find(&id).unwrap();
+        assert_eq!(
+            captured_request.result.unwrap().outcome,
+            RequestOutcome::Completed,
+            "{encoding}"
+        );
+        assert_eq!(
+            std::fs::read(captured_request.directory.join("response.body")).unwrap(),
+            body,
+            "{encoding}"
+        );
+        let protocol = captured_request.summary.protocol.unwrap();
+        assert!(protocol.response_terminal, "{encoding}");
+        assert_eq!(
+            protocol
+                .errors
+                .iter()
+                .map(|error| error.kind.as_str())
+                .collect::<Vec<_>>(),
+            expected_errors,
+            "{encoding}"
+        );
+        assert!(protocol.first_token_at_ns.is_none(), "{encoding}");
+        assert!(captured_request.summary.warnings.is_empty(), "{encoding}");
+        assert_eq!(
+            captured_request.summary.assessment.level, assessment,
+            "{encoding}"
+        );
+        assert!(
+            captured_request
+                .summary
+                .timing
+                .upstream_response_body_completed_at_ns
+                .is_some(),
+            "{encoding}"
+        );
+        assert!(
+            !captured_request
+                .directory
+                .join("response.events.jsonl")
+                .exists(),
+            "{encoding}"
+        );
+    }
 }
 
 fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
@@ -1386,81 +1507,6 @@ fn brotli_encode(bytes: &[u8]) -> Vec<u8> {
     )
     .unwrap();
     output
-}
-
-#[tokio::test]
-async fn brotli_sse_is_interpreted_only_after_eof_without_event_timing() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = RequestStore::open(temp.path()).unwrap();
-    let upstream_url = "https://example.com/v1/messages";
-    let (captured_request, _) = store
-        .begin(ObservedRequest {
-            upstream_url: Some(upstream_url),
-            host_hint: Some("example.com"),
-            ..ObservedRequest::test("POST", upstream_url)
-        })
-        .unwrap();
-    let id = captured_request.id.clone();
-    let headers = vec![
-        RecordedHeader {
-            name: "content-type".to_string(),
-            value_base64: base64::engine::general_purpose::STANDARD.encode("text/event-stream"),
-        },
-        RecordedHeader {
-            name: "content-encoding".to_string(),
-            value_base64: base64::engine::general_purpose::STANDARD.encode("br"),
-        },
-    ];
-    let guard = RequestAttempt::new(
-        store.clone(),
-        captured_request,
-        Arc::new(Mutex::new(RuntimeMeasurements::default())),
-        Arc::new(Mutex::new(ProtocolObserver::new(Some(upstream_url)))),
-    );
-    guard
-        .observe_response_headers(&headers, Some(true))
-        .unwrap();
-    let body = brotli_encode(
-        br#"event: message_stop
-data: {"type":"message_stop"}
-
-"#,
-    );
-    let response_file = tokio::fs::File::from_std(guard.clone_response_body().unwrap());
-    let (sender, mut receiver) = mpsc::channel(2);
-    let task = tokio::spawn(async move {
-        let mut guard = guard;
-        record_response_stream_with_index(
-            CancellationToken::new(),
-            futures_util::stream::iter([Ok(Bytes::from(body))]),
-            response_file,
-            sender,
-            ResponseStreamConfig {
-                mode: ResponseStreamMode::OpaqueEventStream,
-                status: 200,
-                headers,
-            },
-            &mut guard,
-        )
-        .await;
-    });
-    while receiver.recv().await.is_some() {}
-    task.await.unwrap();
-
-    let captured_request = store.find(&id).unwrap();
-    let protocol = captured_request.summary.protocol.unwrap();
-    assert!(protocol.response_terminal);
-    assert!(captured_request.summary.warnings.is_empty());
-    assert_eq!(
-        captured_request.summary.assessment.level,
-        AssessmentLevel::Ok
-    );
-    assert!(
-        !captured_request
-            .directory
-            .join("response.events.jsonl")
-            .exists()
-    );
 }
 
 #[tokio::test]
@@ -1554,7 +1600,7 @@ async fn client_close_before_sse_terminal_event_is_disconnected() {
         ResponseStreamMode::EventStream,
     )
     .await;
-    assert_eq!(outcome, Outcome::ClientDisconnected);
+    assert_eq!(outcome, RequestOutcome::ClientDisconnected);
     assert!(!protocol.response_terminal);
     assert!(protocol.first_token_at_ns.is_some());
     assert!(protocol.token_usage.is_none());
@@ -1573,7 +1619,7 @@ async fn headerless_split_sse_is_completed_when_client_closes_after_terminal_eve
         )
         .await;
 
-    assert_eq!(outcome, Outcome::Completed);
+    assert_eq!(outcome, RequestOutcome::Completed);
     assert_eq!(
         protocol.response_mode.observed,
         Some(ResponseModeValue::Stream)
@@ -1635,7 +1681,10 @@ async fn headerless_json_response_remains_normal_and_keeps_usage() {
     assert!(client_receiver.recv().await.is_none());
 
     let captured_request = store.find(&id).unwrap();
-    assert_eq!(captured_request.result.unwrap().outcome, Outcome::Completed);
+    assert_eq!(
+        captured_request.result.unwrap().outcome,
+        RequestOutcome::Completed
+    );
     assert_eq!(
         captured_request
             .summary
@@ -1718,105 +1767,6 @@ fn response_stream_mode_only_sniffs_successful_requested_streams_without_content
 }
 
 #[test]
-fn sse_prefix_sniffer_handles_split_bom_and_rejects_json() {
-    let mut sniffer = SsePrefixSniffer::default();
-    assert_eq!(sniffer.observe(b"\xef"), PrefixSniff::Pending);
-    assert_eq!(sniffer.observe(b"\xbb\xbfeve"), PrefixSniff::Pending);
-    assert_eq!(
-        sniffer.observe(b"nt: response.created\n"),
-        PrefixSniff::EventStream
-    );
-
-    let mut json = SsePrefixSniffer::default();
-    assert_eq!(
-        json.observe(br#"{"object":"response"}"#),
-        PrefixSniff::Normal
-    );
-}
-
-#[test]
-fn first_token_data_matches_relay_line_filtering() {
-    assert!(!is_first_token_data(b""));
-    assert!(!is_first_token_data(b" \t\r\n"));
-    assert!(!is_first_token_data("\u{00a0}".as_bytes()));
-    assert!(!is_first_token_data(b" [DONE]"));
-    assert!(!is_first_token_data(b"[DONE] trailing relay text"));
-    assert!(is_first_token_data(b"ping"));
-    assert!(is_first_token_data(b"{"));
-    assert!(is_first_token_data(b"\xff"));
-}
-
-#[test]
-fn sse_first_token_counts_any_eligible_data_line_and_never_overwrites_it() {
-    let ignored = b"\xef\xbb\xbf: comment\nevent: response.created\r\ndata:\rdata: \t \ndata: [DONE] trailing\r\n";
-    let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
-    indexer.feed(ignored, 0, "1").unwrap();
-    assert!(indexer.take_first_token_at_ns().is_none());
-
-    let message_start = b"data:\ndata: {\"type\":\"message_start\"}\n\n";
-    indexer
-        .feed(message_start, ignored.len() as u64, "2")
-        .unwrap();
-    assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("2"));
-
-    indexer
-        .feed(
-            b"data: ping\n\n",
-            (ignored.len() + message_start.len()) as u64,
-            "3",
-        )
-        .unwrap();
-    assert!(indexer.take_first_token_at_ns().is_none());
-}
-
-#[test]
-fn sse_first_token_accepts_relay_compatible_non_output_data() {
-    for line in [
-        b"data: ping\n".as_slice(),
-        b"data: {\"type\":\"error\",\"error\":{}}\n".as_slice(),
-        b"data: {malformed json\n".as_slice(),
-        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n".as_slice(),
-        b"data: {\"type\":\"response.created\"}\n".as_slice(),
-    ] {
-        let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
-        indexer.feed(line, 0, "7").unwrap();
-        assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("7"));
-    }
-}
-
-#[test]
-fn sse_first_token_supports_lf_cr_and_crlf_lines() {
-    for body in [
-        b"data: ping\ndata: later\n".as_slice(),
-        b"data: ping\rdata: later\r".as_slice(),
-        b"data: ping\r\ndata: later\r\n".as_slice(),
-    ] {
-        let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
-        indexer.feed(body, 0, "11").unwrap();
-        indexer.finish().unwrap();
-        assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("11"));
-    }
-}
-
-#[test]
-fn sse_first_token_uses_line_completion_and_eof_arrival_times() {
-    let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
-    let first = b"\xef\xbb\xbfdata: {\"type\":\"response.created\"}";
-    indexer.feed(first, 0, "1").unwrap();
-    assert!(indexer.take_first_token_at_ns().is_none());
-    indexer.feed(b"\r", first.len() as u64, "2").unwrap();
-    assert!(indexer.take_first_token_at_ns().is_none());
-    indexer.feed(b"\n", (first.len() + 1) as u64, "3").unwrap();
-    assert_eq!(indexer.take_first_token_at_ns().as_deref(), Some("3"));
-
-    let mut eof = SseIndexer::new(None, "captured_request-2".to_string());
-    eof.feed(b"data: ping", 0, "8").unwrap();
-    assert!(eof.take_first_token_at_ns().is_none());
-    assert!(eof.finish().unwrap());
-    assert_eq!(eof.take_first_token_at_ns().as_deref(), Some("8"));
-}
-
-#[test]
 fn terminal_sse_detection_does_not_require_an_event_index() {
     let mut indexer = SseIndexer::new(None, "captured_request-1".to_string());
     let first = b"data: {\"type\":\"response.com";
@@ -1825,7 +1775,11 @@ fn terminal_sse_detection_does_not_require_an_event_index() {
         .feed(b"pleted\"}\n\n", first.len() as u64, "2")
         .unwrap();
 
-    assert!(indexer.terminal_seen(ProtocolFamily::OpenaiResponses));
+    assert!(
+        indexer
+            .terminal_at_ns(ProtocolFamily::OpenaiResponses)
+            .is_some()
+    );
     assert_eq!(
         indexer.terminal_at_ns(ProtocolFamily::OpenaiResponses),
         Some("2")
@@ -1843,7 +1797,7 @@ fn terminal_sse_detection_does_not_require_an_event_index() {
         Arc::new(Mutex::new(ProtocolObserver::new(None))),
     );
     let terminal = client_closed_terminal(&tracker, &guard);
-    assert_eq!(terminal.terminal.outcome, Outcome::Completed);
+    assert_eq!(terminal.terminal.outcome, RequestOutcome::Completed);
     assert_eq!(terminal.completed_at_ns.as_deref(), Some("2"));
 }
 
@@ -1885,7 +1839,7 @@ async fn upstream_eof_wins_when_client_closes_at_the_same_time() {
     task.await.unwrap();
     assert_eq!(
         store.find(&id).unwrap().result.unwrap().outcome,
-        Outcome::Completed
+        RequestOutcome::Completed
     );
 }
 

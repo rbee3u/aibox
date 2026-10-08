@@ -8,8 +8,6 @@
   overflow-wrap: anywhere;
 }
 
-/* Verbatim means line breaks and spacing survive, not that a prompt reads as
- * code: the card, not the face, says who is speaking. */
 .plainText {
   font-family: inherit;
   white-space: pre-wrap;
@@ -87,10 +85,7 @@
 }
 
 /*
- * Agent output is content, not chrome, so its headings carry their own scale
- * instead of the section and panel roles. The scale steps by size where a
- * reader scans — a report's sections are its h2s — and by ink only at the
- * bottom, where a heading is a label for the paragraph under it.
+ * Agent-output headings use a separate scale from Console section titles.
  */
 .markdown h1,
 .markdown h2,
@@ -260,11 +255,6 @@
 .codeBlock :global(.hljs-number),
 .codeBlock :global(.hljs-built_in) {
   color: var(--warning);
-}
-
-.role {
-  color: var(--ink-secondary);
-  font-weight: var(--weight-semibold);
 }
 
 @media (pointer: coarse) {

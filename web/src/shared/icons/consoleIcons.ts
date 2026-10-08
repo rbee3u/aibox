@@ -48,21 +48,9 @@ export const resourceIcons: Record<ResourceIcon, LucideIcon> = {
   component: Wrench,
 };
 
-/**
- * The mark each status tone carries, so severity never rides on hue alone.
- *
- * `--warning` and `--danger` are a step apart in lightness and adjacent in
- * hue: simulated for deuteranopia they land 6 ΔE apart in the light theme,
- * which is the same colour. Any surface that renders both tones in one list
- * therefore has to differ in shape as well, and every surface that renders
- * one of them should use the same shape as the others so the shape is
- * learnable. A triangle warns, a circled exclamation is an error, a circled
- * check is healthy.
- */
+/** Keep status shapes consistent so severity does not depend on color. */
 export const toneIcons = {
   good: CircleCheck,
   warning: TriangleAlert,
   error: CircleAlert,
 } as const satisfies Record<string, LucideIcon>;
-
-export type IconTone = keyof typeof toneIcons;

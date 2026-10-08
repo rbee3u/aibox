@@ -1,4 +1,4 @@
-use super::super::{api_error, json_response};
+use super::super::{ControlError, ControlResult, json_response};
 use crate::request::{
     AssessmentFinding, AssessmentLevel, AssessmentSource, ProtocolSummary, RecordedHeader,
     RequestAssessment, RequestDetailReadError, RequestInspection, RequestMetadata,
@@ -6,9 +6,8 @@ use crate::request::{
     StoredRequestSummary, SummaryMetadata, anchored_at,
 };
 use anyhow::Context as _;
-use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{Response, StatusCode};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 const PAGE_SIZE: usize = 50;
@@ -46,19 +45,21 @@ pub(crate) struct RequestList {
     pub(super) has_next: bool,
 }
 
-pub(crate) async fn list_requests(
+pub(in crate::service::control) async fn list_requests(
     State(state): State<RequestProxyState>,
     Query(query): Query<ListQuery>,
-) -> Response<Body> {
+) -> ControlResult {
     let inspection = state.inspection();
-    match tokio::task::spawn_blocking(move || list_requests_inner(&inspection, query.page)).await {
-        Ok(Ok(value)) => json_response(StatusCode::OK, &value),
-        Ok(Err(error)) => api_error(StatusCode::BAD_REQUEST, &error.to_string()),
-        Err(error) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("scan Requests: {error}"),
-        ),
-    }
+    let list = tokio::task::spawn_blocking(move || list_requests_inner(&inspection, query.page))
+        .await
+        .map_err(|error| {
+            ControlError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("scan Requests: {error}"),
+            )
+        })?
+        .map_err(|error| ControlError::new(StatusCode::BAD_REQUEST, error))?;
+    Ok(json_response(StatusCode::OK, &list))
 }
 
 pub(super) fn list_requests_inner(
@@ -89,27 +90,22 @@ pub(super) fn list_requests_inner(
     })
 }
 
-fn state_name(active: bool, terminal: bool) -> RequestState {
-    RequestState::from_snapshot(active, terminal)
-}
-
 fn summary(inspection: &RequestInspection, request: &StoredRequestSummary) -> RequestSummary {
     let value = &request.summary;
-    let state = state_name(request.active, value.outcome.is_some());
+    let state = RequestState::from_snapshot(request.active, value.outcome.is_some());
     let outcome = match value.outcome {
         Some(outcome) if !request.active => outcome.as_str(),
         _ => state.as_str(),
     };
-    let ended_at = value
-        .terminal
-        .then(|| {
-            value
-                .timing
-                .finished_at_ns
-                .as_deref()
-                .and_then(|offset| anchored_at(&value.observed_at, offset))
-        })
-        .flatten();
+    let ended_at = if value.terminal {
+        value
+            .timing
+            .finished_at_ns
+            .as_deref()
+            .and_then(|offset| anchored_at(&value.observed_at, offset))
+    } else {
+        None
+    };
     RequestSummary {
         id: value.request_id.clone(),
         started_at: value.observed_at.clone(),
@@ -219,65 +215,65 @@ fn diagnostic_groups(
     groups
 }
 
-pub(crate) async fn request_detail(
+pub(in crate::service::control) async fn request_detail(
     State(state): State<RequestProxyState>,
     Path(id): Path<String>,
-) -> Response<Body> {
+) -> ControlResult {
     let inspection = state.inspection();
-    let lookup_id = id.clone();
-    let lookup = tokio::task::spawn_blocking(move || inspection.find_detail(&lookup_id)).await;
-    match lookup {
-        Ok(Ok(request)) => {
-            let terminal = request.result.is_some();
-            let display_state = state_name(request.active, terminal);
-            let live_total_ms = request.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
-            let interrupted = !request.active && !terminal;
-            let inspection = state.inspection();
-            let assessment = inspection.assessment(&request.summary, request.active);
-            let diagnostics = diagnostic_groups(&inspection, &request.summary, interrupted);
-            let timeline_end_at_ns =
-                inspection.timeline_end_at_ns(&request, request.live_elapsed_ns.clone());
-            let response_headers_at = request
-                .summary
-                .timing
-                .upstream_response_headers_at_ns
-                .as_deref()
-                .and_then(|offset| anchored_at(&request.summary.observed_at, offset));
-            let response = request.response.map(|metadata| {
-                let mut detail = ResponseDetail::from(metadata);
-                if let Some(headers_at) = &response_headers_at {
-                    detail.headers_at = headers_at.clone();
-                }
-                detail
-            });
-            json_response(
-                StatusCode::OK,
-                &RequestDetail {
-                    request: request.request,
-                    response,
-                    result: request.result,
-                    summary: request.summary,
-                    assessment,
-                    diagnostics,
-                    state: display_state,
-                    request_body_bytes: request.request_body_bytes,
-                    response_body_bytes: request.response_body_bytes,
-                    live_total_ms,
-                    timeline_end_at_ns,
-                },
+    let request = tokio::task::spawn_blocking(move || inspection.find_detail(&id))
+        .await
+        .map_err(|error| {
+            ControlError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read Request detail: {error}"),
             )
+        })?
+        .map_err(|error| match error {
+            RequestDetailReadError::Lookup(error) => {
+                ControlError::new(StatusCode::NOT_FOUND, error)
+            }
+            RequestDetailReadError::EventIndex(error) => {
+                ControlError::new(StatusCode::INTERNAL_SERVER_ERROR, error)
+            }
+        })?;
+    let terminal = request.result.is_some();
+    let display_state = RequestState::from_snapshot(request.active, terminal);
+    let live_total_ms = request.live_elapsed_ns.as_deref().and_then(elapsed_ns_ms);
+    let interrupted = !request.active && !terminal;
+    let inspection = state.inspection();
+    let assessment = inspection.assessment(&request.summary, request.active);
+    let diagnostics = diagnostic_groups(&inspection, &request.summary, interrupted);
+    let timeline_end_at_ns =
+        inspection.timeline_end_at_ns(&request, request.live_elapsed_ns.clone());
+    let response_headers_at = request
+        .summary
+        .timing
+        .upstream_response_headers_at_ns
+        .as_deref()
+        .and_then(|offset| anchored_at(&request.summary.observed_at, offset));
+    let response = request.response.map(|metadata| {
+        let mut detail = ResponseDetail::from(metadata);
+        if let Some(headers_at) = &response_headers_at {
+            detail.headers_at = headers_at.clone();
         }
-        Ok(Err(RequestDetailReadError::Lookup(error))) => {
-            api_error(StatusCode::NOT_FOUND, &error.to_string())
-        }
-        Ok(Err(RequestDetailReadError::EventIndex(error))) => {
-            api_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
-        }
-        Err(error) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("read Request detail: {error}"),
-        ),
-    }
+        detail
+    });
+    Ok(json_response(
+        StatusCode::OK,
+        &RequestDetail {
+            request: request.request,
+            response,
+            result: request.result,
+            summary: request.summary,
+            assessment,
+            diagnostics,
+            state: display_state,
+            request_body_bytes: request.request_body_bytes,
+            response_body_bytes: request.response_body_bytes,
+            live_total_ms,
+            timeline_end_at_ns,
+        },
+    ))
 }
 
 fn elapsed_ns_ms(elapsed_ns: &str) -> Option<u64> {

@@ -17,7 +17,7 @@ mod openai;
 mod usage;
 mod wire;
 
-use self::http::{family_from_url, header_text, nonempty, parse_request, trim_ascii};
+use self::http::{family_from_url, header_text, nonempty, parse_request};
 use self::usage::UsageAccumulator;
 use self::wire::{
     ChoiceEnvelope, JsonResponseEnvelope, ResponseEnvelope, StreamEvent, UsageEnvelope, error_parts,
@@ -390,7 +390,7 @@ impl ProtocolObserver {
         data: &[u8],
         at_ns: String,
     ) -> bool {
-        let data = trim_ascii(data);
+        let data = data.trim_ascii();
         if data.is_empty() {
             return false;
         }

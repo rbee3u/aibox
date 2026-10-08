@@ -1,17 +1,13 @@
-//! Reading the SSE Event timing index one line at a time.
-//!
-//! Two readers walk this index: the timing view a Console body panel polls, and
-//! the diagnostic pass that folds index damage into a Request detail's warnings.
-//! They report damage in their own words, so this module owns only the decode
-//! and the walk, leaving each caller its own message wording.
+//! SSE index persistence and streaming reads. Readers report structural damage;
+//! callers choose diagnostic wording.
 
 use super::{FORMAT_VERSION, RESPONSE_EVENTS_JSONL};
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::BufRead;
 use std::path::Path;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct EventIndexEntry {
     schema_version: u32,
     request_id: String,
@@ -41,11 +37,8 @@ pub(super) enum EventIndexLine {
     Unparsable(serde_json::Error),
 }
 
-/// Walks the event index, skipping blank lines and stopping at the first line an
-/// active Request has not finished writing.
-///
-/// Yields the 1-based line number alongside each outcome so a caller can name the
-/// damaged line. A read failure carries the number of the line it was reading.
+/// Skips blank lines and an active Request's unfinished tail. Every outcome,
+/// including read failures, carries its 1-based line number.
 pub(super) struct EventIndexReader {
     reader: std::io::BufReader<std::fs::File>,
     request_id: String,
@@ -101,3 +94,104 @@ impl Iterator for EventIndexReader {
         }
     }
 }
+
+/// Live best-effort event index persistence, composed with the pure observer.
+pub(crate) struct SseIndexer {
+    observer: crate::request::sse::SseObserver,
+    file: Option<std::fs::File>,
+    request_id: String,
+    sequence: u64,
+    disabled: bool,
+}
+impl SseIndexer {
+    pub(crate) fn new(file: Option<std::fs::File>, request_id: String) -> Self {
+        Self {
+            observer: crate::request::sse::SseObserver::new(),
+            file,
+            request_id,
+            sequence: 0,
+            disabled: false,
+        }
+    }
+    pub(crate) fn feed(
+        &mut self,
+        chunk: &[u8],
+        body_start: u64,
+        at_ns: &str,
+    ) -> anyhow::Result<()> {
+        let observed = self.observer.feed(chunk, body_start, at_ns);
+        let written = self.write_ranges();
+        observed.and(written)
+    }
+    fn write_ranges(&mut self) -> anyhow::Result<()> {
+        use std::io::Write as _;
+        let mut first_error = None;
+        for range in self.observer.take_index_ranges() {
+            if self.disabled {
+                continue;
+            }
+            let Some(file) = self.file.as_mut() else {
+                continue;
+            };
+            let entry = EventIndexEntry {
+                schema_version: FORMAT_VERSION,
+                request_id: self.request_id.clone(),
+                kind: "sse_event".to_string(),
+                sequence: self.sequence,
+                body_start: range.body_start,
+                body_end: range.body_end,
+                first_arrival_at_ns: range.first_arrival_at_ns,
+                completed_at_ns: range.completed_at_ns,
+            };
+            let result = (|| -> anyhow::Result<()> {
+                serde_json::to_writer(&mut *file, &entry)?;
+                file.write_all(b"\n")?;
+                file.flush()?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => self.sequence = self.sequence.saturating_add(1),
+                Err(error) => {
+                    self.disabled = true;
+                    self.observer.disable_indexing();
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+    pub(crate) fn finish(&mut self) -> anyhow::Result<bool> {
+        let stopped = self.observer.observation_disabled();
+        let incomplete = self.observer.finish()?;
+        self.write_ranges()?;
+        if (!self.disabled || stopped)
+            && let Some(file) = self.file.as_mut()
+        {
+            file.sync_all()?;
+        }
+        Ok(incomplete)
+    }
+    pub(crate) fn disable_indexing(&mut self) {
+        self.disabled = true;
+        self.observer.disable_indexing();
+    }
+    pub(crate) fn body_offset(&self) -> u64 {
+        self.observer.body_offset()
+    }
+    pub(crate) fn take_protocol_events(&mut self) -> Vec<crate::request::sse::ObservedSseEvent> {
+        self.observer.take_protocol_events()
+    }
+    pub(crate) fn take_first_token_at_ns(&mut self) -> Option<String> {
+        self.observer.take_first_token_at_ns()
+    }
+    pub(crate) fn terminal_at_ns(
+        &self,
+        family: crate::request::model::ProtocolFamily,
+    ) -> Option<&str> {
+        self.observer.terminal_at_ns(family)
+    }
+}
+
+#[cfg(test)]
+#[path = "event_index_tests.rs"]
+mod tests;

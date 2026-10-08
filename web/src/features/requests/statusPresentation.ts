@@ -21,12 +21,9 @@ export interface AssessmentPresentation {
 }
 
 /**
- * Catalog status cell. The cell carries the Assessment: a finding that adds to
- * an HTTP status hangs a level marker after the code — an error also turns the
- * whole cell red, a warning leaves the code its own tone — and a finding on a
- * Request that never got a status becomes the label itself. `issue` is the
- * reason the cell explains on hover; it is null when the status already says
- * everything.
+ * Supplement HTTP status with an Assessment marker only when it adds a finding.
+ * Without HTTP status, the finding supplies the label. Errors override status
+ * tone; warnings retain it. `issue` supplies the hover explanation.
  */
 interface RequestStatusPresentation {
   label: string;
@@ -78,8 +75,7 @@ export function assessmentPrimaryLabel(primary: AssessmentPrimary): string {
   return httpStatus != null ? `HTTP ${httpStatus}` : errorKindLabel(primary.kind);
 }
 
-/** True when the Assessment primary is the same HTTP status already on the record. */
-export function assessmentRestatesHttpStatus(
+function assessmentRestatesHttpStatus(
   assessment: RequestAssessment,
   status: number | null,
 ): boolean {
@@ -165,9 +161,6 @@ export function requestHeadlinePresentation(
   if (!response) {
     if (active)
       return { statusText: null, tone: "active", tag: { label: "Waiting", tone: "active" } };
-    // The failure kind is the status: the list already states it alone in
-    // the status column (finding 51), and "No response" beside it said the
-    // same thing twice with the grey half first.
     const issue = assessmentPresentation(assessment);
     return issue
       ? { statusText: null, tone: issue.tone, tag: issue }

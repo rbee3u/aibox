@@ -119,13 +119,13 @@ fn invocation_preserves_passthrough_without_injecting_named_config() {
     let pass = vec![OsString::from("--model"), OsString::from("opus")];
     let invocation = AgentKind::Claude.invocation(Path::new("/home/aibox"), &pass);
     assert_eq!(
-        invocation.command(),
+        invocation,
         ["/home/aibox/.local/bin/claude", "--model", "opus",]
     );
 
     let invocation = AgentKind::Codex.invocation(Path::new("/home/aibox"), &[]);
     assert_eq!(
-        invocation.command().last(),
+        invocation.last(),
         Some(&OsString::from("/home/aibox/.local/bin/codex"))
     );
 }
@@ -160,5 +160,5 @@ fn command_preserves_non_utf8_passthrough_arguments() {
 
     let invocation = AgentKind::Codex.invocation(Path::new("/home/aibox"), &pass);
 
-    assert_eq!(invocation.command().last(), Some(&opaque));
+    assert_eq!(invocation.last(), Some(&opaque));
 }

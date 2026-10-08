@@ -1,0 +1,36 @@
+.inlineWarning {
+  margin: 8px 12px;
+}
+.catalogList {
+  padding: 6px;
+}
+
+.sessionCatalog {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.sessionWarnings:empty {
+  display: none;
+}
+
+.sessionWarnings {
+  max-height: 150px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-content);
+}
+
+.sessionWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.sessionList {
+  min-height: 0;
+  padding: 4px 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  background: var(--surface);
+}

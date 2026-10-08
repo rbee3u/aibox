@@ -33,11 +33,7 @@ import { iconSize } from "@/shared/icons/iconSizes";
 const RequestIcon = moduleIcons.requests;
 
 /**
- * A page turn that is unavailable because the page is loading stays
- * focusable: `disabled` would blur the control the user just pressed (the
- * Refresh seam, finding 27). Only a genuinely missing neighbour page — first
- * or last — renders the real `disabled`, and by then the caller has moved
- * focus off the button.
+ * Keep busy pagination focusable; native disabling is only for absent pages.
  */
 function PageTurnButton({
   direction,
@@ -107,11 +103,7 @@ function RequestPagination({
   const counter = useRef<HTMLSpanElement>(null);
   const focusedTurn = useRef<HTMLButtonElement | null>(null);
 
-  // Landing on the first or last page disables the button that brought the
-  // user there, and the browser blurs it to `<body>` the moment the attribute
-  // lands — before any effect runs. The button remembers that it held focus;
-  // the counter is the one element that still says where the user is, so
-  // focus parks on it.
+  // Native disabling can blur to <body> before effects run; recover on the counter.
   useLayoutEffect(() => {
     const turn = focusedTurn.current;
     const active = document.activeElement;
@@ -254,9 +246,7 @@ export function RequestList({
     onExit: onExitSelection,
   });
 
-  // A page turn reuses the scrolled list container, so without this the new
-  // page opens wherever the old one was left — from the bottom, where Next
-  // lives, that hid the first 36 rows of every page (finding 52).
+  // Page changes reuse the list container, so reset its previous scroll position.
   const listBody = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (listBody.current) listBody.current.scrollTop = 0;

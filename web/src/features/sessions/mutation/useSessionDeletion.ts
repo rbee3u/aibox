@@ -1,3 +1,4 @@
+import type { SessionDeletion } from "@/features/sessions/viewTypes";
 import type { RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -12,7 +13,6 @@ import {
 } from "@/features/sessions/sessionSource";
 import { useElementRegistry } from "@/features/common/useElementRegistry";
 
-export type SessionDeletion = { kind: "record"; key: string } | { kind: "batch" } | null;
 type SessionDeleteDialog =
   { kind: "record"; target: SourcedSession } | { kind: "batch"; keys: string[] } | null;
 
@@ -80,24 +80,11 @@ export function useSessionDeletion({
     const target = preferred && !preferred.disabled ? preferred : refreshButton.current;
     if (target && !target.disabled) {
       target.focus();
-      // The focus target is consumed once; clearing it here is what ends the
-      // post-deletion focus move rather than a cascading state update.
+      // Consume the focus target once to avoid repeated focus moves.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setFocusAfterDelete(undefined);
     }
   }, [data, deleteButtons, deletion, focusAfterDelete, refreshButton]);
-
-  function setDialogKeys(keys: string[] | null) {
-    setDialog(keys ? { kind: "batch", keys } : null);
-  }
-
-  function setSingleDeleteTarget(target: SourcedSession | null) {
-    setDialog(target ? { kind: "record", target } : null);
-  }
-
-  function registerDeleteButton(key: string, element: HTMLButtonElement | null) {
-    deleteButtons.register(key, element);
-  }
 
   function beginDeletion(next: Exclude<SessionDeletion, null>): boolean {
     if (deletionInFlight.current) return false;
@@ -137,7 +124,7 @@ export function useSessionDeletion({
       if (wasCurrent && survivor) void openSession(survivor);
       setFocusAfterDelete(survivor ? row.key : null);
     } finally {
-      setSingleDeleteTarget(null);
+      setDialog(null);
       finishDeletion();
     }
   }
@@ -163,7 +150,7 @@ export function useSessionDeletion({
     } catch (cause) {
       reportFailure("action", "Couldn’t delete selected Sessions", cause);
     }
-    setDialogKeys(null);
+    setDialog(null);
     const refreshed = await load("refresh");
     if (refreshed && refreshed.warnings.length === 0) {
       const remaining = new Set(
@@ -181,8 +168,6 @@ export function useSessionDeletion({
 
   const deletionBusy = deletion !== null;
 
-  // Grouped the way the Session view model consumes it, so the controller
-  // spreads these rather than forwarding each field.
   return {
     mutations: {
       batchBusy: deletion?.kind === "batch",
@@ -194,11 +179,11 @@ export function useSessionDeletion({
     },
     dialogs: {
       dialogKeys,
-      closeBatchDelete: () => setDialogKeys(null),
-      closeSingleDelete: () => setSingleDeleteTarget(null),
-      openBatchDelete: (keys: string[]) => setDialogKeys(keys),
-      openSingleDelete: (target: SourcedSession) => setSingleDeleteTarget(target),
-      registerDeleteButton,
+      closeBatchDelete: () => setDialog(null),
+      closeSingleDelete: () => setDialog(null),
+      openBatchDelete: (keys: string[]) => setDialog({ kind: "batch", keys }),
+      openSingleDelete: (target: SourcedSession) => setDialog({ kind: "record", target }),
+      registerDeleteButton: deleteButtons.register,
       singleDeleteTarget,
     },
   };

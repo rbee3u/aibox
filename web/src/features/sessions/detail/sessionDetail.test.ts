@@ -1,3 +1,4 @@
+import type { SessionActivityItem } from "@/features/sessions/viewTypes";
 import { describe, expect, it } from "vitest";
 import type { ConversationMessage, SessionDetailStats, ToolActivity } from "@/api/sessions";
 import {
@@ -13,7 +14,6 @@ import {
   toolNeedsAttention,
   transcriptAttentionWarnings,
   transcriptAttentionNotice,
-  type SessionActivityItem,
   type SessionDetailAction,
   type SessionDetailState,
 } from "@/features/sessions/detail/sessionDetail";

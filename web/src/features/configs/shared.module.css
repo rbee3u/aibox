@@ -1,0 +1,116 @@
+.dialogActions {
+  composes: dialogActions from "@/shared/ui/layout/catalog.module.css";
+}
+
+.inlineWarning {
+  margin: 8px 12px;
+}
+
+.dialogActions,
+.editorTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.configWarnings:empty {
+  display: none;
+}
+
+.configWarnings {
+  max-height: 150px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-content);
+}
+
+.configWarnings .inlineWarning {
+  margin: 8px;
+}
+
+.editorTools {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  min-height: 44px;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line-content);
+  background: var(--surface);
+}
+
+.editorTools > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.authVisualBody {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--line-content);
+}
+
+.authVisualBody p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+
+.authVisualBody .dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.authVisualBody > .visualField:first-child {
+  border-top: 0;
+}
+
+.visualFieldList {
+  display: grid;
+  max-width: var(--measure-text);
+}
+
+.visualFieldList > .visualField:not(:first-child) {
+  border-top: 1px solid var(--line-content);
+}
+
+.visualField {
+  display: grid;
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 9px 0;
+  background: transparent;
+}
+
+.providerEditor {
+  display: grid;
+  gap: 1px;
+}
+
+.providerEditor > .visualField + .visualField {
+  border-top: 1px solid var(--line-content);
+}
+
+@media (max-width: 760px) {
+  .editorTools {
+    flex-wrap: wrap;
+  }
+
+  .editorTools > span {
+    flex: 1 0 100%;
+  }
+
+  .visualField {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    padding: 10px 12px;
+  }
+}

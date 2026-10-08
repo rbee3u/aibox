@@ -1,7 +1,8 @@
 import type { Mock } from "vitest";
 import { composeControlApi, type ConnectedControlApi } from "@/api/connect";
 import type { Bootstrap } from "@/api/core";
-import { ApiError, ControlApi } from "@/api/transport";
+import { HttpError } from "@/api/httpError";
+import { ControlApi } from "@/api/transport";
 
 export interface TestControlApi {
   bootstrap?: Partial<Bootstrap>;
@@ -25,7 +26,7 @@ export function composeTestApi(testApi: TestControlApi): ConnectedControlApi {
 
 /** A refused Control request as the transport raises it: message plus HTTP status. */
 export function controlRefusal(message: string, status: number): Error {
-  return new ApiError(message, status);
+  return new HttpError(message, status);
 }
 
 export { ControlApi };

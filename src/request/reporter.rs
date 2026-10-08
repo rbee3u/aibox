@@ -1,6 +1,8 @@
 //! Safe, serialized terminal presentation for the foreground Request Proxy.
 
-use crate::request::model::{AssessmentLevel, ErrorKind, Outcome, TerminalRequestEvent, utc_now};
+use crate::request::model::{
+    AssessmentLevel, ErrorKind, RequestOutcome, TerminalRequestEvent, utc_now,
+};
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
@@ -104,9 +106,12 @@ impl RequestReporter {
     }
 }
 
-fn should_report_request(outcome: Outcome, assessment_level: AssessmentLevel) -> bool {
+fn should_report_request(outcome: RequestOutcome, assessment_level: AssessmentLevel) -> bool {
     assessment_level == AssessmentLevel::Error
-        && !matches!(outcome, Outcome::Completed | Outcome::ServerShutdown)
+        && !matches!(
+            outcome,
+            RequestOutcome::Completed | RequestOutcome::ServerShutdown
+        )
 }
 
 fn render_event(tty: bool, timestamp: &str, level: &str, message: &str) -> String {
@@ -143,14 +148,14 @@ fn short_id(id: &str) -> &str {
     &id[start..]
 }
 
-fn outcome_reason(outcome: Outcome) -> &'static str {
+fn outcome_reason(outcome: RequestOutcome) -> &'static str {
     match outcome {
-        Outcome::Rejected => "request rejected",
-        Outcome::UpstreamError => "upstream request failed",
-        Outcome::ClientDisconnected => "client disconnected",
-        Outcome::RecordingFailed => "request could not be finalized",
-        Outcome::ServerShutdown => "server shutdown",
-        Outcome::Completed => "completed",
+        RequestOutcome::Rejected => "request rejected",
+        RequestOutcome::UpstreamError => "upstream request failed",
+        RequestOutcome::ClientDisconnected => "client disconnected",
+        RequestOutcome::RecordingFailed => "request could not be finalized",
+        RequestOutcome::ServerShutdown => "server shutdown",
+        RequestOutcome::Completed => "completed",
     }
 }
 

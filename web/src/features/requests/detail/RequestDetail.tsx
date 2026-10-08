@@ -1,17 +1,10 @@
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleAlert,
-  CircleOff,
-  Clipboard,
-  FileText,
-  TriangleAlert,
-} from "lucide-react";
+import styles from "@/features/requests/detail/RequestDetail.module.css";
+import summarySharedStyles from "@/features/requests/detail/summaryShared.module.css";
+import { RequestSummary } from "@/features/requests/detail/RequestSummary";
+import { ChevronDown, ChevronRight, CircleOff, FileText } from "lucide-react";
 import { useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { KeyboardEvent } from "react";
 import type {
-  AssessmentFinding,
   BodyKind,
   EventTimingIndex,
   RequestDetail as RequestDetailData,
@@ -26,21 +19,15 @@ import {
   createBodyViewMemory,
   type BodyViewMemory,
 } from "@/features/requests/detail/bodyViewMemory";
-import {
-  elapsedNsMs,
-  resolveRequestedEffective,
-  timingStages,
-  tokenCount,
-} from "@/features/requests/summary";
-import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
-import { capitalize, compactDuration, duration, formatTimestamp } from "@/shared/lib/format";
+
+import { compactDuration, formatTimestamp } from "@/shared/lib/format";
 import { decodeHeader, requestDetailUrl } from "@/features/requests/requestFormat";
 import { BodyViewer } from "@/features/requests/detail/BodyViewer";
-import styles from "@/features/requests/detail/RequestDetail.module.css";
+
 import { RecordHeadlineStatus } from "@/features/requests/RequestStatus";
-import { assessmentPrimaryLabel } from "@/features/requests/statusPresentation";
+
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
-import { IconButton } from "@/shared/ui/IconButton";
+
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { iconSize } from "@/shared/icons/iconSizes";
 
@@ -155,7 +142,7 @@ export function RequestDetail({
         aria-labelledby={`request-tab-${request.id}-${tab}`}
       >
         {tab === "summary" ? (
-          <Summary detail={detail} />
+          <RequestSummary detail={detail} />
         ) : tab === "response" && !response ? (
           <EmptyState
             variant="detail"
@@ -180,372 +167,6 @@ export function RequestDetail({
       </div>
     </section>
   );
-}
-
-function Summary({ detail }: { detail: RequestDetailData }) {
-  const [copiedSessionId, copySessionIdText] = useClipboardFeedback<string>();
-  const total = detail.result?.total_ms ?? detail.live_total_ms;
-  const axisMs = elapsedNsMs(detail.timeline_end_at_ns) ?? total ?? 0;
-  const protocol = detail.summary.protocol;
-  const model =
-    resolveRequestedEffective(protocol?.model) ??
-    (detail.state === "active" ? "Detecting…" : "Not reported");
-  const reasoningEffort = resolveRequestedEffective(protocol?.reasoning_effort);
-  const sessionId = detail.summary.agent_session_id;
-  const sessionCopied = sessionId !== null && copiedSessionId === sessionId;
-  const stages = timingStages(detail);
-  const firstToken = elapsedNsMs(protocol?.first_token_at_ns);
-  const mode = protocol?.response_mode.observed ?? protocol?.response_mode.requested;
-  const responseMode = mode === "stream" ? "Stream" : mode === "normal" ? "Non-stream" : null;
-  const diagnostics = detail.diagnostics;
-  const hasDiagnostics = Object.values(diagnostics).some((entries) => entries.length > 0);
-
-  function copySessionId() {
-    if (sessionId) void copySessionIdText(sessionId, sessionId);
-  }
-
-  return (
-    <div className={styles.summary}>
-      <section className={styles.modelSummary} aria-labelledby="request-model-title">
-        <h2 id="request-model-title">Model</h2>
-        <div className={styles.modelHeadline}>
-          <p className={styles.modelName} title={`Model ${model}`}>
-            <span className={styles.modelValue}>{model}</span>
-            {reasoningEffort && (
-              <>
-                {" "}
-                <span className={styles.modelEffort}>{reasoningEffort}</span>
-              </>
-            )}
-          </p>
-          {responseMode && <span className={styles.modeBadge}>{responseMode}</span>}
-        </div>
-        <dl className={styles.sessionMeta}>
-          <div className={styles.sessionFact}>
-            <dt>Agent Session ID</dt>
-            <dd>
-              <span className={styles.sessionValue}>{sessionId ?? "Not reported"}</span>
-              {sessionId && (
-                <IconButton
-                  size="sm"
-                  label={sessionCopied ? "Agent Session ID copied" : "Copy Agent Session ID"}
-                  onClick={copySessionId}
-                >
-                  {sessionCopied ? (
-                    <Check size={iconSize.xs} aria-hidden="true" />
-                  ) : (
-                    <Clipboard size={iconSize.xs} aria-hidden="true" />
-                  )}
-                </IconButton>
-              )}
-            </dd>
-          </div>
-        </dl>
-      </section>
-      <TokenUsageGroup detail={detail} />
-      <section className={styles.timingSection} aria-labelledby="request-timing-title">
-        <h2 id="request-timing-title">Timing</h2>
-        <dl className={styles.timingMetrics}>
-          <Metric label="First token" value={duration(firstToken)} />
-          <Metric label="Duration" value={duration(total)} />
-        </dl>
-        {stages.length > 0 ? (
-          <div className={styles.timelineContainer}>
-            {axisMs > 0 && (
-              <div className={styles.timelineRulerRow} aria-hidden="true">
-                <span />
-                <div className={styles.timelineRuler}>
-                  <span className={`${styles.rulerTick} ${styles.rulerTickStart}`}>0 ms</span>
-                  <span className={`${styles.rulerTick} ${styles.rulerTickHalf}`}>
-                    {duration(axisMs * 0.5)}
-                  </span>
-                  <span className={`${styles.rulerTick} ${styles.rulerTickEnd}`}>
-                    {duration(axisMs)}
-                  </span>
-                </div>
-                <span />
-              </div>
-            )}
-            <div className={styles.timeline} role="list" aria-label="Timing stages">
-              {stages.map((stage) => {
-                const status = stage.status === "complete" ? "" : ` · ${stage.status}`;
-                const value = `${duration(stage.durationMs)}${status}`;
-                const startMs = (axisMs * stage.startPercent) / 100;
-                const pct = stage.widthPercent.toFixed(1);
-                const detailTitle = `${stage.label}: ${value} (${pct}%) · Started at +${duration(startMs)}`;
-                const style = {
-                  "--stage-start": `${stage.startPercent}%`,
-                  "--stage-width": `${stage.widthPercent}%`,
-                } as CSSProperties;
-                return (
-                  <div
-                    key={stage.label}
-                    className={styles.timelineRow}
-                    role="listitem"
-                    title={detailTitle}
-                    aria-label={detailTitle}
-                  >
-                    <span className={styles.timelineLabel}>
-                      <span
-                        className={`${styles.stageDot} ${styles[`tone${capitalize(stage.tone)}`]}`}
-                        aria-hidden="true"
-                      />
-                      {stage.label}
-                    </span>
-                    <span className={styles.timelineTrack} aria-hidden="true">
-                      <span
-                        className={`${styles.timelineBar} ${styles[`tone${capitalize(stage.tone)}`]} ${
-                          stage.status !== "complete" ? styles.timelinePartial : ""
-                        }`}
-                        style={style}
-                      />
-                    </span>
-                    <span className={styles.timelineValue}>{value}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className={styles.timelineLegend} aria-label="Timing stage legend">
-              <span className={styles.legendItem}>
-                <span className={`${styles.stageDot} ${styles.toneRequest}`} aria-hidden="true" />
-                <span>Request</span>
-              </span>
-              <span className={styles.legendItem}>
-                <span className={`${styles.stageDot} ${styles.toneWait}`} aria-hidden="true" />
-                <span>Waiting (TTFB)</span>
-              </span>
-              <span className={styles.legendItem}>
-                <span className={`${styles.stageDot} ${styles.toneModel}`} aria-hidden="true" />
-                <span>Response stream / body</span>
-              </span>
-              <span className={styles.legendItem}>
-                <span className={`${styles.stageDot} ${styles.toneFinalize}`} aria-hidden="true" />
-                <span>Finalization</span>
-              </span>
-            </div>
-          </div>
-        ) : (
-          <p className={styles.sectionState}>Timing stages are not available yet.</p>
-        )}
-      </section>
-      {hasDiagnostics && (
-        <section className={styles.diagnostics} aria-labelledby="request-diagnostics-title">
-          <h2 id="request-diagnostics-title">Diagnostics</h2>
-          <div className={styles.diagnosticGroups}>
-            <DiagnosticGroup title="Proxy / transport" entries={diagnostics.request} tone="error" />
-            <DiagnosticGroup title="HTTP response" entries={diagnostics.http} tone="error" />
-            <DiagnosticGroup title="Model API" entries={diagnostics.provider} tone="error" />
-            <DiagnosticGroup title="Warnings" entries={diagnostics.warnings} tone="warning" />
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function TokenUsageGroup({ detail }: { detail: RequestDetailData }) {
-  const protocol = detail.summary.protocol;
-  const usage = protocol?.token_usage ?? null;
-  const claude = protocol?.family === "claude_messages";
-  const hasCacheWriteBreakdown =
-    claude && (usage?.cache_write_5m_tokens != null || usage?.cache_write_1h_tokens != null);
-  const cacheWrites = hasCacheWriteBreakdown
-    ? (usage?.cache_write_5m_tokens ?? 0) + (usage?.cache_write_1h_tokens ?? 0)
-    : (usage?.cache_write_tokens ?? null);
-  const inputMetrics: Array<{
-    label: string;
-    value: number | null;
-    details?: Array<{ label: string; value: number | null }>;
-  }> = [
-    {
-      label: claude ? "Base input" : "Input",
-      value: usage?.base_input_tokens ?? null,
-    },
-    {
-      label: claude ? "Cache hits & refreshes" : "Cached input",
-      value: usage?.cached_input_tokens ?? null,
-    },
-    {
-      label: "Cache writes",
-      value: cacheWrites,
-      details: hasCacheWriteBreakdown
-        ? [
-            { label: "5m", value: usage?.cache_write_5m_tokens ?? null },
-            { label: "1h", value: usage?.cache_write_1h_tokens ?? null },
-          ]
-        : undefined,
-    },
-  ];
-  const totalInput = usage?.total_input_tokens ?? null;
-  const output = usage?.output_tokens ?? null;
-  const reasoning = output !== null ? (usage?.reasoning_output_tokens ?? null) : null;
-  const hasUsageData = [
-    usage?.total_input_tokens,
-    usage?.base_input_tokens,
-    usage?.cached_input_tokens,
-    usage?.cache_write_tokens,
-    usage?.cache_write_5m_tokens,
-    usage?.cache_write_1h_tokens,
-    usage?.output_tokens,
-  ].some((value) => value != null);
-  return (
-    <section className={styles.tokenSection} aria-labelledby="request-token-title">
-      <h2 id="request-token-title">Token usage</h2>
-      {hasUsageData ? (
-        <div className={styles.tokenUsageGrid}>
-          <div className={styles.tokenCard} role="group" aria-label="Input tokens container">
-            <dl className={styles.tokenCardHeader} role="group" aria-label="Total input tokens">
-              <div className={styles.tokenMetricPrimary}>
-                <dt>Total input</dt>
-                <dd>{displayTokenCount(totalInput)}</dd>
-              </div>
-            </dl>
-            <div className={styles.tokenSubMetrics} role="group" aria-label="Input tokens">
-              {inputMetrics.map((metric) => (
-                <div
-                  className={`${styles.tokenSubCell} ${
-                    metric.details ? styles.tokenSubCellDetailed : ""
-                  }`}
-                  role="group"
-                  aria-label={`${metric.label} billing category`}
-                  key={metric.label}
-                >
-                  <dl className={styles.tokenSubDl}>
-                    <div>
-                      <dt>{metric.label}</dt>
-                      <dd>{displayTokenCount(metric.value)}</dd>
-                    </div>
-                  </dl>
-                  {metric.details && (
-                    <dl
-                      className={styles.tokenCacheBreakdown}
-                      role="group"
-                      aria-label="Cache write TTL breakdown"
-                    >
-                      {metric.details.map((detailMetric) => (
-                        <div className={styles.tokenCacheDetail} key={detailMetric.label}>
-                          <dt>{detailMetric.label}</dt>
-                          <dd>{displayTokenCount(detailMetric.value)}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className={styles.tokenCard} role="group" aria-label="Output tokens">
-            <dl className={styles.tokenCardHeader}>
-              <div className={styles.tokenMetricPrimary}>
-                <dt>Output</dt>
-                <dd>{displayTokenCount(output)}</dd>
-              </div>
-            </dl>
-            {reasoning !== null && (
-              <div className={styles.tokenSubMetrics}>
-                <div
-                  className={styles.tokenSubCell}
-                  role="group"
-                  aria-label={`Output includes ${tokenCount(reasoning)} reasoning tokens`}
-                >
-                  <dl className={styles.tokenSubDl}>
-                    <div>
-                      <dt>Reasoning</dt>
-                      <dd>{tokenCount(reasoning)}</dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <p className={styles.usageMessage}>{usageStateMessage(detail)}</p>
-      )}
-    </section>
-  );
-}
-
-const PHASE_LABELS: Record<string, string> = {
-  request: "Request",
-  response: "Response",
-  model_api: "Model API",
-  recording: "Recording",
-  transport: "Transport",
-  proxy: "Proxy",
-};
-
-function formatPhase(phase: string): string {
-  const normalized = phase.trim().toLowerCase();
-  if (PHASE_LABELS[normalized]) return PHASE_LABELS[normalized];
-  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function DiagnosticGroup({
-  title,
-  entries,
-  tone,
-}: {
-  title: string;
-  entries: AssessmentFinding[];
-  tone: "error" | "warning";
-}) {
-  if (entries.length === 0) return null;
-  const Icon = tone === "error" ? CircleAlert : TriangleAlert;
-  return (
-    <section
-      className={`${styles.diagnosticGroup} ${
-        tone === "error" ? styles.errorDiagnostics : styles.warningDiagnostics
-      }`}
-      aria-label={title}
-    >
-      <h3>
-        {title} <span>{entries.length}</span>
-      </h3>
-      <div className={styles.diagnosticList}>
-        {entries.map((entry, index) => (
-          <article
-            className={styles.diagnosticItem}
-            key={`${entry.source}-${entry.kind}-${entry.at_ns}-${index}`}
-          >
-            <div className={styles.diagnosticMeta}>
-              <Icon className={styles.diagnosticIcon} size={iconSize.xs} aria-hidden="true" />
-              <strong>{assessmentPrimaryLabel(entry)}</strong>
-              {entry.phase && (
-                <span className={styles.diagnosticPhase}>{formatPhase(entry.phase)}</span>
-              )}
-              {entry.at_ns && (
-                <span className={styles.diagnosticTime}>+{duration(elapsedNsMs(entry.at_ns))}</span>
-              )}
-            </div>
-            <p>{entry.message}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function usageStateMessage(detail: RequestDetailData): string {
-  const protocol = detail.summary.protocol;
-  if (!protocol || protocol.family === "unknown") {
-    return "Token usage is unavailable for this protocol.";
-  }
-  if (protocol.token_usage) return "The upstream API reported no token counters.";
-  if (detail.state === "active" && !protocol.response_terminal) {
-    return "Waiting for the upstream API to report token usage.";
-  }
-  if (
-    detail.state !== "active" &&
-    (detail.summary.outcome !== "completed" || !protocol.response_terminal)
-  ) {
-    return "Token usage was not reported before this request ended.";
-  }
-  return "The completed response did not report token usage.";
-}
-
-function displayTokenCount(value: number | null): string {
-  return value === null ? "—" : tokenCount(value);
 }
 
 function MessageData({
@@ -577,7 +198,7 @@ function MessageData({
 
   return (
     <div className={styles.messageData}>
-      <div className={styles.sectionTitle}>
+      <div className={summarySharedStyles.sectionTitle}>
         <h2>
           {headers.length > 0 ? (
             <button
@@ -631,17 +252,6 @@ function MessageData({
         onMemoryChange={onMemoryChange}
         onDownload={onDownload}
       />
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className={styles.metric}>
-      <dt>{label}</dt>
-      <dd>
-        <span className={styles.metricValue}>{value}</span>
-      </dd>
     </div>
   );
 }

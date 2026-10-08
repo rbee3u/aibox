@@ -1,9 +1,11 @@
 //! Component catalog composition and Tenant Environment capability projection.
 
+use super::TenantEnvironmentCapabilities;
 use super::{ComponentInspection, ComponentKind, ComponentStatus};
 use super::{node_agent, python, rust_go, statusline};
 use crate::agent::AgentKind;
-use crate::tenant::{Tenant, TenantEnvironmentCapabilities};
+use crate::foundation::safe_fs;
+use crate::tenant::Tenant;
 use anyhow::{Result, bail};
 use std::path::Path;
 
@@ -13,14 +15,12 @@ pub(crate) fn inspect_catalog(selected: &Tenant) -> Result<Vec<ComponentInspecti
         .iter()
         .copied()
         .map(|kind| {
-            if !exists {
-                return ComponentInspection {
-                    kind,
-                    status: Some(ComponentStatus::NotInstalled),
-                    error: None,
-                };
-            }
-            match inspect(kind, selected.home_dir()) {
+            let status = if exists {
+                inspect(kind, selected.home_dir())
+            } else {
+                Ok(ComponentStatus::NotInstalled)
+            };
+            match status {
                 Ok(status) => ComponentInspection {
                     kind,
                     status: Some(status),
@@ -101,9 +101,7 @@ fn component_catalog(selected: &Tenant) -> &'static [ComponentKind] {
 pub(super) fn tenant_home_exists(selected: &Tenant) -> Result<bool> {
     match selected {
         Tenant::Managed(tenant) => tenant.exists(),
-        Tenant::Host { home_dir, .. } => {
-            crate::foundation::safe_fs::real_dir_exists(home_dir, "Host Home")
-        }
+        Tenant::Host { home_dir, .. } => safe_fs::real_dir_exists(home_dir, "Host Home"),
     }
 }
 

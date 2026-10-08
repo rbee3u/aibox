@@ -340,11 +340,6 @@ describe("TenantPage", () => {
       "true",
     );
   });
-  /*
-   * Entering selection swaps the toolbar under the button that was just
-   * pressed, so focus would otherwise fall to <body>. Host and the protected
-   * Default Tenant cannot be ticked, so the first row that can is `work`.
-   */
   it("moves focus onto the first selectable row on enter and back to Select on cancel", async () => {
     const { api } = tenantApi();
     const user = userEvent.setup();
@@ -432,11 +427,6 @@ describe("TenantPage", () => {
       await screen.findByLabelText("Selected Tenant: new-tenant, Managed Tenant"),
     ).toBeInTheDocument();
   });
-  /*
-   * The dialog's own focus restore could not help here: every reload used to
-   * swap the whole list for a spinner, so the control that opened the dialog
-   * was a dead node by the time it tried, and focus fell to <body>.
-   */
   it("moves focus to the new Tenant's row after a create", async () => {
     const rows = [...tenantRows];
     const createTenant = vi.fn((name: string) => {
@@ -514,10 +504,6 @@ describe("TenantPage", () => {
     });
     expect(screen.getByRole("button", { name: "work, Managed Tenant" })).toBe(work);
   });
-  /*
-   * Typing `my-tenant` passes through `my-`, which is invalid for exactly one
-   * keystroke; the error used to flash a 44px banner and jump the dialog.
-   */
   it("holds the name format error until the field is left or submitted", async () => {
     const { api } = tenantApi();
     const user = userEvent.setup();

@@ -97,9 +97,8 @@ function MarkdownLink({ children, href, ...props }: MarkdownLinkProps) {
 }
 
 /**
- * An image in a Transcript is a reference, never a fetch: a local path cannot
- * resolve from here (and would reach the Service as a Request Proxy target),
- * and a remote one would have the Console call out on the Agent's behalf.
+ * Never fetch Transcript images: relative paths reach the Request Proxy;
+ * remote URLs would make unsolicited requests on the Agent's behalf.
  */
 function MarkdownImage({ alt, src }: MarkdownImageProps) {
   const source = typeof src === "string" ? src : undefined;
@@ -196,8 +195,4 @@ export function SessionMessageContent({ role, text }: SessionMessageContentProps
     return <MarkdownMessage text={text} />;
   }
   return <PlainMessage text={text} />;
-}
-
-export function SessionMessageRole({ children }: { children: ReactNode }) {
-  return <span className={styles.role}>{children}</span>;
 }

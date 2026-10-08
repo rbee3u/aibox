@@ -9,7 +9,6 @@ interface ConversationNavigationOptions {
   loading: boolean;
 }
 
-/** Owns Conversation DOM scrolling, anchors, and the active user-message projection. */
 export function useConversationNavigation({
   active,
   currentSessionKey,
@@ -27,7 +26,6 @@ export function useConversationNavigation({
     userMessageRefs.current.clear();
   }, []);
 
-  /** Reads the scroll position into the navigator: latest-ness and the current stop. */
   const syncToScroll = useCallback((element: HTMLDivElement) => {
     setShowJumpLatest(conversationIsAwayFromLatest(element));
     const threshold = element.scrollTop + Math.min(element.clientHeight * 0.28, 180);
@@ -86,9 +84,7 @@ export function useConversationNavigation({
     return () => window.cancelAnimationFrame(frame);
   }, [currentSessionKey]);
 
-  // Each completed read — the first, or a refresh that kept the reading in
-  // place — re-reads the position, so the navigator marks the stop the reader
-  // is actually at rather than resetting to the first.
+  // Refresh preserves scroll position; derive the active stop from that position.
   useEffect(() => {
     if (!currentSessionKey || !active || loading) return;
     const frame = window.requestAnimationFrame(() => {

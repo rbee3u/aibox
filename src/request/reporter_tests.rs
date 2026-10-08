@@ -9,23 +9,23 @@ fn short_id_uses_the_last_twelve_characters() {
 #[test]
 fn request_events_report_only_error_assessed_abnormal_outcomes() {
     assert!(!should_report_request(
-        Outcome::ClientDisconnected,
+        RequestOutcome::ClientDisconnected,
         AssessmentLevel::Ok
     ));
     assert!(!should_report_request(
-        Outcome::ClientDisconnected,
+        RequestOutcome::ClientDisconnected,
         AssessmentLevel::Warning
     ));
     assert!(should_report_request(
-        Outcome::ClientDisconnected,
+        RequestOutcome::ClientDisconnected,
         AssessmentLevel::Error
     ));
     assert!(!should_report_request(
-        Outcome::Completed,
+        RequestOutcome::Completed,
         AssessmentLevel::Error
     ));
     assert!(!should_report_request(
-        Outcome::ServerShutdown,
+        RequestOutcome::ServerShutdown,
         AssessmentLevel::Error
     ));
 }

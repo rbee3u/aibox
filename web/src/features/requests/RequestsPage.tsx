@@ -8,12 +8,11 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
-import type { RequestsApi } from "@/api/requests";
 import { RequestDetail } from "@/features/requests/detail/RequestDetail";
 import { RequestList } from "@/features/requests/catalog/RequestList";
-import { REQUESTS_PER_PAGE } from "@/features/requests/catalog/listModel";
+import { REQUESTS_PER_PAGE } from "@/features/requests/listModel";
 import { useRequestsController } from "@/features/requests/useRequestsController";
-import type { ModuleLocationChange } from "@/shared/lib/navigation";
+
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { NotificationCenter } from "@/shared/ui/NotificationCenter";
@@ -21,12 +20,7 @@ import { PageError } from "@/shared/ui/ManagementFeedback";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import styles from "@/features/requests/RequestsPage.module.css";
 import { iconSize } from "@/shared/icons/iconSizes";
-
-interface RequestsPageProps {
-  api: RequestsApi;
-  search: string;
-  onLocationChange: ModuleLocationChange;
-}
+import type { RequestsPageProps } from "@/features/requests/viewTypes";
 
 export function RequestsPage(props: RequestsPageProps) {
   const {

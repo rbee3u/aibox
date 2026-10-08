@@ -28,9 +28,7 @@ export function OperationPanel(props: OperationPanelProps) {
 }
 
 /**
- * Reports the panel's own height to the shell. The collapsed bar wraps its
- * header at narrow widths and with a long Operation kind, so the space to
- * reserve is measured rather than restated as a constant that can drift.
+ * Measure the fixed panel because narrow layouts and long labels wrap its header.
  */
 function useReportedHeight(onHeightChange: ((height: number) => void) | undefined) {
   const panelRef = useRef<HTMLElement>(null);
@@ -49,11 +47,6 @@ function useReportedHeight(onHeightChange: ((height: number) => void) | undefine
   return panelRef;
 }
 
-/**
- * How long the Operation has been running. A running Operation retimes every
- * second, because "is it stuck" is the question a multi-minute install invites
- * and a static label cannot answer it.
- */
 function useElapsedLabel(operation: Operation): string | null {
   const running = operation.state === "running";
   const [now, setNow] = useState(() => Date.now());
@@ -62,9 +55,6 @@ function useElapsedLabel(operation: Operation): string | null {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [running]);
-  // A finished Operation carries `ended_at`, so the clock only advances a
-  // running one. A finished Operation missing its end reports nothing rather
-  // than presenting the time since mount as a total.
   const elapsed = operationElapsedMs(operation, now);
   if (elapsed === null) return null;
   if (running) return compactDuration(elapsed);
@@ -72,14 +62,9 @@ function useElapsedLabel(operation: Operation): string | null {
 }
 
 /**
- * Keeps the newest log line in view while the reader is at the bottom.
- *
- * Stickiness is decided against the geometry the box had before this frame
- * arrived, not from scroll events: assigning `scrollTop` emits its own scroll
- * event, which lands after the next batch of log lines has already grown the
- * box and so reports the reader as having scrolled away when they had not.
- * Scrolling up is a deliberate act of reading history, so a new frame must not
- * yank the view back down; returning to the bottom re-arms following.
+ * Follow new output only when the reader was at the previous bottom. Compare
+ * against pre-update geometry: programmatic scroll events arrive after content
+ * grows and can falsely appear to be a user scrolling away.
  */
 function useLogFollow() {
   const logRef = useRef<HTMLPreElement>(null);
@@ -153,11 +138,7 @@ function OperationPanelContent({
         </div>
         <span className={styles.stateGroup}>
           {elapsedLabel && <span className={styles.elapsed}>{elapsedLabel}</span>}
-          {/*
-           * A requested cancellation is not an observed one: Docker may still be
-           * finishing. The status reports only what the Console knows, and reuses
-           * the string the disabled Cancel control already carries.
-           */}
+          {/* Docker may still be running after cancellation is requested. */}
           <span aria-live="polite" role="status">
             <StatusBadge tone={tone} variant="inline" dot={false}>
               {cancelRequested && operation.state === "running" ? "Cancellation requested" : label}
@@ -196,12 +177,6 @@ function OperationPanelContent({
       </header>
       {expanded && (
         <>
-          {/*
-           * The result is the Operation's conclusion, so it reads directly
-           * under the state that names it. A failure's reason used to sit in
-           * the footer's far-right slot, the one place in the panel that is
-           * neither under the title nor beside the log.
-           */}
           {operation.result && (
             <AlertBanner
               variant="strip"

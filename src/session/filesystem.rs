@@ -1,5 +1,6 @@
 //! Transcript discovery, bounded JSONL reads, and anchored filesystem access.
 
+use super::text::{safe_path, terminal_safe};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::Value;
@@ -11,26 +12,6 @@ use std::path::{Path, PathBuf};
 // needs a bound before it is buffered for parsing.
 pub(super) const MAX_TRANSCRIPT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const UUID_TEXT_LEN: usize = 36;
-
-pub(super) fn terminal_safe(value: &str) -> String {
-    terminal_safe_with(value, |_| false)
-}
-
-pub(super) fn terminal_safe_with(value: &str, keep_control: impl Fn(char) -> bool) -> String {
-    let mut output = String::with_capacity(value.len());
-    for character in value.chars() {
-        if character.is_control() && !keep_control(character) {
-            output.extend(character.escape_default());
-        } else {
-            output.push(character);
-        }
-    }
-    output
-}
-
-pub(super) fn safe_path(path: &Path) -> String {
-    terminal_safe(&path.to_string_lossy())
-}
 
 /// Resolve a Transcript directory only through real directory entries beneath
 /// the selected Home. The Home is writable by an Agent, so following a
@@ -183,27 +164,22 @@ fn try_for_each_json_line_with_limit(
             // record itself rather than rejecting an exact-size record just
             // because it has a conventional trailing newline.
             .take(max_line_bytes.saturating_add(2))
-            .read_until(b'\n', &mut line);
-        match read {
-            Ok(0) => return Ok(malformed_lines),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("read session transcript {}", safe_path(path)));
-            }
-            Ok(_) => {
-                let record = line.strip_suffix(b"\n").unwrap_or(&line);
-                let record = record.strip_suffix(b"\r").unwrap_or(record);
-                if record.len() as u64 > max_line_bytes {
-                    bail!(
-                        "session transcript line {} exceeds the {} byte limit: {}",
-                        line_number + 1,
-                        max_line_bytes,
-                        safe_path(path)
-                    );
-                }
-                line_number += 1;
-            }
+            .read_until(b'\n', &mut line)
+            .with_context(|| format!("read session transcript {}", safe_path(path)))?;
+        if read == 0 {
+            return Ok(malformed_lines);
         }
+        let record = line.strip_suffix(b"\n").unwrap_or(&line);
+        let record = record.strip_suffix(b"\r").unwrap_or(record);
+        if record.len() as u64 > max_line_bytes {
+            bail!(
+                "session transcript line {} exceeds the {} byte limit: {}",
+                line_number + 1,
+                max_line_bytes,
+                safe_path(path)
+            );
+        }
+        line_number += 1;
         match serde_json::from_slice::<Value>(&line) {
             Ok(value) if !visit(&value)? => return Ok(malformed_lines),
             Ok(_) => {}

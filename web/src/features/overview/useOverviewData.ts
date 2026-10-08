@@ -6,9 +6,7 @@ import { LatestRequest } from "@/shared/lib/latestRequest";
 const OVERVIEW_POLL_MS = 15000;
 
 export function useOverviewData(
-  api: Pick<OverviewApi, "loadOverview" | "loadTopology"> & {
-    loadRequestsCount?: (signal?: AbortSignal) => Promise<number>;
-  },
+  api: Pick<OverviewApi, "loadOverview" | "loadTopology" | "loadRequestsCount">,
 ) {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [topology, setTopology] = useState<TopologyData | null>(null);
@@ -25,60 +23,47 @@ export function useOverviewData(
 
   const loadOverview = useCallback(
     async (visibleRefresh = false) => {
-      const request = overviewRequest.current.begin();
       if (visibleRefresh) setOverviewRefreshing(true);
-      try {
-        const value = await api.loadOverview(request.signal);
-        if (request.signal.aborted || !request.isCurrent()) return;
-        setOverview(value);
-        setOverviewLoadedAt(Date.now());
-        setUptimeTick(Date.now());
-        setOverviewError(null);
-      } catch (cause) {
-        if (!request.signal.aborted) setOverviewError(messageOf(cause));
-      } finally {
-        if (request.isCurrent()) {
-          request.release();
+      await overviewRequest.current.run((signal) => api.loadOverview(signal), {
+        loaded: (value) => {
+          setOverview(value);
+          setOverviewLoadedAt(Date.now());
+          setUptimeTick(Date.now());
+          setOverviewError(null);
+        },
+        failed: (cause) => setOverviewError(messageOf(cause)),
+        settled: () => {
           if (visibleRefresh) setOverviewRefreshing(false);
-        }
-      }
+        },
+      });
     },
     [api],
   );
 
   const loadTopology = useCallback(
     async (visibleRefresh = false) => {
-      const request = topologyRequest.current.begin();
       if (visibleRefresh) setTopologyRefreshing(true);
-      try {
-        const value = await api.loadTopology(request.signal);
-        if (request.signal.aborted || !request.isCurrent()) return;
-        setTopology(value);
-        setTopologyError(null);
-      } catch (cause) {
-        if (!request.signal.aborted) setTopologyError(messageOf(cause));
-      } finally {
-        if (request.isCurrent()) {
-          request.release();
+      await topologyRequest.current.run((signal) => api.loadTopology(signal), {
+        loaded: (value) => {
+          setTopology(value);
+          setTopologyError(null);
+        },
+        failed: (cause) => setTopologyError(messageOf(cause)),
+        settled: () => {
           if (visibleRefresh) setTopologyRefreshing(false);
-        }
-      }
+        },
+      });
     },
     [api],
   );
 
   const loadRequestsTotal = useCallback(async () => {
-    if (!api.loadRequestsCount) return;
-    const request = requestsCountRequest.current.begin();
-    try {
-      const value = await api.loadRequestsCount(request.signal);
-      if (request.signal.aborted || !request.isCurrent()) return;
-      setRequestsTotal(value);
-    } catch {
-      // Quietly preserve previous value
-    } finally {
-      if (request.isCurrent()) request.release();
-    }
+    const load = api.loadRequestsCount?.bind(api);
+    if (!load) return;
+    await requestsCountRequest.current.run(load, {
+      loaded: setRequestsTotal,
+      failed: () => {}, // Preserve the previous count when a background read fails.
+    });
   }, [api]);
 
   useEffect(() => {
@@ -115,7 +100,6 @@ export function useOverviewData(
     elapsedUptime,
     loadOverview,
     loadTopology,
-    loadRequestsTotal,
     requestsTotal,
     overview,
     overviewError,

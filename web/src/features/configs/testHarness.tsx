@@ -1,5 +1,4 @@
 import type { ComponentProps } from "react";
-import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { ConfigApi, ConfigFileData, ConfigListData } from "@/api/configs";
 import type { Bootstrap } from "@/api/core";
@@ -23,11 +22,6 @@ export function ConfigPage(
       {...pageProps}
     />
   );
-}
-
-export async function revealConfigFiles(user?: ReturnType<typeof userEvent.setup>) {
-  void user;
-  await Promise.resolve();
 }
 
 export function configApi(

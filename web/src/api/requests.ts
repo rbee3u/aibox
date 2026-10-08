@@ -1,6 +1,5 @@
-import { HttpError as ApiError } from "@/api/httpError";
+import { HttpError } from "@/api/httpError";
 import type { ControlApi } from "@/api/transport";
-export { ApiError };
 import type {
   AssessmentFinding,
   AssessmentLevel,
@@ -15,7 +14,7 @@ import type {
   RecordedHeader,
   RequestAssessment,
   RequestDetail as GeneratedRequestDetail,
-  RequestList as GeneratedRequestList,
+  RequestList,
   RequestMetadata as GeneratedRequestMetadata,
   RequestState,
   RequestSummary,
@@ -40,6 +39,7 @@ export type {
   RequestAssessment,
   RequestState,
   RequestSummary,
+  RequestList,
   RequestedEffective,
   RequestedObserved,
   ResponseModeValue,
@@ -50,22 +50,13 @@ export type BodyKind = "request" | "response";
 
 export type EventTimingIndex = EventTimingResponse;
 
-/**
- * The three stored documents, minus what only the store itself reads.
- *
- * Each is derived from its generated type rather than restated, so a field added
- * on the Rust side arrives here instead of being silently dropped: a hand-written
- * mirror of a wire type stays compilable while it goes stale.
- */
 export type RequestMetadata = Omit<GeneratedRequestMetadata, "format_version">;
 export type ResponseMetadata = Omit<GeneratedResponseDetail, "format_version">;
 type ResultMetadata = Omit<
   GeneratedResultMetadata,
   "format_version" | "request_bytes" | "response_bytes" | "request_body_ms"
 >;
-export type RequestList = GeneratedRequestList;
 
-/** A Request's detail read, with the three documents narrowed as above. */
 export type RequestDetail = Omit<GeneratedRequestDetail, "request" | "response" | "result"> & {
   request: RequestMetadata;
   response: ResponseMetadata | null;
@@ -73,6 +64,10 @@ export type RequestDetail = Omit<GeneratedRequestDetail, "request" | "response" 
 };
 
 export type RequestLookup = RequestDetail | { kind: "missing" };
+
+export function isRequestNotFound(cause: unknown): boolean {
+  return cause instanceof HttpError && cause.status === 404;
+}
 
 function featureRequestDetail(value: GeneratedRequestDetail): RequestDetail {
   if (!value || typeof value !== "object" || !value.request) {
@@ -133,33 +128,25 @@ export function requestsApi(client: ControlApi): RequestsApi {
   return {
     listRequests: (page = 1, signal) => {
       const query = page === 1 ? "" : `?page=${page}`;
-      return client.get<GeneratedRequestList>(`/_aibox/api/requests${query}`, signal);
+      return client.get<RequestList>(`/_aibox/api/requests${query}`, signal);
     },
-    getRequest: (id, signal) =>
-      client
-        .get<GeneratedRequestDetail>(requestPath(id), signal)
-        .then(featureRequestDetail)
-        .catch((cause: unknown) => {
-          if (cause instanceof ApiError && cause.status === 404)
-            return { kind: "missing" } as const;
-          throw cause;
-        }),
+    getRequest: async (id, signal) => {
+      try {
+        const response = await client.get<GeneratedRequestDetail>(requestPath(id), signal);
+        return featureRequestDetail(response);
+      } catch (cause) {
+        if (isRequestNotFound(cause)) return { kind: "missing" };
+        throw cause;
+      }
+    },
     loadBody: async (id, kind, offset, signal) => {
       const response = await client.getResponse(
         `${requestPath(id)}/${kind}-body?offset=${offset}`,
         signal,
       );
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const header = response.headers.get("X-Aibox-Request-Next-Offset");
-      const fallbackOffset = offset + bytes.length;
-      const advertisedOffset = header === null ? null : Number(header);
-      const nextOffset =
-        advertisedOffset !== null &&
-        Number.isSafeInteger(advertisedOffset) &&
-        advertisedOffset === fallbackOffset
-          ? advertisedOffset
-          : fallbackOffset;
-      return { bytes, nextOffset };
+      // Advance only by received bytes, regardless of the advertised offset.
+      return { bytes, nextOffset: offset + bytes.length };
     },
     loadDecodedBody: async (id, kind, signal) => {
       const response = await client.getResponse(`${requestPath(id)}/${kind}-body-decoded`, signal);
@@ -170,9 +157,13 @@ export function requestsApi(client: ControlApi): RequestsApi {
         `${requestPath(id)}/response-event-timings?after_sequence=${afterSequence}`,
         signal,
       ),
-    deleteRequests: (ids, signal) =>
-      client
-        .post<{ deleted: number }>("/_aibox/api/requests/delete", { ids }, signal)
-        .then((value) => value.deleted),
+    deleteRequests: async (ids, signal) => {
+      const response = await client.post<{ deleted: number }>(
+        "/_aibox/api/requests/delete",
+        { ids },
+        signal,
+      );
+      return response.deleted;
+    },
   };
 }

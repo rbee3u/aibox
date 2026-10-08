@@ -8,9 +8,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import type { AttentionItem } from "@/features/overview/resourceTree";
 import { OverviewLink } from "@/features/overview/OverviewLink";
-import type { AttentionPanelKind } from "@/features/overview/viewTypes";
+import type { AttentionItem, AttentionPanelKind } from "@/features/overview/viewTypes";
 import { toneIcons } from "@/shared/icons/consoleIcons";
 import { iconSize } from "@/shared/icons/iconSizes";
 import type { ConsoleNavigate } from "@/shared/lib/navigation";

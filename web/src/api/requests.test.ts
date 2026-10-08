@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { composeControlApi } from "@/api/connect";
-import { ApiError, type RequestsApi } from "@/api/requests";
+import { HttpError } from "@/api/httpError";
+import type { RequestsApi } from "@/api/requests";
 import { ControlApi } from "@/test/controlApi";
 import { controlRoute } from "@/test/controlRoutes";
 
@@ -125,7 +126,7 @@ describe("Request API client", () => {
     const api = requestsApi(fetchMock);
 
     const request = api.deleteRequests(["active"]);
-    await expect(request).rejects.toBeInstanceOf(ApiError);
+    await expect(request).rejects.toBeInstanceOf(HttpError);
     await expect(request).rejects.toMatchObject({ name: "ApiError", ...expectedError });
   });
 

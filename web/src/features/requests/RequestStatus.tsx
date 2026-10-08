@@ -33,12 +33,6 @@ const STATUS_BADGE_TONE: Record<RequestStatusTone, StatusTone> = {
   warning: "warning",
 };
 
-/**
- * Catalog status cell. An HTTP code wears the dot and, when the Assessment
- * adds a finding the code does not state, a level glyph after it; a finding on
- * a Request that never got a status wears its level glyph in the dot's place.
- * Whichever it is, the whole cell explains the finding on hover.
- */
 export function RequestStatus({ status, state, assessment }: RequestStatusProps) {
   const presentation = requestStatusPresentation({ status, state, assessment });
   const namedFinding = presentation.issue !== null && presentation.marker === null;

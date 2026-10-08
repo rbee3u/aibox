@@ -1,19 +1,12 @@
-//! Classifying one Request into its display Request Assessment.
+//! Request Assessment derived from Outcome, HTTP status, and protocol diagnostics.
 //!
-//! A Request Assessment is a presentation label derived from independent
-//! evidence: Request Outcome, HTTP status, Provider Error, and protocol
-//! diagnostics. Active takes temporary visual precedence, every finding stays
-//! separately available for Diagnostics, and one prioritized primary finding
-//! supplies the compact label.
-//!
-//! [`refresh_assessment`] materializes a write-path projection in the Summary.
-//! [`effective_assessment`] re-derives display state for active and interrupted
-//! Requests at read time. See
-//! `docs/adr/0007-request-evidence-and-materialized-projections.md`.
+//! Active takes display precedence; all findings remain available separately.
+//! [`refresh_assessment`] persists the projection; [`effective_assessment`]
+//! recomputes active and interrupted state at read time.
 
 use crate::request::model::{
-    AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, Outcome,
-    ProtocolFamily, RequestAssessment, ResponseModeValue, SummaryMetadata,
+    AssessmentFinding, AssessmentLevel, AssessmentPrimary, AssessmentSource, ProtocolFamily,
+    RequestAssessment, RequestOutcome, ResponseModeValue, SummaryMetadata,
 };
 
 pub(crate) fn effective_assessment(summary: &SummaryMetadata, active: bool) -> RequestAssessment {
@@ -87,9 +80,9 @@ fn collect_request_findings(summary: &SummaryMetadata, findings: &mut Vec<Assess
 
     if summary.errors.is_empty()
         && let Some(outcome) = summary.outcome
-        && outcome != Outcome::Completed
+        && outcome != RequestOutcome::Completed
     {
-        let level = if outcome == Outcome::ClientDisconnected {
+        let level = if outcome == RequestOutcome::ClientDisconnected {
             AssessmentLevel::Warning
         } else {
             AssessmentLevel::Error
@@ -160,11 +153,13 @@ fn collect_protocol_findings(summary: &SummaryMetadata, findings: &mut Vec<Asses
             },
         );
     }
-    let streaming = protocol.response_mode.observed == Some(ResponseModeValue::Stream)
-        || (protocol.response_mode.observed.is_none()
-            && protocol.response_mode.requested == Some(ResponseModeValue::Stream));
+    let streaming = protocol
+        .response_mode
+        .observed
+        .or(protocol.response_mode.requested)
+        == Some(ResponseModeValue::Stream);
     if summary.terminal
-        && summary.outcome == Some(Outcome::Completed)
+        && summary.outcome == Some(RequestOutcome::Completed)
         && protocol.family != ProtocolFamily::Unknown
         && streaming
         && !protocol.response_terminal
@@ -290,13 +285,15 @@ fn offset_key(value: Option<&str>) -> u128 {
         .unwrap_or(u128::MAX)
 }
 
-fn outcome_fallback_message(outcome: Outcome) -> &'static str {
+fn outcome_fallback_message(outcome: RequestOutcome) -> &'static str {
     match outcome {
-        Outcome::Completed => "The proxy attempt completed",
-        Outcome::Rejected => "The proxy rejected the upstream request",
-        Outcome::UpstreamError => "The upstream request or response failed",
-        Outcome::ClientDisconnected => "The client disconnected before the proxy attempt completed",
-        Outcome::RecordingFailed => "The Request could not be recorded completely",
-        Outcome::ServerShutdown => "Request Proxy stopped before the attempt completed",
+        RequestOutcome::Completed => "The proxy attempt completed",
+        RequestOutcome::Rejected => "The proxy rejected the upstream request",
+        RequestOutcome::UpstreamError => "The upstream request or response failed",
+        RequestOutcome::ClientDisconnected => {
+            "The client disconnected before the proxy attempt completed"
+        }
+        RequestOutcome::RecordingFailed => "The Request could not be recorded completely",
+        RequestOutcome::ServerShutdown => "Request Proxy stopped before the attempt completed",
     }
 }

@@ -12,3 +12,5 @@ These ADRs record the current architectural decisions that shape AIBox.
 - [0008: Acyclic feature-first Console](0008-acyclic-feature-first-console.md)
 - [0009: Rust-owned Console contract](0009-rust-owned-console-contract.md)
 - [0010: Centralized Agent contracts](0010-centralized-agent-contracts.md)
+- [0011: Transport-independent Management](0011-transport-independent-management.md)
+- [0012: Config editing scope](0012-config-editing-scope.md)

@@ -1,6 +1,7 @@
 import { Check, ChevronDown, ChevronRight, Clipboard } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
+import { useElementRegistry } from "@/features/common/useElementRegistry";
 import {
   isJsonContainer,
   jsonEntries,
@@ -35,7 +36,7 @@ export function JsonTree({
 }: JsonTreeProps) {
   const [copiedPath, copyValue] = useClipboardFeedback<string>();
   const [activePath, setActivePath] = useState(pathPrefix);
-  const nodeRefs = useRef(new Map<string, HTMLDivElement>());
+  const nodes = useElementRegistry<HTMLDivElement>();
   const visibleNodes = useMemo(
     () => collectVisibleNodes(value, pathPrefix, expanded),
     [expanded, pathPrefix, value],
@@ -51,7 +52,7 @@ export function JsonTree({
 
   function focusNode(path: string) {
     setActivePath(path);
-    nodeRefs.current.get(path)?.focus();
+    nodes.focus(path);
   }
 
   function navigateTree(event: KeyboardEvent<HTMLDivElement>, path: string) {
@@ -112,10 +113,7 @@ export function JsonTree({
         expandedStrings={expandedStrings}
         copiedPath={copiedPath}
         activePath={resolvedActivePath}
-        registerNode={(path, element) => {
-          if (element) nodeRefs.current.set(path, element);
-          else nodeRefs.current.delete(path);
-        }}
+        registerNode={nodes.register}
         onNodeFocus={setActivePath}
         onNodeKeyDown={navigateTree}
         onToggle={onToggle}

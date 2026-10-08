@@ -6,10 +6,9 @@ import type { TenantSelection } from "@/domain/tenant";
 import {
   configLocation,
   namedConfigName,
-  type ConfigApplyTarget,
-  type ConfigDeleteTarget,
   type ConfigSelection,
-} from "@/features/configs/route";
+} from "@/features/common/routes/configs";
+import type { ConfigApplyTarget, ConfigDeleteTarget } from "@/features/configs/configWorkflow";
 import type { ConfigCatalogLoadKind } from "@/features/configs/viewTypes";
 import { messageOf } from "@/shared/lib/errors";
 import type { ModuleLocationChange } from "@/shared/lib/navigation";
@@ -74,21 +73,9 @@ export function useConfigCrud({
     });
   }
 
-  function closeCreateDialog() {
-    setCreateOpen(false);
-  }
-
   function changeNewName(name: string) {
     setNewName(name);
     setCreateError(null);
-  }
-
-  function cancelApply() {
-    setApplyTarget(null);
-  }
-
-  function cancelDelete() {
-    setDeleteTarget(null);
   }
 
   async function createConfig(name: string) {
@@ -175,8 +162,6 @@ export function useConfigCrud({
     }
   }
 
-  // Grouped the way the Config view model consumes it, so the controller
-  // spreads these rather than forwarding each field.
   return {
     applyFeedback,
     mutations: {
@@ -187,10 +172,10 @@ export function useConfigCrud({
     },
     dialogs: {
       applyTarget,
-      cancelApply,
-      cancelDelete,
+      cancelApply: () => setApplyTarget(null),
+      cancelDelete: () => setDeleteTarget(null),
       changeNewName,
-      closeCreateDialog,
+      closeCreateDialog: () => setCreateOpen(false),
       createError,
       createOpen,
       deleteTarget,

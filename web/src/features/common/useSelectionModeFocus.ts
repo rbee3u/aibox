@@ -13,13 +13,8 @@ interface SelectionModeFocusOptions {
 }
 
 /**
- * Carries keyboard focus across the toolbar swap that selection mode causes.
- *
- * Entering replaces the Select control with the selection bar, so the element
- * the user just activated is gone; focus moves to the first row that can be
- * ticked, which is both where the work is and a label that says what mode
- * this is. Exiting reverses it. Only a user-initiated enter or cancel moves
- * focus: a batch delete that ends selection mode owns its own focus target.
+ * Preserve focus when selection mode replaces the toolbar. Only explicit enter
+ * and cancel actions move focus here; batch deletion owns its recovery target.
  */
 export function useSelectionModeFocus({
   selectionMode,

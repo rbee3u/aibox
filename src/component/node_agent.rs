@@ -1,26 +1,20 @@
 //! Node.js and Claude/Codex executable ownership.
 
+use super::links::{LinkState, link_state, map_home_symlink_target, one_relative_component};
 use super::native::{executable_file_exists, remove_local_launcher};
 use super::{ComponentStatus, validate_stable_version};
-use crate::tenant::CONTAINER_HOME;
+use crate::foundation::safe_fs;
 use anyhow::{Context, Result, bail};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum LinkState {
-    Absent,
-    Symlink(PathBuf),
-    Other,
-}
+use std::path::Path;
 
 pub(super) fn inspect_node(home: &Path) -> Result<ComponentStatus> {
     let root = home.join(".node");
-    if !crate::foundation::safe_fs::real_dir_exists(&root, "Node.js root")? {
+    if !safe_fs::real_dir_exists(&root, "Node.js root")? {
         return Ok(ComponentStatus::NotInstalled);
     }
     let releases = root.join("releases");
-    if !crate::foundation::safe_fs::real_dir_exists(&releases, "Node.js release collection")? {
+    if !safe_fs::real_dir_exists(&releases, "Node.js release collection")? {
         return Ok(ComponentStatus::Incomplete);
     }
     let current = root.join("current");
@@ -42,11 +36,11 @@ pub(super) fn inspect_node(home: &Path) -> Result<ComponentStatus> {
         return Ok(ComponentStatus::Unmanaged);
     };
     let release = releases.join(&name);
-    if !crate::foundation::safe_fs::real_dir_exists(&release, "Node.js release")? {
+    if !safe_fs::real_dir_exists(&release, "Node.js release")? {
         return Ok(ComponentStatus::Incomplete);
     }
     let bin = release.join("bin");
-    if !crate::foundation::safe_fs::real_dir_exists(&bin, "Node.js binary directory")?
+    if !safe_fs::real_dir_exists(&bin, "Node.js binary directory")?
         || !executable_file_exists(&bin.join("node"), "Node.js executable")?
         || !safe_file_exists_under(&bin.join("npm"), &release, "npm launcher")?
     {
@@ -84,7 +78,7 @@ pub(super) fn inspect_codex(home: &Path) -> Result<ComponentStatus> {
         return Ok(ComponentStatus::Unmanaged);
     };
     let releases = standalone.join("releases");
-    if !crate::foundation::safe_fs::real_dir_exists(&releases, "Codex release collection")? {
+    if !safe_fs::real_dir_exists(&releases, "Codex release collection")? {
         return Ok(ComponentStatus::Incomplete);
     }
     let Some(release_name) = one_relative_component(&current_target, &releases) else {
@@ -94,7 +88,7 @@ pub(super) fn inspect_codex(home: &Path) -> Result<ComponentStatus> {
         return Ok(ComponentStatus::Unmanaged);
     };
     let release = releases.join(&release_name);
-    if !crate::foundation::safe_fs::real_dir_exists(&release, "Codex release")? {
+    if !safe_fs::real_dir_exists(&release, "Codex release")? {
         return Ok(ComponentStatus::Incomplete);
     }
 
@@ -152,97 +146,37 @@ pub(super) fn inspect_claude(home: &Path) -> Result<ComponentStatus> {
 
 fn codex_standalone_exists(home: &Path, standalone: &Path) -> Result<bool> {
     let packages = home.join(".codex/packages");
-    if !crate::foundation::safe_fs::real_dir_exists(&home.join(".codex"), "Codex state directory")?
-        || !crate::foundation::safe_fs::real_dir_exists(&packages, "Codex package directory")?
+    if !safe_fs::real_dir_exists(&home.join(".codex"), "Codex state directory")?
+        || !safe_fs::real_dir_exists(&packages, "Codex package directory")?
     {
         return Ok(false);
     }
-    crate::foundation::safe_fs::real_dir_exists(standalone, "Codex standalone package")
+    safe_fs::real_dir_exists(standalone, "Codex standalone package")
 }
 
 fn claude_versions_exist(home: &Path, versions: &Path) -> Result<bool> {
     let local = home.join(".local");
     let share = local.join("share");
     let claude = share.join("claude");
-    if !crate::foundation::safe_fs::real_dir_exists(&local, "Tenant-local data directory")?
-        || !crate::foundation::safe_fs::real_dir_exists(
-            &share,
-            "Tenant-local shared data directory",
-        )?
-        || !crate::foundation::safe_fs::real_dir_exists(&claude, "Claude data directory")?
+    if !safe_fs::real_dir_exists(&local, "Tenant-local data directory")?
+        || !safe_fs::real_dir_exists(&share, "Tenant-local shared data directory")?
+        || !safe_fs::real_dir_exists(&claude, "Claude data directory")?
     {
         return Ok(false);
     }
-    crate::foundation::safe_fs::real_dir_exists(versions, "Claude version collection")
-}
-
-pub(super) fn link_state(path: &Path, label: &str) -> Result<LinkState> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Ok(LinkState::Symlink(
-            fs::read_link(path).with_context(|| format!("read {label} {}", path.display()))?,
-        )),
-        Ok(_) => Ok(LinkState::Other),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LinkState::Absent),
-        Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
-    }
+    safe_fs::real_dir_exists(versions, "Claude version collection")
 }
 
 fn local_launcher_state(home: &Path, name: &str, label: &str) -> Result<LinkState> {
     let local = home.join(".local");
-    if !crate::foundation::safe_fs::real_dir_exists(&local, "Tenant-local data directory")? {
+    if !safe_fs::real_dir_exists(&local, "Tenant-local data directory")? {
         return Ok(LinkState::Absent);
     }
     let bin = local.join("bin");
-    if !crate::foundation::safe_fs::real_dir_exists(&bin, "Tenant-local binary directory")? {
+    if !safe_fs::real_dir_exists(&bin, "Tenant-local binary directory")? {
         return Ok(LinkState::Absent);
     }
     link_state(&bin.join(name), label)
-}
-
-pub(super) fn map_home_symlink_target(home: &Path, link: &Path, target: &Path) -> Option<PathBuf> {
-    let mapped = if target.is_absolute() {
-        if let Ok(relative) = target.strip_prefix(CONTAINER_HOME) {
-            home.join(relative)
-        } else if target.starts_with(home) {
-            target.to_path_buf()
-        } else {
-            return None;
-        }
-    } else {
-        link.parent()?.join(target)
-    };
-    normalize_absolute_path(&mapped).filter(|path| path.starts_with(home))
-}
-
-fn normalize_absolute_path(path: &Path) -> Option<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                normalized.push(component.as_os_str());
-            }
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                if !normalized.pop() {
-                    return None;
-                }
-            }
-            std::path::Component::Normal(_) => normalized.push(component.as_os_str()),
-        }
-    }
-    Some(normalized)
-}
-
-pub(super) fn one_relative_component(path: &Path, root: &Path) -> Option<String> {
-    let relative = path.strip_prefix(root).ok()?;
-    let mut components = relative.components();
-    let std::path::Component::Normal(name) = components.next()? else {
-        return None;
-    };
-    if components.next().is_some() {
-        return None;
-    }
-    name.to_str().map(str::to_owned)
 }
 
 fn codex_release_version(name: &str) -> Option<String> {
@@ -275,44 +209,38 @@ fn safe_file_exists_under(path: &Path, root: &Path, label: &str) -> Result<bool>
 }
 
 pub(super) fn remove_node(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::real_dir_exists(home, "Tenant Home")?;
-    crate::foundation::safe_fs::remove_real_dir_if_exists(&home.join(".node"), "Node.js root")
+    safe_fs::real_dir_exists(home, "Tenant Home")?;
+    safe_fs::remove_real_dir_if_exists(&home.join(".node"), "Node.js root")
 }
 
 pub(super) fn remove_codex(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::real_dir_exists(home, "Tenant Home")?;
+    safe_fs::real_dir_exists(home, "Tenant Home")?;
     remove_local_launcher(home, "codex", "Codex launcher")?;
     let codex = home.join(".codex");
-    if !crate::foundation::safe_fs::real_dir_exists(&codex, "Codex state directory")? {
+    if !safe_fs::real_dir_exists(&codex, "Codex state directory")? {
         return Ok(());
     }
     let packages = codex.join("packages");
-    if !crate::foundation::safe_fs::real_dir_exists(&packages, "Codex package directory")? {
+    if !safe_fs::real_dir_exists(&packages, "Codex package directory")? {
         return Ok(());
     }
-    crate::foundation::safe_fs::remove_real_dir_if_exists(
-        &packages.join("standalone"),
-        "Codex standalone package",
-    )
+    safe_fs::remove_real_dir_if_exists(&packages.join("standalone"), "Codex standalone package")
 }
 
 pub(super) fn remove_claude(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::real_dir_exists(home, "Tenant Home")?;
+    safe_fs::real_dir_exists(home, "Tenant Home")?;
     remove_local_launcher(home, "claude", "Claude launcher")?;
     let local = home.join(".local");
-    if !crate::foundation::safe_fs::real_dir_exists(&local, "Tenant-local data directory")? {
+    if !safe_fs::real_dir_exists(&local, "Tenant-local data directory")? {
         return Ok(());
     }
     let share = local.join("share");
-    if !crate::foundation::safe_fs::real_dir_exists(&share, "Tenant-local shared data directory")? {
+    if !safe_fs::real_dir_exists(&share, "Tenant-local shared data directory")? {
         return Ok(());
     }
     let claude = share.join("claude");
-    if !crate::foundation::safe_fs::real_dir_exists(&claude, "Claude data directory")? {
+    if !safe_fs::real_dir_exists(&claude, "Claude data directory")? {
         return Ok(());
     }
-    crate::foundation::safe_fs::remove_real_dir_if_exists(
-        &claude.join("versions"),
-        "Claude version collection",
-    )
+    safe_fs::remove_real_dir_if_exists(&claude.join("versions"), "Claude version collection")
 }

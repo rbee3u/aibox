@@ -53,7 +53,6 @@ function unwrapToolSummary(value: string): string | null {
   }
 }
 
-/** Uses a message's first readable line as its navigator label. */
 export function messageNavigationLabel(text: string): string {
   const reading = userMessageReadingText(text);
   const firstLine = reading
@@ -68,7 +67,6 @@ export function messageAnchorId(message: ConversationMessage): string {
   return `session-message-${message.entry_ids[0]?.replace(/[^a-zA-Z0-9_-]/g, "-") || "unknown"}`;
 }
 
-/** Reports whether the reader has scrolled well away from the newest message. */
 export function conversationIsAwayFromLatest(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight > 160;
 }

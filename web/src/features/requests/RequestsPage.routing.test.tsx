@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/requests";
+import { HttpError } from "@/api/httpError";
 import {
   completedDetail,
   completedSummary,
@@ -206,7 +206,7 @@ describe("Requests page routing", () => {
     );
     renderApp({
       listRequests: vi.fn().mockResolvedValue(requestList),
-      getRequest: vi.fn().mockRejectedValue(new ApiError("Request not found", 404)),
+      getRequest: vi.fn().mockRejectedValue(new HttpError("Request not found", 404)),
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Request not found");

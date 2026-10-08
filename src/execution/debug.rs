@@ -1,9 +1,10 @@
 //! Managed Tenant Debug Shell orchestration.
 
+use super::build_debug_command;
 use super::{DockerSource, canonical_tenant_home, require_runtime_image, tenant_capabilities};
 use crate::docker;
 use crate::sandbox;
-use crate::tenant::{ManagedTenant, build_debug_command};
+use crate::tenant::ManagedTenant;
 use anyhow::Result;
 use std::path::Path;
 

@@ -1,0 +1,21 @@
+.sessionRoutineEntries > summary {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.sessionRoutineEntries > summary:hover {
+  background: var(--surface-hover);
+  color: var(--ink-secondary);
+}
+
+.sessionRoutineEntries > summary:active {
+  background: var(--surface-pressed);
+}
+
+.sessionRoutineEntries > div {
+  padding: 6px 0 0;
+  border-top: 0;
+}

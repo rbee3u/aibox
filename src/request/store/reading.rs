@@ -9,11 +9,11 @@ use super::layout::{
 };
 use super::summary::{summary_to_result, validate_schema, validate_summary};
 use super::{
-    DiagnosticMetadata, FORMAT_VERSION, Outcome, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
+    DiagnosticMetadata, FORMAT_VERSION, REQUEST_BODY, REQUEST_JSON, RESPONSE_BODY,
     RESPONSE_EVENTS_JSONL, RESPONSE_JSON, RESULT_JSON, RequestDetailReadError, RequestMetadata,
-    RequestStore, ResponseMetadata, ResponseSource, SUMMARY_JSON, StoredEventTiming,
-    StoredEventTimings, StoredRequest, StoredRequestSummary, SummaryMetadata, anchored_at,
-    offset_ns,
+    RequestOutcome, RequestStore, ResponseMetadata, ResponseSource, SUMMARY_JSON,
+    StoredEventTiming, StoredEventTimings, StoredRequest, StoredRequestSummary, SummaryMetadata,
+    anchored_at, offset_ns,
 };
 use crate::foundation::sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned};
 use anyhow::{Context, Result, bail};
@@ -514,7 +514,7 @@ fn active_elapsed_ns(
 pub(super) fn terminal_summary_matches(
     path: &Path,
     id: &str,
-    outcome: Outcome,
+    outcome: RequestOutcome,
     finished_at_ns: &str,
 ) -> bool {
     read_json::<SummaryMetadata>(&path.join(SUMMARY_JSON), "Request summary metadata").is_ok_and(

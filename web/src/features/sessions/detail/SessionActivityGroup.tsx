@@ -1,17 +1,16 @@
+import styles from "@/features/sessions/detail/SessionActivityGroup.module.css";
+import conversationStyles from "@/features/sessions/detail/conversation.module.css";
+import type { SessionActivityItem } from "@/features/sessions/viewTypes";
 import { AlertTriangle, Wrench } from "lucide-react";
 import type { SessionApi } from "@/api/sessions";
 import { SessionEvidenceDisclosure } from "@/features/sessions/detail/SessionEvidenceDisclosure";
-import {
-  activitySummary,
-  isRoutineEvidence,
-  type SessionActivityItem,
-} from "@/features/sessions/detail/sessionDetail";
+import { activitySummary, isRoutineEvidence } from "@/features/sessions/detail/sessionDetail";
 import {
   compactMessageTimestamp,
   toolActivityHeadline,
 } from "@/features/sessions/detail/sessionFormat";
 import type { SourcedSession } from "@/features/sessions/sessionSource";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 interface SessionActivityGroupProps {
@@ -23,10 +22,8 @@ interface SessionActivityGroupProps {
 }
 
 /**
- * One run of Tool Activity and Transcript Evidence between messages. The
- * disclosure is uncontrolled: a group the reader opened stays open while the
- * Session refreshes around it, and a call keyed by its own entry keeps its
- * row when the result lands.
+ * Uncontrolled disclosures and stable entry keys preserve open groups and tool
+ * rows across refreshes and arriving results.
  */
 export function SessionActivityGroup({
   api,
@@ -85,7 +82,7 @@ export function SessionActivityGroup({
   };
 
   return (
-    <details className={styles.sessionActivityGroup}>
+    <details className={conversationStyles.sessionActivityGroup}>
       <summary>
         <span>
           {summary.toolCount > 0 ? <Wrench size={iconSize.xs} aria-hidden="true" /> : null}
@@ -94,16 +91,20 @@ export function SessionActivityGroup({
             <AlertTriangle size={iconSize.xs} aria-label="Activity has diagnostics" />
           )}
         </span>
-        {summary.detail && <span className={styles.sessionRowMeta}>{summary.detail}</span>}
+        {summary.detail && (
+          <span className={conversationStyles.sessionRowMeta}>{summary.detail}</span>
+        )}
       </summary>
-      <div className={styles.sessionActivityGroupItems}>
+      <div className={conversationStyles.sessionActivityGroupItems}>
         {shown.map(renderEntry)}
         {routine.length > 0 && (
           <details className={styles.sessionRoutineEntries}>
             <summary>
               {routine.length} routine {routine.length === 1 ? "entry" : "entries"}
             </summary>
-            <div className={styles.sessionActivityGroupItems}>{routine.map(renderEntry)}</div>
+            <div className={conversationStyles.sessionActivityGroupItems}>
+              {routine.map(renderEntry)}
+            </div>
           </details>
         )}
       </div>

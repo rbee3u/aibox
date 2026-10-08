@@ -4,7 +4,7 @@
 //! Extra Mount paths. Debug Shell and container-based Component callers use
 //! the shared Tenant Home source check after canonicalizing the path.
 
-use crate::tenant::CONTAINER_HOME;
+use super::CONTAINER_HOME;
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 

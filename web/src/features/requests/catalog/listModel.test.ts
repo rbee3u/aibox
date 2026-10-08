@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RequestList, RequestState, RequestSummary } from "@/api/requests";
-import {
-  focusTargetAfterDelete,
-  removeDeletedFromList,
-} from "@/features/requests/catalog/listModel";
+import { focusTargetAfterDelete, removeDeletedFromList } from "@/features/requests/listModel";
 
 function row(id: string, state: RequestState = "completed"): RequestSummary {
   return {

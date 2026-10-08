@@ -1,0 +1,53 @@
+.sessionEvidenceRawList {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line-content);
+  padding: 6px 8px;
+}
+.sessionToolExchange {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 12px;
+}
+
+.sessionToolExchange section {
+  overflow: hidden;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.sessionToolExchange section + section {
+  border-top: 1px solid var(--line-control);
+}
+
+.sessionToolExchange h4 {
+  margin: 0;
+  padding: 5px 12px;
+  background: var(--surface-inset);
+  border-bottom: 1px solid var(--line-structural);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.sessionToolExchange pre {
+  padding: 10px 12px;
+}
+
+.sessionToolResultFailed h4,
+.sessionToolResultFailed pre {
+  color: var(--danger);
+}
+
+.sessionEvidenceError {
+  color: var(--danger) !important;
+}
+.sessionEvidenceStale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}

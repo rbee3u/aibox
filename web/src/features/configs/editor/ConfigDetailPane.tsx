@@ -1,0 +1,297 @@
+import styles from "@/features/configs/editor/ConfigDetailPane.module.css";
+import { ConfigComparisonProvider } from "@/features/configs/editor/ConfigComparisonContext";
+import { AlertTriangle, ChevronLeft, Save, ShieldAlert } from "lucide-react";
+import { useId } from "react";
+
+import type { ConfigApi } from "@/api/configs";
+import { tenantSelectionValue } from "@/domain/tenant";
+import { ConfigDriftBadge } from "@/features/configs/ConfigDriftBadge";
+import { PropagateCredentialsButton } from "@/features/configs/PropagateCredentialsButton";
+import { appliedConfigPresentation } from "@/features/configs/configCatalog";
+import { ConfigFilePane } from "@/features/configs/editor/ConfigFilePane";
+import { isNamedCatalog, namedConfigName } from "@/features/common/routes/configs";
+
+import type { ConfigViewModel } from "@/features/configs/viewTypes";
+import { resourceIcons } from "@/shared/icons/consoleIcons";
+import { ActionButton } from "@/shared/ui/ActionButton";
+import { EmptyState } from "@/shared/ui/EmptyState";
+import { IconButton } from "@/shared/ui/IconButton";
+import { Loading } from "@/shared/ui/ManagementFeedback";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import layout from "@/shared/ui/layout/catalog.module.css";
+
+import { iconSize } from "@/shared/icons/iconSizes";
+import { agentLabel } from "@/shared/lib/format";
+
+const CurrentConfigIcon = resourceIcons.currentConfig;
+const ManagedTenantIcon = resourceIcons.managedTenant;
+const NamedConfigIcon = resourceIcons.namedConfig;
+export function ConfigDetailPane({
+  api,
+  catalog,
+  detail,
+  dialogs,
+  editor,
+  mutations,
+}: Pick<ConfigViewModel, "catalog" | "detail" | "dialogs" | "editor" | "feedback" | "mutations"> & {
+  api: ConfigApi;
+}) {
+  const filesId = useId();
+  const {
+    agent,
+    catalog: data,
+    configFiles,
+    configSelectionLabel,
+    configTenantLabel,
+    loadingCatalog,
+    loadingTenants,
+    managedTenantMissing,
+    tenant,
+  } = catalog;
+  const { closeConfigDetail, detailBackButtonRef, detailHeadingRef, openCurrent, selection } =
+    detail;
+  const {
+    session,
+    dirtyFiles,
+    editorMode,
+    registerPane,
+    showRawEditor,
+    switchEditorMode,
+    visualAvailable,
+  } = editor;
+  const { openCreateDialog, requestApply } = dialogs;
+  const { mutationBusy, previewPropagation, saveAll } = mutations;
+  const inspectedName = namedConfigName(selection);
+  const inspectedEntry = data?.configs.find((entry) => entry.name === inspectedName) ?? null;
+  const inspectedApplied =
+    inspectedName !== null && data?.application.last_application?.applied === inspectedName;
+  /*
+   * Standing conditions of this editor, stated once and kept stable across
+   * Visual and Raw so the header never resizes under the mode toggle. Visual
+   * mode masks credentials but still holds them, one reveal away.
+   */
+  const editorNotice = [
+    tenant.kind === "host" ? "Edits write to the real Host Home" : null,
+    "Native content may contain credentials and is shown without redaction.",
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+
+  return (
+    <section className={layout.detailPane}>
+      {loadingTenants || loadingCatalog ? (
+        <Loading />
+      ) : managedTenantMissing ? (
+        <EmptyState
+          variant="detail"
+          icon={<ManagedTenantIcon size={iconSize.xl} aria-hidden="true" />}
+          title="Managed Tenant not found"
+          description="The selected Managed Tenant does not exist."
+        />
+      ) : isNamedCatalog(selection) && data ? (
+        <EmptyState
+          variant="detail"
+          icon={<NamedConfigIcon size={iconSize.xl} aria-hidden="true" />}
+          title="Named Configs"
+          description="Select Current Config or a Named Config to inspect its files."
+        >
+          <div className={styles.emptyStateGuide}>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <CurrentConfigIcon size={iconSize.sm} />
+                <strong>Current Config</strong>
+                <span className={styles.emptyStateBadgeActive}>Active sandbox</span>
+              </div>
+              <p>
+                Live configuration files mounted directly into the container. Edits in Raw mode
+                update the active runtime environment immediately.
+              </p>
+              <button
+                type="button"
+                className={styles.emptyStateAction}
+                onClick={() => void openCurrent()}
+              >
+                Inspect Current Config →
+              </button>
+            </div>
+            <div className={styles.emptyStateCard}>
+              <div className={styles.emptyStateCardHeader}>
+                <NamedConfigIcon size={iconSize.sm} />
+                <strong>Named Configs</strong>
+                <span className={styles.emptyStateBadgeProfiles}>Saved profiles</span>
+              </div>
+              <p>
+                Reusable profile templates. Edit configurations visually or in Raw code, and apply
+                any profile to Current Config with one click.
+              </p>
+              <button
+                type="button"
+                className={styles.emptyStateAction}
+                disabled={mutationBusy}
+                onClick={openCreateDialog}
+              >
+                + Create Named Config
+              </button>
+            </div>
+          </div>
+        </EmptyState>
+      ) : data ? (
+        <>
+          <div className={styles.configEditorHeader}>
+            <IconButton
+              buttonRef={detailBackButtonRef}
+              label="Back to Configs"
+              onClick={closeConfigDetail}
+            >
+              <ChevronLeft size={iconSize.md} />
+            </IconButton>
+            <div className={styles.configContextStack}>
+              <div className={styles.configTitleRow}>
+                <h2 ref={detailHeadingRef} tabIndex={-1}>
+                  {configSelectionLabel}
+                </h2>
+                {selection.current &&
+                  tenant.kind === "host" &&
+                  agent === "codex" &&
+                  data.credential_propagation_available && (
+                    <div className={styles.configHeaderAction}>
+                      <PropagateCredentialsButton
+                        busy={mutationBusy}
+                        onClick={() => void previewPropagation()}
+                      />
+                    </div>
+                  )}
+                {inspectedEntry?.state === "ready" && (
+                  <div className={styles.configHeaderAction}>
+                    {inspectedApplied && <ConfigDriftBadge status={data.application} />}
+                    {(!inspectedApplied ||
+                      appliedConfigPresentation(data.application).applicable) && (
+                      <ActionButton
+                        tone="primarySoft"
+                        disabled={mutationBusy}
+                        onClick={() => requestApply(inspectedEntry.name)}
+                      >
+                        Apply to Current Config
+                      </ActionButton>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className={styles.configSubHeader}>
+                <div className={styles.contextFacts} aria-label="Config editing context">
+                  <span>
+                    <small>Tenant: </small>
+                    <strong>{configTenantLabel}</strong>
+                  </span>
+                  <span>
+                    <small>Agent: </small>
+                    <strong>{agentLabel(agent)}</strong>
+                  </span>
+                  <span>
+                    <small>File: </small>
+                    <strong
+                      className={styles.contextFile}
+                      title={agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                    >
+                      {agent === "codex" ? "config.toml + auth.json" : "settings.json"}
+                    </strong>
+                  </span>
+                </div>
+                <div className={styles.editorControls} aria-label="Editor mode">
+                  <span className={styles.saveStatus}>
+                    {dirtyFiles.length > 0
+                      ? `${dirtyFiles.length} unsaved file${dirtyFiles.length === 1 ? "" : "s"}`
+                      : "All files saved"}
+                  </span>
+                  <SegmentedControl variant="filled" role="group" aria-label="Editor mode">
+                    {visualAvailable && !selection.current && (
+                      <button
+                        type="button"
+                        aria-pressed={editorMode === "visual"}
+                        onClick={() => switchEditorMode("visual")}
+                      >
+                        Visual
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      aria-pressed={editorMode === "raw"}
+                      onClick={() => switchEditorMode("raw")}
+                    >
+                      Raw
+                    </button>
+                  </SegmentedControl>
+                  {dirtyFiles.length > 1 && (
+                    <ActionButton
+                      tone="primarySoft"
+                      disabled={mutationBusy}
+                      onClick={() => void saveAll()}
+                    >
+                      <Save size={iconSize.xs} /> Save all
+                    </ActionButton>
+                  )}
+                </div>
+              </div>
+              <div className={styles.editorNotice}>
+                <ShieldAlert
+                  size={iconSize.xs}
+                  className={styles.editorNoticeIcon}
+                  aria-hidden="true"
+                />
+                <span>{editorNotice}</span>
+              </div>
+            </div>
+          </div>
+          <div id={filesId} className={styles.configFilePanel}>
+            <ConfigComparisonProvider
+              key={`${tenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : namedConfigName(selection)}`}
+              api={api}
+              target={{
+                tenant,
+                agent,
+                current: selection.current,
+                config: selection.current ? null : namedConfigName(selection),
+              }}
+              enabled={Boolean(
+                data.application.last_application &&
+                (selection.current ||
+                  namedConfigName(selection) === data.application.last_application.applied),
+              )}
+              inputs={session.comparisonInputs}
+              revision={session.getSnapshot().revision}
+              dirty={dirtyFiles.length > 0}
+              refresh={data}
+            >
+              <div className={styles.configFileStack}>
+                {configFiles.map((name) => (
+                  <div
+                    key={name}
+                    ref={(element) => registerPane(name, element)}
+                    className={styles.configFileSection}
+                  >
+                    <ConfigFilePane
+                      key={`${tenantSelectionValue(tenant)}:${agent}:${selection.current ? "current" : `named:${namedConfigName(selection)}`}:${name}`}
+                      listen={api.bootstrap?.listen}
+                      tenant={tenant}
+                      file={name}
+                      mode={selection.current ? "raw" : editorMode}
+                      controlsDisabled={mutationBusy}
+                      session={session}
+                      data={session.file(name)}
+                      onRequestRaw={showRawEditor}
+                    />
+                  </div>
+                ))}
+              </div>
+            </ConfigComparisonProvider>
+          </div>
+        </>
+      ) : (
+        <div className={styles.emptyPane} role="status">
+          <AlertTriangle size={iconSize.lg} aria-hidden="true" />
+          <span>Configuration is unavailable. Use Retry to load it again.</span>
+        </div>
+      )}
+    </section>
+  );
+}

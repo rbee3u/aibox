@@ -1,40 +1,33 @@
+import { tenantSelection, tenantSelectionValue } from "@/domain/tenant";
+import { configLocation } from "@/features/common/routes/configs";
+import { sessionLocation } from "@/features/common/routes/sessions";
+import { tenantComponentLocation } from "@/features/common/routes/tenants";
 import type { Operation } from "@/api/operations";
 import type { OverviewData, TopologyAgent, TopologyData, TopologyTenant } from "@/api/overview";
 import type { ComponentKind } from "@/api/tenants";
-import {
-  componentLabel,
-  namedCatalogLocation,
-  orderTenants,
-  tenantComponentLocation,
-  tenantLocation,
-  tenantSelection,
-  type AttentionItem,
-  type NavigationTarget,
-} from "@/features/overview/resourceTree";
-import type { AttentionPanelKind } from "@/features/overview/viewTypes";
+import { orderTenants } from "@/features/overview/tenantStatus";
+import type {
+  AttentionItem,
+  AttentionPanelKind,
+  NavigationTarget,
+} from "@/features/overview/viewTypes";
+import { agentLabel, capitalize } from "@/shared/lib/format";
 
-export function attentionTenant(tenant: TopologyTenant): string {
-  return tenant.kind === "host" ? "host" : `managed:${tenant.name}`;
-}
-export function configAttentionTarget(
+function configAttentionTarget(
   tenant: TopologyTenant,
   agent: TopologyAgent,
   config?: string,
 ): NavigationTarget {
-  const query = new URLSearchParams();
-  query.set("tenant", attentionTenant(tenant));
-  query.set("agent", agent.agent);
-  if (config) query.set("config", config);
-  else query.set("current", "1");
+  const query = configLocation(
+    tenantSelection(tenant),
+    agent.agent,
+    config ? { current: false, config } : { current: true },
+  );
   return { module: "configs", query };
 }
 
-function agentTitle(agent: TopologyAgent): string {
-  return agent.agent === "codex" ? "Codex" : "Claude";
-}
-
 function attentionScope(tenant: TopologyTenant, agent?: TopologyAgent): string {
-  return agent ? `${tenant.display_name} · ${agentTitle(agent)}` : tenant.display_name;
+  return agent ? `${tenant.display_name} · ${agentLabel(agent.agent)}` : tenant.display_name;
 }
 
 function driftReason(drift: string): string {
@@ -44,20 +37,14 @@ function driftReason(drift: string): string {
 }
 
 /**
- * Every Config condition the topology reports, one item each.
- *
- * The panel used to show the first hit per category and fold the rest into a
- * `+N more` tail inside the detail sentence, which named one Tenant and left
- * the reader to open a module to discover the others. The conditions are the
- * same ones the health summary counted, so enumerating them keeps the panel's
- * row count equal to the number of real problems.
+ * Keep each condition separately actionable, including multiple failures per Tenant.
  */
 export function configAttentions(data: TopologyData): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const tenant of orderTenants(data.tenants)) {
     for (const agent of tenant.agents) {
       const scope = attentionScope(tenant, agent);
-      const id = `${attentionTenant(tenant)}/${agent.agent}`;
+      const id = `${tenantSelectionValue(tenant)}/${agent.agent}`;
       if (agent.current_config.error)
         items.push({
           key: `config-current-error:${id}`,
@@ -82,7 +69,10 @@ export function configAttentions(data: TopologyData): AttentionItem[] {
           tone: "error",
           target: {
             module: "configs",
-            query: namedCatalogLocation(tenantSelection(tenant), agent.agent),
+            query: configLocation(tenantSelection(tenant), agent.agent, {
+              current: false,
+              namedCatalog: true,
+            }),
           },
         });
       for (const entry of agent.named_configs.attention) {
@@ -106,7 +96,7 @@ function componentAttentionReason(input: {
   error?: string | null;
 }): string {
   if (!input.kind) return "Components inspection failed";
-  const label = componentLabel(input.kind);
+  const label = input.kind.split("-").map(capitalize).join(" ");
   if (input.error) return `${label} inspection failed`;
   if (input.status === "modified") return `${label} differs from the AIBox definition`;
   if (input.status === "incomplete") return `${label} is incomplete`;
@@ -120,14 +110,14 @@ export function componentAttentions(data: TopologyData): AttentionItem[] {
   for (const tenant of orderTenants(data.tenants)) {
     const scope = attentionScope(tenant);
     const selection = tenantSelection(tenant);
-    const id = attentionTenant(tenant);
+    const id = tenantSelectionValue(tenant);
     if (tenant.components.error)
       items.push({
         key: `component-catalog:${id}`,
         label: "Components",
         detail: `${scope} · ${componentAttentionReason({ kind: null })}`,
         tone: "error",
-        target: { module: "tenants", query: tenantLocation(selection) },
+        target: { module: "tenants", query: tenantComponentLocation(selection) },
       });
     for (const entry of tenant.components.attention) {
       if (!entry.error && !["modified", "incomplete", "unmanaged"].includes(entry.status ?? ""))
@@ -145,21 +135,16 @@ export function componentAttentions(data: TopologyData): AttentionItem[] {
 }
 
 /**
- * Every Session condition the topology reports, one item each.
- *
- * Discovery only counts Transcripts, so the single condition is a Home that
- * could not be walked. A count of zero is a fact, not a problem, and stays out
- * of the panel.
+ * Only discovery failures need attention; an empty Session catalog is valid.
  */
 export function sessionAttentions(data: TopologyData): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const tenant of orderTenants(data.tenants)) {
     for (const agent of tenant.agents) {
       if (!agent.sessions.error) continue;
-      const query = tenantLocation(tenantSelection(tenant));
-      query.set("agent", agent.agent);
+      const query = sessionLocation(tenantSelection(tenant), agent.agent);
       items.push({
-        key: `sessions:${attentionTenant(tenant)}/${agent.agent}`,
+        key: `sessions:${tenantSelectionValue(tenant)}/${agent.agent}`,
         label: "Sessions",
         detail: `${attentionScope(tenant, agent)} · Session inspection failed`,
         tone: "error",
@@ -176,12 +161,7 @@ export function topologyAttentions(data: TopologyData): AttentionItem[] {
 }
 
 /**
- * Errors first, then warnings, each keeping the order it was collected in.
- *
- * Collection order is the order the sources are read — Service, then Docker,
- * then the Runtime Image, then the topology — which is an implementation
- * detail, not a priority. `Array.prototype.sort` is stable, so ranking by tone
- * alone leaves that order intact inside each tone.
+ * Sort errors before warnings, preserving collection order within each severity.
  */
 export function bySeverity(items: AttentionItem[]): AttentionItem[] {
   return [...items].sort(

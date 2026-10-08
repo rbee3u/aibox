@@ -1,6 +1,6 @@
 //! Session, conversation, tool, and evidence projection types.
 
-use super::filesystem::terminal_safe_with;
+use super::text::terminal_safe_with;
 use serde_json::Value;
 
 /// A line's top-level timestamp, shared by both transcript formats, or empty.
@@ -214,9 +214,7 @@ pub(crate) struct TranscriptEvidence {
     pub(crate) snapshot: String,
 }
 
-/// The one field a tool call is about, in the order the Agents name it —
-/// a shell command, a file, a search, a question — so a row can carry the
-/// command rather than the JSON wrapper around it.
+/// Preview field precedence across native Agent tool formats.
 const TOOL_INPUT_KEYS: [&str; 14] = [
     "command",
     "cmd",
@@ -234,9 +232,7 @@ const TOOL_INPUT_KEYS: [&str; 14] = [
     "input",
 ];
 
-/// A tool's input as a reader wants it: the primary field's own text when the
-/// input carries one, otherwise the input's JSON. Bounded after extraction,
-/// so a long command is cut in its own text rather than mid-JSON.
+/// Extract readable input before truncation; fall back to JSON.
 pub(crate) fn tool_input_preview(input: &Value) -> String {
     let readable = match input {
         Value::String(text) => Some(text.clone()),
@@ -262,8 +258,7 @@ pub(crate) fn tool_input_preview(input: &Value) -> String {
     }
 }
 
-/// A tool's output as a reader wants it: a plain string as itself, anything
-/// else as its JSON.
+/// Preview strings or joined text blocks; fall back to JSON.
 pub(crate) fn tool_output_preview(output: &Value) -> String {
     match output {
         Value::String(text) => bounded_preview(text),
@@ -283,8 +278,7 @@ pub(crate) fn tool_output_preview(output: &Value) -> String {
     }
 }
 
-/// Previews travel only to the Console, which renders them preformatted, so
-/// line and tab structure survives; every other control character is escaped.
+/// Preserve newlines and tabs for the Console; escape other control characters.
 pub(crate) fn bounded_preview(value: &str) -> String {
     const MAX: usize = 240;
     let safe = terminal_safe_with(value, |character| matches!(character, '\n' | '\t'));

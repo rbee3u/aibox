@@ -109,9 +109,7 @@
 }
 
 /*
- * Every variant answers a press the same way. The pressed ink goes on as a
- * layer rather than a fill because a Primary and a Danger button already own
- * their background, and a single flat token cannot darken all seven of them.
+ * Overlay press feedback to preserve each variant's background.
  */
 .button:active:not(:disabled) {
   transform: translateY(1px);
@@ -128,10 +126,7 @@
 }
 
 /*
- * `aria-disabled` is the disabled look without the focus loss: a control that
- * is busy with the press it just took keeps focus, but answers nothing else.
- * Pointer events are off so hover and press never reach it; the keyboard
- * still can, and the component ignores the click.
+ * `aria-disabled` preserves focus. The component must also block keyboard clicks.
  */
 .button[aria-disabled="true"] {
   pointer-events: none;

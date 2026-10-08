@@ -9,11 +9,19 @@ const fileSystem = (
     };
   }
 ).process.getBuiltinModule("fs");
-const css = fileSystem.readFileSync(
+const css = [
   "src/features/requests/detail/RequestDetail.module.css",
+  "src/features/requests/detail/summaryShared.module.css",
+  "src/features/requests/detail/TokenUsageGroup.module.css",
+  "src/features/requests/detail/RequestSummary.module.css",
+  "src/features/requests/detail/DiagnosticGroup.module.css",
+]
+  .map((path) => fileSystem.readFileSync(path, "utf8"))
+  .join("\n");
+const component = fileSystem.readFileSync(
+  "src/features/requests/detail/RequestSummary.tsx",
   "utf8",
 );
-const component = fileSystem.readFileSync("src/features/requests/detail/RequestDetail.tsx", "utf8");
 
 describe("Request summary copy controls", () => {
   it("takes the inline hit area from the primitive's own step", () => {

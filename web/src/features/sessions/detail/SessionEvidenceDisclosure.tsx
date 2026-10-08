@@ -1,3 +1,5 @@
+import styles from "@/features/sessions/detail/SessionEvidenceDisclosure.module.css";
+import conversationStyles from "@/features/sessions/detail/conversation.module.css";
 import { Check, Clipboard } from "lucide-react";
 import { useState } from "react";
 import type { ReactNode } from "react";
@@ -13,7 +15,7 @@ import { useClipboardFeedback } from "@/shared/hooks/useClipboardFeedback";
 import { messageOf } from "@/shared/lib/errors";
 import { RefreshButton } from "@/shared/ui/RefreshButton";
 import { StatusBadge, type StatusTone } from "@/shared/ui/StatusBadge";
-import styles from "@/features/sessions/SessionPage.module.css";
+
 import { iconSize } from "@/shared/icons/iconSizes";
 
 interface SessionEvidenceDisclosureProps {
@@ -33,9 +35,7 @@ interface SessionEvidenceDisclosureProps {
 }
 
 /**
- * Statuses a tool row states beside its label. A completed call says nothing;
- * a call with no result is stated in the neutral tone because the Transcript
- * cannot tell a call still running from one the CLI abandoned.
+ * No result is neutral because the Transcript cannot establish failure.
  */
 const TOOL_STATUS_BADGE: Partial<
   Record<ToolActivity["status"], { label: string; tone: StatusTone }>
@@ -55,10 +55,8 @@ function prettyEvidence(content: string): string {
 }
 
 /**
- * One raw Transcript Entry, loaded on demand and rendered indented. An entry
- * read is pinned to the snapshot the Session was read under, so on a Session
- * still being written the file has usually grown by the time a reader opens
- * one; the entry re-reads the Session once and retries before it says so.
+ * Evidence reads are snapshot-bound. Refresh the Session once on stale
+ * evidence, then retry against the new snapshot.
  */
 function RawEntry({
   api,
@@ -110,7 +108,7 @@ function RawEntry({
 
   return (
     <details
-      className={styles.sessionEvidenceRaw}
+      className={conversationStyles.sessionEvidenceRaw}
       onToggle={(event) => {
         if (event.currentTarget.open) void load();
       }}
@@ -152,9 +150,7 @@ function RawEntry({
 }
 
 /**
- * One Transcript record inside an activity group. A tool row shows what was
- * asked and what came back; raw Transcript Entries load only when opened, and
- * reasoning records stay hidden.
+ * Load raw evidence only on disclosure; internal reasoning stays hidden.
  */
 export function SessionEvidenceDisclosure({
   api,
@@ -175,7 +171,9 @@ export function SessionEvidenceDisclosure({
   const badge = toolStatus !== undefined ? TOOL_STATUS_BADGE[toolStatus] : undefined;
 
   return (
-    <details className={isTool ? styles.sessionActivity : styles.sessionEvidence}>
+    <details
+      className={isTool ? conversationStyles.sessionActivity : conversationStyles.sessionEvidence}
+    >
       <summary>
         <span>{label}</span>
         {badge && (
@@ -183,7 +181,7 @@ export function SessionEvidenceDisclosure({
             {badge.label}
           </StatusBadge>
         )}
-        <span className={styles.sessionRowMeta}>{meta}</span>
+        <span className={conversationStyles.sessionRowMeta}>{meta}</span>
       </summary>
       {isTool ? (
         <div className={styles.sessionToolExchange}>

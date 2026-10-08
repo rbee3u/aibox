@@ -2,6 +2,7 @@
 
 use super::native::{capture_limited, executable_file_exists};
 use super::{ComponentStatus, validate_stable_version};
+use crate::foundation::safe_fs;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub(super) fn inspect_rust(home: &Path) -> Result<ComponentStatus> {
     let rustup_home = home.join(".rustup");
-    if !crate::foundation::safe_fs::real_dir_exists(&rustup_home, "Rustup Home")? {
+    if !safe_fs::real_dir_exists(&rustup_home, "Rustup Home")? {
         return Ok(ComponentStatus::NotInstalled);
     }
     let settings = capture_limited(&rustup_home.join("settings.toml"), "rustup settings")?;
@@ -27,26 +28,19 @@ pub(super) fn inspect_rust(home: &Path) -> Result<ComponentStatus> {
     };
 
     let cargo_home = home.join(".cargo");
-    let cargo_exists = crate::foundation::safe_fs::real_dir_exists(&cargo_home, "Cargo Home")?;
+    let cargo_exists = safe_fs::real_dir_exists(&cargo_home, "Cargo Home")?;
     let cargo_bin_exists = cargo_exists
-        && crate::foundation::safe_fs::real_dir_exists(
-            &cargo_home.join("bin"),
-            "Cargo binary directory",
-        )?;
+        && safe_fs::real_dir_exists(&cargo_home.join("bin"), "Cargo binary directory")?;
     let rustup_exists = cargo_bin_exists
         && executable_file_exists(&cargo_home.join("bin/rustup"), "rustup executable")?;
 
     let toolchains = rustup_home.join("toolchains");
-    let toolchains_exist =
-        crate::foundation::safe_fs::real_dir_exists(&toolchains, "Rust toolchain collection")?;
+    let toolchains_exist = safe_fs::real_dir_exists(&toolchains, "Rust toolchain collection")?;
     let toolchain_dir = toolchains.join(toolchain);
-    let toolchain_exists = toolchains_exist
-        && crate::foundation::safe_fs::real_dir_exists(&toolchain_dir, "Rust toolchain")?;
+    let toolchain_exists =
+        toolchains_exist && safe_fs::real_dir_exists(&toolchain_dir, "Rust toolchain")?;
     let toolchain_bin_exists = toolchain_exists
-        && crate::foundation::safe_fs::real_dir_exists(
-            &toolchain_dir.join("bin"),
-            "Rust binary directory",
-        )?;
+        && safe_fs::real_dir_exists(&toolchain_dir.join("bin"), "Rust binary directory")?;
     let rustc_exists = toolchain_bin_exists
         && executable_file_exists(&toolchain_dir.join("bin/rustc"), "rustc executable")?;
     let complete = rustup_exists && rustc_exists;
@@ -61,7 +55,7 @@ pub(super) fn inspect_rust(home: &Path) -> Result<ComponentStatus> {
 
 pub(super) fn inspect_go(home: &Path) -> Result<ComponentStatus> {
     let goroot = home.join(".goroot");
-    if !crate::foundation::safe_fs::real_dir_exists(&goroot, "Go root")? {
+    if !safe_fs::real_dir_exists(&goroot, "Go root")? {
         return Ok(ComponentStatus::NotInstalled);
     }
     let version_file = capture_limited(&goroot.join("VERSION"), "Go version file")?;
@@ -77,7 +71,7 @@ pub(super) fn inspect_go(home: &Path) -> Result<ComponentStatus> {
     else {
         return Ok(ComponentStatus::Unmanaged);
     };
-    if crate::foundation::safe_fs::real_dir_exists(&goroot.join("bin"), "Go binary directory")?
+    if safe_fs::real_dir_exists(&goroot.join("bin"), "Go binary directory")?
         && executable_file_exists(&goroot.join("bin/go"), "Go executable")?
     {
         Ok(ComponentStatus::Installed {
@@ -100,14 +94,13 @@ fn stable_version_prefix(toolchain: &str) -> Option<String> {
 }
 
 pub(super) fn remove_rust(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::real_dir_exists(home, "Tenant Home")?;
+    safe_fs::real_dir_exists(home, "Tenant Home")?;
     let rustup = home.join(".rustup");
-    let rustup_exists = crate::foundation::safe_fs::real_dir_exists(&rustup, "Rustup Home")?;
+    let rustup_exists = safe_fs::real_dir_exists(&rustup, "Rustup Home")?;
     let cargo = home.join(".cargo");
-    let cargo_exists = crate::foundation::safe_fs::real_dir_exists(&cargo, "Cargo Home")?;
+    let cargo_exists = safe_fs::real_dir_exists(&cargo, "Cargo Home")?;
     let bin = cargo.join("bin");
-    let bin_exists = cargo_exists
-        && crate::foundation::safe_fs::real_dir_exists(&bin, "Cargo binary directory")?;
+    let bin_exists = cargo_exists && safe_fs::real_dir_exists(&bin, "Cargo binary directory")?;
     let proxies = if bin_exists {
         rustup_proxy_paths(&bin)?
     } else {
@@ -124,10 +117,10 @@ pub(super) fn remove_rust(home: &Path) -> Result<()> {
             .with_context(|| format!("remove rustup proxy {}", proxy.display()))?;
     }
     if bin_exists {
-        crate::foundation::safe_fs::sync_dir(&bin)?;
+        safe_fs::sync_dir(&bin)?;
     }
     if rustup_exists {
-        crate::foundation::safe_fs::remove_real_dir_if_exists(&rustup, "Rustup Home")?;
+        safe_fs::remove_real_dir_if_exists(&rustup, "Rustup Home")?;
     }
     Ok(())
 }
@@ -188,5 +181,5 @@ fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
 }
 
 pub(super) fn remove_go(home: &Path) -> Result<()> {
-    crate::foundation::safe_fs::remove_real_dir_if_exists(&home.join(".goroot"), "Go root")
+    safe_fs::remove_real_dir_if_exists(&home.join(".goroot"), "Go root")
 }

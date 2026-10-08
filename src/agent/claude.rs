@@ -1,6 +1,6 @@
 //! Claude Code's fixed Config Fields and built-in Named Config template.
 
-use super::{MainConfigCondition, MainConfigField, MainConfigValueKind, NO_ENUM_VALUES};
+use super::{MainConfigCondition, MainConfigField, MainConfigValueKind};
 
 const PERMISSION_MODES: &[&str] = &[
     "default",
@@ -19,7 +19,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Endpoint used for Claude requests.",
         visible_when: None,
         group: "Endpoint & credentials",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: true,
         required_for_custom_provider: false,
@@ -32,7 +32,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Credential passed to Claude as ANTHROPIC_AUTH_TOKEN.",
         visible_when: None,
         group: "Endpoint & credentials",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: true,
         required: true,
         required_for_custom_provider: false,
@@ -61,7 +61,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
             value: "bypassPermissions",
         }),
         group: "Permissions",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: false,
@@ -74,7 +74,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Model used for the Haiku class of requests.",
         visible_when: None,
         group: "Model defaults",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: false,
@@ -87,7 +87,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Model used for the Sonnet class of requests.",
         visible_when: None,
         group: "Model defaults",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: false,
@@ -100,7 +100,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Model used for the Opus class of requests.",
         visible_when: None,
         group: "Model defaults",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: false,
@@ -113,7 +113,7 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         description: "Model used for the Fable class of requests.",
         visible_when: None,
         group: "Model defaults",
-        enum_values: NO_ENUM_VALUES,
+        enum_values: &[],
         sensitive: false,
         required: false,
         required_for_custom_provider: false,
@@ -125,7 +125,7 @@ pub(super) const DEFAULT_CONFIG: &str = r#"{
   "env": {
     "ANTHROPIC_BASE_URL": "https://example.com",
     "ANTHROPIC_AUTH_TOKEN": "sk-example",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5[1m]",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]"

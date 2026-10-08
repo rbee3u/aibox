@@ -1,0 +1,326 @@
+.fileTitle {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.fileTitle strong {
+  font: var(--weight-semibold) var(--text-xs) / 1.4 var(--font-mono);
+}
+
+.fileTitle span,
+.authModeBadge {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.fileTitle .fileStateDirty {
+  color: var(--warning);
+}
+
+.authModeBadge {
+  min-height: var(--status-height);
+  padding: 2px 6px;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+}
+
+.configFilePane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.authStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.authStatus svg {
+  color: var(--success);
+}
+
+.codeEditor {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--code-text);
+  background: var(--code-bg);
+}
+.codeEditor:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
+.codeEditor :global(.cm-editor) {
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: var(--text-xs) / 1.6 var(--font-mono);
+}
+.codeEditor :global(.cm-scroller) {
+  overflow: visible;
+  padding: 16px 0;
+}
+
+.codeEditor :global(.cm-content) {
+  padding: 0 16px 0 12px;
+  caret-color: var(--accent);
+}
+
+.codeEditor :global(.cm-gutters) {
+  border: 0;
+  border-right: 1px solid var(--line-content);
+  color: var(--code-muted);
+  background: var(--surface-inset);
+}
+
+.codeEditor :global(.cm-lineNumbers) :global(.cm-gutterElement) {
+  min-width: 2.5em;
+  padding: 0 8px 0 4px;
+  text-align: right;
+}
+
+.codeEditor :global(.cm-activeLine),
+.codeEditor :global(.cm-activeLineGutter) {
+  background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+}
+.codeEditor :global(.cm-editor) :global(.cm-cursor),
+.codeEditor :global(.cm-editor) :global(.cm-dropCursor) {
+  border-left-color: var(--accent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionBackground),
+.codeEditor
+  :global(.cm-editor.cm-focused)
+  > :global(.cm-scroller)
+  > :global(.cm-selectionLayer)
+  :global(.cm-selectionBackground) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-selectionMatch) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-matchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-matchingBracket) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-nonmatchingBracket),
+.codeEditor :global(.cm-editor.cm-focused) :global(.cm-nonmatchingBracket) {
+  background: var(--danger-soft);
+  box-shadow: 0 0 0 1px var(--danger-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch) {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  box-shadow: 0 0 0 1px var(--warning-line);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-searchMatch.cm-searchMatch-selected) {
+  background: color-mix(in srgb, var(--warning) 36%, transparent);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-foldPlaceholder) {
+  border-color: var(--line-control);
+  color: var(--muted);
+  background: var(--surface-inset);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels) {
+  z-index: 1;
+  color: var(--ink);
+  background: var(--bg-shell);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-bottom) {
+  border-top: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panels.cm-panels-top) {
+  border-bottom: 1px solid var(--line-structural);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 40px 8px 10px;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) br {
+  flex-basis: 100%;
+  height: 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel.cm-search) label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-secondary);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-textfield) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button) {
+  min-height: var(--control-sm);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  color: var(--ink-secondary);
+  background: var(--surface);
+  background-image: none;
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+  text-transform: capitalize;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):hover {
+  border-color: var(--line-control-strong);
+  background: var(--surface-hover);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-button):active {
+  background: var(--surface-pressed);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-panel) button[name="close"] {
+  top: 8px;
+  right: 8px;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip) {
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font: var(--text-xs) / var(--line-height-xs) var(--font-sans);
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-tooltip-lint) {
+  padding: 4px 0;
+}
+
+.codeEditor :global(.cm-editor) :global(.cm-diagnostic-error) {
+  border-left-color: var(--danger);
+}
+
+.codeEditor :global(.cm-config-key) {
+  color: var(--syntax-key);
+}
+
+.codeEditor :global(.cm-config-string) {
+  color: var(--syntax-string);
+}
+
+.codeEditor :global(.cm-config-number) {
+  color: var(--syntax-number);
+}
+
+.codeEditor :global(.cm-config-boolean) {
+  color: var(--syntax-boolean);
+}
+
+.codeEditor :global(.cm-config-comment) {
+  color: var(--code-muted);
+  font-style: italic;
+}
+
+.codeEditor :global(.cm-config-invalid) {
+  color: var(--danger);
+  text-decoration: underline wavy;
+}
+
+.codeEditorFallback {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  padding: 16px;
+  border: 0;
+  outline: 0;
+  color: var(--code-text);
+  background: var(--code-bg);
+  font: var(--text-xs) / 1.6 var(--font-mono);
+  tab-size: 2;
+}
+
+.codeEditorFallback:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
+.editorDiagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: var(--text-xs);
+}
+
+.binaryConfigNotice {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.binaryConfigNotice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.codeEditor :global(.cm-config-difference-line) {
+  background: var(--warning-soft);
+}
+.codeEditor :global(.cm-config-difference-button) {
+  /* A gutter control follows one code row, not the generic toolbar button size. */
+  display: block;
+  min-height: 0;
+  height: 1lh;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 0;
+  cursor: pointer;
+  padding: 0 var(--space-md);
+  font: inherit;
+}
+
+.fileHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}

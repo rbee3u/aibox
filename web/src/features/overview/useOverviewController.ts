@@ -1,12 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { tenantLocation } from "@/features/common/routes/tenants";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Operation } from "@/api/operations";
-import type { OverviewApi, OverviewData, TopologyData } from "@/api/overview";
-import {
-  buildTopologyTree,
-  type AttentionItem,
-  type TopologyNode,
-} from "@/features/overview/resourceTree";
+import { tenantStatusRows } from "@/features/overview/tenantStatus";
 import {
   attentionPanelKind,
   buildDisabledReason,
@@ -14,48 +9,19 @@ import {
   topologyAttentions,
 } from "@/features/overview/topology/healthAttention";
 import { explainFailure } from "@/features/overview/failureCopy";
-import type { AttentionPanelKind } from "@/features/overview/viewTypes";
+import type {
+  OverviewPageProps,
+  AttentionItem,
+  OverviewViewModel,
+} from "@/features/overview/viewTypes";
 import { useOverviewData } from "@/features/overview/useOverviewData";
 import { messageOf } from "@/shared/lib/errors";
-
-interface ControllerOptions {
-  api: OverviewApi;
-  operation: Operation | null;
-  onOperation: (operation: Operation) => void;
-}
-
-interface OverviewViewModel {
-  service: {
-    build: (force: boolean) => Promise<void>;
-    buildDisabled: boolean;
-    buildUnavailableReason: string | null;
-    elapsedUptime: number;
-    loadOverview: (visibleRefresh?: boolean) => Promise<void>;
-    loadRequestsTotal: () => Promise<void>;
-    overview: OverviewData | null;
-    overviewError: string | null;
-    overviewRefreshing: boolean;
-    requestsTotal: number | null;
-  };
-  topology: {
-    pageRef: RefObject<HTMLDivElement | null>;
-    tree: TopologyNode | null;
-    loadTopology: (visibleRefresh?: boolean) => Promise<void>;
-    topology: TopologyData | null;
-    topologyError: string | null;
-    topologyRefreshing: boolean;
-  };
-  attention: {
-    attentionItems: AttentionItem[];
-    panel: AttentionPanelKind;
-  };
-}
 
 export function useOverviewController({
   api,
   operation,
   onOperation,
-}: ControllerOptions): OverviewViewModel {
+}: Pick<OverviewPageProps, "api" | "operation" | "onOperation">): OverviewViewModel {
   const [buildPosting, setBuildPosting] = useState(false);
   const ownedBuild = useRef<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
@@ -64,7 +30,6 @@ export function useOverviewController({
     elapsedUptime,
     loadOverview,
     loadTopology,
-    loadRequestsTotal,
     requestsTotal,
     overview,
     overviewError,
@@ -83,7 +48,7 @@ export function useOverviewController({
     ownedBuild.current = null;
     void loadOverview();
   }, [loadOverview, operation]);
-  const tree = useMemo(() => (topology ? buildTopologyTree(topology) : null), [topology]);
+  const tenants = useMemo(() => (topology ? tenantStatusRows(topology) : null), [topology]);
   const operationRunning = operation?.state === "running";
   const buildDisabled =
     buildPosting ||
@@ -138,7 +103,7 @@ export function useOverviewController({
         label: "Host Tenant",
         detail: "The Host Home is unavailable.",
         tone: "warning",
-        target: { module: "tenants", query: new URLSearchParams("tenant=host") },
+        target: { module: "tenants", query: tenantLocation("host") },
       });
     if (topology) items.push(...topologyAttentions(topology));
     if (topologyError)
@@ -171,14 +136,13 @@ export function useOverviewController({
     }
   }
 
-  const viewModel = {
+  return {
     service: {
       build,
       buildDisabled,
       buildUnavailableReason,
       elapsedUptime,
       loadOverview,
-      loadRequestsTotal,
       overview,
       overviewError,
       overviewRefreshing,
@@ -186,7 +150,7 @@ export function useOverviewController({
     },
     topology: {
       pageRef,
-      tree,
+      tenants,
       loadTopology,
       topology,
       topologyError,
@@ -197,5 +161,4 @@ export function useOverviewController({
       panel,
     },
   };
-  return viewModel;
 }

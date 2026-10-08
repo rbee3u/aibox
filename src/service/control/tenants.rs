@@ -1,7 +1,7 @@
 //! Tenant Control API handlers and wire types.
 
 use super::{ControlResult, json_response};
-use crate::service::coordination::{DeleteTenantsCommand, TenantCatalogEntry, TenantCoordinator};
+use crate::management::{DeleteTenantsCommand, TenantCatalogEntry};
 use crate::service::state::ServiceState;
 use axum::Json;
 use axum::extract::State;
@@ -27,27 +27,25 @@ pub(crate) enum TenantRow {
 }
 
 pub(super) async fn list_tenants(State(state): State<ServiceState>) -> ControlResult {
-    let entries = TenantCoordinator::new(state).list().await?;
-    Ok(json_response(
-        StatusCode::OK,
-        &entries
-            .into_iter()
-            .map(|entry| match entry {
-                TenantCatalogEntry::Host { home, exists } => TenantRow::Host {
-                    name: None,
-                    display_name: "Host Tenant".to_string(),
-                    home,
-                    exists,
-                },
-                TenantCatalogEntry::Managed { name, home } => TenantRow::Managed {
-                    display_name: name.clone(),
-                    name,
-                    home,
-                    exists: true,
-                },
-            })
-            .collect::<Vec<_>>(),
-    ))
+    let entries = state.management.tenants.list().await?;
+    let rows = entries
+        .into_iter()
+        .map(|entry| match entry {
+            TenantCatalogEntry::Host { home, exists } => TenantRow::Host {
+                name: None,
+                display_name: "Host Tenant".to_string(),
+                home,
+                exists,
+            },
+            TenantCatalogEntry::Managed { name, home } => TenantRow::Managed {
+                display_name: name.clone(),
+                name,
+                home,
+                exists: true,
+            },
+        })
+        .collect::<Vec<_>>();
+    Ok(json_response(StatusCode::OK, &rows))
 }
 
 #[derive(Deserialize)]
@@ -60,7 +58,7 @@ pub(super) async fn create_tenant(
     State(state): State<ServiceState>,
     Json(request): Json<CreateTenantRequest>,
 ) -> ControlResult {
-    let created = TenantCoordinator::new(state).create(request.name).await?;
+    let created = state.management.tenants.create(request.name).await?;
     Ok(json_response(
         StatusCode::OK,
         &CreatedTenantResponse {
@@ -89,7 +87,7 @@ pub(super) async fn delete_tenants(
         all: request.all,
         confirmation: request.confirmation,
     };
-    let deleted = TenantCoordinator::new(state).delete(command).await?;
+    let deleted = state.management.tenants.delete(command).await?;
     Ok(json_response(
         StatusCode::OK,
         &DeletedTenantsResponse {

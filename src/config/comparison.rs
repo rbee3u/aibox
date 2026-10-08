@@ -246,64 +246,49 @@ fn collect_differences(
     if named == current {
         return;
     }
-    if (named.is_some_and(Value::is_object)
-        && (current.is_none() || current.is_some_and(Value::is_object)))
-        || (current.is_some_and(Value::is_object) && named.is_none())
-    {
+    if matches!(
+        (named, current),
+        (Some(Value::Object(_)), None | Some(Value::Object(_))) | (None, Some(Value::Object(_)))
+    ) {
         let empty = serde_json::Map::new();
-        let a = named.and_then(Value::as_object).unwrap_or(&empty);
-        let b = current.and_then(Value::as_object).unwrap_or(&empty);
-        if a.is_empty() && b.is_empty() {
-            output.push(ConfigDifference {
-                path: path.clone(),
-                sensitive: false,
-                named_present: named.is_some(),
-                current_present: current.is_some(),
-                named_value: named.cloned(),
-                current_value: current.cloned(),
-                named_range: None,
-                current_range: None,
-            });
+        let named_fields = named.and_then(Value::as_object).unwrap_or(&empty);
+        let current_fields = current.and_then(Value::as_object).unwrap_or(&empty);
+        if !named_fields.is_empty() || !current_fields.is_empty() {
+            for key in named_fields
+                .keys()
+                .chain(current_fields.keys())
+                .collect::<BTreeSet<_>>()
+            {
+                path.push(key.clone());
+                collect_differences(named_fields.get(key), current_fields.get(key), path, output);
+                path.pop();
+            }
             return;
         }
-        for key in a.keys().chain(b.keys()).collect::<BTreeSet<_>>() {
-            path.push(key.clone());
-            collect_differences(a.get(key), b.get(key), path, output);
-            path.pop();
-        }
-    } else {
-        output.push(ConfigDifference {
-            path: path.clone(),
-            sensitive: false,
-            named_present: named.is_some(),
-            current_present: current.is_some(),
-            named_value: named.cloned(),
-            current_value: current.cloned(),
-            named_range: None,
-            current_range: None,
-        });
     }
+    output.push(ConfigDifference {
+        path: path.clone(),
+        sensitive: false,
+        named_present: named.is_some(),
+        current_present: current.is_some(),
+        named_value: named.cloned(),
+        current_value: current.cloned(),
+        named_range: None,
+        current_range: None,
+    });
 }
 
 fn toml_range(text: &str, path: &[String]) -> Option<[usize; 2]> {
     let document = toml_edit::Document::parse(text).ok()?;
     let mut item = document.as_item();
     for key in path {
-        item = match item.get(key) {
-            Some(child) => child,
-            None => {
-                return if item.is_table() || item.is_inline_table() {
-                    None
-                } else {
-                    item.span().map(|span| {
-                        [
-                            text[..span.start].encode_utf16().count(),
-                            text[..span.end].encode_utf16().count(),
-                        ]
-                    })
-                };
+        let Some(child) = item.get(key) else {
+            if item.is_table() || item.is_inline_table() {
+                return None;
             }
+            break;
         };
+        item = child;
     }
     let span = item.span()?;
     Some([

@@ -4,17 +4,11 @@ import { ActionButton, type ActionButtonTone } from "@/shared/ui/ActionButton";
 import { AnchoredTooltip } from "@/shared/ui/AnchoredTooltip";
 import styles from "@/shared/ui/IconButton.module.css";
 
-/*
- * Long enough that sweeping a pointer across a row of actions stays quiet,
- * short enough to answer someone who stopped to ask. Focus does not wait,
- * because a keyboard user has no other way to read the icon.
- */
 const HOVER_DELAY_MS = 450;
 
 /**
- * Which step the control takes. `md` is a control in its own slot: a row or
- * toolbar action. `sm` rides inside a line of text beside the value it acts on,
- * and still meets the touch-target floor on a coarse pointer.
+ * `sm` fits inline text; `md` fits row and toolbar actions. Both retain the
+ * coarse-pointer target minimum.
  */
 export type IconButtonSize = "md" | "sm";
 
@@ -27,12 +21,6 @@ type IconButtonProps = Omit<ComponentProps<typeof ActionButton>, "children"> & {
   size?: IconButtonSize;
 };
 
-/**
- * A button whose only content is an icon, and which therefore owes the reader
- * its name. The label is the accessible name and the tooltip text both: a
- * trash icon in a list of fifty rows says nothing about which row it ends, and
- * that answer already exists here.
- */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { label, children, className, buttonRef, tone = "ghost", size = "md", ...props },
   ref,

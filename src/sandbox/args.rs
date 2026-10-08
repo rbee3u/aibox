@@ -4,8 +4,8 @@
 //! Debug Shell and container-based Component callers must canonicalize the
 //! Tenant Home and reject unsupported bind-source syntax before calling them.
 
+use super::CONTAINER_HOME;
 use crate::foundation::platform;
-use crate::tenant::CONTAINER_HOME;
 use std::path::Path;
 
 /// Assemble Docker arguments for the Tenant Home, Workspace, and Extra Mounts.

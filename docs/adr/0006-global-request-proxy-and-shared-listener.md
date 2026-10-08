@@ -1,6 +1,6 @@
 # Share one listener with the global Request Proxy
 
-The Request Proxy is global and independent of Tenants, Runs, Sessions, and
-Agents. It shares one listener with the Console, keeping the proxy and
-management surfaces on one endpoint while preserving their separate trust
-boundaries.
+The global Request Proxy shares one listener with the Console, giving clients
+one endpoint without tying traffic to Tenants, Runs, Sessions, or Agents.
+Management routes require loopback access even when the listener accepts remote
+proxy traffic.

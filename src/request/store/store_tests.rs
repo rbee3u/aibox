@@ -2,6 +2,7 @@ use super::*;
 use crate::request::interpretation::{ProtocolDiagnostic, ResponseModeValue};
 use crate::request::model::{AssessmentLevel, AssessmentSource};
 use base64::Engine as _;
+use proptest::prelude::*;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -76,14 +77,14 @@ fn summary_is_terminal_and_legacy_result_is_derived() {
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
     let found = store.find(&request.id).unwrap();
     assert!(found.summary.terminal);
     let result = found.result.unwrap();
-    assert_eq!(result.outcome, Outcome::Rejected);
+    assert_eq!(result.outcome, RequestOutcome::Rejected);
     assert!(!result.ended_at.is_empty());
     let terminal_name = found.directory.file_name().unwrap().to_string_lossy();
     assert!(!terminal_name.starts_with("active-"));
@@ -96,12 +97,12 @@ fn every_terminal_outcome_has_an_end_time_and_terminal_directory() {
     let temp = tempfile::tempdir().unwrap();
     let store = RequestStore::open(temp.path()).unwrap();
     for outcome in [
-        Outcome::Completed,
-        Outcome::Rejected,
-        Outcome::UpstreamError,
-        Outcome::ClientDisconnected,
-        Outcome::RecordingFailed,
-        Outcome::ServerShutdown,
+        RequestOutcome::Completed,
+        RequestOutcome::Rejected,
+        RequestOutcome::UpstreamError,
+        RequestOutcome::ClientDisconnected,
+        RequestOutcome::RecordingFailed,
+        RequestOutcome::ServerShutdown,
     ] {
         let (request, _) = store
             .begin(ObservedRequest {
@@ -142,7 +143,7 @@ fn terminal_summary_is_immutable_to_late_checkpoints() {
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
@@ -255,7 +256,7 @@ fn terminal_summary_under_active_name_stays_terminal_and_uses_expected_sort_key(
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             None,
         )
         .unwrap();
@@ -264,7 +265,10 @@ fn terminal_summary_under_active_name_stays_terminal_and_uses_expected_sort_key(
 
     let reopened = RequestStore::open(temp.path()).unwrap();
     let stored = reopened.find(&request.id).unwrap();
-    assert_eq!(stored.result.unwrap().outcome, Outcome::UpstreamError);
+    assert_eq!(
+        stored.result.unwrap().outcome,
+        RequestOutcome::UpstreamError
+    );
     assert!(
         stored
             .directory
@@ -292,7 +296,7 @@ fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::ServerShutdown,
+            RequestOutcome::ServerShutdown,
             None,
         )
         .unwrap();
@@ -306,7 +310,7 @@ fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
@@ -318,9 +322,9 @@ fn no_clobber_rename_failure_preserves_terminal_outcome_and_source_directory() {
     assert_eq!(terminal.id, request.id);
     assert_eq!(terminal.method, "GET");
     assert_eq!(terminal.host, "example.test");
-    assert_eq!(terminal.outcome, Outcome::ServerShutdown);
+    assert_eq!(terminal.outcome, RequestOutcome::ServerShutdown);
     assert!(repeated.terminal_event.is_none());
-    assert_eq!(repeated.outcome, Outcome::ServerShutdown);
+    assert_eq!(repeated.outcome, RequestOutcome::ServerShutdown);
     assert_eq!(repeated.ended_at, first.ended_at);
     assert!(active_path.exists());
     assert!(target.exists());
@@ -356,7 +360,7 @@ fn normal_directory_order_matches_scanned_sort_keys_exactly() {
             &terminal,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Completed,
+            RequestOutcome::Completed,
             None,
         )
         .unwrap();
@@ -389,15 +393,15 @@ fn derived_result_uses_the_finished_monotonic_offset() {
     let mut summary = SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", None);
     summary.terminal = true;
     summary.timing.finished_at_ns = Some("1500000000".to_string());
-    summary.outcome = Some(Outcome::Completed);
+    summary.outcome = Some(RequestOutcome::Completed);
     refresh_assessment(&mut summary);
 
     let result = summary_to_result(&summary);
     assert!(result.ended_at.starts_with("2026-08-06T04:00:01"));
 }
 
-#[test]
-fn assessment_preserves_evidence_and_prioritizes_recording_provider_transport_http_then_warning() {
+/// Independent evidence with deliberately conflicting severity, source, and time order.
+fn assessment_summary() -> SummaryMetadata {
     let mut summary = SummaryMetadata::test(
         "018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12",
         Some(ProtocolSummary::for_url(Some(
@@ -405,96 +409,138 @@ fn assessment_preserves_evidence_and_prioritizes_recording_provider_transport_ht
         ))),
     );
     summary.terminal = true;
-    summary.outcome = Some(Outcome::UpstreamError);
-    summary.timing.finished_at_ns = Some("90".to_string());
+    summary.outcome = Some(RequestOutcome::Completed);
     summary.response = Some(SummaryResponseMetadata {
         status: 401,
         http_version: "HTTP/2".to_string(),
     });
-    summary.errors.extend([
-        DiagnosticMetadata {
-            phase: "response".to_string(),
-            kind: "response_recording_failed".to_string(),
-            message: "response bytes could not be recorded".to_string(),
-            at_ns: "90".to_string(),
-        },
-        DiagnosticMetadata {
-            phase: "response".to_string(),
-            kind: "response_recording_failed".to_string(),
-            message: "response bytes could not be recorded".to_string(),
-            at_ns: "70".to_string(),
-        },
-    ]);
+    summary.errors = [
+        (
+            "response_recording_failed",
+            "response bytes could not be recorded",
+            "90",
+        ),
+        ("upstream_response_failed", "connection reset", "30"),
+    ]
+    .into_iter()
+    .map(|(kind, message, at_ns)| DiagnosticMetadata {
+        phase: "response".into(),
+        kind: kind.into(),
+        message: message.into(),
+        at_ns: at_ns.into(),
+    })
+    .collect();
     summary
         .protocol
         .as_mut()
         .unwrap()
         .errors
         .push(ProtocolDiagnostic {
-            kind: "service_unavailable_error".to_string(),
-            message: "provider overloaded".to_string(),
-            at_ns: Some("10".to_string()),
+            kind: "service_unavailable_error".into(),
+            message: "provider overloaded".into(),
+            at_ns: Some("10".into()),
         });
     summary.warnings.push(DiagnosticMetadata {
-        phase: "recording".to_string(),
-        kind: "event_index_failed".to_string(),
-        message: "timing index unavailable".to_string(),
-        at_ns: "20".to_string(),
+        phase: "recording".into(),
+        kind: "event_index_failed".into(),
+        message: "timing index unavailable".into(),
+        at_ns: "20".into(),
     });
-
-    refresh_assessment(&mut summary);
-    assert_eq!(summary.assessment.level, AssessmentLevel::Error);
-    assert_eq!(summary.assessment.issue_count, 4);
-    let primary = summary.assessment.primary.as_ref().unwrap();
-    assert_eq!(primary.source, AssessmentSource::Request);
-    assert_eq!(primary.kind, "response_recording_failed");
-    assert_eq!(
-        diagnostic_findings(&summary, false)
-            .iter()
-            .find(|finding| finding.kind == "response_recording_failed")
-            .unwrap()
-            .at_ns
-            .as_deref(),
-        Some("70")
-    );
-
     summary
-        .errors
-        .retain(|error| error.kind != "response_recording_failed");
-    refresh_assessment(&mut summary);
-    assert_eq!(
-        summary.assessment.primary.as_ref().unwrap().source,
-        AssessmentSource::Provider
-    );
+}
 
-    summary.protocol.as_mut().unwrap().errors.clear();
-    summary.errors.push(DiagnosticMetadata {
-        phase: "response".to_string(),
-        kind: "upstream_response_failed".to_string(),
-        message: "connection reset".to_string(),
-        at_ns: "30".to_string(),
-    });
-    refresh_assessment(&mut summary);
-    assert_eq!(
-        summary.assessment.primary.as_ref().unwrap().source,
-        AssessmentSource::Request
-    );
+#[test]
+fn assessment_prioritizes_recording_provider_transport_http_then_warning() {
+    // This table states the contract from highest to lowest priority. Each row
+    // starts with fresh evidence and competes with every lower-priority finding.
+    let priority = [
+        (
+            AssessmentSource::Request,
+            "response_recording_failed",
+            AssessmentLevel::Error,
+        ),
+        (
+            AssessmentSource::Provider,
+            "service_unavailable_error",
+            AssessmentLevel::Error,
+        ),
+        (
+            AssessmentSource::Request,
+            "upstream_response_failed",
+            AssessmentLevel::Error,
+        ),
+        (AssessmentSource::Http, "http_401", AssessmentLevel::Error),
+        (
+            AssessmentSource::Diagnostic,
+            "event_index_failed",
+            AssessmentLevel::Warning,
+        ),
+    ];
+    for (index, &(source, kind, level)) in priority.iter().enumerate() {
+        let present = |candidate: &str| {
+            priority[index..]
+                .iter()
+                .any(|(_, kind, _)| *kind == candidate)
+        };
+        let mut summary = assessment_summary();
+        summary.errors.retain(|error| present(&error.kind));
+        summary
+            .protocol
+            .as_mut()
+            .unwrap()
+            .errors
+            .retain(|error| present(&error.kind));
+        if !present("http_401") {
+            summary.response = None;
+        }
 
-    summary.errors.clear();
-    summary.outcome = Some(Outcome::Completed);
-    refresh_assessment(&mut summary);
-    assert_eq!(
-        summary.assessment.primary.as_ref().unwrap().source,
-        AssessmentSource::Http
-    );
+        refresh_assessment(&mut summary);
 
-    summary.response = None;
-    refresh_assessment(&mut summary);
-    assert_eq!(
-        summary.assessment.primary.as_ref().unwrap().source,
-        AssessmentSource::Diagnostic
-    );
-    assert_eq!(summary.assessment.level, AssessmentLevel::Warning);
+        let primary = summary.assessment.primary.as_ref().unwrap();
+        assert_eq!(
+            (primary.source, primary.kind.as_str()),
+            (source, kind),
+            "{kind}"
+        );
+        assert_eq!(summary.assessment.level, level, "{kind}");
+        assert_eq!(
+            summary.assessment.issue_count,
+            priority.len() - index,
+            "{kind}"
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn repeated_diagnostics_preserve_distinct_evidence_and_earliest_time(
+        times in proptest::collection::vec(any::<u64>(), 2..16),
+    ) {
+        let mut summary = assessment_summary();
+        let recording = summary.errors.remove(0);
+        summary.errors.extend(times.iter().map(|time| DiagnosticMetadata {
+            at_ns: time.to_string(), ..recording.clone()
+        }));
+        let earliest = times.iter().min().unwrap().to_string();
+
+        // Input order is generated; reversing it also exercises both directions
+        // of duplicate replacement. The oracle comes from the generated times.
+        for _ in 0..2 {
+            refresh_assessment(&mut summary);
+            prop_assert_eq!(summary.assessment.level, AssessmentLevel::Error);
+            prop_assert_eq!(summary.assessment.issue_count, 5);
+            let primary = summary.assessment.primary.as_ref().unwrap();
+            prop_assert_eq!(primary.source, AssessmentSource::Request);
+            prop_assert_eq!(&primary.kind, "response_recording_failed");
+            let findings = diagnostic_findings(&summary, false);
+            let recording = findings.iter().filter(|finding| finding.kind == "response_recording_failed")
+                .collect::<Vec<_>>();
+            prop_assert_eq!(recording.len(), 1);
+            prop_assert_eq!(recording[0].at_ns.as_deref(), Some(earliest.as_str()));
+            prop_assert_eq!(summary.errors.len(), times.len() + 1);
+            summary.errors.reverse();
+        }
+    }
 }
 
 #[test]
@@ -502,17 +548,17 @@ fn client_disconnect_and_request_abort_are_warnings_but_recording_failure_is_err
     for (kind, outcome, level) in [
         (
             "client_disconnected",
-            Outcome::ClientDisconnected,
+            RequestOutcome::ClientDisconnected,
             AssessmentLevel::Warning,
         ),
         (
             "request_body_failed",
-            Outcome::ClientDisconnected,
+            RequestOutcome::ClientDisconnected,
             AssessmentLevel::Warning,
         ),
         (
             "request_recording_failed",
-            Outcome::RecordingFailed,
+            RequestOutcome::RecordingFailed,
             AssessmentLevel::Error,
         ),
     ] {
@@ -540,7 +586,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             None,
             Some(ResponseModeValue::Stream),
             false,
-            Outcome::Completed,
+            RequestOutcome::Completed,
             true,
         ),
         (
@@ -549,7 +595,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             Some(ResponseModeValue::Stream),
             None,
             false,
-            Outcome::Completed,
+            RequestOutcome::Completed,
             true,
         ),
         (
@@ -558,7 +604,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             None,
             Some(ResponseModeValue::Normal),
             false,
-            Outcome::Completed,
+            RequestOutcome::Completed,
             false,
         ),
         (
@@ -567,7 +613,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             None,
             Some(ResponseModeValue::Stream),
             false,
-            Outcome::Completed,
+            RequestOutcome::Completed,
             false,
         ),
         (
@@ -576,7 +622,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             None,
             Some(ResponseModeValue::Stream),
             true,
-            Outcome::Completed,
+            RequestOutcome::Completed,
             false,
         ),
         (
@@ -585,7 +631,7 @@ fn completed_model_stream_warns_only_when_a_required_terminal_event_is_missing()
             None,
             Some(ResponseModeValue::Stream),
             false,
-            Outcome::UpstreamError,
+            RequestOutcome::UpstreamError,
             false,
         ),
     ] {
@@ -618,7 +664,7 @@ fn missing_terminal_event_is_not_claimed_when_response_interpretation_failed() {
     protocol.response_mode.observed = Some(ResponseModeValue::Stream);
     let mut summary = SummaryMetadata::test("018f4c8e-4b6b-7c13-8a22-2e4d6d6b6e12", Some(protocol));
     summary.terminal = true;
-    summary.outcome = Some(Outcome::Completed);
+    summary.outcome = Some(RequestOutcome::Completed);
     summary.timing.upstream_response_body_completed_at_ns = Some("25".to_string());
     summary.warnings.push(DiagnosticMetadata {
         phase: "recording".to_string(),
@@ -672,7 +718,7 @@ fn summary_scan_ignores_body_and_metadata_corruption_but_detail_is_strict() {
                 &request,
                 Instant::now(),
                 &RuntimeMeasurements::default(),
-                Outcome::Completed,
+                RequestOutcome::Completed,
                 None,
             )
             .unwrap();
@@ -1083,7 +1129,7 @@ fn deletion_rejects_symlinked_request_entries_without_touching_targets() {
             &request,
             Instant::now(),
             &RuntimeMeasurements::default(),
-            Outcome::Rejected,
+            RequestOutcome::Rejected,
             None,
         )
         .unwrap();
@@ -1110,7 +1156,7 @@ fn delete_ids_requires_a_unique_valid_non_active_selection_before_removing_anyth
                 &request,
                 Instant::now(),
                 &RuntimeMeasurements::default(),
-                Outcome::Rejected,
+                RequestOutcome::Rejected,
                 None,
             )
             .unwrap();

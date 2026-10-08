@@ -1,6 +1,5 @@
 # Keep AIBox application-only
 
-AIBox exposes an application surface through `console`, `run`, and `debug`;
-management stays inside the foreground Service and embedded Console. Runs and
-Debug Shells are transient and have no Run History or Run-to-Session mapping,
-so the library exposes no embedding-oriented management or execution model.
+AIBox exposes only its application entry point; management belongs to the
+foreground Service and embedded Console. Domain facades and the Control API
+remain internal, avoiding a public embedding contract for application workflows.

@@ -1,7 +1,7 @@
+import styles from "@/features/configs/ConfigDriftBadge.module.css";
 import type { ApplicationStatus } from "@/api/configs";
 import { appliedConfigPresentation } from "@/features/configs/configCatalog";
 import { StatusBadge } from "@/shared/ui/StatusBadge";
-import styles from "@/features/configs/ConfigPage.module.css";
 
 /** Marks the Last Application source: `Applied` when clean, the drift label otherwise. */
 export function ConfigDriftBadge({

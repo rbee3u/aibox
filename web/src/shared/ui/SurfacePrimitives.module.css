@@ -12,8 +12,6 @@
   gap: 1px;
 }
 
-/* The eyebrow sits above its heading, so it stays lighter than the section
- * title role rather than matching it. */
 .sectionHeader span {
   color: var(--muted);
   font-size: var(--text-meta);

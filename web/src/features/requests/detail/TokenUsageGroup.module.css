@@ -1,0 +1,142 @@
+.usageMessage {
+  margin: 10px 0 0;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-height-xs);
+}
+.tokenUsageGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.tokenCard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-content);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+.tokenCardHeader {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-content);
+  background: var(--surface-raised);
+}
+.tokenMetricPrimary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tokenMetricPrimary dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1.35;
+}
+.tokenCardHeader:last-child {
+  border-bottom: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.tokenMetricPrimary dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.tokenMetricPrimary dd {
+  margin: 0;
+  color: var(--ink);
+  font: var(--weight-bold) var(--text-md) / 1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tokenSubMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: var(--line-content);
+}
+.tokenCard:last-child .tokenSubMetrics {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tokenSubCell {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+.tokenSubCellDetailed {
+  justify-content: space-between;
+}
+.tokenSubDl {
+  margin: 0;
+  min-width: 0;
+}
+.tokenSubDl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tokenSubDl dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+}
+.tokenSubDl dd {
+  margin: 0;
+  color: var(--ink-secondary);
+  font: var(--weight-bold) var(--text-xs) / 1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tokenCacheBreakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line-content);
+}
+.tokenCacheDetail {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.tokenCacheDetail dt {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.tokenCacheDetail dd {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+@container (max-width: 560px) {
+  .tokenUsageGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container (max-width: 380px) {
+  .tokenSubMetrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

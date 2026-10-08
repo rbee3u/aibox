@@ -1,5 +1,5 @@
 use super::*;
-use crate::request::store::{Outcome, StoredRequest};
+use crate::request::store::{RequestOutcome, StoredRequest};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
@@ -150,7 +150,7 @@ async fn reqwest_tcp_smoke_preserves_bytes_headers_query_and_redirect_policy() {
         std::fs::read(request.directory.join("response.body")).unwrap(),
         raw
     );
-    assert_eq!(request.result.unwrap().outcome, Outcome::Completed);
+    assert_eq!(request.result.unwrap().outcome, RequestOutcome::Completed);
 
     let redirect_url = format!("http://{proxy_address}/http://{upstream}/v1/redirect");
     assert_eq!(

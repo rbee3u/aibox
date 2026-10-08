@@ -66,19 +66,19 @@ impl NamedConfigDefinition {
             }
             AgentKind::Codex => {
                 let auth = auth.context("Codex Named Config auth.json is missing")?;
-                let (object, auth_warnings) = validate_codex_auth(
-                    auth,
-                    (value_at_path(&main, &["model_provider"]).and_then(Value::as_str)
-                        == Some("custom"))
-                    .then(|| {
-                        value_at_path(
-                            &main,
-                            &["model_providers", "custom", "requires_openai_auth"],
-                        )
-                        .and_then(Value::as_bool)
-                    })
-                    .flatten(),
-                )?;
+                let requires_openai_auth = if value_at_path(&main, &["model_provider"])
+                    .and_then(Value::as_str)
+                    == Some("custom")
+                {
+                    value_at_path(
+                        &main,
+                        &["model_providers", "custom", "requires_openai_auth"],
+                    )
+                    .and_then(Value::as_bool)
+                } else {
+                    None
+                };
+                let (object, auth_warnings) = validate_codex_auth(auth, requires_openai_auth)?;
                 warnings.extend(auth_warnings);
                 Some(object)
             }
@@ -203,8 +203,7 @@ impl NamedConfigDefinition {
         let desired_auth = self.auth.as_ref().expect("Codex Named Config has auth");
         let auth = if current_auth.is_none() && desired_auth.is_empty() {
             None
-        } else if current_auth.is_some()
-            && current_auth_object == *desired_auth
+        } else if current_auth_object == *desired_auth
             && current_auth.is_some_and(|content| !content.trim().is_empty())
         {
             current_auth.map(str::to_string)
@@ -223,34 +222,24 @@ pub(super) fn validate_config_main(
     agent: AgentKind,
     main: &Map<String, Value>,
 ) -> Result<Vec<String>> {
-    let warnings = validate_config_main_shape(agent, main)?;
-    validate_required_config_main(agent, main)?;
-    Ok(warnings)
-}
-
-fn validate_config_main_shape(agent: AgentKind, main: &Map<String, Value>) -> Result<Vec<String>> {
-    let warnings = validate_config_field_shape(agent, main)?;
+    let warnings = validate_config_object(main, agent.main_config_fields(), &mut Vec::new())?;
     if agent == AgentKind::Codex {
         validate_codex_provider(main)?;
     }
-    Ok(warnings)
-}
-
-fn validate_config_field_shape(agent: AgentKind, main: &Map<String, Value>) -> Result<Vec<String>> {
-    let mut path = Vec::new();
-    let warnings = validate_config_object(main, agent.main_config_fields(), &mut path)?;
+    validate_required_config_main(agent, main)?;
     Ok(warnings)
 }
 
 fn validate_required_config_main(agent: AgentKind, main: &Map<String, Value>) -> Result<()> {
     for field in agent.main_config_fields() {
-        if field.required {
-            let Some(value) = value_at_path(main, field.path) else {
-                bail!("required Config Field {} is missing", field.path.join("."));
-            };
-            if value.as_str().is_some_and(|value| value.trim().is_empty()) {
-                bail!("required Config Field {} is empty", field.path.join("."));
-            }
+        if !field.required {
+            continue;
+        }
+        let Some(value) = value_at_path(main, field.path) else {
+            bail!("required Config Field {} is missing", field.path.join("."));
+        };
+        if value.as_str().is_some_and(|value| value.trim().is_empty()) {
+            bail!("required Config Field {} is empty", field.path.join("."));
         }
     }
     Ok(())
@@ -354,14 +343,13 @@ pub(super) fn validate_codex_auth(
             .as_str()
             .context("Named Config auth.json auth_mode must be a string")?;
         if mode == "chatgpt" {
-            let account_id = object
+            object
                 .get("tokens")
                 .and_then(Value::as_object)
                 .and_then(|tokens| tokens.get("account_id"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .context("ChatGPT credentials require a non-empty tokens.account_id")?;
-            let _ = account_id;
             let last_refresh = object
                 .get("last_refresh")
                 .and_then(Value::as_str)

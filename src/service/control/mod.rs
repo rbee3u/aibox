@@ -54,33 +54,37 @@ fn default_agent() -> AgentKind {
     AgentKind::Codex
 }
 
-fn result_error(error: anyhow::Error) -> Response<Body> {
-    let message = format!("{error:#}");
-    let status = status_for_application_error(
-        ApplicationError::kind(&error).unwrap_or(ApplicationErrorKind::InvalidInput),
-    );
-    api_error(status, &message)
-}
-
 /// What every fallible Control API handler returns.
 pub(crate) type ControlResult = Result<Response<Body>, ControlError>;
 
-/// A domain error on its way to a Control API response.
-///
-/// Handlers return `Result<Response<Body>, ControlError>` so wire decoding,
-/// selector parsing, and coordinator calls can all use `?` instead of repeating
-/// a `match` that maps every error to [`result_error`].
-pub(crate) struct ControlError(anyhow::Error);
+/// A Control API failure, with its HTTP status and shared error envelope.
+pub(crate) struct ControlError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ControlError {
+    fn new(status: StatusCode, message: impl ToString) -> Self {
+        Self {
+            status,
+            message: message.to_string(),
+        }
+    }
+}
 
 impl<E: Into<anyhow::Error>> From<E> for ControlError {
     fn from(error: E) -> Self {
-        Self(error.into())
+        let error = error.into();
+        let status = status_for_application_error(
+            ApplicationError::kind(&error).unwrap_or(ApplicationErrorKind::InvalidInput),
+        );
+        Self::new(status, format!("{error:#}"))
     }
 }
 
 impl axum::response::IntoResponse for ControlError {
     fn into_response(self) -> Response<Body> {
-        result_error(self.0)
+        api_error(self.status, &self.message)
     }
 }
 

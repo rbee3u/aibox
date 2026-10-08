@@ -1,3 +1,5 @@
+import type { AgentKind } from "@/domain/agent";
+
 const UTC_PLUS_EIGHT_MS = 8 * 60 * 60 * 1000;
 const EXPLICIT_TIME_ZONE = /(?:z|[+-]\d{2}:\d{2})$/i;
 
@@ -50,11 +52,7 @@ export function duration(ms: number | null | undefined): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
-/**
- * Decimal-prefix byte sizes (KB/MB). Binary-prefix sizes come from
- * `formatBinaryByteSize` in `shared/lib/encoding`; both spellings exist so each
- * surface keeps its established wording.
- */
+/** Decimal units (KB/MB); use `formatBinaryByteSize` for KiB/MiB. */
 export function formatByteSize(value: number | null | undefined): string {
   if (value == null) return "—";
   if (value < 1024) return `${value} B`;
@@ -62,7 +60,6 @@ export function formatByteSize(value: number | null | undefined): string {
   return `${(value / 1048576).toFixed(1)} MB`;
 }
 
-/** Upper-case the first character, leaving the rest as written. */
 export function capitalize(value: string): string {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
@@ -87,4 +84,15 @@ export function concatChunks(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.length;
   }
   return output;
+}
+
+export function agentLabel(agent: AgentKind): string {
+  switch (agent) {
+    case "codex":
+      return "Codex";
+    case "claude":
+      return "Claude";
+    default:
+      return agent;
+  }
 }

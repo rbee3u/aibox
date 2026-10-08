@@ -1,33 +1,13 @@
+import type { SessionTimelineItem, SessionActivityItem } from "@/features/sessions/viewTypes";
 import type {
   ConversationMessage,
   SessionDetailMeta,
   SessionDetailStats,
   ToolActivity,
-  TranscriptEvidenceSummary,
 } from "@/api/sessions";
 
 /**
- * A Transcript projects into an ordered reading stream. Conversation Messages
- * stand alone, while consecutive Tool Activity and Transcript Evidence records
- * collapse into one activity group that keeps its native order.
- */
-export type SessionTimelineItem =
-  | { kind: "message"; value: ConversationMessage }
-  | { kind: "activity"; value: SessionActivityItem[] };
-
-export type SessionActivityItem =
-  | {
-      kind: "tool";
-      value: ToolActivity;
-      /** The terminal record for this call, once it has arrived: what came back. */
-      result?: ToolActivity;
-    }
-  | { kind: "evidence"; value: TranscriptEvidenceSummary };
-
-/**
- * An item's identity is where it starts. A group that grows or a call that
- * gets its result keeps the same key, so a disclosure the reader opened stays
- * open across a refresh and fills in rather than remounting closed.
+ * Keep keys stable as groups grow or tool results arrive, preserving disclosures.
  */
 export function sessionItemKey(item: SessionTimelineItem): string {
   if (item.kind === "message") return `message:${item.value.entry_ids[0]}`;
@@ -36,13 +16,8 @@ export function sessionItemKey(item: SessionTimelineItem): string {
 }
 
 /**
- * Appends one activity record. A terminal Tool Activity that names an earlier
- * call updates that entry in place so a tool appears once with its final status;
- * anything else extends the trailing activity group or opens a new one.
- *
- * A call the Transcript never answered ends the stream as a terminal record
- * cloned from the call itself — same entries, same input. That is a status
- * without a result, so nothing is kept as one.
+ * Merge terminal Tool Activity into its earlier call. An unanswered call repeats
+ * its original entry ids; update its status without inventing a result.
  */
 export function appendActivityItem(
   current: SessionTimelineItem[],
@@ -86,15 +61,12 @@ export function appendActivityItem(
   return [...current, { kind: "activity", value: [entry] }];
 }
 
-/** A CLI-written line in a speaker's slot: an event, not something anyone said. */
 export function isConversationNotice(message: ConversationMessage): boolean {
   return message.notice !== undefined;
 }
 
 /**
- * Adjacent Agent messages merge only when no other record separates them. A
- * notice never merges: it is not the Agent's voice, and an API error folded
- * into the reply before it would read as the model's last sentence.
+ * Keep CLI notices separate so errors are not attributed to the Agent.
  */
 export function appendConversationMessage(
   current: SessionTimelineItem[],
@@ -125,23 +97,19 @@ export function appendConversationMessage(
 }
 
 /**
- * A tool the reader should look at: one that returned an error, or one whose
- * outcome the projection could not tell. A call with no result is neither —
- * it is still running, or the CLI stopped before it answered — and the
- * Transcript cannot say which, so it is stated, not flagged.
+ * No result is neutral: the Transcript cannot distinguish a running call
+ * from one abandoned by the CLI.
  */
 export function toolNeedsAttention(status: ToolActivity["status"]): boolean {
   return status === "failed" || status === "unknown";
 }
 
-export function evidenceNeedsAttention(status: string): boolean {
+function evidenceNeedsAttention(status: string): boolean {
   return status === "malformed";
 }
 
 /**
- * Housekeeping the CLI writes around every call — mode, permission, latch,
- * last prompt — and reasoning the reader hides on purpose. Neither is
- * something a reader of the Conversation is looking for.
+ * Hide CLI housekeeping and internal reasoning from Conversation.
  */
 export function isRoutineEvidence(entry: SessionActivityItem): boolean {
   return (
@@ -150,7 +118,6 @@ export function isRoutineEvidence(entry: SessionActivityItem): boolean {
   );
 }
 
-/** Summarizes one activity group for its collapsed disclosure. */
 export function activitySummary(entries: SessionActivityItem[]): {
   count: number;
   toolCount: number;
@@ -211,8 +178,7 @@ export function activitySummary(entries: SessionActivityItem[]): {
 }
 
 /**
- * Groups holding nothing but routine evidence stay off the reading stream:
- * there is nothing in them a reader would open. Details still counts them.
+ * Routine-only groups remain counted in Details but hidden in Conversation.
  */
 export function conversationReadingTimeline(
   timeline: readonly SessionTimelineItem[],
@@ -251,10 +217,8 @@ export function transcriptAttentionWarnings(warnings: readonly string[]): string
 }
 
 /**
- * One sentence naming why Conversation reading is impaired, or `null` when it
- * is not. A tool that returned an error is content, marked on its own activity
- * group, and never a Transcript problem; routine Codex projection notes stay
- * counts on Details.
+ * Report Transcript read failures here; tool errors belong to their activity
+ * groups, and routine projection counts belong to Details.
  */
 export function transcriptAttentionNotice(input: {
   partial: boolean;

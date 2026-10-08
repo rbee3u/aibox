@@ -9,13 +9,8 @@ reapplies a Named Config.
 Every Config belongs to one Tenant and Agent. The Host Tenant operates
 directly on the real Host Home, including unredacted credentials.
 
-- A **Named Config** is a reusable definition of the fixed Config Fields owned
-  by `AgentKind`.
-- **Current Config** is the native file set read by the Agent.
-- **Config Application** is an explicit, one-shot projection of a Named Config
-  into Current Config.
-- **Config Drift** compares Current Config with the source recorded by Last
-  Application; it never reconciles or reapplies anything.
+`AgentKind` defines each Named Config's fixed Config Fields and native files.
+See [Domain Language](../CONTEXT.md#configuration) for Config terminology.
 
 | Agent | Named Config files | Native role |
 | --- | --- | --- |
@@ -40,11 +35,11 @@ newly created in Visual mode. Codex custom-provider fields form one optional
 aggregate; enabling one supplies safe placeholders without overwriting
 credentials.
 
-Claude's Skip dangerous mode prompt is available in Visual mode only when Default
-permission mode is `bypassPermissions`. Leaving that mode clears its inclusion;
-returning requires enabling it again. Visual saves remove the field whenever the
-condition is unmet, including from existing non-bypass configurations. Opening a
-Config does not write files; Raw editing retains its native-content behavior.
+Claude's Visual Editor includes Skip dangerous mode prompt only under
+`bypassPermissions`. Leaving that permission mode clears inclusion; returning
+requires re-enabling it. Visual saves remove the field when the condition is
+unmet, including in existing Configs. Opening writes nothing; Raw editing does
+not enforce this condition.
 
 **Raw Editor** remains available for every Named Config and is the only editor
 for Current Config. Named Config writes validate the selected file. Current

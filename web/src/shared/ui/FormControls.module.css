@@ -6,11 +6,6 @@
   border-color: var(--line-control-strong);
 }
 
-/*
- * A field has no press of its own: the pointer going down is what focuses it,
- * and the ring says so a moment later. A second accent flash here would be the
- * same event announced twice, in a colour reserved for lasting states.
- */
 .control:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);

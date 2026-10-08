@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { composeControlApi } from "@/api/connect";
+import samples from "@/api/generated/samples.json";
 import { ControlApi } from "@/api/transport";
 import { controlMethod, controlRoute, type ControlRouteKey } from "@/test/controlRoutes";
 
@@ -222,17 +223,7 @@ describe("Control API endpoints", () => {
           linked_file: null,
         }),
       )
-      .mockResolvedValueOnce(
-        Response.json([
-          {
-            kind: "python",
-            supports_version: true,
-            status: "installed",
-            version: "3.14.7",
-            error: null,
-          },
-        ]),
-      )
+      .mockResolvedValueOnce(Response.json(samples.component_rows))
       .mockResolvedValueOnce(
         Response.json({
           tenants: [
@@ -263,9 +254,7 @@ describe("Control API endpoints", () => {
       custom_provider: undefined,
       visual_error: undefined,
     });
-    await expect(api.tenants.listComponents(tenant)).resolves.toEqual([
-      expect.objectContaining({ kind: "python", status: "installed" }),
-    ]);
+    await expect(api.tenants.listComponents(tenant)).resolves.toEqual(samples.component_rows);
     await expect(api.overview.loadTopology()).resolves.toEqual({
       tenants: [
         expect.objectContaining({

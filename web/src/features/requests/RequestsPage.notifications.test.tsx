@@ -2,7 +2,7 @@ import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestsApi } from "@/api/requests";
-import { ApiError } from "@/api/requests";
+import { HttpError } from "@/api/httpError";
 import { completedDetail, completedSummary, requestList } from "@/features/requests/testFixtures";
 import {
   advanceTimers,
@@ -56,7 +56,7 @@ describe("Requests page failure notifications", () => {
   it("clears a request that disappears before its detail loads", async () => {
     const getRequest = vi
       .fn<RequestsApi["getRequest"]>()
-      .mockRejectedValue(new ApiError("Request not found", 404));
+      .mockRejectedValue(new HttpError("Request not found", 404));
     const user = userEvent.setup();
     renderApp({ getRequest });
 

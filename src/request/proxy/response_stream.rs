@@ -6,12 +6,13 @@ use super::headers::{forwarded_headers, is_event_stream, recorded_headers, versi
 use crate::request::RequestProxyState;
 use crate::request::interpretation::{BodyContentCoding, body_content_coding};
 use crate::request::model::{
-    ErrorKind, ErrorMetadata, Outcome, ProtocolFamily, ProtocolSummary, RecordedHeader,
+    ErrorKind, ErrorMetadata, ProtocolFamily, ProtocolSummary, RecordedHeader, RequestOutcome,
     ResponseMetadata, ResponseModeValue, ResponseSource, utc_now,
 };
 use crate::request::response_observation::replay_encoded_sse_prefix;
-use crate::request::sse::{PrefixSniff, SseIndexer, SsePrefixSniffer};
+use crate::request::sse::{PrefixSniff, SsePrefixSniffer};
 use crate::request::store::FORMAT_VERSION;
+use crate::request::store::SseIndexer;
 use axum::body::Body;
 use axum::http::{HeaderMap, Response, StatusCode, header};
 use bytes::Bytes;
@@ -142,7 +143,7 @@ impl ResponseStreamEnd {
     pub(super) fn completed(at_ns: String) -> Self {
         Self {
             terminal: RequestTerminal {
-                outcome: Outcome::Completed,
+                outcome: RequestOutcome::Completed,
                 error: None,
             },
             completed_at_ns: Some(at_ns),
@@ -335,7 +336,7 @@ pub(super) fn feed_sse_chunk(
 }
 
 pub(super) fn response_error(
-    outcome: Outcome,
+    outcome: RequestOutcome,
     kind: ErrorKind,
     message: impl Into<String>,
 ) -> RequestTerminal {
@@ -363,7 +364,7 @@ pub(super) async fn notify_response_error(
     sender: &mpsc::Sender<Result<Bytes, io::Error>>,
     shutdown: &tokio_util::sync::CancellationToken,
     error: io::Error,
-    outcome: Outcome,
+    outcome: RequestOutcome,
     kind: ErrorKind,
 ) -> RequestTerminal {
     let message = error.to_string();
@@ -380,7 +381,7 @@ pub(super) async fn notify_recording_error(
         sender,
         shutdown,
         error,
-        Outcome::RecordingFailed,
+        RequestOutcome::RecordingFailed,
         ErrorKind::ResponseRecordingFailed,
     )
     .await
@@ -438,7 +439,7 @@ pub(super) async fn record_response_chunk(
         DownstreamSend::Shutdown => {
             notify_shutdown_truncation(sender);
             Some(ResponseStreamEnd::incomplete(response_error(
-                Outcome::ServerShutdown,
+                RequestOutcome::ServerShutdown,
                 ErrorKind::ServerShutdown,
                 RESPONSE_SHUTDOWN_MESSAGE,
             )))
@@ -461,7 +462,7 @@ pub(super) async fn stream_response_body(
             () = shutdown.cancelled() => {
                 notify_shutdown_truncation(sender);
                 return ResponseStreamEnd::incomplete(response_error(
-                        Outcome::ServerShutdown,
+                        RequestOutcome::ServerShutdown,
                         ErrorKind::ServerShutdown,
                         RESPONSE_SHUTDOWN_MESSAGE,
                     ));
@@ -484,7 +485,7 @@ pub(super) async fn stream_response_body(
                 return match tracker.finish(guard) {
                     Ok(()) => ResponseStreamEnd::completed(guard.at_ns()),
                     Err(error) => ResponseStreamEnd::incomplete(response_error(
-                        Outcome::RecordingFailed,
+                        RequestOutcome::RecordingFailed,
                         ErrorKind::ResponseRecordingFailed,
                         error.to_string(),
                     )),
@@ -499,10 +500,10 @@ pub(super) async fn stream_response_body(
                 if let Some(failure) = recorded_failure {
                     let outcome = match failure.kind {
                         ErrorKind::ClientDisconnected | ErrorKind::RequestBodyFailed => {
-                            Outcome::ClientDisconnected
+                            RequestOutcome::ClientDisconnected
                         }
-                        ErrorKind::ServerShutdown => Outcome::ServerShutdown,
-                        _ => Outcome::RecordingFailed,
+                        ErrorKind::ServerShutdown => RequestOutcome::ServerShutdown,
+                        _ => RequestOutcome::RecordingFailed,
                     };
                     let terminal = notify_response_error(
                         sender,
@@ -521,7 +522,7 @@ pub(super) async fn stream_response_body(
                         io::ErrorKind::UnexpectedEof,
                         format!("upstream response stream failed: {error}"),
                     ),
-                    Outcome::UpstreamError,
+                    RequestOutcome::UpstreamError,
                     ErrorKind::UpstreamResponseFailed,
                 )
                 .await;
@@ -557,7 +558,7 @@ pub(super) async fn record_response_stream_with_index(
         .await;
         if guard
             .finish(
-                Outcome::RecordingFailed,
+                RequestOutcome::RecordingFailed,
                 Some(ErrorMetadata {
                     kind: ErrorKind::ResponseRecordingFailed,
                     message,
@@ -576,7 +577,7 @@ pub(super) async fn record_response_stream_with_index(
         };
         if let Err(error) = semantic_result {
             stream_end.terminal = response_error(
-                Outcome::RecordingFailed,
+                RequestOutcome::RecordingFailed,
                 ErrorKind::ResponseRecordingFailed,
                 error.to_string(),
             );
@@ -587,7 +588,7 @@ pub(super) async fn record_response_stream_with_index(
             })
         {
             stream_end.terminal = response_error(
-                Outcome::RecordingFailed,
+                RequestOutcome::RecordingFailed,
                 ErrorKind::ResponseRecordingFailed,
                 error.to_string(),
             );
@@ -613,7 +614,7 @@ pub(super) fn client_closed_terminal(
         return ResponseStreamEnd::completed(guard.at_ns());
     }
     ResponseStreamEnd::incomplete(response_error(
-        Outcome::ClientDisconnected,
+        RequestOutcome::ClientDisconnected,
         ErrorKind::ClientDisconnected,
         "client disconnected while the upstream response was streaming",
     ))
@@ -636,7 +637,7 @@ pub(super) fn encoded_terminal_seen_on_close(
             &directory.join("response.body"),
             "Upstream Response body",
         )?;
-        replay_encoded_sse_prefix(file, coding, guard.request_id().to_string(), family)
+        replay_encoded_sse_prefix(file, coding, family)
     });
     let Ok(Ok(observation)) = observation else {
         return false;

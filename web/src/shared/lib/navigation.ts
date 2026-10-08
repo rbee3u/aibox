@@ -9,11 +9,7 @@ export type ModuleLocationChange = (query: URLSearchParams, replace?: boolean) =
 /** Moves to another module, optionally with its initial query. */
 export type ConsoleNavigate = (module: ModuleId, query?: URLSearchParams) => void;
 
-export function currentPageSearch(): URLSearchParams {
-  return new URLSearchParams(window.location.search);
-}
-
-export const CONSOLE_BASE_PATH = "/_aibox/ui";
+const CONSOLE_BASE_PATH = "/_aibox/ui";
 
 export function modulePath(module: ModuleId, query?: URLSearchParams): string {
   const suffix = query?.toString();

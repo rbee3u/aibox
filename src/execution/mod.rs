@@ -4,12 +4,16 @@
 //! the Docker source seam and the preflight steps both share.
 
 mod debug;
+mod environment;
 mod run;
 
+use environment::{build_command, build_debug_command};
+
 use crate::component;
+use crate::component::TenantEnvironmentCapabilities;
 use crate::docker;
 use crate::sandbox;
-use crate::tenant::{ManagedTenant, TenantEnvironmentCapabilities};
+use crate::tenant::ManagedTenant;
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -65,9 +69,4 @@ fn tenant_capabilities(home: &Path) -> TenantEnvironmentCapabilities {
         eprintln!("!! {warning}");
     }
     components
-}
-
-#[cfg(test)]
-pub(crate) fn injected_docker(docker: docker::DockerCli) -> DockerSource {
-    DockerSource::Injected(docker)
 }

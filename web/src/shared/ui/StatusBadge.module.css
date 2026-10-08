@@ -9,11 +9,6 @@
   white-space: nowrap;
 }
 
-/*
- * A status annotating a row stays at the ladder floor. One step up is for a
- * status that is itself the thing being read, which is the Overview strip:
- * there the label beside it is the caption and the status is the answer.
- */
 .xs {
   font-size: var(--text-xs);
   line-height: var(--line-height-xs);
