@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Use [CONTEXT.md](CONTEXT.md) for domain language. Before changing a domain,
+Use [GLOSSARY.md](GLOSSARY.md) for domain language. Before changing a domain,
 read its canonical reference and relevant [ADRs](docs/adr/README.md):
 
 | Area | Canonical reference |

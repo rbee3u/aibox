@@ -137,6 +137,10 @@ after its terminal Summary commits. Each Request stores raw request and
 response metadata, bodies, lifecycle Summary, and an optional best-effort SSE
 index. Directory names are ordering hints; the Summary is lifecycle authority.
 
+A **Request Group** is a collection-root directory that holds older recorded
+Requests as a count and pagination index. It is not Request evidence and is not
+a retention policy.
+
 New Requests begin at the collection root. When more than 500 ungrouped
 Requests exist, the Service periodically moves the oldest 200 eligible terminal
 Requests into an immutable Request Group. Groups are not merged or refilled.

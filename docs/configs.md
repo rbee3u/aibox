@@ -10,7 +10,7 @@ Every Config belongs to one Tenant and Agent. The Host Tenant operates
 directly on the real Host Home, including unredacted credentials.
 
 `AgentKind` defines each Named Config's fixed Config Fields and native files.
-See [Domain Language](../CONTEXT.md#configuration) for Config terminology.
+See [Domain Language](../GLOSSARY.md#configuration) for Config terminology.
 
 | Agent | Named Config files | Native role |
 | --- | --- | --- |

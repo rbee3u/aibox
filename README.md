@@ -83,7 +83,7 @@ automatic redaction or retention policy.
 
 ## Learn More
 
-- [Domain Language](CONTEXT.md): canonical terms used throughout the project.
+- [Domain Language](GLOSSARY.md): canonical terms used throughout the project.
 - [Tenants, Sessions, and Components](docs/tenants.md): identity, lifecycle,
   Components, Transcripts, and Tenant Environment.
 - [Configs](docs/configs.md): Named and Current Configs, application, drift, and
