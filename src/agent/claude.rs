@@ -1,6 +1,8 @@
 //! Claude Code's fixed Config Fields and built-in Named Config template.
 
 use super::{MainConfigCondition, MainConfigField, MainConfigValueKind};
+use anyhow::{Result, bail};
+use serde_json::{Map, Value};
 
 const PERMISSION_MODES: &[&str] = &[
     "default",
@@ -16,25 +18,51 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         path: &["env", "ANTHROPIC_BASE_URL"],
         value_kind: MainConfigValueKind::String,
         label: "Base URL",
-        description: "Endpoint used for Claude requests.",
+        description: "Optional endpoint override; omit to use Claude's default endpoint.",
         visible_when: None,
         group: "Endpoint & credentials",
         enum_values: &[],
         sensitive: false,
-        required: true,
+        required: false,
         required_for_custom_provider: false,
         request_proxy_route: true,
     },
     MainConfigField {
         path: &["env", "ANTHROPIC_AUTH_TOKEN"],
         value_kind: MainConfigValueKind::String,
-        label: "Auth token",
-        description: "Credential passed to Claude as ANTHROPIC_AUTH_TOKEN.",
+        label: "Custom auth token",
+        description: "Custom Bearer credential. Include at most one explicit credential.",
         visible_when: None,
         group: "Endpoint & credentials",
         enum_values: &[],
         sensitive: true,
-        required: true,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
+    },
+    MainConfigField {
+        path: &["env", "ANTHROPIC_API_KEY"],
+        value_kind: MainConfigValueKind::String,
+        label: "API key",
+        description: "Claude Console API key for API usage billing. Include at most one explicit credential.",
+        visible_when: None,
+        group: "Endpoint & credentials",
+        enum_values: &[],
+        sensitive: true,
+        required: false,
+        required_for_custom_provider: false,
+        request_proxy_route: false,
+    },
+    MainConfigField {
+        path: &["env", "CLAUDE_CODE_OAUTH_TOKEN"],
+        value_kind: MainConfigValueKind::String,
+        label: "Subscription OAuth token",
+        description: "Subscription token from claude setup-token. Include at most one explicit credential; omit all to use native login.",
+        visible_when: None,
+        group: "Endpoint & credentials",
+        enum_values: &[],
+        sensitive: true,
+        required: false,
         required_for_custom_provider: false,
         request_proxy_route: false,
     },
@@ -120,6 +148,30 @@ pub(super) const MAIN_CONFIG_FIELDS: &[MainConfigField] = &[
         request_proxy_route: false,
     },
 ];
+
+/// Validate explicit credentials without inspecting native login state or token contents.
+pub(super) fn validate_main_config(main: &Map<String, Value>) -> Result<()> {
+    let mut selected = None;
+    for field in [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ] {
+        let Some(value) = main.get("env").and_then(|env| env.get(field)) else {
+            continue;
+        };
+        if value.as_str().is_none_or(|value| value.trim().is_empty()) {
+            bail!("Config Field env.{field} must be a nonempty string");
+        }
+        if let Some(previous) = selected {
+            bail!(
+                "Claude Named Config permits at most one explicit credential: env.{previous} conflicts with env.{field}"
+            );
+        }
+        selected = Some(field);
+    }
+    Ok(())
+}
 
 pub(super) const DEFAULT_CONFIG: &str = r#"{
   "env": {

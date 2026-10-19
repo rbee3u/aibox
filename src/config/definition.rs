@@ -227,6 +227,7 @@ pub(super) fn validate_config_main(
         validate_codex_provider(main)?;
     }
     validate_required_config_main(agent, main)?;
+    agent.validate_main_config(main)?;
     Ok(warnings)
 }
 

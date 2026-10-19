@@ -31,6 +31,14 @@ fn agent_kind_carries_agent_contracts() {
                     MainConfigValueKind::String,
                 ),
                 (
+                    &["env", "ANTHROPIC_API_KEY"][..],
+                    MainConfigValueKind::String,
+                ),
+                (
+                    &["env", "CLAUDE_CODE_OAUTH_TOKEN"][..],
+                    MainConfigValueKind::String,
+                ),
+                (
                     &["permissions", "defaultMode"][..],
                     MainConfigValueKind::String,
                 ),

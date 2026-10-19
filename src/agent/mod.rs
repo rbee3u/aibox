@@ -115,6 +115,14 @@ impl AgentKind {
         }
     }
 
+    /// Validate Agent-specific constraints on a Named Config's main fields.
+    pub(crate) fn validate_main_config(self, main: &Map<String, Value>) -> Result<()> {
+        match self {
+            Self::Claude => claude::validate_main_config(main),
+            Self::Codex => Ok(()),
+        }
+    }
+
     /// Built-in native main configuration used when the Console creates a Named Config.
     pub(crate) const fn config_template(self) -> &'static str {
         match self {

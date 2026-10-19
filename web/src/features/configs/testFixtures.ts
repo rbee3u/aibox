@@ -37,7 +37,9 @@ export function configFile(
 export function claudeVisualOptions(): VisualOptionFixture[] {
   return [
     ["env.ANTHROPIC_BASE_URL", "Base URL", "string", "https://example.com"],
-    ["env.ANTHROPIC_AUTH_TOKEN", "Auth token", "string", "secret"],
+    ["env.ANTHROPIC_AUTH_TOKEN", "Custom auth token", "string", "secret"],
+    ["env.ANTHROPIC_API_KEY", "API key", "string", undefined],
+    ["env.CLAUDE_CODE_OAUTH_TOKEN", "Subscription OAuth token", "string", undefined],
     ["permissions.defaultMode", "Default permission mode", "string", "bypassPermissions"],
     ["skipDangerousModePermissionPrompt", "Skip dangerous mode prompt", "bool", true],
     ["env.ANTHROPIC_DEFAULT_HAIKU_MODEL", "Default Haiku model", "string", "haiku"],
@@ -57,16 +59,16 @@ export function claudeVisualOptions(): VisualOptionFixture[] {
       path === "permissions.defaultMode"
         ? ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]
         : [],
-    sensitive: path === "env.ANTHROPIC_AUTH_TOKEN",
-    required:
-      path === "env.ANTHROPIC_BASE_URL" ||
+    sensitive:
       path === "env.ANTHROPIC_AUTH_TOKEN" ||
-      path === "permissions.defaultMode",
+      path === "env.ANTHROPIC_API_KEY" ||
+      path === "env.CLAUDE_CODE_OAUTH_TOKEN",
+    required: path === "permissions.defaultMode",
     visible_when:
       path === "skipDangerousModePermissionPrompt"
         ? { path: "permissions.defaultMode", value: "bypassPermissions" }
         : null,
-    included: true,
+    included: value !== undefined,
     value,
   }));
 }

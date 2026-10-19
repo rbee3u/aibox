@@ -22,6 +22,213 @@ fn selected(root: &Path, agent: AgentKind) -> TenantAgent {
     tenant.for_agent(agent)
 }
 
+#[test]
+fn claude_credential_switches_apply_once_preserve_native_state_and_track_drift() {
+    let modes = [
+        None,
+        Some("ANTHROPIC_AUTH_TOKEN"),
+        Some("ANTHROPIC_API_KEY"),
+        Some("CLAUDE_CODE_OAUTH_TOKEN"),
+    ];
+    for from in modes {
+        for to in modes {
+            let root = tempfile::tempdir().unwrap();
+            let selected = selected(root.path(), AgentKind::Claude);
+            let name = config_name("source");
+            create_named_config(&selected, &name).unwrap();
+            let current = ConfigTarget::Current;
+            let mut old = json!({"permissions": {"defaultMode": "default"}, "apiKeyHelper": "existing-helper", "statusLine": {"type": "command", "command": "keep"}, "env": {"KEEP": "value", "ANTHROPIC_BASE_URL": "https://old.example"}});
+            if let Some(field) = from {
+                old["env"][field] = Value::from("old-secret");
+            }
+            let before = read_config_file_target(&selected, &current, ConfigFile::Main).unwrap();
+            save_config_file_target(
+                &selected,
+                &current,
+                ConfigFile::Main,
+                &before.revision,
+                ConfigEdit::Raw {
+                    content: old.to_string().into_bytes(),
+                    custom_provider: None,
+                },
+            )
+            .unwrap();
+            let native_auth = selected.state_file(".credentials.json");
+            write_private(&native_auth, b"native login owned by Claude");
+
+            let target = ConfigTarget::Named(name.clone());
+            let mut source = json!({"permissions": {"defaultMode": "default"}});
+            if let Some(field) = to {
+                source["env"][field] = Value::from(" opaque credential ");
+            }
+            let before = read_config_file_target(&selected, &target, ConfigFile::Main).unwrap();
+            save_config_file_target(
+                &selected,
+                &target,
+                ConfigFile::Main,
+                &before.revision,
+                ConfigEdit::Raw {
+                    content: source.to_string().into_bytes(),
+                    custom_provider: None,
+                },
+            )
+            .unwrap();
+            assert!(
+                config_file_warnings(&selected, "settings.json", source.to_string().as_bytes())
+                    .unwrap()
+                    .is_empty()
+            );
+            apply_named_config(&selected, &name).unwrap();
+            let applied = read_config_file_target(&selected, &current, ConfigFile::Main).unwrap();
+            let value: Value = serde_json::from_slice(&applied.content).unwrap();
+            for field in modes.into_iter().flatten() {
+                assert_eq!(
+                    value["env"].get(field),
+                    (Some(field) == to)
+                        .then(|| source["env"].get(field))
+                        .flatten(),
+                    "{from:?} -> {to:?}: {field}"
+                );
+            }
+            assert!(value["env"].get("ANTHROPIC_BASE_URL").is_none());
+            assert_eq!(value["env"]["KEEP"], "value");
+            assert_eq!(value["apiKeyHelper"], "existing-helper");
+            assert_eq!(value["statusLine"], old["statusLine"]);
+            assert_eq!(
+                fs::read(&native_auth).unwrap(),
+                b"native login owned by Claude"
+            );
+            assert_eq!(application_status(&selected).drift, ConfigDrift::Clean);
+            let comparison = compare_configs(&selected, &current, vec![]).unwrap();
+            assert!(!comparison.incomplete);
+            assert!(comparison.files[0].differences.is_empty());
+            apply_named_config(&selected, &name).unwrap();
+            assert_eq!(
+                read_config_file_target(&selected, &current, ConfigFile::Main).unwrap(),
+                applied
+            );
+
+            if let Some(field) = to {
+                let mut changed = value;
+                changed["env"][field] = Value::from("rotated-secret");
+                save_config_file_target(
+                    &selected,
+                    &current,
+                    ConfigFile::Main,
+                    &applied.revision,
+                    ConfigEdit::Raw {
+                        content: changed.to_string().into_bytes(),
+                        custom_provider: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(application_status(&selected).drift, ConfigDrift::Dirty);
+                let comparison = compare_configs(&selected, &current, vec![]).unwrap();
+                assert!(!comparison.incomplete);
+                assert_eq!(comparison.files[0].differences.len(), 1);
+                let difference = &comparison.files[0].differences[0];
+                assert_eq!(difference.path, ["env", field]);
+                assert!(difference.sensitive);
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_named_edits_and_application_reject_conflicts_but_current_raw_preserves_them() {
+    let root = tempfile::tempdir().unwrap();
+    let selected = selected(root.path(), AgentKind::Claude);
+    let name = config_name("source");
+    create_named_config(&selected, &name).unwrap();
+    let target = ConfigTarget::Named(name.clone());
+    let before = read_config_file_target(&selected, &target, ConfigFile::Main).unwrap();
+    let conflict = br#"{"permissions":{"defaultMode":"default"},"env":{"ANTHROPIC_API_KEY":"api-secret","CLAUDE_CODE_OAUTH_TOKEN":"oauth-secret"}}"#;
+    let mut visual = inspect_visual_config(
+        AgentKind::Claude,
+        std::str::from_utf8(&before.content).unwrap(),
+    )
+    .unwrap()
+    .options
+    .into_iter()
+    .map(|field| VisualConfigOptionInput {
+        path: field.path,
+        included: field.included,
+        value: field.value,
+    })
+    .collect::<Vec<_>>();
+    let oauth = visual
+        .iter_mut()
+        .find(|field| field.path == "env.CLAUDE_CODE_OAUTH_TOKEN")
+        .unwrap();
+    oauth.included = true;
+    oauth.value = Some(Value::from("oauth-secret"));
+    for edit in [
+        ConfigEdit::Raw {
+            content: conflict.to_vec(),
+            custom_provider: None,
+        },
+        ConfigEdit::VisualMain {
+            options: visual,
+            custom_provider: None,
+        },
+    ] {
+        let error = format!(
+            "{:#}",
+            save_config_file_target(&selected, &target, ConfigFile::Main, &before.revision, edit)
+                .err()
+                .unwrap()
+        );
+        assert!(error.contains("at most one explicit credential"), "{error}");
+        assert!(!error.contains("api-secret") && !error.contains("oauth-secret"));
+        assert_eq!(
+            read_config_file_target(&selected, &target, ConfigFile::Main).unwrap(),
+            before
+        );
+    }
+    let diagnostics = diagnose_config_file(&selected, &target, ConfigFile::Main, conflict).unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("at most one explicit credential")
+    );
+
+    let current = ConfigTarget::Current;
+    let snapshot = read_config_file_target(&selected, &current, ConfigFile::Main).unwrap();
+    let saved = save_config_file_target(
+        &selected,
+        &current,
+        ConfigFile::Main,
+        &snapshot.revision,
+        ConfigEdit::Raw {
+            content: conflict.to_vec(),
+            custom_provider: None,
+        },
+    )
+    .unwrap()
+    .snapshot;
+    assert_eq!(saved.content, conflict);
+    assert!(
+        diagnose_config_file(&selected, &current, ConfigFile::Main, conflict)
+            .unwrap()
+            .is_empty()
+    );
+    write_private(
+        &named_config_file(&selected, "source", "settings.json"),
+        conflict,
+    );
+    assert_eq!(
+        inspect_named_configs(&selected).unwrap()[0].state,
+        ConfigCatalogState::Invalid
+    );
+    assert!(apply_named_config(&selected, &name).is_err());
+    assert_eq!(
+        read_config_file_target(&selected, &current, ConfigFile::Main).unwrap(),
+        saved
+    );
+    assert_eq!(application_status(&selected).drift, ConfigDrift::Untracked);
+}
+
 fn config_name(value: &str) -> NamedConfigName {
     NamedConfigName::parse(value).unwrap()
 }

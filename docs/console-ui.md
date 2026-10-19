@@ -127,6 +127,14 @@ the same column as the required-field marker and Required caption; omitted
 controls stay visible and disabled, except fields whose model-declared visibility
 condition is unmet. Conditional omission follows [Config semantics](configs.md).
 
+Claude's Base URL and three credential fields use these optional controls.
+Credentials remain masked until revealed. Named Config saves reject multiple
+included credentials or an empty included credential through the existing
+Service-error strip; they do not silently choose one or discard the draft.
+Omitting all credentials delegates authentication to native Claude Code. See
+[Claude Authentication](configs.md#claude-authentication) for billing, Application,
+and login behavior.
+
 Visual fields use one Agent-ordered list with native-path captions and no group
 headings or help icons. Codex places Custom provider first; including it reveals
 its name on the same row and Base URL below. Routed fields show the saved

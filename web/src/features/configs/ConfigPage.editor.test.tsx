@@ -48,6 +48,74 @@ async function editVisualCodexNamedFiles(user: ReturnType<typeof userEvent.setup
 }
 
 describe("ConfigPage", () => {
+  it.each([
+    ["API key", "env.ANTHROPIC_API_KEY"],
+    ["Subscription OAuth token", "env.CLAUDE_CODE_OAUTH_TOKEN"],
+  ])(
+    "edits optional %s credentials and preserves drafts after server refusal",
+    async (label, path) => {
+      window.history.replaceState(
+        null,
+        "",
+        "/_aibox/ui/configs?tenant=managed%3Adefault&agent=claude&config=team&file=settings.json",
+      );
+      const visual = claudeVisualOptions();
+      const snapshot = configFile(
+        "settings.json",
+        '{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"},"permissions":{"defaultMode":"bypassPermissions"}}',
+        visual,
+      );
+      const { api, saveConfigFile } = configApi({
+        listConfigs: () =>
+          Promise.resolve({
+            configs: [{ name: "team", state: "ready" }],
+            files: ["settings.json"],
+            application: { last_application: null, drift: "untracked" },
+            credential_propagation_available: false,
+          }),
+        revealConfigFile: () => Promise.resolve(snapshot),
+      });
+      const message = `Claude Named Config permits at most one explicit credential: env.ANTHROPIC_AUTH_TOKEN conflicts with ${path}`;
+      saveConfigFile.mockRejectedValueOnce(new Error(message));
+      const user = userEvent.setup();
+      render(<ConfigPage api={api} />);
+      const input = await screen.findByLabelText(label);
+      expect(input).toBeDisabled();
+      expect(input).toHaveAttribute("type", "password");
+      expect(input).not.toBeRequired();
+      await user.click(screen.getByRole("checkbox", { name: `Optional ${label}` }));
+      await user.type(input, "new-secret");
+      await user.click(screen.getByRole("button", { name: `Show ${label}` }));
+      expect(input).toHaveAttribute("type", "text");
+      await user.click(screen.getByRole("button", { name: `Hide ${label}` }));
+      expect(input).toHaveAttribute("type", "password");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByText(message)).toBeVisible();
+      expect(input).toHaveValue("new-secret");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+      await user.click(screen.getByRole("checkbox", { name: "Optional Custom auth token" }));
+      const savedVisual = visual.map((field) =>
+        field.path === path
+          ? { ...field, included: true, value: "new-secret" }
+          : field.path === "env.ANTHROPIC_AUTH_TOKEN"
+            ? { ...field, included: false, value: undefined }
+            : field,
+      );
+      saveConfigFile.mockResolvedValueOnce(configFile("settings.json", "{}", savedVisual));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveConfigFile).toHaveBeenCalledTimes(2));
+      const saved = saveConfigFile.mock.lastCall?.[1].visualOptions;
+      expect(saved).toEqual(
+        expect.arrayContaining([
+          { path, included: true, value: "new-secret" },
+          { path: "env.ANTHROPIC_AUTH_TOKEN", included: false, value: "secret" },
+        ]),
+      );
+      expect(await screen.findByRole("button", { name: "Saved" })).toBeDisabled();
+    },
+  );
+
   it("opens supported Named Config main files in Visual Editor and saves field projections", async () => {
     window.history.replaceState(
       null,
@@ -116,9 +184,9 @@ describe("ConfigPage", () => {
       {
         revision: snapshot.revision,
         contentBase64: snapshot.content_base64,
-        visualOptions: visual.map(({ path, value }) => ({
+        visualOptions: visual.map(({ path, included, value }) => ({
           path,
-          included: !omitted.has(path),
+          included: included && !omitted.has(path),
           value,
         })),
       },
@@ -179,7 +247,7 @@ describe("ConfigPage", () => {
       await user.type(screen.getByLabelText("Base URL", { selector: "input" }), "/v2");
       await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(saveConfigFile).toHaveBeenCalled());
-      expect(saveConfigFile.mock.calls[0]?.[1].visualOptions).toHaveLength(8);
+      expect(saveConfigFile.mock.calls[0]?.[1].visualOptions).toHaveLength(visual.length);
       expect(saveConfigFile.mock.calls[0]?.[1].visualOptions).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ path: "skipDangerousModePermissionPrompt", included: false }),

@@ -5,7 +5,7 @@ import { VisualConfigOptions } from "@/features/configs/editor/VisualConfigOptio
 import { claudeVisualOptions, configFile } from "@/features/configs/testFixtures";
 
 describe("Visual Config fields", () => {
-  it("names required fields and reveals credentials without changing their value", async () => {
+  it("names optional credentials and reveals them without changing their value", async () => {
     const onChange = vi.fn();
     render(
       <VisualConfigOptions
@@ -14,17 +14,18 @@ describe("Visual Config fields", () => {
         onChange={onChange}
       />,
     );
-    expect(screen.getByLabelText("Base URL")).toBeRequired();
-    expect(screen.queryByRole("checkbox", { name: "Optional Base URL" })).toBeNull();
+    expect(screen.getByLabelText("Base URL")).not.toBeRequired();
+    expect(screen.getByRole("checkbox", { name: "Optional Base URL" })).toBeChecked();
     expect(screen.getByText("env.ANTHROPIC_AUTH_TOKEN")).toBeVisible();
-    const token = screen.getByLabelText("Auth token");
-    expect(token).toBeRequired();
+    const token = screen.getByLabelText("Custom auth token");
+    expect(token).not.toBeRequired();
+    expect(screen.getByRole("checkbox", { name: "Optional Custom auth token" })).toBeChecked();
     expect(token).toHaveAttribute("type", "password");
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Show Auth token" }));
+    await user.click(screen.getByRole("button", { name: "Show Custom auth token" }));
     expect(token).toHaveAttribute("type", "text");
     expect(token).toHaveValue("secret");
-    await user.click(screen.getByRole("button", { name: "Hide Auth token" }));
+    await user.click(screen.getByRole("button", { name: "Hide Custom auth token" }));
     expect(token).toHaveAttribute("type", "password");
     expect(onChange).not.toHaveBeenCalled();
   });

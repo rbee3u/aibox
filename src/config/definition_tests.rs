@@ -88,6 +88,52 @@ fn claude_token_is_a_string_field_in_settings() {
 }
 
 #[test]
+fn claude_credentials_are_optional_exclusive_nonempty_strings() {
+    let credentials = [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ];
+    for selection in 0_u8..8 {
+        let mut main = serde_json::json!({"permissions": {"defaultMode": "default"}});
+        for (index, field) in credentials.iter().enumerate() {
+            if selection & (1 << index) != 0 {
+                main["env"][*field] = Value::String(format!("secret-{index}"));
+            }
+        }
+        let result =
+            NamedConfigDefinition::parse_with_warnings(AgentKind::Claude, &main.to_string(), None);
+        if selection.count_ones() <= 1 {
+            assert!(result.unwrap().warnings.is_empty());
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("at most one explicit credential"), "{error}");
+            assert!(!error.contains("secret-"), "{error}");
+        }
+    }
+    for field in credentials {
+        for value in [
+            Value::Bool(true),
+            Value::Null,
+            Value::from(42),
+            Value::from(""),
+            Value::from(" \n\t"),
+        ] {
+            let mut main = serde_json::json!({"permissions": {"defaultMode": "default"}});
+            main["env"][field] = value;
+            let error = NamedConfigDefinition::validate_file(
+                AgentKind::Claude,
+                "settings.json",
+                &main.to_string(),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(field), "{error}");
+        }
+    }
+}
+
+#[test]
 fn claude_application_sets_removes_and_preserves_fields() {
     let config = NamedConfigDefinition::parse(
         AgentKind::Claude,

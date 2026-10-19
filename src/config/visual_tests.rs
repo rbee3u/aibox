@@ -46,7 +46,7 @@ fn visual_schema_comes_from_agent_fields() {
         .iter()
         .find(|field| field.path == "env.ANTHROPIC_AUTH_TOKEN")
         .unwrap();
-    assert_eq!(token.label, "Auth token");
+    assert_eq!(token.label, "Custom auth token");
     assert_eq!(token.group, "Endpoint & credentials");
     assert!(token.sensitive);
     assert!(token.included);
@@ -101,6 +101,62 @@ fn visual_schema_comes_from_agent_fields() {
         codex.options.len(),
         AgentKind::Codex.main_config_fields().len() - 4
     );
+}
+
+#[test]
+fn visual_claude_credentials_share_named_validation_and_support_native_login() {
+    let original = AgentKind::Claude.config_template();
+    for selected in [
+        None,
+        Some("env.ANTHROPIC_AUTH_TOKEN"),
+        Some("env.ANTHROPIC_API_KEY"),
+        Some("env.CLAUDE_CODE_OAUTH_TOKEN"),
+    ] {
+        let mut inputs = visual_inputs(AgentKind::Claude, original);
+        visual_input_mut(&mut inputs, "env.ANTHROPIC_BASE_URL").included = false;
+        for path in [
+            "env.ANTHROPIC_AUTH_TOKEN",
+            "env.ANTHROPIC_API_KEY",
+            "env.CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
+            let field = visual_input_mut(&mut inputs, path);
+            field.included = Some(path) == selected;
+            field.value = Some(Value::from(" opaque credential "));
+        }
+        let rendered = render_visual_main(AgentKind::Claude, original, &inputs, None).unwrap();
+        let state = inspect_visual_config(AgentKind::Claude, &rendered).unwrap();
+        assert!(
+            !state
+                .options
+                .iter()
+                .find(|field| field.path == "env.ANTHROPIC_BASE_URL")
+                .unwrap()
+                .included
+        );
+        for field in state.options.iter().filter(|field| field.sensitive) {
+            assert!(!field.required);
+            assert_eq!(field.included, Some(field.path.as_str()) == selected);
+            if field.included {
+                assert_eq!(field.value, Some(Value::from(" opaque credential ")));
+            }
+        }
+    }
+    for value in [
+        Value::from(""),
+        Value::from(" \t"),
+        Value::Bool(true),
+        Value::from("oauth-secret"),
+    ] {
+        let mut inputs = visual_inputs(AgentKind::Claude, original);
+        let oauth = visual_input_mut(&mut inputs, "env.CLAUDE_CODE_OAUTH_TOKEN");
+        oauth.included = true;
+        oauth.value = Some(value);
+        let error = render_visual_main(AgentKind::Claude, original, &inputs, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("env.CLAUDE_CODE_OAUTH_TOKEN"), "{error}");
+        assert!(!error.contains("oauth-secret"), "{error}");
+    }
 }
 
 #[test]
@@ -297,12 +353,12 @@ fn required_and_custom_provider_fields_cannot_be_omitted() {
         AgentKind::Claude,
         r#"{"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"secret"},"permissions":{"defaultMode":"bypassPermissions"}}"#,
     );
-    visual_input_mut(&mut claude, "env.ANTHROPIC_BASE_URL").included = false;
+    visual_input_mut(&mut claude, "permissions.defaultMode").included = false;
     assert!(
         render_visual_main(AgentKind::Claude, "{}", &claude, None)
             .unwrap_err()
             .to_string()
-            .contains("required Config Field env.ANTHROPIC_BASE_URL is missing")
+            .contains("required Config Field permissions.defaultMode is missing")
     );
 
     let original = "approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nmodel = \"gpt\"\nmodel_provider = \"custom\"\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://example.com/v1\"\nrequires_openai_auth = true\n";
@@ -373,7 +429,9 @@ fn visual_fields_follow_display_order_and_declare_permission_condition() {
             .collect::<Vec<_>>(),
         [
             "Base URL",
-            "Auth token",
+            "Custom auth token",
+            "API key",
+            "Subscription OAuth token",
             "Default permission mode",
             "Skip dangerous mode prompt",
             "Default Haiku model",
@@ -382,7 +440,13 @@ fn visual_fields_follow_display_order_and_declare_permission_condition() {
             "Default Fable model",
         ]
     );
-    let condition = claude.options[3].visible_when.unwrap();
+    let condition = claude
+        .options
+        .iter()
+        .find(|field| field.path == "skipDangerousModePermissionPrompt")
+        .unwrap()
+        .visible_when
+        .unwrap();
     assert_eq!(condition.path, "permissions.defaultMode");
     assert_eq!(condition.value, "bypassPermissions");
     let codex =

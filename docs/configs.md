@@ -14,7 +14,7 @@ See [Domain Language](../GLOSSARY.md#configuration) for Config terminology.
 
 | Agent | Named Config files | Native role |
 | --- | --- | --- |
-| Claude | `settings.json` | JSON settings, including `ANTHROPIC_*` values |
+| Claude | `settings.json` | JSON settings, including endpoint and credential environment values |
 | Codex | `config.toml`, `auth.json` | TOML settings and one complete JSON auth object |
 
 Codex `auth.json` is one complete Config Field and is replaced as a whole. The
@@ -22,6 +22,115 @@ Agent contract defines file order, built-in templates, empty content, and
 supported fields. Named Config directories contain no management metadata.
 Templates use native unrestricted, non-interactive settings and credential
 placeholders that must be reviewed before application.
+
+## Claude Authentication
+
+Claude Named Configs accept at most one explicit credential in `settings.json`:
+
+| Config Field under `env` | Native authentication |
+| --- | --- |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription OAuth token from `claude setup-token` |
+| `ANTHROPIC_API_KEY` | Claude Console API key for API usage billing |
+| `ANTHROPIC_AUTH_TOKEN` | Custom Bearer credential, commonly for a custom endpoint |
+
+Each included credential must be a nonempty, non-whitespace string. AIBox does
+not infer credential types from prefixes, check account eligibility, or validate
+credentials online. The same rules apply to Named Config Visual and Raw saves
+and Application. Current Config remains Raw-only and accepts arbitrary native
+content, including multiple credentials.
+
+`ANTHROPIC_BASE_URL` is optional and independent of credential selection. Omit
+it to use Claude's native default endpoint, or include it to route through a
+custom endpoint or the [Request Proxy](requests.md#setup). An endpoint override
+alone does not replace subscription authentication.
+
+### Subscription Token
+
+Generate a token with the official Claude Code CLI's `claude setup-token`, then
+copy its terminal output into `env.CLAUDE_CODE_OAUTH_TOKEN`. With the Runtime
+Image built and the Claude Component installed in a Managed Tenant, the same
+command can run inside its Filesystem Sandbox:
+
+```sh
+aibox run --agent claude --tenant work -- setup-token
+```
+
+The command opens Anthropic's browser authorization flow; if the container's
+browser callback is unreachable, paste the displayed authorization code back
+into its terminal. AIBox does not implement a login flow or acquire the token.
+The official documentation describes a one-year token for Pro, Max, Team, or
+Enterprise subscriptions. Requests use that subscription's limits and billing
+rules. This is distinct from a browser cookie or website session token.
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_OAUTH_TOKEN": "replace-with-setup-token-output"
+  },
+  "permissions": { "defaultMode": "default" }
+}
+```
+
+The configured token is fixed, not automatically refreshed by AIBox. If it
+expires or is revoked, generate a replacement, save and apply it, then restart
+Claude. It supports model requests but not Remote Control or claude.ai
+connectors; local MCP servers still work. Claude's `--bare` mode does not read
+this variable. See [Claude's token documentation](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token).
+
+### API Key and Custom Authentication
+
+For official API usage billing, obtain a key from Claude Console:
+
+```json
+{
+  "env": { "ANTHROPIC_API_KEY": "replace-with-console-api-key" },
+  "permissions": { "defaultMode": "default" }
+}
+```
+
+Existing custom Bearer configurations remain supported, and new Named Configs
+retain the custom endpoint and credential placeholders:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gateway.example",
+    "ANTHROPIC_AUTH_TOKEN": "replace-with-gateway-token"
+  },
+  "permissions": { "defaultMode": "default" }
+}
+```
+
+### Native Login and Credential Switching
+
+Omit all three credentials to let Claude Code use its native authentication:
+
+```json
+{
+  "permissions": { "defaultMode": "default" }
+}
+```
+
+After Application, run Claude in the selected Tenant and use its official
+`/login` flow if needed. The [Tenant Home](tenants.md#tenant-identity-and-layout)
+persists native login state. A credential-free Config does not prove that the
+Tenant is logged in.
+
+Application writes the included credential and removes the other two fixed
+credential fields, or removes all three when none is included. It also removes
+an omitted Base URL. It preserves unrelated settings, `apiKeyHelper`, and native
+login state such as `.credentials.json`; it does not log out or overwrite that
+file. Host macOS Keychain credentials are not imported into Managed Tenants.
+Existing Configs with multiple explicit credentials are invalid until the user
+chooses one; AIBox does not migrate them by guessing.
+
+Actual authentication follows [Claude's native precedence](https://code.claude.com/docs/en/authentication#authentication-precedence).
+For ordinary direct or custom-endpoint sessions, custom Auth token and API key
+take precedence over `apiKeyHelper`, which takes precedence over the subscription
+Token and saved subscription login. Unmanaged helpers, profiles, cloud-provider
+settings, and environment sources may therefore affect the selected credential.
+Use Claude's `/status` to verify it. AIBox does not automatically switch to API
+billing when subscription limits are reached.
 
 ## Create, Reveal, and Edit
 
