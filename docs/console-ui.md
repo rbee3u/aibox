@@ -73,10 +73,12 @@ notification. Other failures use the shared notification stack, keyed by resourc
 or action; repeated identical failures stay quiet until recovery. Destructive
 failures require confirmation again.
 
-The latest Management Operation remains available across modules. Polling does
-not overlap itself or reopen a collapsed operation panel. Route changes and
-dialogs cancel obsolete work; late responses cannot replace a newer generation.
-Degraded decoding or evidence stays local to the affected view.
+The latest Management Operation remains available across modules. Dismissing a
+finished Operation keeps it hidden across reloads; a running Operation is never
+hidden, and a different Operation is shown normally. Polling does not overlap
+itself or reopen a collapsed operation panel. Route changes and dialogs cancel
+obsolete work; late responses cannot replace a newer generation. Degraded
+decoding or evidence stays local to the affected view.
 
 ### Accessibility and Content
 

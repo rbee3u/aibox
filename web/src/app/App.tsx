@@ -42,7 +42,7 @@ export function App() {
     sidebarRef,
     menuButtonRef,
   } = useMobileNavigation();
-  const operations = useOperationFeed(api);
+  const operations = useOperationFeed(api?.operations ?? null);
   const {
     route,
     commitLocation,

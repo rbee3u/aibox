@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ConnectedControlApi } from "@/api/connect";
-import type { Operation } from "@/api/operations";
+import type { Operation, OperationApi } from "@/api/operations";
+import { readPreference, storePreference } from "@/shared/lib/preferences";
 
 export type OperationConnection = "connecting" | "connected" | "reconnecting";
+
+const DISMISSED_OPERATION_KEY = "aibox-console-operation-dismissed";
+
+function readDismissedOperation(): string | null {
+  return readPreference(DISMISSED_OPERATION_KEY) || null;
+}
 
 /**
  * Tracks the latest Management Operation for the whole Console. Log frames
@@ -25,23 +31,23 @@ export function mergeOperation(
   };
 }
 
-export function useOperationFeed(api: ConnectedControlApi | null) {
+export function useOperationFeed(operations: OperationApi | null) {
   const [operation, setOperation] = useState<Operation | null>(null);
   const [connection, setConnection] = useState<OperationConnection>("connecting");
-  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(readDismissedOperation);
   /** Space the fixed panel occupies, reported by the panel and reserved by the shell. */
   const [height, setHeight] = useState(0);
 
   useEffect(() => {
-    if (!api) return;
-    return api.operations.subscribe({
+    if (!operations) return;
+    return operations.subscribe({
       onConnection: setConnection,
       onOperation: (value, gap) => {
         setOperation((current) => mergeOperation(current, value, gap));
         if (value?.state === "running") setDismissed(null);
       },
     });
-  }, [api]);
+  }, [operations]);
 
   const record = useCallback((value: Operation) => {
     setOperation(value);
@@ -55,7 +61,17 @@ export function useOperationFeed(api: ConnectedControlApi | null) {
     setHeight,
     record,
     adopt: setOperation,
-    dismiss: useCallback(() => setDismissed(operation?.id ?? null), [operation]),
-    visible: api && operation && dismissed !== operation.id ? operation : null,
+    dismiss: useCallback(() => {
+      if (!operation) return;
+      setDismissed(operation.id);
+      // The Service keeps its latest Operation for reconnects, so the Console
+      // must remember the acknowledgement or a reload would show it again.
+      storePreference(DISMISSED_OPERATION_KEY, operation.id);
+    }, [operation]),
+    // Live progress must never be hidden by a stale acknowledgement.
+    visible:
+      operations && operation && (operation.state === "running" || dismissed !== operation.id)
+        ? operation
+        : null,
   };
 }
